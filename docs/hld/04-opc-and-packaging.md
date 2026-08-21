@@ -333,3 +333,25 @@ for, every repeated numbering reference resolves, and the candidate document
 serializes successfully. Any control, lookup, numbering, scalar-type, parse, or
 serialization failure leaves package parts, typed content, and layout caches
 unchanged.
+
+Mail merge uses the same fail-closed package boundary. Separate mode clones the
+typed document and complete package for each record, applies the merge-local
+field policy, serializes, and reopens every candidate before returning the
+record-ordered outputs. Section mode serializes the main document and scans it
+by expanded name for every header and footer reference, including references
+inside content controls and preserved wrappers. Relationship-namespace ids are
+resolved through the document relationship graph, and only the resulting
+internal header and footer parts join relationship-resolved footnotes and
+endnotes in the merge-dependency scan. A referenced non-body `MERGEFIELD` that
+varies across records rejects the operation before candidate assembly.
+
+Combined output reuses the first validated package and replaces only its main
+body with the record bodies and their schema-ordered section boundaries.
+Bookmark, content-control, and drawing identities are allocated without
+collision across those bodies. Simple and complex bookmark field targets plus
+hyperlink anchors follow renamed bookmarks in typed and preserved raw XML.
+Clean parsed footnotes remain source-backed. An actual footnote field update
+patches only the field-source spans in the relationship-resolved part, so
+unmodelled siblings remain byte-preserved. Any rejected record, XML parse, or
+identity-allocation failure leaves the source and all prospective outputs
+uncommitted.

@@ -1,6 +1,6 @@
 # F-166, Mail merge
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: M
 **Depends on**: F-161, F-164
@@ -113,14 +113,14 @@ sample invokes them. Any delta is unexplained and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add the two native facade methods in existing files.
-- [ ] Add the merge-local missing-as-empty evaluation policy.
-- [ ] Stage and validate every per-record clone before returning output.
-- [ ] Assemble body sections from source section properties in record order.
-- [ ] Reject record-varying non-body story fields in combined mode.
-- [ ] Add the gate, round-trip, atomicity, and boundary tests to existing test files.
-- [ ] Run parser, packaging, and unchanged-harness riders.
-- [ ] Update exactly HLD 03, HLD 04, HLD 10, and HLD 12.
+- [x] Add the two native facade methods in existing files.
+- [x] Add the merge-local missing-as-empty evaluation policy.
+- [x] Stage and validate every per-record clone before returning output.
+- [x] Assemble body sections from source section properties in record order.
+- [x] Reject record-varying non-body story fields in combined mode.
+- [x] Add the gate, round-trip, atomicity, and boundary tests to existing test files.
+- [x] Run parser, packaging, and unchanged-harness riders.
+- [x] Update exactly HLD 03, HLD 04, HLD 10, and HLD 12.
 
 ## Open questions
 

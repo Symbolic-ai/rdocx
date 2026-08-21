@@ -3437,3 +3437,555 @@ fn repeated_numbered_items_keep_one_continuous_sequence() {
     );
     assert_eq!(invalid.to_bytes().unwrap(), before);
 }
+
+fn mail_merge_record(values: &[(&str, &str)]) -> BTreeMap<String, String> {
+    values
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+fn document_with_mail_merge_header() -> Document {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tbl xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:tblPr/><q:tblGrid/><q:tr><q:tc><q:p><q:fldSimple q:instr="MERGEFIELD &quot;Full Name&quot;"><q:r><q:t>stored table header</q:t></q:r></q:fldSimple></q:p></q:tc></q:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="merge"/></w:sdtPr><w:sdtContent><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> MERGEFIELD Name </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stored control header</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:sdtContent></w:sdt></w:hdr>"#;
+    package.set_part("/word/header1.xml", header.as_bytes().to_vec());
+    package.content_types.add_override(
+        "/word/header1.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let header_id = package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn a_fixture_record_set_produces_separate_and_sectioned_documents() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="MERGEFIELD Name \* Upper"><w:r><w:t>stored name</w:t></w:r></w:fldSimple></w:p>
+        <w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:p><w:fldSimple w:instr="MERGEFIELD City"><w:r><w:t>stored city</w:t></w:r></w:fldSimple></w:p></w:tc></w:tr></w:tbl>
+        <w:sdt><w:sdtPr><w:tag w:val="role"/></w:sdtPr><w:sdtContent><w:p><w:fldSimple w:instr="MERGEFIELD Role"><w:r><w:t>stored role</w:t></w:r></w:fldSimple></w:p></w:sdtContent></w:sdt>
+        <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>
+    "#;
+    let document = document_with_content_controls(&wrap_word_body(body));
+    let records = vec![
+        mail_merge_record(&[("Name", "Ada"), ("City", "London"), ("Role", "Engineer")]),
+        mail_merge_record(&[("Name", "Grace"), ("Role", "Admiral")]),
+    ];
+
+    let mut separate = document.mail_merge(&records).unwrap();
+    assert_eq!(separate.len(), 2);
+    let first = document_xml(&mut separate[0]);
+    let second = document_xml(&mut separate[1]);
+    assert!(first.contains(">ADA<"), "{first}");
+    assert!(first.contains(">London<"), "{first}");
+    assert!(first.contains(">Engineer<"), "{first}");
+    assert!(second.contains(">GRACE<"), "{second}");
+    assert!(second.contains(">Admiral<"), "{second}");
+    assert!(!second.contains("stored city"), "{second}");
+
+    let mut sectioned = document.mail_merge_sections(&records).unwrap();
+    let xml = document_xml(&mut sectioned);
+    let ada = xml.find(">ADA<").unwrap();
+    let grace = xml.find(">GRACE<").unwrap();
+    assert!(ada < grace, "{xml}");
+    assert!(!xml.contains("stored city"), "{xml}");
+    assert_eq!(xml.matches(r#"<w:type w:val="nextPage"/>"#).count(), 1);
+}
+
+#[test]
+fn mail_merge_preserves_switches_and_general_field_policy() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="MERGEFIELD Name \* Upper"><w:r><w:t>stored name</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="MERGEFIELD Missing"><w:r><w:t>stored missing</w:t></w:r></w:fldSimple></w:p>
+        <w:sectPr/>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut merged = document
+        .mail_merge(&[mail_merge_record(&[("Name", "Ada")])])
+        .unwrap()
+        .pop()
+        .unwrap();
+    let merged_xml = document_xml(&mut merged);
+    assert!(merged_xml.contains(r#"MERGEFIELD Name \* Upper"#));
+    assert!(merged_xml.contains(">ADA<"), "{merged_xml}");
+    assert!(!merged_xml.contains("stored missing"), "{merged_xml}");
+
+    let outcomes = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(matches!(
+        &outcomes[0].outcome,
+        FieldOutcome::KeepStored { .. }
+    ));
+    assert!(matches!(
+        &outcomes[1].outcome,
+        FieldOutcome::KeepStored { .. }
+    ));
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        2
+    );
+    let ordinary_xml = document_xml(&mut document);
+    assert!(ordinary_xml.contains("stored name"), "{ordinary_xml}");
+    assert!(ordinary_xml.contains("stored missing"), "{ordinary_xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_preserves_section_properties_and_unmodelled_xml() {
+    const PRODUCER_BODY: &str = r#"<x:producer xmlns:x="urn:producer" mark="kept"/>"#;
+    const PRODUCER_SECTION: &str = r#"<x:section xmlns:x="urn:producer" mark="kept"/>"#;
+    let body = r#"
+        <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>fixed</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+        <x:producer xmlns:x="urn:producer" mark="kept"/>
+        <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><x:section xmlns:x="urn:producer" mark="kept"/></w:sectPr>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let records = vec![
+        mail_merge_record(&[("Name", "one")]),
+        mail_merge_record(&[("Name", "two")]),
+    ];
+    let mut merged = document.mail_merge_sections(&records).unwrap();
+    let bytes = merged.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let body = body_from_document(&mut reopened);
+
+    assert_eq!(body.tables().count(), 2);
+    assert_eq!(
+        body.content
+            .iter()
+            .filter(|content| matches!(content, BodyContent::Paragraph(paragraph) if paragraph.properties.as_ref().and_then(|properties| properties.sect_pr.as_ref()).is_some()))
+            .count(),
+        1
+    );
+    let section_break = body.content.iter().find_map(|content| match content {
+        BodyContent::Paragraph(paragraph) => paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.sect_pr.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        section_break.unwrap().section_type,
+        Some(rdocx_oxml::shared::ST_SectionType::NextPage)
+    );
+    assert_eq!(body.sect_pr.as_ref().unwrap().page_width.unwrap().0, 11906);
+
+    let xml = document_xml(&mut reopened);
+    assert_eq!(xml.matches(PRODUCER_BODY).count(), 2, "{xml}");
+    assert_eq!(xml.matches(PRODUCER_SECTION).count(), 2, "{xml}");
+    assert!(xml.rfind("<w:sectPr>").unwrap() < xml.rfind("</w:body>").unwrap());
+}
+
+#[test]
+fn sectioned_mail_merge_remaps_record_local_body_identities() {
+    let body = r#"
+        <w:p><w:bookmarkStart w:id="7" w:name="Target"/><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored target</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="7"/></w:p>
+        <w:p><w:fldSimple w:instr="REF Target"><w:r><w:t>stored reference</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="REF MailMerge1"><w:r><w:t>intentionally unresolved</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:hyperlink w:anchor="MailMerge2"><w:r><w:t>unresolved anchor</w:t></w:r></w:hyperlink></w:p>
+        <w:sdt><w:sdtPr><w:id w:val="9"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>
+        <w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:extent cx="1" cy="1"/><wp:docPr id="11" name="Picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="12" name="Picture"/><pic:cNvPicPr/></pic:nvPicPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+        <w:sectPr/>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let records = [
+        mail_merge_record(&[("Name", "one")]),
+        mail_merge_record(&[("Name", "two")]),
+    ];
+    let mut merged = document.mail_merge_sections(&records).unwrap();
+
+    let bookmarks = merged.bookmarks();
+    assert_eq!(bookmarks.len(), 2);
+    assert!(bookmarks.iter().all(|bookmark| bookmark.issue().is_none()));
+    assert_ne!(bookmarks[0].id(), bookmarks[1].id());
+    assert_ne!(bookmarks[0].name(), bookmarks[1].name());
+
+    let evaluations = merged
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(evaluations.iter().any(|evaluation| {
+        evaluation.instruction == "REF MailMerge1"
+            && matches!(evaluation.outcome, FieldOutcome::KeepStored { .. })
+    }));
+    assert!(
+        evaluations
+            .iter()
+            .filter(|evaluation| {
+                matches!(
+                    evaluation.instruction.as_str(),
+                    "REF Target" | "REF MailMerge3"
+                )
+            })
+            .all(|evaluation| matches!(evaluation.outcome, FieldOutcome::Resolved(_)))
+    );
+    let xml = document_xml(&mut merged);
+    assert!(xml.contains(r#"w:instr="REF Target""#), "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge3""#), "{xml}");
+    assert_eq!(
+        xml.matches(r#"w:instr="REF MailMerge1""#).count(),
+        2,
+        "{xml}"
+    );
+    assert_eq!(xml.matches(r#"w:anchor="MailMerge2""#).count(), 2, "{xml}");
+    assert!(!xml.contains(r#"w:name="MailMerge1""#), "{xml}");
+    assert!(!xml.contains(r#"w:name="MailMerge2""#), "{xml}");
+    assert_eq!(xml.matches(r#"w:val="9""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"wp:docPr id="11""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"pic:cNvPr id="12""#).count(), 1, "{xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_remaps_references_inside_preserved_body_xml() {
+    let body = r#"
+        <w:customXml>
+          <w:p><w:bookmarkStart w:id="21" w:name="RawTarget"/><w:r><w:t>raw target</w:t></w:r><w:bookmarkEnd w:id="21"/></w:p>
+          <w:p><w:fldSimple w:instr="REF RawTarget"><w:r><w:t>stored ref</w:t></w:r></w:fldSimple></w:p>
+          <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText><w:instrText>REF RawTarget</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+          <w:p><w:hyperlink w:anchor="RawTarget"><w:r><w:t>raw link</w:t></w:r></w:hyperlink></w:p>
+          <w:p><w:fldSimple w:instr="REF MailMerge1"><w:r><w:t>unresolved</w:t></w:r></w:fldSimple></w:p>
+        </w:customXml>
+        <w:sectPr/>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let records = [mail_merge_record(&[]), mail_merge_record(&[])];
+    let mut merged = document.mail_merge_sections(&records).unwrap();
+    let xml = document_xml(&mut merged);
+
+    assert_eq!(xml.matches(r#"w:name="RawTarget""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="MailMerge2""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge2""#), "{xml}");
+    assert!(xml.contains("PAGEREF MailMerge2"), "{xml}");
+    assert!(xml.contains(r#"w:anchor="MailMerge2""#), "{xml}");
+    assert_eq!(
+        xml.matches(r#"w:instr="REF MailMerge1""#).count(),
+        2,
+        "{xml}"
+    );
+    assert!(!xml.contains(r#"w:name="MailMerge1""#), "{xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_correlates_entity_escaped_bookmark_names() {
+    let body = r#"
+        <w:p><w:bookmarkStart w:id="7" w:name="A&amp;B"/><w:r><w:t>target</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>
+        <w:p><w:fldSimple w:instr="REF A&amp;B"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:sectPr/>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut merged = document
+        .mail_merge_sections(&[mail_merge_record(&[]), mail_merge_record(&[])])
+        .unwrap();
+    let evaluations = merged
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(
+        evaluations
+            .iter()
+            .filter(|evaluation| evaluation.instruction.starts_with("REF "))
+            .all(|evaluation| matches!(evaluation.outcome, FieldOutcome::Resolved(_)))
+    );
+    let xml = document_xml(&mut merged);
+    assert_eq!(xml.matches(r#"w:name="A&amp;B""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="MailMerge1""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge1""#), "{xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_ignores_foreign_same_local_name_attributes() {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:p><w:fldSimple x:instr="MERGEFIELD Stable" w:instr="MERGEFIELD Vary"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+    package.set_part("/word/header-foreign.xml", header.as_bytes().to_vec());
+    package.content_types.add_override(
+        "/word/header-foreign.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "header-foreign.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:customXml xmlns:x="urn:producer"><w:p><w:bookmarkStart x:id="701" w:id="7" x:name="Foreign" w:name="Target"/><w:r><w:t>target</w:t></w:r><w:bookmarkEnd x:id="702" w:id="7"/></w:p><w:p><w:fldSimple x:instr="REF Foreign" w:instr="REF Target"><w:r><w:t>stored ref</w:t></w:r></w:fldSimple></w:p><w:sdt><w:sdtPr><w:id x:val="900" w:val="9"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:extent cx="1" cy="1"/><wp:docPr x:id="1100" id="11" name="Picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr x:id="1200" id="12" name="Picture"/><pic:cNvPicPr/></pic:nvPicPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:customXml><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Stable", "same"), ("Vary", "one")]),
+                mail_merge_record(&[("Stable", "same"), ("Vary", "two")]),
+            ])
+            .is_err()
+    );
+
+    let mut merged = document
+        .mail_merge_sections(&[
+            mail_merge_record(&[("Stable", "same"), ("Vary", "same")]),
+            mail_merge_record(&[("Stable", "same"), ("Vary", "same")]),
+        ])
+        .unwrap();
+    let xml = document_xml(&mut merged);
+    assert_eq!(xml.matches(r#"x:id="701""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:id="702""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:name="Foreign""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:val="900""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:id="1100""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:id="1200""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="Target""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:name="MailMerge1""#), "{xml}");
+    assert_eq!(xml.matches(r#"w:instr="REF Target""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge1""#), "{xml}");
+    assert_eq!(xml.matches(r#"w:val="9""#).count(), 1, "{xml}");
+    assert_eq!(
+        xml.matches(r#"wp:docPr x:id="1100" id="11""#).count(),
+        1,
+        "{xml}"
+    );
+    assert_eq!(
+        xml.matches(r#"pic:cNvPr x:id="1200" id="12""#).count(),
+        1,
+        "{xml}"
+    );
+}
+
+#[test]
+fn sectioned_mail_merge_scans_header_references_in_block_content_controls() {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="MERGEFIELD Vary"><w:r><w:t>stored nested header</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+    package.set_part(
+        "/word/sections/nested-header.xml",
+        header.as_bytes().to_vec(),
+    );
+    package.content_types.add_override(
+        "/word/sections/nested-header.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "sections/nested-header.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:sdt><w:sdtPr><w:tag w:val="nested-section"/></w:sdtPr><w:sdtContent><w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:pPr><w:r><w:t>nested section</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    assert!(
+        document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        0
+    );
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Vary", "one")]),
+                mail_merge_record(&[("Vary", "two")]),
+            ])
+            .is_err()
+    );
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Vary", "same")]),
+                mail_merge_record(&[("Vary", "same")]),
+            ])
+            .is_ok()
+    );
+}
+
+#[test]
+fn mail_merge_uses_the_relationship_resolved_footnotes_part() {
+    const RAW_TABLE: &str = r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>producer table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let mut document = document_with_field_parts(
+        &wrap_word_body(r#"<w:p><w:r><w:t>body</w:t></w:r></w:p><w:sectPr/>"#),
+        None,
+        None,
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let footnotes = format!(
+        r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="2"><w:p><w:fldSimple w:instr="MERGEFIELD Note"><w:r><w:t>stored note</w:t></w:r></w:fldSimple></w:p>{RAW_TABLE}</w:footnote></w:footnotes>"#
+    );
+    package.set_part("/word/notes/producer-footnotes.xml", footnotes.into_bytes());
+    package.content_types.add_override(
+        "/word/notes/producer-footnotes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    );
+    package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::FOOTNOTES,
+        "notes/producer-footnotes.xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let records = [
+        mail_merge_record(&[("Note", "one")]),
+        mail_merge_record(&[("Note", "two")]),
+    ];
+
+    for (mut output, expected) in document
+        .mail_merge(&records)
+        .unwrap()
+        .into_iter()
+        .zip(["one", "two"])
+    {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(output.to_bytes().unwrap()))
+                .unwrap();
+        let producer = std::str::from_utf8(
+            package
+                .get_part("/word/notes/producer-footnotes.xml")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(producer.contains(&format!(">{expected}<")), "{producer}");
+        assert!(producer.contains(RAW_TABLE), "{producer}");
+        assert!(package.get_part("/word/footnotes.xml").is_none());
+    }
+    assert!(document.mail_merge_sections(&records).is_err());
+    let mut sectioned = document
+        .mail_merge_sections(&[
+            mail_merge_record(&[("Note", "same")]),
+            mail_merge_record(&[("Note", "same")]),
+        ])
+        .unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(sectioned.to_bytes().unwrap()))
+            .unwrap();
+    let producer = std::str::from_utf8(
+        package
+            .get_part("/word/notes/producer-footnotes.xml")
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(producer.contains(RAW_TABLE), "{producer}");
+}
+
+#[test]
+fn a_failed_record_leaves_the_source_and_outputs_uncommitted() {
+    let body = r#"<w:p><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p><w:sectPr/>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let before = document.to_bytes().unwrap();
+    let records = vec![
+        mail_merge_record(&[("Name", "valid")]),
+        mail_merge_record(&[("Name", "invalid\u{000b}value")]),
+    ];
+
+    assert!(document.mail_merge(&records).is_err());
+    assert!(document.mail_merge_sections(&records).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn empty_and_single_record_merges_have_stable_boundaries() {
+    let body = r#"<w:p><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>"#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    assert!(document.mail_merge(&[]).is_err());
+    assert!(document.mail_merge_sections(&[]).is_err());
+
+    let mut single = document
+        .mail_merge_sections(&[mail_merge_record(&[("Name", "only")])])
+        .unwrap();
+    let xml = document_xml(&mut single);
+    assert!(xml.contains(">only<"), "{xml}");
+    assert!(!xml.contains(r#"<w:type w:val="nextPage"/>"#), "{xml}");
+    let body = body_from_document(&mut single);
+    assert!(body.sect_pr.is_some());
+    assert!(body.content.iter().all(|content| {
+        !matches!(content, BodyContent::Paragraph(paragraph) if paragraph.properties.as_ref().and_then(|properties| properties.sect_pr.as_ref()).is_some())
+    }));
+
+    let mut document = document_with_mail_merge_header();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let header_before = package.get_part("/word/header1.xml").unwrap().to_vec();
+    assert!(
+        document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        0
+    );
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert_eq!(
+        package.get_part("/word/header1.xml").unwrap(),
+        header_before
+    );
+    let varying = vec![
+        mail_merge_record(&[("Name", "same"), ("Full Name", "one")]),
+        mail_merge_record(&[("Name", "same"), ("Full Name", "two")]),
+    ];
+    let mut separate = document.mail_merge(&varying).unwrap();
+    for output in &mut separate {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(output.to_bytes().unwrap()))
+                .unwrap();
+        let header = std::str::from_utf8(package.get_part("/word/header1.xml").unwrap()).unwrap();
+        assert!(header.contains("stored table header"), "{header}");
+        assert!(header.contains("stored control header"), "{header}");
+        assert!(!header.contains(">one<"), "{header}");
+        assert!(!header.contains(">two<"), "{header}");
+    }
+    assert!(document.mail_merge_sections(&varying).is_err());
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Name", "one"), ("Full Name", "same")]),
+                mail_merge_record(&[("Name", "two"), ("Full Name", "same")]),
+            ])
+            .is_err()
+    );
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Name", "same"), ("Full Name", "same")]),
+                mail_merge_record(&[("Name", "same"), ("Full Name", "same")]),
+            ])
+            .is_ok()
+    );
+}

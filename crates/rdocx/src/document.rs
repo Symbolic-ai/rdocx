@@ -75,8 +75,12 @@ pub struct Document {
     settings_part_name: Option<String>,
     /// Collision-free allocator for image media parts.
     image_namer: MediaNamer,
-    /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
+    /// Typed footnotes loaded through the main document relationship.
     pub(crate) footnotes: rdocx_oxml::footnotes::CT_Footnotes,
+    /// Existing footnotes relationship target. No conventional target is assumed on read.
+    pub(crate) footnotes_part_name: Option<String>,
+    /// Whether a facade mutation requires complete typed footnote serialization.
+    pub(crate) footnotes_dirty: bool,
     /// Typed comments loaded through the main document relationship.
     pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
     /// Existing comments relationship target. No target is invented on read.
@@ -412,12 +416,44 @@ impl Document {
             settings_part_name: None,
             image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
+            footnotes_part_name: None,
+            footnotes_dirty: false,
             comments: None,
             comments_part_name: None,
             comments_extended: None,
             comments_extended_part_name: None,
             comments_owned: false,
             comments_extended_owned: false,
+            layout_cache: Mutex::new(None),
+            deterministic_layout_cache: Mutex::new(None),
+        }
+    }
+
+    /// Clone all package and typed state while discarding derived layout caches.
+    pub(crate) fn clone_for_staging(&self) -> Self {
+        Self {
+            package: self.package.clone(),
+            document: self.document.clone(),
+            styles: self.styles.clone(),
+            numbering: self.numbering.clone(),
+            core_properties: self.core_properties.clone(),
+            custom_properties: self.custom_properties.clone(),
+            core_properties_part_name: self.core_properties_part_name.clone(),
+            doc_part_name: self.doc_part_name.clone(),
+            styles_part_name: self.styles_part_name.clone(),
+            numbering_part_name: self.numbering_part_name.clone(),
+            settings: self.settings.clone(),
+            settings_part_name: self.settings_part_name.clone(),
+            image_namer: self.image_namer.clone(),
+            footnotes: self.footnotes.clone(),
+            footnotes_part_name: self.footnotes_part_name.clone(),
+            footnotes_dirty: self.footnotes_dirty,
+            comments: self.comments.clone(),
+            comments_part_name: self.comments_part_name.clone(),
+            comments_extended: self.comments_extended.clone(),
+            comments_extended_part_name: self.comments_extended_part_name.clone(),
+            comments_owned: self.comments_owned,
+            comments_extended_owned: self.comments_extended_owned,
             layout_cache: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         }
@@ -508,11 +544,10 @@ impl Document {
             package.parts.keys().map(String::as_str),
         );
 
-        let footnotes = package
-            .get_part_rels(&doc_part_name)
-            .and_then(|rels| rels.get_by_type(rel_types::FOOTNOTES))
-            .map(|rel| OpcPackage::resolve_rel_target(&doc_part_name, &rel.target))
-            .and_then(|part| package.get_part(&part))
+        let footnotes_part_name = resolve_part(rel_types::FOOTNOTES);
+        let footnotes = footnotes_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
             .and_then(|xml| rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok())
             .unwrap_or_default();
 
@@ -550,6 +585,8 @@ impl Document {
             settings_part_name,
             image_namer,
             footnotes,
+            footnotes_part_name,
+            footnotes_dirty: false,
             comments,
             comments_part_name,
             comments_extended,
@@ -682,12 +719,16 @@ impl Document {
             self.package.set_part(part_name, settings.to_xml()?);
         }
 
-        // Serialize footnotes.xml when any footnotes exist
-        if !self.footnotes.footnotes.is_empty() {
+        // Preserve parsed footnote bytes until a facade mutation makes the typed view dirty.
+        if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
             let fx = self.footnotes.to_xml_footnotes()?;
-            self.package.set_part("/word/footnotes.xml", fx);
+            let footnotes_part = self
+                .footnotes_part_name
+                .clone()
+                .unwrap_or_else(|| "/word/footnotes.xml".to_owned());
+            self.package.set_part(&footnotes_part, fx);
             self.package.content_types.add_override(
-                "/word/footnotes.xml",
+                &footnotes_part,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
             );
             let rels = self
@@ -906,6 +947,7 @@ impl Document {
     /// `Paragraph::add_footnote_ref` to reference it from the body.
     pub fn add_footnote(&mut self, text: &str) -> i32 {
         self.invalidate_layout();
+        self.footnotes_dirty = true;
         use rdocx_oxml::footnotes::CT_Footnote;
         use rdocx_oxml::text::CT_P;
         let id = self
@@ -2575,33 +2617,6 @@ impl Document {
     /// remain unchanged and continue to preserve documents rendered here.
     pub fn render_template(&mut self, data: &serde_json::Value) -> Result<usize> {
         crate::template::render(self, data)
-    }
-
-    pub(crate) fn clone_for_template(&self) -> Self {
-        Self {
-            package: self.package.clone(),
-            document: self.document.clone(),
-            styles: self.styles.clone(),
-            numbering: self.numbering.clone(),
-            core_properties: self.core_properties.clone(),
-            custom_properties: self.custom_properties.clone(),
-            core_properties_part_name: self.core_properties_part_name.clone(),
-            doc_part_name: self.doc_part_name.clone(),
-            styles_part_name: self.styles_part_name.clone(),
-            numbering_part_name: self.numbering_part_name.clone(),
-            settings: self.settings.clone(),
-            settings_part_name: self.settings_part_name.clone(),
-            image_namer: self.image_namer.clone(),
-            footnotes: self.footnotes.clone(),
-            comments: self.comments.clone(),
-            comments_part_name: self.comments_part_name.clone(),
-            comments_extended: self.comments_extended.clone(),
-            comments_extended_part_name: self.comments_extended_part_name.clone(),
-            comments_owned: self.comments_owned,
-            comments_extended_owned: self.comments_extended_owned,
-            layout_cache: Mutex::new(None),
-            deterministic_layout_cache: Mutex::new(None),
-        }
     }
 
     pub(crate) fn template_numbering_reference_exists(&self, num_id: u32, level: u32) -> bool {

@@ -249,6 +249,18 @@ caches and producer dirty spellings. These methods are additive native Rust
 APIs. Python, WASM, and CLI surfaces gain no field update methods and continue
 to preserve updates already made through their owned `Document`.
 
+Native Word callers merge flat records with `Document::mail_merge` or
+`Document::mail_merge_sections`. Each record is a
+`BTreeMap<String, String>`. Separate mode returns one complete validated
+document per record. Section mode returns one document with record bodies in
+input order and a next-page boundary after every non-final record. Empty input
+is rejected. Missing merge values become empty text only inside these two
+methods. A record-varying merge field in a referenced header, footer, footnote,
+or endnote rejects section mode because it combines main-body stories only.
+Both methods are additive on the pre-1.0 native Rust facade. Python, WASM, and
+CLI surfaces gain no merge methods and continue to preserve documents already
+merged by native code.
+
 Native Word callers render templates with
 `Document::render_template(&serde_json::Value)`. Scalar tags use
 `{{ path.to.value }}` syntax and may cross ordinary Word run boundaries.

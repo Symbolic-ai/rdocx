@@ -201,6 +201,21 @@ byte methods remain leave alone operations that preserve cache content and
 dirty spelling. Update-aware save methods opt into the same atomic operation
 before writing. The settings-level `w:updateFields` value remains untouched.
 
+The `rdocx` facade also owns flat native mail merge over
+`BTreeMap<String, String>` records. Separate mode stages, serializes, and
+reopens one complete package clone per record. Its private evaluator policy
+maps only an absent `MERGEFIELD` value to empty text, while ordinary field
+evaluation retains its cached-display fallback. Section mode first rejects a
+record-varying merge dependency in a referenced header, footer, footnote, or
+endnote. It then concatenates candidate body entries in record order, moves
+each non-final body section properties value to a next-page section-ending
+paragraph, and retains the final body-level section properties value. A
+namespace-aware serialized-body pass remaps bookmark, content-control, and
+drawing identities together with bookmark field and hyperlink references,
+including values held in preserved raw XML. The operation does not evaluate
+structured template tags, and ordinary field traversal keeps its existing
+typed story scope.
+
 The `rdocx` facade owns structured template evaluation over
 `serde_json::Value`. The focused `template` module recognizes scalar tags
 across ordinary run boundaries and pairs nested `for` and `if` controls with a

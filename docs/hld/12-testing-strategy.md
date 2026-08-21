@@ -56,6 +56,17 @@ numbering regression proves that mixed list and ordinary paragraphs retain one
 test compares row, cell, table, numbering, and raw XML state after reopen and
 checks the raw children at their schema boundaries.
 
+The flat mail-merge regression gate builds one readable record set in code and
+compares exact separate and sectioned outputs in record order. It proves that
+an absent record value becomes empty only under merge policy. Focused
+regressions retain ordinary field fallback, switches, atomic failure, empty and
+single-record boundaries, section-property order, tables, lists, and producer
+XML after reopen. Scanner regressions cover simple and complex non-body fields,
+nested header references, relationship-resolved footnotes, preserved raw body
+references, entity-escaped bookmark names, collision-safe identity allocation,
+and foreign same-local-name attributes. The methods are opt-in and no sample
+invokes them, so the 49-entry hash harness must remain unchanged.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

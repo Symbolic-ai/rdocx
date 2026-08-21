@@ -7,13 +7,15 @@ use oxml_core::custom_properties::CustomPropertyValue;
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::name::{Namespace, NamespaceResolver, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
-use rdocx_oxml::document::{BodyContent, CT_Body, CT_SectPr};
+use rdocx_oxml::document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
 use rdocx_oxml::footnotes::{CT_Footnotes, NoteType};
 use rdocx_oxml::header_footer::CT_HdrFtr;
-use rdocx_oxml::namespace::{W_NS, matches_local_name};
+use rdocx_oxml::namespace::{R_NS, W_NS, matches_local_name};
+use rdocx_oxml::properties::CT_PPr;
+use rdocx_oxml::shared::ST_SectionType;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, Field, FieldArgument, FieldInstruction, RunContent};
 
@@ -63,7 +65,19 @@ impl Document {
         &self,
         context: &FieldEvaluationContext,
     ) -> Result<Vec<FieldEvaluation>> {
-        let mut evaluator = Evaluator::new(self, context);
+        self.evaluate_fields_with_policy(context, false)
+    }
+
+    fn evaluate_fields_with_policy(
+        &self,
+        context: &FieldEvaluationContext,
+        missing_merge_fields_as_empty: bool,
+    ) -> Result<Vec<FieldEvaluation>> {
+        let mut evaluator = if missing_merge_fields_as_empty {
+            Evaluator::for_mail_merge(self, context)
+        } else {
+            Evaluator::new(self, context)
+        };
 
         let mut main = Vec::new();
         collect_body_paragraphs(&self.document.body, &mut main);
@@ -97,7 +111,16 @@ impl Document {
 
     /// Evaluate and materialize every typed field cache in document order.
     pub fn update_fields(&mut self, context: &FieldEvaluationContext) -> Result<usize> {
-        let evaluations = self.evaluate_fields(context)?;
+        self.update_fields_with_policy(context, false)
+    }
+
+    fn update_fields_with_policy(
+        &mut self,
+        context: &FieldEvaluationContext,
+        missing_merge_fields_as_empty: bool,
+    ) -> Result<usize> {
+        let evaluations =
+            self.evaluate_fields_with_policy(context, missing_merge_fields_as_empty)?;
         let updates = evaluations
             .iter()
             .map(|evaluation| match &evaluation.outcome {
@@ -165,7 +188,23 @@ impl Document {
             }
         }
 
+        let footnotes_start = update_index;
         apply_updates_to_notes(&mut footnotes, &updates, &mut update_index);
+        let mut footnotes_dirty = self.footnotes_dirty;
+        if update_index > footnotes_start && !self.footnotes_dirty {
+            if let Some((part_name, xml)) = relationship_parts(self, rel_types::FOOTNOTES)
+                .into_iter()
+                .next()
+            {
+                let paragraphs = normal_note_paragraphs(&footnotes);
+                let updated =
+                    patch_story_field_sources(&xml, &paragraphs, PackageStoryKind::Footnotes)?;
+                CT_Footnotes::from_xml(&updated)?;
+                staged_parts.push((part_name, updated));
+            } else {
+                footnotes_dirty = true;
+            }
+        }
 
         for (part_name, xml) in relationship_parts(self, rel_types::ENDNOTES) {
             if let Ok(mut part) = CT_Footnotes::from_xml(&xml) {
@@ -190,18 +229,85 @@ impl Document {
 
         let document_xml = document.to_xml()?;
         rdocx_oxml::document::CT_Document::from_xml(&document_xml)?;
-        if !footnotes.footnotes.is_empty() {
+        if footnotes_dirty && !footnotes.footnotes.is_empty() {
             let footnotes_xml = footnotes.to_xml_footnotes()?;
             CT_Footnotes::from_xml(&footnotes_xml)?;
         }
 
         self.document = document;
         self.footnotes = footnotes;
+        self.footnotes_dirty = footnotes_dirty;
         for (part_name, xml) in staged_parts {
             self.package.set_part(&part_name, xml);
         }
         self.invalidate_layout();
         Ok(updates.len())
+    }
+
+    /// Materialize one independent document for each flat mail-merge record.
+    pub fn mail_merge(&self, records: &[BTreeMap<String, String>]) -> Result<Vec<Document>> {
+        if records.is_empty() {
+            return Err(Error::Other(
+                "mail merge requires at least one record".to_owned(),
+            ));
+        }
+
+        let mut outputs = Vec::with_capacity(records.len());
+        for record in records {
+            let context = FieldEvaluationContext {
+                merge_fields: record.clone(),
+                ..Default::default()
+            };
+            let mut candidate = self.clone_for_staging();
+            candidate.update_fields_with_policy(&context, true)?;
+            let bytes = candidate.to_bytes()?;
+            outputs.push(Document::from_bytes(&bytes)?);
+        }
+        Ok(outputs)
+    }
+
+    /// Materialize one document whose record bodies form next-page sections.
+    pub fn mail_merge_sections(&self, records: &[BTreeMap<String, String>]) -> Result<Document> {
+        reject_varying_non_body_merge_fields(self, records)?;
+        let mut candidates = self.mail_merge(records)?;
+
+        let mut identity_state = BodyIdentityState::from_documents(&candidates)?;
+        for candidate in candidates.iter_mut().skip(1) {
+            remap_body_identities(candidate, &mut identity_state)?;
+        }
+
+        let bodies = candidates
+            .iter()
+            .map(|candidate| candidate.document.body.clone())
+            .collect::<Vec<_>>();
+        let mut combined = candidates.remove(0);
+        combined.document.body.content.clear();
+        combined.document.body.sect_pr = None;
+
+        let final_index = bodies.len() - 1;
+        for (index, mut body) in bodies.into_iter().enumerate() {
+            combined.document.body.content.append(&mut body.content);
+            if index == final_index {
+                combined.document.body.sect_pr = body.sect_pr;
+            } else {
+                let mut section = body.sect_pr.unwrap_or_else(empty_section_properties);
+                section.section_type = Some(ST_SectionType::NextPage);
+                let mut paragraph = CT_P::new();
+                paragraph.properties = Some(CT_PPr {
+                    sect_pr: Some(section),
+                    ..Default::default()
+                });
+                combined
+                    .document
+                    .body
+                    .content
+                    .push(BodyContent::Paragraph(paragraph));
+            }
+        }
+        combined.invalidate_layout();
+
+        let bytes = combined.to_bytes()?;
+        Document::from_bytes(&bytes)
     }
 
     /// Update typed field caches, then save the package to a file path.
@@ -221,6 +327,1063 @@ impl Document {
     ) -> Result<Vec<u8>> {
         self.update_fields(context)?;
         self.to_bytes()
+    }
+}
+
+fn non_body_story_parts(document: &Document) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut parts = merge_referenced_header_footer_parts(document)?
+        .into_iter()
+        .chain(
+            relationship_parts(document, rel_types::FOOTNOTES)
+                .into_iter()
+                .map(|(name, xml)| (format!("footnotes:{name}"), xml)),
+        )
+        .chain(
+            relationship_parts(document, rel_types::ENDNOTES)
+                .into_iter()
+                .map(|(name, xml)| (format!("endnotes:{name}"), xml)),
+        )
+        .collect::<Vec<_>>();
+    parts.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(parts)
+}
+
+fn merge_referenced_header_footer_parts(document: &Document) -> Result<Vec<(String, Vec<u8>)>> {
+    let Some(relationships) = document.package.get_part_rels(&document.doc_part_name) else {
+        return Ok(Vec::new());
+    };
+    let xml = document.document.to_xml()?;
+    let mut reader = NsReader::from_reader(xml.as_slice());
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut references = Vec::<(String, bool)>::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid main document XML: {error}")))?;
+        match event {
+            Event::Start(element) | Event::Empty(element)
+                if namespace_is_word(&reader.resolver().resolve_element(element.name()).0) =>
+            {
+                let name = element.name();
+                let local = local_name(name.as_ref());
+                let is_header = if local == b"headerReference" {
+                    true
+                } else if local == b"footerReference" {
+                    false
+                } else {
+                    buffer.clear();
+                    continue;
+                };
+                if let Some((_, rel_id)) = resolved_element_attribute(
+                    &element,
+                    reader.resolver(),
+                    b"id",
+                    AttributeNamespace::Relationship,
+                )? {
+                    references.push((rel_id, is_header));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    let mut seen = HashSet::new();
+    let mut parts = Vec::new();
+    for (rel_id, is_header) in references {
+        let Some(relationship) = relationships.get_by_id(&rel_id) else {
+            continue;
+        };
+        let relationship_type = if is_header {
+            rel_types::HEADER
+        } else {
+            rel_types::FOOTER
+        };
+        if relationship.rel_type != relationship_type
+            || relationship.target_mode.as_deref() == Some("External")
+        {
+            continue;
+        }
+        let part_name =
+            OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target);
+        if seen.insert(part_name.clone())
+            && let Some(xml) = document.package.get_part(&part_name)
+        {
+            let story = if is_header { "header" } else { "footer" };
+            parts.push((format!("{story}:{part_name}"), xml.to_vec()));
+        }
+    }
+    Ok(parts)
+}
+
+fn reject_varying_non_body_merge_fields(
+    document: &Document,
+    records: &[BTreeMap<String, String>],
+) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut names = HashSet::new();
+    for (_, xml) in non_body_story_parts(document)? {
+        collect_raw_merge_field_names(&xml, &mut names)?;
+    }
+    for name in names {
+        let expected = records[0].get(&name).map(String::as_str).unwrap_or("");
+        if records
+            .iter()
+            .skip(1)
+            .any(|record| record.get(&name).map(String::as_str).unwrap_or("") != expected)
+        {
+            return Err(Error::Other(
+                "sectioned mail merge cannot vary fields in headers, footers, footnotes, or endnotes"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+struct ComplexInstruction {
+    text: String,
+    collecting: bool,
+}
+
+fn collect_raw_merge_field_names(xml: &[u8], names: &mut HashSet<String>) -> Result<()> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut complex = Vec::<ComplexInstruction>::new();
+    let mut in_instruction_text = false;
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid package story XML: {error}")))?;
+        let word = match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                namespace_is_word(&reader.resolver().resolve_element(element.name()).0)
+            }
+            Event::End(element) => {
+                namespace_is_word(&reader.resolver().resolve_element(element.name()).0)
+            }
+            _ => false,
+        };
+        match event {
+            Event::Start(element) if word => {
+                if collect_raw_field_element(&element, reader.resolver(), names, &mut complex)? {
+                    in_instruction_text = true;
+                }
+            }
+            Event::Empty(element) if word => {
+                collect_raw_field_element(&element, reader.resolver(), names, &mut complex)?;
+            }
+            Event::Text(text) if in_instruction_text => {
+                if let Some(instruction) = complex.last_mut()
+                    && instruction.collecting
+                {
+                    let decoded = text.decode().map_err(|error| {
+                        Error::Other(format!("invalid field instruction text: {error}"))
+                    })?;
+                    let unescaped = quick_xml::escape::unescape(&decoded).map_err(|error| {
+                        Error::Other(format!("invalid field instruction entity: {error}"))
+                    })?;
+                    instruction.text.push_str(&unescaped);
+                }
+            }
+            Event::CData(text) if in_instruction_text => {
+                if let Some(instruction) = complex.last_mut()
+                    && instruction.collecting
+                {
+                    instruction.text.push_str(&text.decode().map_err(|error| {
+                        Error::Other(format!("invalid field instruction text: {error}"))
+                    })?);
+                }
+            }
+            Event::End(element)
+                if word && matches_local_name(element.name().as_ref(), b"instrText") =>
+            {
+                in_instruction_text = false;
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_raw_field_element(
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    names: &mut HashSet<String>,
+    complex: &mut Vec<ComplexInstruction>,
+) -> Result<bool> {
+    let name = element.name();
+    let local = local_name(name.as_ref());
+    if local == b"fldSimple" {
+        if let Some((_, instruction)) =
+            resolved_element_attribute(element, resolver, b"instr", AttributeNamespace::Word)?
+        {
+            collect_merge_field_name(&instruction, names);
+        }
+    } else if local == b"fldChar" {
+        match resolved_element_attribute(
+            element,
+            resolver,
+            b"fldCharType",
+            AttributeNamespace::Word,
+        )?
+        .map(|(_, value)| value)
+        .as_deref()
+        {
+            Some("begin") => complex.push(ComplexInstruction {
+                text: String::new(),
+                collecting: true,
+            }),
+            Some("separate") => {
+                if let Some(instruction) = complex.last_mut() {
+                    instruction.collecting = false;
+                }
+            }
+            Some("end") => {
+                if let Some(instruction) = complex.pop() {
+                    collect_merge_field_name(&instruction.text, names);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(local == b"instrText")
+}
+
+fn collect_merge_field_name(instruction: &str, names: &mut HashSet<String>) {
+    let field = Field::new(instruction, "");
+    if field.instruction.name == "MERGEFIELD"
+        && let Some(FieldArgument::Text(name)) = field.instruction.arguments.first()
+    {
+        names.insert(name.clone());
+    }
+}
+
+#[derive(Default)]
+struct BodyIdentityValues {
+    numeric_ids: Vec<String>,
+    bookmark_names: Vec<String>,
+    reference_names: Vec<String>,
+}
+
+struct BodyIdentityState {
+    used_ids: HashSet<u32>,
+    used_names: HashSet<String>,
+    next_id: u32,
+    next_name: u32,
+}
+
+impl BodyIdentityState {
+    fn from_documents(documents: &[Document]) -> Result<Self> {
+        let mut state = Self {
+            used_ids: HashSet::new(),
+            used_names: HashSet::new(),
+            next_id: 1,
+            next_name: 1,
+        };
+        for document in documents {
+            let xml = document.document.to_xml()?;
+            let values = body_identity_values(&xml)?;
+            state.used_ids.extend(
+                values
+                    .numeric_ids
+                    .iter()
+                    .filter_map(|value| value.parse::<u32>().ok()),
+            );
+            state.used_names.extend(values.bookmark_names);
+            state.used_names.extend(values.reference_names);
+        }
+        Ok(state)
+    }
+
+    fn allocate_id(&mut self) -> Result<String> {
+        loop {
+            let candidate = self.next_id;
+            self.next_id = self.next_id.checked_add(1).ok_or_else(|| {
+                Error::Other("mail merge exhausted the document identity range".to_owned())
+            })?;
+            if self.used_ids.insert(candidate) {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+
+    fn allocate_name(&mut self) -> Result<String> {
+        loop {
+            let candidate = format!("MailMerge{}", self.next_name);
+            self.next_name = self.next_name.checked_add(1).ok_or_else(|| {
+                Error::Other("mail merge exhausted the bookmark name range".to_owned())
+            })?;
+            if self.used_names.insert(candidate.clone()) {
+                return Ok(candidate);
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct BodyIdentityRemap {
+    numeric_ids: BTreeMap<String, String>,
+    bookmark_names: BTreeMap<String, String>,
+}
+
+fn remap_body_identities(document: &mut Document, state: &mut BodyIdentityState) -> Result<()> {
+    let xml = document.document.to_xml()?;
+    let values = body_identity_values(&xml)?;
+    let mut remap = BodyIdentityRemap::default();
+    for value in values.numeric_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) = remap.numeric_ids.entry(value) {
+            entry.insert(state.allocate_id()?);
+        }
+    }
+    for value in values.bookmark_names {
+        if let std::collections::btree_map::Entry::Vacant(entry) = remap.bookmark_names.entry(value)
+        {
+            entry.insert(state.allocate_name()?);
+        }
+    }
+    let updated = patch_body_identity_attributes(&xml, &remap)?;
+    document.document = CT_Document::from_xml(&updated)?;
+    Ok(())
+}
+
+fn body_identity_values(xml: &[u8]) -> Result<BodyIdentityValues> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut body_depth = None;
+    let mut sdt_properties_depth = None;
+    let mut values = BodyIdentityValues::default();
+    let mut complex = Vec::<ComplexInstruction>::new();
+    let mut in_instruction_text = false;
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid document identity XML: {error}")))?;
+        let word = match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                namespace_is_word(&reader.resolver().resolve_element(element.name()).0)
+            }
+            Event::End(element) => {
+                namespace_is_word(&reader.resolver().resolve_element(element.name()).0)
+            }
+            _ => false,
+        };
+        match event {
+            Event::Start(element) => {
+                if body_depth.is_none()
+                    && word
+                    && matches_local_name(element.name().as_ref(), b"body")
+                {
+                    body_depth = Some(depth);
+                } else if body_depth.is_some() {
+                    collect_body_identity_values(
+                        &element,
+                        reader.resolver(),
+                        sdt_properties_depth.is_some(),
+                        &mut values,
+                    )?;
+                    if collect_body_reference_values(
+                        &element,
+                        reader.resolver(),
+                        &mut complex,
+                        &mut values.reference_names,
+                    )? {
+                        in_instruction_text = true;
+                    }
+                    if word && matches_local_name(element.name().as_ref(), b"sdtPr") {
+                        sdt_properties_depth = Some(depth);
+                    }
+                }
+                depth += 1;
+            }
+            Event::Empty(element) if body_depth.is_some() => {
+                collect_body_identity_values(
+                    &element,
+                    reader.resolver(),
+                    sdt_properties_depth.is_some(),
+                    &mut values,
+                )?;
+                collect_body_reference_values(
+                    &element,
+                    reader.resolver(),
+                    &mut complex,
+                    &mut values.reference_names,
+                )?;
+            }
+            Event::Text(text) if body_depth.is_some() && in_instruction_text => {
+                append_complex_instruction_text(
+                    &text.decode().map_err(|error| {
+                        Error::Other(format!("invalid field instruction text: {error}"))
+                    })?,
+                    &mut complex,
+                )?;
+            }
+            Event::CData(text) if body_depth.is_some() && in_instruction_text => {
+                if let Some(instruction) = complex.last_mut()
+                    && instruction.collecting
+                {
+                    instruction.text.push_str(&text.decode().map_err(|error| {
+                        Error::Other(format!("invalid field instruction text: {error}"))
+                    })?);
+                }
+            }
+            Event::End(element) => {
+                if word && matches_local_name(element.name().as_ref(), b"instrText") {
+                    in_instruction_text = false;
+                }
+                depth = depth.saturating_sub(1);
+                if sdt_properties_depth == Some(depth) {
+                    sdt_properties_depth = None;
+                }
+                if body_depth == Some(depth) {
+                    body_depth = None;
+                }
+            }
+            Event::Eof => return Ok(values),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_body_identity_values(
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    in_sdt_properties: bool,
+    values: &mut BodyIdentityValues,
+) -> Result<()> {
+    let name = element.name();
+    let local = local_name(name.as_ref());
+    let namespace = resolver.resolve_element(element.name()).0;
+    if namespace_is_word(&namespace) && matches!(local, b"bookmarkStart" | b"bookmarkEnd") {
+        if let Some((_, value)) =
+            resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Word)?
+        {
+            values.numeric_ids.push(value);
+        }
+        if local == b"bookmarkStart"
+            && let Some((_, value)) =
+                resolved_element_attribute(element, resolver, b"name", AttributeNamespace::Word)?
+        {
+            values.bookmark_names.push(value);
+        }
+    } else if namespace_is_word(&namespace) && in_sdt_properties && local == b"id" {
+        if let Some((_, value)) =
+            resolved_element_attribute(element, resolver, b"val", AttributeNamespace::Word)?
+        {
+            values.numeric_ids.push(value);
+        }
+    } else if namespace_matches(&namespace, WP_NS) && local == b"docPr" {
+        if let Some((_, value)) =
+            resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Unbound)?
+        {
+            values.numeric_ids.push(value);
+        }
+    } else if namespace_is_non_visual_drawing(&namespace)
+        && local == b"cNvPr"
+        && let Some((_, value)) =
+            resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Unbound)?
+    {
+        values.numeric_ids.push(value);
+    }
+    Ok(())
+}
+
+fn collect_body_reference_values(
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    complex: &mut Vec<ComplexInstruction>,
+    references: &mut Vec<String>,
+) -> Result<bool> {
+    let (namespace, local) = resolver.resolve_element(element.name());
+    if !namespace_is_word(&namespace) {
+        return Ok(false);
+    }
+    if local.as_ref() == b"hyperlink" {
+        if let Some((_, anchor)) =
+            resolved_element_attribute(element, resolver, b"anchor", AttributeNamespace::Word)?
+        {
+            references.push(anchor);
+        }
+    } else if local.as_ref() == b"fldSimple" {
+        if let Some((_, instruction)) =
+            resolved_element_attribute(element, resolver, b"instr", AttributeNamespace::Word)?
+        {
+            collect_reference_field_name(&instruction, references);
+        }
+    } else if local.as_ref() == b"fldChar" {
+        match resolved_element_attribute(
+            element,
+            resolver,
+            b"fldCharType",
+            AttributeNamespace::Word,
+        )?
+        .map(|(_, value)| value)
+        .as_deref()
+        {
+            Some("begin") => complex.push(ComplexInstruction {
+                text: String::new(),
+                collecting: true,
+            }),
+            Some("separate") => {
+                if let Some(instruction) = complex.last_mut() {
+                    instruction.collecting = false;
+                }
+            }
+            Some("end") => {
+                if let Some(instruction) = complex.pop() {
+                    collect_reference_field_name(&instruction.text, references);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(local.as_ref() == b"instrText")
+}
+
+fn append_complex_instruction_text(text: &str, complex: &mut [ComplexInstruction]) -> Result<()> {
+    if let Some(instruction) = complex.last_mut()
+        && instruction.collecting
+    {
+        let unescaped = quick_xml::escape::unescape(text)
+            .map_err(|error| Error::Other(format!("invalid field instruction entity: {error}")))?;
+        instruction.text.push_str(&unescaped);
+    }
+    Ok(())
+}
+
+fn collect_reference_field_name(instruction: &str, references: &mut Vec<String>) {
+    if let Some(name) = reference_field_name(instruction) {
+        references.push(name);
+    }
+}
+
+fn reference_field_name(instruction: &str) -> Option<String> {
+    let field = Field::new(instruction, "");
+    if matches!(field.instruction.name.as_str(), "REF" | "PAGEREF") {
+        field
+            .instruction
+            .arguments
+            .first()
+            .and_then(argument_text)
+            .map(str::to_owned)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AttributeNamespace {
+    Relationship,
+    Word,
+    Unbound,
+}
+
+fn resolved_element_attribute(
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    local: &[u8],
+    expected: AttributeNamespace,
+) -> Result<Option<(Vec<u8>, String)>> {
+    for attribute in element.attributes() {
+        let attribute =
+            attribute.map_err(|error| Error::Other(format!("invalid XML attribute: {error}")))?;
+        let (namespace, resolved_local) = resolver.resolve_attribute(attribute.key);
+        let namespace_matches = match expected {
+            AttributeNamespace::Relationship => namespace_matches(&namespace, R_NS),
+            AttributeNamespace::Word => namespace_is_word(&namespace),
+            AttributeNamespace::Unbound => matches!(namespace, ResolveResult::Unbound),
+        };
+        if namespace_matches && resolved_local.as_ref() == local {
+            let raw = std::str::from_utf8(attribute.value.as_ref())
+                .map_err(|error| Error::Other(format!("invalid XML attribute value: {error}")))?;
+            let decoded = quick_xml::escape::unescape(raw)
+                .map_err(|error| Error::Other(format!("invalid XML attribute entity: {error}")))?;
+            return Ok(Some((
+                attribute.key.as_ref().to_vec(),
+                decoded.into_owned(),
+            )));
+        }
+    }
+    Ok(None)
+}
+
+const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const PIC_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+const DRAWING_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const WPS_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+
+fn namespace_matches(namespace: &ResolveResult<'_>, expected: &str) -> bool {
+    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == expected.as_bytes())
+}
+
+fn namespace_is_non_visual_drawing(namespace: &ResolveResult<'_>) -> bool {
+    [PIC_NS, DRAWING_NS, WPS_NS]
+        .iter()
+        .any(|expected| namespace_matches(namespace, expected))
+}
+
+fn patch_body_identity_attributes(xml: &[u8], remap: &BodyIdentityRemap) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut body_depth = None;
+    let mut sdt_properties_depth = None;
+    let mut edits = Vec::new();
+    let mut complex = Vec::<ComplexInstructionEdit>::new();
+    let mut in_instruction_text = false;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid document identity XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        let identity_namespace = match &event {
+            Event::Start(element) | Event::Empty(element) => BodyIdentityNamespace::from_resolved(
+                &reader.resolver().resolve_element(element.name()).0,
+            ),
+            Event::End(element) => BodyIdentityNamespace::from_resolved(
+                &reader.resolver().resolve_element(element.name()).0,
+            ),
+            _ => BodyIdentityNamespace::default(),
+        };
+        match event {
+            Event::Start(element) => {
+                if body_depth.is_none()
+                    && identity_namespace.word
+                    && matches_local_name(element.name().as_ref(), b"body")
+                {
+                    body_depth = Some(depth);
+                } else if body_depth.is_some() {
+                    collect_body_identity_edits(
+                        xml,
+                        before,
+                        after,
+                        &element,
+                        reader.resolver(),
+                        identity_namespace,
+                        sdt_properties_depth.is_some(),
+                        remap,
+                        &mut edits,
+                    )?;
+                    if collect_body_reference_edits(
+                        xml,
+                        before,
+                        after,
+                        &element,
+                        reader.resolver(),
+                        remap,
+                        &mut complex,
+                        &mut edits,
+                    )? {
+                        in_instruction_text = true;
+                    }
+                    if identity_namespace.word
+                        && matches_local_name(element.name().as_ref(), b"sdtPr")
+                    {
+                        sdt_properties_depth = Some(depth);
+                    }
+                }
+                depth += 1;
+            }
+            Event::Empty(element) if body_depth.is_some() => {
+                collect_body_identity_edits(
+                    xml,
+                    before,
+                    after,
+                    &element,
+                    reader.resolver(),
+                    identity_namespace,
+                    sdt_properties_depth.is_some(),
+                    remap,
+                    &mut edits,
+                )?;
+                collect_body_reference_edits(
+                    xml,
+                    before,
+                    after,
+                    &element,
+                    reader.resolver(),
+                    remap,
+                    &mut complex,
+                    &mut edits,
+                )?;
+            }
+            Event::Text(text) if body_depth.is_some() && in_instruction_text => {
+                if let Some(instruction) = complex.last_mut()
+                    && instruction.collecting
+                {
+                    let decoded = text.decode().map_err(|error| {
+                        Error::Other(format!("invalid field instruction text: {error}"))
+                    })?;
+                    let decoded = quick_xml::escape::unescape(&decoded).map_err(|error| {
+                        Error::Other(format!("invalid field instruction entity: {error}"))
+                    })?;
+                    instruction.text.push_str(&decoded);
+                    instruction.spans.push((before, after));
+                }
+            }
+            Event::CData(text) if body_depth.is_some() && in_instruction_text => {
+                if let Some(instruction) = complex.last_mut()
+                    && instruction.collecting
+                {
+                    instruction.text.push_str(&text.decode().map_err(|error| {
+                        Error::Other(format!("invalid field instruction text: {error}"))
+                    })?);
+                    instruction.spans.push((before, after));
+                }
+            }
+            Event::End(element) => {
+                if identity_namespace.word
+                    && matches_local_name(element.name().as_ref(), b"instrText")
+                {
+                    in_instruction_text = false;
+                }
+                depth = depth.saturating_sub(1);
+                if sdt_properties_depth == Some(depth) {
+                    sdt_properties_depth = None;
+                }
+                if body_depth == Some(depth) {
+                    body_depth = None;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    let mut updated = xml.to_vec();
+    edits.sort_by_key(|edit: &FieldSourceEdit| edit.start);
+    for edit in edits.into_iter().rev() {
+        updated.splice(edit.start..edit.end, edit.replacement);
+    }
+    Ok(updated)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_body_identity_edits(
+    xml: &[u8],
+    start: usize,
+    end: usize,
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    namespace: BodyIdentityNamespace,
+    in_sdt_properties: bool,
+    remap: &BodyIdentityRemap,
+    edits: &mut Vec<FieldSourceEdit>,
+) -> Result<()> {
+    let name = element.name();
+    let local = local_name(name.as_ref());
+    if namespace.word && matches!(local, b"bookmarkStart" | b"bookmarkEnd") {
+        add_identity_attribute_edit(
+            xml,
+            start,
+            end,
+            element,
+            resolver,
+            b"id",
+            AttributeNamespace::Word,
+            &remap.numeric_ids,
+            edits,
+        )?;
+        if local == b"bookmarkStart" {
+            add_identity_attribute_edit(
+                xml,
+                start,
+                end,
+                element,
+                resolver,
+                b"name",
+                AttributeNamespace::Word,
+                &remap.bookmark_names,
+                edits,
+            )?;
+        }
+    } else if namespace.word && in_sdt_properties && local == b"id" {
+        add_identity_attribute_edit(
+            xml,
+            start,
+            end,
+            element,
+            resolver,
+            b"val",
+            AttributeNamespace::Word,
+            &remap.numeric_ids,
+            edits,
+        )?;
+    } else if namespace.wordprocessing_drawing && local == b"docPr"
+        || namespace.non_visual_drawing && local == b"cNvPr"
+    {
+        add_identity_attribute_edit(
+            xml,
+            start,
+            end,
+            element,
+            resolver,
+            b"id",
+            AttributeNamespace::Unbound,
+            &remap.numeric_ids,
+            edits,
+        )?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Default)]
+struct BodyIdentityNamespace {
+    word: bool,
+    wordprocessing_drawing: bool,
+    non_visual_drawing: bool,
+}
+
+impl BodyIdentityNamespace {
+    fn from_resolved(namespace: &ResolveResult<'_>) -> Self {
+        Self {
+            word: namespace_is_word(namespace),
+            wordprocessing_drawing: namespace_matches(namespace, WP_NS),
+            non_visual_drawing: namespace_is_non_visual_drawing(namespace),
+        }
+    }
+}
+
+fn add_identity_attribute_edit(
+    xml: &[u8],
+    start: usize,
+    end: usize,
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    local: &[u8],
+    expected: AttributeNamespace,
+    replacements: &BTreeMap<String, String>,
+    edits: &mut Vec<FieldSourceEdit>,
+) -> Result<()> {
+    let Some((key, old)) = resolved_element_attribute(element, resolver, local, expected)? else {
+        return Ok(());
+    };
+    let Some(replacement) = replacements.get(&old) else {
+        return Ok(());
+    };
+    let Some((relative_start, relative_end)) = attribute_value_span(&xml[start..end], &key) else {
+        return Err(Error::Other(
+            "document identity attribute source was not found".to_owned(),
+        ));
+    };
+    edits.push(FieldSourceEdit {
+        start: start + relative_start,
+        end: start + relative_end,
+        replacement: replacement.as_bytes().to_vec(),
+    });
+    Ok(())
+}
+
+struct ComplexInstructionEdit {
+    text: String,
+    collecting: bool,
+    spans: Vec<(usize, usize)>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_body_reference_edits(
+    xml: &[u8],
+    start: usize,
+    end: usize,
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    remap: &BodyIdentityRemap,
+    complex: &mut Vec<ComplexInstructionEdit>,
+    edits: &mut Vec<FieldSourceEdit>,
+) -> Result<bool> {
+    let (namespace, local) = resolver.resolve_element(element.name());
+    if !namespace_is_word(&namespace) {
+        return Ok(false);
+    }
+    if local.as_ref() == b"hyperlink" {
+        add_identity_attribute_edit(
+            xml,
+            start,
+            end,
+            element,
+            resolver,
+            b"anchor",
+            AttributeNamespace::Word,
+            &remap.bookmark_names,
+            edits,
+        )?;
+    } else if local.as_ref() == b"fldSimple" {
+        if let Some((key, instruction)) =
+            resolved_element_attribute(element, resolver, b"instr", AttributeNamespace::Word)?
+            && let Some(updated) = remap_reference_instruction(&instruction, &remap.bookmark_names)
+        {
+            add_attribute_value_edit(xml, start, end, &key, &updated, true, edits)?;
+        }
+    } else if local.as_ref() == b"fldChar" {
+        match resolved_element_attribute(
+            element,
+            resolver,
+            b"fldCharType",
+            AttributeNamespace::Word,
+        )?
+        .map(|(_, value)| value)
+        .as_deref()
+        {
+            Some("begin") => complex.push(ComplexInstructionEdit {
+                text: String::new(),
+                collecting: true,
+                spans: Vec::new(),
+            }),
+            Some("separate") => {
+                if let Some(instruction) = complex.last_mut() {
+                    instruction.collecting = false;
+                }
+            }
+            Some("end") => {
+                if let Some(instruction) = complex.pop()
+                    && let Some(updated) =
+                        remap_reference_instruction(&instruction.text, &remap.bookmark_names)
+                    && let Some((first, remaining)) = instruction.spans.split_first()
+                {
+                    edits.push(FieldSourceEdit {
+                        start: first.0,
+                        end: first.1,
+                        replacement: quick_xml::escape::escape(&updated)
+                            .into_owned()
+                            .into_bytes(),
+                    });
+                    edits.extend(remaining.iter().map(|(start, end)| FieldSourceEdit {
+                        start: *start,
+                        end: *end,
+                        replacement: Vec::new(),
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(local.as_ref() == b"instrText")
+}
+
+fn add_attribute_value_edit(
+    xml: &[u8],
+    start: usize,
+    end: usize,
+    key: &[u8],
+    replacement: &str,
+    escape: bool,
+    edits: &mut Vec<FieldSourceEdit>,
+) -> Result<()> {
+    let Some((relative_start, relative_end)) = attribute_value_span(&xml[start..end], key) else {
+        return Err(Error::Other(
+            "document identity attribute source was not found".to_owned(),
+        ));
+    };
+    let replacement = if escape {
+        quick_xml::escape::escape(replacement)
+            .into_owned()
+            .into_bytes()
+    } else {
+        replacement.as_bytes().to_vec()
+    };
+    edits.push(FieldSourceEdit {
+        start: start + relative_start,
+        end: start + relative_end,
+        replacement,
+    });
+    Ok(())
+}
+
+fn remap_reference_instruction(
+    instruction: &str,
+    names: &BTreeMap<String, String>,
+) -> Option<String> {
+    let old = reference_field_name(instruction)?;
+    let replacement = names.get(&old)?;
+    let command_end = instruction
+        .find(char::is_whitespace)
+        .unwrap_or(instruction.len());
+    let relative = instruction[command_end..].find(&old)?;
+    let start = command_end + relative;
+    let mut updated = instruction.to_owned();
+    updated.replace_range(start..start + old.len(), replacement);
+    Some(updated)
+}
+
+fn attribute_value_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize, usize)> {
+    let mut index = 1usize;
+    while index < element.len() && !element[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    while index < element.len() {
+        while index < element.len() && element[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= element.len() || matches!(element[index], b'>' | b'/') {
+            return None;
+        }
+        let name_start = index;
+        while index < element.len()
+            && !element[index].is_ascii_whitespace()
+            && element[index] != b'='
+        {
+            index += 1;
+        }
+        let name_end = index;
+        while index < element.len() && element[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if element.get(index) != Some(&b'=') {
+            return None;
+        }
+        index += 1;
+        while index < element.len() && element[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let quote = *element.get(index)?;
+        if !matches!(quote, b'\'' | b'"') {
+            return None;
+        }
+        index += 1;
+        let value_start = index;
+        while index < element.len() && element[index] != quote {
+            index += 1;
+        }
+        let value_end = index;
+        if &element[name_start..name_end] == attribute_name {
+            return Some((value_start, value_end));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn empty_section_properties() -> CT_SectPr {
+    CT_SectPr {
+        page_width: None,
+        page_height: None,
+        orientation: None,
+        margin_top: None,
+        margin_right: None,
+        margin_bottom: None,
+        margin_left: None,
+        gutter: None,
+        header_distance: None,
+        footer_distance: None,
+        section_type: None,
+        columns: None,
+        title_pg: None,
+        header_refs: Vec::new(),
+        footer_refs: Vec::new(),
+        extra_xml: Vec::new(),
+        change: None,
     }
 }
 
@@ -249,6 +1412,7 @@ struct Evaluator<'a> {
     results: Vec<FieldEvaluation>,
     sequences: BTreeMap<(String, String), SequenceState>,
     nested_outcomes: Vec<BTreeMap<usize, FieldOutcome>>,
+    missing_merge_fields_as_empty: bool,
 }
 
 impl<'a> Evaluator<'a> {
@@ -266,7 +1430,14 @@ impl<'a> Evaluator<'a> {
             results: Vec::new(),
             sequences: BTreeMap::new(),
             nested_outcomes: Vec::new(),
+            missing_merge_fields_as_empty: false,
         }
+    }
+
+    fn for_mail_merge(document: &'a Document, context: &'a FieldEvaluationContext) -> Self {
+        let mut evaluator = Self::new(document, context);
+        evaluator.missing_merge_fields_as_empty = true;
+        evaluator
     }
 
     fn evaluate_story(&mut self, story: &str, paragraphs: &[&CT_P]) {
@@ -764,6 +1935,9 @@ impl<'a> Evaluator<'a> {
             return keep("MERGEFIELD requires a field name");
         };
         let Some(value) = self.context.merge_fields.get(name) else {
+            if self.missing_merge_fields_as_empty {
+                return FieldOutcome::Resolved(String::new());
+            }
             return keep(&format!("MERGEFIELD input {name} was not supplied"));
         };
         if value.is_empty() {
@@ -875,12 +2049,14 @@ fn normal_note_paragraphs(notes: &CT_Footnotes) -> Vec<&CT_P> {
 #[derive(Clone, Copy)]
 enum PackageStoryKind {
     HeaderFooter,
+    Footnotes,
     Endnotes,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StoryElementKind {
     HeaderFooterRoot,
+    FootnotesRoot,
     EndnotesRoot,
     NormalNote,
     Paragraph,
@@ -986,6 +2162,21 @@ fn story_paragraph_spans(xml: &[u8], story_kind: PackageStoryKind) -> Result<Vec
                     {
                         StoryElementKind::EndnotesRoot
                     }
+                    PackageStoryKind::Footnotes
+                        if stack.is_empty()
+                            && word
+                            && matches_local_name(element.name().as_ref(), b"footnotes") =>
+                    {
+                        StoryElementKind::FootnotesRoot
+                    }
+                    PackageStoryKind::Footnotes
+                        if parent == Some(StoryElementKind::FootnotesRoot)
+                            && word
+                            && matches_local_name(element.name().as_ref(), b"footnote")
+                            && note_is_normal(&element) =>
+                    {
+                        StoryElementKind::NormalNote
+                    }
                     PackageStoryKind::Endnotes
                         if parent == Some(StoryElementKind::EndnotesRoot)
                             && word
@@ -1002,6 +2193,13 @@ fn story_paragraph_spans(xml: &[u8], story_kind: PackageStoryKind) -> Result<Vec
                         StoryElementKind::Paragraph
                     }
                     PackageStoryKind::Endnotes
+                        if parent == Some(StoryElementKind::NormalNote)
+                            && word
+                            && matches_local_name(element.name().as_ref(), b"p") =>
+                    {
+                        StoryElementKind::Paragraph
+                    }
+                    PackageStoryKind::Footnotes
                         if parent == Some(StoryElementKind::NormalNote)
                             && word
                             && matches_local_name(element.name().as_ref(), b"p") =>
