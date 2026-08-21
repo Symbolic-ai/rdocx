@@ -7,7 +7,7 @@ ship the completed milestone with the community-requested ordered-body and
 complete-layout reader surfaces. Keep each operation package-preserving and
 bounded to its declared document stories. Establish reviewed release notes as
 the permanent publication contract before the incubating 0.4.0 and stable
-0.8.0 releases.
+0.8.0 releases through a reusable `/release-notes` ceremony.
 
 ## Spec references
 

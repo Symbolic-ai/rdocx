@@ -2229,18 +2229,22 @@ gate, and the unchanged hash harness also pass.
 ### F-X034, Reviewed release notes for every release (S)
 
 Every release tag carries reviewed, human-written release notes rather than
-only GitHub's generated commit summary. The versioned `CHANGELOG.md` section
-for the exact tag records highlights, user-visible additions and fixes,
-compatibility or migration guidance, and contributor credit. Release
-preflight rejects a missing, empty, or placeholder section. The publish
-workflow renders that reviewed section and passes it to `gh release create`
-without replacing it with `--generate-notes`.
+only GitHub's generated commit summary. A canonical `/release-notes TAG`
+ceremony reads the release plan, completed delivery records, relevant commits,
+and contributor history, then prepares the versioned `CHANGELOG.md` section
+with highlights, user-visible additions and fixes, compatibility or migration
+guidance, and contributor credit. Its generated agent skill keeps the ceremony
+identical across tools. Release preflight rejects a missing, empty, or
+placeholder section. The publish workflow renders that reviewed section and
+passes it to `gh release create` without replacing it with
+`--generate-notes`.
 
 **Depends on**: F-X025.
-**Test gate**: regression. Release-note extraction returns the exact versioned
-changelog section for both tag families, rejects missing or incomplete notes,
-and the publish workflow can create a GitHub release only from that reviewed
-output.
+**Test gate**: regression. The custom command prepares complete notes from the
+reviewed release record, its generated skill is in sync, release-note
+extraction returns the exact versioned changelog section for both tag families,
+missing or incomplete notes fail, and the publish workflow can create a GitHub
+release only from that reviewed output.
 
 ### F-X035, Tag rpptx-v0.4.0 (S)
 

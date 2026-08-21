@@ -858,8 +858,9 @@ implementation gets wrong, and the two after it inherit whatever it decides.
 
 #### Sprint S51, Automation milestone and community release
 
-**Goal**: close M16, add the two requested native reader surfaces, establish
-reviewed release notes, and publish the coherent incubating and stable trains.
+**Goal**: close M16, add the two requested native reader surfaces, establish a
+custom reviewed release-notes ceremony, and publish the coherent incubating
+and stable trains.
 
 | F-ID | Title | Size |
 |------|-------|------|
