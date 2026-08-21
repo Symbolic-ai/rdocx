@@ -461,6 +461,33 @@ the left for even pages. The marker does not affect text placement. Existing
 render methods select accepted layout and retain the normal and deterministic
 caches. Option-taking tracked renders are uncached.
 
+### Word watermarks
+
+Header `w:pict` content has a conservative renderer-only projection. A direct
+VML shape with finite positive point bounds becomes a watermark only when it
+contains one VML text path string or one relationship-namespaced image id.
+Namespace aliases and shadows are resolved by expanded name. Unsupported,
+ambiguous, malformed, or unrelated VML remains preserved but does not enter
+layout. Named VML colours and six-digit RGB values lower to shared colour.
+Unsupported colours and unresolved image relationships suppress that watermark
+and add a stable diagnostic.
+
+Text watermarks shape with the deterministic font manager and image watermarks
+reuse the scoped relationship entry in the layout's collision-safe
+`MediaRegistry`. Both lower to an opacity-bearing `GroupElement` centered in the
+section margin rectangle, with rotation around the local watermark centre.
+Pagination inserts the selected group before behind-body drawings, ordinary
+header content, and body elements. PDF and raster backends therefore use their
+existing recursive group paths without watermark-specific code.
+
+Header selection follows Word's variants rather than content emptiness. A
+title page selects its first variant even when that variant is blank. When the
+decoded `w:evenAndOddHeaders` setting is active, displayed even page numbers
+select the even variant even when it is blank. `w:pgNumType/@w:start` resets
+that displayed parity for a section. Missing later variants inherit only the
+same type from the preceding section. No selected first or even variant borrows
+default header, footer, or watermark content.
+
 Every public document mutation and mutable-accessor entry point clears both
 caches before changing or exposing content. Rendering every page through the
 single-page entry point therefore performs one layout per font mode instead of

@@ -79,6 +79,17 @@ proves that unmodeled XML and namespace declarations retain their exact bytes
 through comparison, save, and reopen. No sample invokes comparison, so the
 49-entry hash harness remains unchanged.
 
+The watermark golden gate builds a five-page document in code, renders with
+bundled fonts, and compares the exact PNG-byte digest for every page. It also
+requires the selected watermark group to precede ordinary header and body
+elements. Focused tests cover aliased VML projection, raw header preservation,
+canonical generated child order, package-visible first and even variants,
+same-type section inheritance, displayed page-number parity, header-scoped
+image relationships, forced media-id collisions, blank selected variants,
+entity-decoded settings, unsupported colour and media diagnostics, atomic
+rejection, and margin-relative centering. No sample authors a watermark, so the
+49-entry hash harness remains unchanged.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

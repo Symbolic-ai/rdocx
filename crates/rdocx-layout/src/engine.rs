@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
 use rdocx_oxml::drawing::WrapType;
-use rdocx_oxml::header_footer::HdrFtrType;
+use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
 use rdocx_oxml::numbering::ST_LvlSuffix;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
@@ -24,9 +24,9 @@ use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
 use oxml_layout::{
-    Color, Diagnostic, DocumentMetadata, FieldKind, FontManager, GroupElement, InlineItem,
-    LayoutResult, NoteRef, NoteStream, PageFrame, PositionedElement, Rect, Result, TextSegment,
-    Underline, break_into_lines,
+    Color, Diagnostic, DocumentMetadata, FieldKind, FontManager, GlyphRun, GroupElement,
+    InlineItem, LayoutResult, NoteRef, NoteStream, PageFrame, Point, PositionedElement, Rect,
+    Result, TextSegment, Transform, Underline, break_into_lines,
 };
 
 #[derive(Clone, Copy)]
@@ -347,6 +347,7 @@ impl Engine {
                             geometry,
                             header_footer,
                             title_pg,
+                            page_number_start: section_page_number_start(&sect_pr),
                         });
                         current_sect_pr = Some(sect_pr);
                     }
@@ -388,6 +389,7 @@ impl Engine {
             geometry: final_geometry,
             header_footer: final_hf,
             title_pg: final_title_pg,
+            page_number_start: section_page_number_start(&final_sect_pr),
         });
 
         // Lay the notes out once per width, before pagination, so the paginator
@@ -1640,6 +1642,183 @@ fn sect_pr_to_geometry(sect_pr: &CT_SectPr) -> PageGeometry {
     }
 }
 
+fn section_page_number_start(sect_pr: &CT_SectPr) -> Option<usize> {
+    for raw in &sect_pr.extra_xml {
+        let Some((name, raw_attributes)) = raw_root_start_tag(raw) else {
+            continue;
+        };
+        let Some(attributes) = parse_raw_attributes(raw_attributes) else {
+            continue;
+        };
+        if xml_local_name(name) != b"pgNumType"
+            || !raw_name_has_namespace(name, &attributes, rdocx_oxml::namespace::W_NS, false)
+        {
+            continue;
+        }
+        let (_, value) = attributes.iter().find(|(attribute_name, _)| {
+            xml_local_name(attribute_name) == b"start"
+                && raw_name_has_namespace(
+                    attribute_name,
+                    &attributes,
+                    rdocx_oxml::namespace::W_NS,
+                    true,
+                )
+        })?;
+        return decode_xml_attribute(value)?.parse().ok();
+    }
+    None
+}
+
+fn xml_local_name(name: &[u8]) -> &[u8] {
+    name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
+}
+
+fn raw_root_start_tag(raw: &[u8]) -> Option<(&[u8], &[u8])> {
+    let mut cursor = 0usize;
+    while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    if raw.get(cursor) != Some(&b'<') {
+        return None;
+    }
+    cursor += 1;
+    if matches!(raw.get(cursor), Some(b'!' | b'?' | b'/')) {
+        return None;
+    }
+    let name_start = cursor;
+    while cursor < raw.len()
+        && !raw[cursor].is_ascii_whitespace()
+        && !matches!(raw[cursor], b'>' | b'/')
+    {
+        cursor += 1;
+    }
+    if cursor == name_start {
+        return None;
+    }
+    let name_end = cursor;
+    let attributes_start = cursor;
+    let mut quote = None;
+    while cursor < raw.len() {
+        match (quote, raw[cursor]) {
+            (None, b'\'' | b'"') => quote = Some(raw[cursor]),
+            (Some(expected), found) if expected == found => quote = None,
+            (None, b'>') => {
+                return Some((&raw[name_start..name_end], &raw[attributes_start..cursor]));
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn parse_raw_attributes(attributes: &[u8]) -> Option<Vec<(&[u8], &[u8])>> {
+    let mut parsed = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < attributes.len() {
+        while cursor < attributes.len() && attributes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor == attributes.len() || attributes[cursor] == b'/' {
+            break;
+        }
+        let name_start = cursor;
+        while cursor < attributes.len()
+            && !attributes[cursor].is_ascii_whitespace()
+            && attributes[cursor] != b'='
+        {
+            cursor += 1;
+        }
+        let name_end = cursor;
+        while cursor < attributes.len() && attributes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if attributes.get(cursor) != Some(&b'=') {
+            cursor = cursor.saturating_add(1);
+            continue;
+        }
+        cursor += 1;
+        while cursor < attributes.len() && attributes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let quote = *attributes.get(cursor)?;
+        if !matches!(quote, b'\'' | b'"') {
+            return None;
+        }
+        cursor += 1;
+        let value_start = cursor;
+        while cursor < attributes.len() && attributes[cursor] != quote {
+            cursor += 1;
+        }
+        let value_end = cursor;
+        cursor += 1;
+        parsed.push((
+            &attributes[name_start..name_end],
+            &attributes[value_start..value_end],
+        ));
+    }
+    Some(parsed)
+}
+
+fn raw_name_has_namespace(
+    name: &[u8],
+    attributes: &[(&[u8], &[u8])],
+    expected: &str,
+    is_attribute: bool,
+) -> bool {
+    let prefix = name
+        .iter()
+        .rposition(|byte| *byte == b':')
+        .map(|separator| &name[..separator]);
+    let namespace = match prefix {
+        Some(prefix) => attributes.iter().find_map(|(attribute_name, value)| {
+            attribute_name
+                .strip_prefix(b"xmlns:")
+                .is_some_and(|declared| declared == prefix)
+                .then_some(*value)
+        }),
+        None if !is_attribute => attributes
+            .iter()
+            .find_map(|(attribute_name, value)| (*attribute_name == b"xmlns").then_some(*value)),
+        None => None,
+    };
+    match namespace {
+        Some(namespace) => decode_xml_attribute(namespace).is_some_and(|value| value == expected),
+        None => prefix == Some(b"w".as_slice()) && expected == rdocx_oxml::namespace::W_NS,
+    }
+}
+
+fn decode_xml_attribute(value: &[u8]) -> Option<String> {
+    let value = std::str::from_utf8(value).ok()?;
+    let mut decoded = String::with_capacity(value.len());
+    let mut cursor = 0usize;
+    while let Some(relative_start) = value[cursor..].find('&') {
+        let entity_start = cursor + relative_start;
+        decoded.push_str(&value[cursor..entity_start]);
+        let entity_end = entity_start + value[entity_start..].find(';')?;
+        let entity = &value[entity_start + 1..entity_end];
+        match entity {
+            "amp" => decoded.push('&'),
+            "apos" => decoded.push('\''),
+            "gt" => decoded.push('>'),
+            "lt" => decoded.push('<'),
+            "quot" => decoded.push('"'),
+            numeric if numeric.starts_with("#x") => {
+                decoded.push(char::from_u32(
+                    u32::from_str_radix(&numeric[2..], 16).ok()?,
+                )?);
+            }
+            numeric if numeric.starts_with('#') => {
+                decoded.push(char::from_u32(numeric[1..].parse().ok()?)?);
+            }
+            _ => return None,
+        }
+        cursor = entity_end + 1;
+    }
+    decoded.push_str(&value[cursor..]);
+    Some(decoded)
+}
+
 /// Lay out header and footer content (both Default and First-page).
 fn layout_header_footer(
     sect_pr: &CT_SectPr,
@@ -1655,17 +1834,39 @@ fn layout_header_footer(
     let mut footer_blocks = Vec::new();
     let mut first_header_blocks = Vec::new();
     let mut first_footer_blocks = Vec::new();
+    let mut even_header_blocks = Vec::new();
+    let mut even_footer_blocks = Vec::new();
+    let mut watermark = None;
+    let mut first_watermark = None;
+    let mut even_watermark = None;
+    let even_headers_active = sect_pr
+        .header_refs
+        .iter()
+        .any(|reference| reference.hdr_ftr_type == HdrFtrType::Even);
 
     let geometry = sect_pr_to_geometry(sect_pr);
     let width = geometry.content_width();
 
     for href in &sect_pr.header_refs {
-        let target_blocks = match href.hdr_ftr_type {
-            HdrFtrType::Default => &mut header_blocks,
-            HdrFtrType::First => &mut first_header_blocks,
-            _ => continue, // skip Even for now
+        let (target_blocks, target_watermark) = match href.hdr_ftr_type {
+            HdrFtrType::Default => (&mut header_blocks, &mut watermark),
+            HdrFtrType::First => (&mut first_header_blocks, &mut first_watermark),
+            HdrFtrType::Even => (&mut even_header_blocks, &mut even_watermark),
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
+            if target_watermark.is_none()
+                && let Some(projected) = hdr.watermarks().first()
+            {
+                *target_watermark = layout_watermark(
+                    projected,
+                    &href.rel_id,
+                    input,
+                    media,
+                    fm,
+                    geometry,
+                    diagnostics,
+                )?;
+            }
             for para in &hdr.paragraphs {
                 let block = layout_paragraph(
                     para,
@@ -1687,7 +1888,7 @@ fn layout_header_footer(
         let target_blocks = match fref.hdr_ftr_type {
             HdrFtrType::Default => &mut footer_blocks,
             HdrFtrType::First => &mut first_footer_blocks,
-            _ => continue, // skip Even for now
+            HdrFtrType::Even => &mut even_footer_blocks,
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
             for para in &ftr.paragraphs {
@@ -1713,10 +1914,147 @@ fn layout_header_footer(
             footer_blocks,
             first_header_blocks,
             first_footer_blocks,
+            even_header_blocks,
+            even_footer_blocks,
+            even_headers_active,
+            watermark,
+            first_watermark,
+            even_watermark,
         }))
     } else {
         Ok(None)
     }
+}
+
+fn layout_watermark(
+    watermark: &VmlWatermark,
+    header_relationship_id: &str,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    geometry: PageGeometry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<GroupElement>> {
+    let (width, height, rotation, opacity) = match watermark {
+        VmlWatermark::Text {
+            width_pt,
+            height_pt,
+            rotation_degrees,
+            opacity,
+            ..
+        }
+        | VmlWatermark::Image {
+            width_pt,
+            height_pt,
+            rotation_degrees,
+            opacity,
+            ..
+        } => (*width_pt, *height_pt, *rotation_degrees, *opacity),
+    };
+    let translate = Transform {
+        e: geometry.margin_left + (geometry.content_width() - width) / 2.0,
+        f: geometry.margin_top + (geometry.content_height() - height) / 2.0,
+        ..Transform::IDENTITY
+    };
+    let transform = Transform::rotate_about(rotation, width / 2.0, height / 2.0).then(translate);
+    let children = match watermark {
+        VmlWatermark::Text {
+            text,
+            color,
+            font_family,
+            ..
+        } => {
+            let Some(color) = vml_color(color) else {
+                diagnostics.push(Diagnostic {
+                    message: format!("VML watermark colour {color:?} is unsupported"),
+                });
+                return Ok(None);
+            };
+            let estimated = width / (text.chars().count().max(1) as f64 * 0.62);
+            let font_size = (height * 0.62).min(estimated).max(1.0);
+            let font_id = fm.resolve_font_for_text(
+                font_family.as_deref().or(Some("Calibri")),
+                false,
+                false,
+                text,
+            )?;
+            let shaped = fm.shape_text(font_id, text, font_size)?;
+            let metrics = fm.metrics(font_id, font_size)?;
+            vec![PositionedElement::Text(GlyphRun {
+                origin: Point {
+                    x: (width - shaped.width) / 2.0,
+                    y: (height + metrics.ascent - metrics.descent) / 2.0,
+                },
+                font_id,
+                font_size,
+                glyph_ids: shaped.glyph_ids,
+                advances: shaped.advances,
+                text: text.clone(),
+                color,
+                bold: false,
+                italic: false,
+                field_kind: None,
+                note: None,
+            })]
+        }
+        VmlWatermark::Image {
+            relationship_id, ..
+        } => {
+            let scoped_id = format!("{header_relationship_id}\0{relationship_id}");
+            let Some(image) = input.images.get(&scoped_id) else {
+                diagnostics.push(Diagnostic {
+                    message: format!(
+                        "VML watermark image relationship {relationship_id} in header {header_relationship_id} was not resolved"
+                    ),
+                });
+                return Ok(None);
+            };
+            let data = image.data.clone();
+            vec![PositionedElement::Image {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height,
+                },
+                content_type: image.content_type.clone(),
+                media_id: media.id_for_relationship(&scoped_id),
+                data,
+            }]
+        }
+    };
+    Ok(Some(GroupElement {
+        transform,
+        clip: None,
+        opacity,
+        effects: Vec::new(),
+        children,
+    }))
+}
+
+fn vml_color(value: &str) -> Option<Color> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let hex = match normalized.as_str() {
+        "black" => "000000",
+        "silver" => "c0c0c0",
+        "gray" | "grey" => "808080",
+        "white" => "ffffff",
+        "maroon" => "800000",
+        "red" => "ff0000",
+        "purple" => "800080",
+        "fuchsia" | "magenta" => "ff00ff",
+        "green" => "008000",
+        "lime" => "00ff00",
+        "olive" => "808000",
+        "yellow" => "ffff00",
+        "navy" => "000080",
+        "blue" => "0000ff",
+        "teal" => "008080",
+        "aqua" | "cyan" => "00ffff",
+        _ => normalized.trim_start_matches('#'),
+    };
+    (hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| Color::from_hex(hex))
 }
 
 /// Resolve the effective font family for a run, considering theme fonts.
@@ -2567,6 +2905,7 @@ mod tests {
             geometry: PageGeometry::default(),
             header_footer: None,
             title_pg: false,
+            page_number_start: None,
         }];
 
         let (pages, _) = paginator::paginate_sections(
@@ -2591,6 +2930,52 @@ mod tests {
 
         assert!(images.contains(&(b"\x01\x02\x03".as_slice(), "image/png", inline_id)));
         assert!(images.contains(&(b"\x04\x05\x06".as_slice(), "image/jpeg", anchor_id)));
+    }
+
+    #[test]
+    fn watermark_image_uses_the_collision_safe_media_registry_id() {
+        let mut input = make_input_with_text("body");
+        input.images.insert(
+            "rIdHeader\0rIdOrdinary".to_owned(),
+            ImageData {
+                data: vec![1],
+                content_type: "image/png".to_owned(),
+            },
+        );
+        input.images.insert(
+            "rIdHeader\0rIdWatermark".to_owned(),
+            ImageData {
+                data: vec![2],
+                content_type: "image/png".to_owned(),
+            },
+        );
+        let media = MediaRegistry::with_hasher(&input.images, |_| MediaId(7));
+        let expected = media.id_for_relationship("rIdHeader\0rIdWatermark");
+        let mut font_manager = FontManager::new();
+        let mut diagnostics = Vec::new();
+        let group = layout_watermark(
+            &VmlWatermark::Image {
+                relationship_id: "rIdWatermark".to_owned(),
+                width_pt: 72.0,
+                height_pt: 36.0,
+                rotation_degrees: 0.0,
+                opacity: 0.5,
+            },
+            "rIdHeader",
+            &input,
+            &media,
+            &mut font_manager,
+            PageGeometry::default(),
+            &mut diagnostics,
+        )
+        .unwrap()
+        .unwrap();
+        let PositionedElement::Image { media_id, data, .. } = &group.children[0] else {
+            panic!("expected watermark image");
+        };
+        assert_eq!(*media_id, expected);
+        assert_eq!(data, &[2]);
+        assert!(diagnostics.is_empty());
     }
 
     #[test]
@@ -2645,6 +3030,7 @@ mod tests {
             geometry: PageGeometry::default(),
             header_footer: None,
             title_pg: false,
+            page_number_start: None,
         }];
         let media = MediaRegistry::new(&HashMap::new());
         let (pages, _) = paginator::paginate_sections(
@@ -2772,6 +3158,27 @@ mod tests {
         assert!((geom.page_height - 792.0).abs() < 0.01);
         assert!((geom.margin_top - 72.0).abs() < 0.01);
         assert!((geom.content_width() - 468.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn section_page_number_start_requires_a_direct_word_child_and_decodes_entities() {
+        let mut section = CT_SectPr::default_letter();
+        section.extra_xml = vec![
+            br#"<x:pgNumType xmlns:x="urn:producer" x:start="2"/>"#.to_vec(),
+            br#"<w:pgNumType xmlns:w="urn:producer" w:start="2"/>"#.to_vec(),
+            format!(
+                r#"<w:wrapper xmlns:w="{}"><w:pgNumType w:start="2"/></w:wrapper>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+            format!(
+                r#"<q:pgNumType xmlns:q="{}" q:start="&#x31;"/>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+        ];
+
+        assert_eq!(section_page_number_start(&section), Some(1));
     }
 
     #[test]

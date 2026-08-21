@@ -303,6 +303,15 @@ layout compares complete bytes, assigns deterministic alternate IDs when two
 compact keys collide, and is shared by the lower-level layout and pagination
 entry points.
 
+Header VML watermarks keep the same ownership split. `rdocx-oxml` retains the
+complete `w:pict` source and projects only supported `v:shape` text paths and
+images for layout. The `rdocx` facade owns atomic text and image authoring,
+header-local relationships, section inheritance, and package-visible first and
+even variants. `rdocx-layout` consumes that projection, resolves header images
+through the shared `MediaRegistry`, and lowers each selected watermark to a
+backend-neutral group before pagination. Unsupported VML stays opaque and no
+backend parses WordprocessingML.
+
 Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
 the paginator reserves, splits and draws them. Note placement is part of
 pagination rather than a pass that runs after it, because a page's body height

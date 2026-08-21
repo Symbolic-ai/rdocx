@@ -356,6 +356,22 @@ paths. The existing methods keep their accepted default. Python, WASM, and CLI
 surfaces do not implicitly expose the selector and retain their existing
 rendering behavior.
 
+Native Word callers author watermarks with `Document::set_text_watermark` and
+`Document::set_image_watermark`. Text uses fixed Word-like defaults of 468 by
+117 points, 315 degree rotation, `D9D9D9`, Calibri, and 50 percent opacity.
+Image callers provide positive width and height, while rotation stays zero and
+opacity stays at 50 percent. Both methods replace one API-owned watermark in
+every active default, first, and enabled even header variant atomically. These
+methods are additive on the native pre-1.0 facade. Python, WASM, and CLI gain no
+watermark methods and continue to preserve watermarks already authored through
+their owned `Document`.
+
+The public low-level `VmlWatermark` projection and the added paginator section
+and header-selection fields are part of the intentional pre-1.0 Rust source
+break for the next stable family. They expose renderer input, not a second
+authoring surface. Opened header XML remains the serialization authority, and
+callers should use the native `Document` methods for mutation.
+
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. Full struct literals written for

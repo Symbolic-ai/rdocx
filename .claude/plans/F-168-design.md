@@ -1,6 +1,6 @@
 # F-168, Watermarks
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: S
 **Depends on**: none
@@ -142,15 +142,15 @@ contain watermarks. Any delta is unrelated and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Parse recognized header VML text and image watermark projections while retaining raw bytes.
-- [ ] Write canonical generated VML and preserve unrelated header content.
-- [ ] Add native setters with header-local media relationships and atomic cache invalidation.
-- [ ] Resolve header-local image ids without cross-part collisions.
-- [ ] Lower text and image watermarks to deterministic neutral layout groups.
-- [ ] Repeat the selected group behind body content on every default, first, and even page.
-- [ ] Add preservation, scope, round-trip, z-order, and multi-page golden tests in existing files.
-- [ ] Run scoped checks, risk riders, the full gate, and the unchanged hash harness.
-- [ ] Update exactly HLD 03, HLD 04, HLD 08, HLD 10, and HLD 12.
+- [x] Parse recognized header VML text and image watermark projections while retaining raw bytes.
+- [x] Write canonical generated VML and preserve unrelated header content.
+- [x] Add native setters with header-local media relationships and atomic cache invalidation.
+- [x] Resolve header-local image ids without cross-part collisions.
+- [x] Lower text and image watermarks to deterministic neutral layout groups.
+- [x] Repeat the selected group behind body content on every default, first, and even page.
+- [x] Add preservation, scope, round-trip, z-order, and multi-page golden tests in existing files.
+- [x] Run scoped checks, risk riders, the full gate, and the unchanged hash harness.
+- [x] Update exactly HLD 03, HLD 04, HLD 08, HLD 10, and HLD 12.
 
 ## Open questions
 
