@@ -334,8 +334,9 @@ assigns absolute schema slots to the unmodelled standard `w:hMerge`, `w:tcMar`,
 `w:tcPrChange` children. This sidecar is part of the intentional pre-1.0 0.8
 low-level Rust source break. Existing exhaustive matches and full struct
 literals must be updated or moved to the provided constructors. The workspace
-remains at 0.7 during development. Its next published stable-family version
-must be 0.8.0, not a 0.7 patch. The additive `rdocx::Document` facade and
+is prepared at 0.8.0 for the next stable-family release, not a 0.7 patch. The
+immutable published boundary remains 0.7.0 until separate release approval.
+The additive `rdocx::Document` facade and
 unchanged Python, WASM, and CLI surfaces do not inherit this low-level source
 break.
 

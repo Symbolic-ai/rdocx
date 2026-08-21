@@ -2,11 +2,62 @@
 
 ## Unreleased
 
-The next stable rdocx release adopts the shared OOXML crates described below.
-It is planned as version 0.8.0. The shared and PowerPoint crate family is
-prepared separately at version 0.4.0.
+No unreleased changes.
 
-### Migration table
+## v0.8.0
+
+### Highlights
+
+The stable Word family now combines native document automation with a complete
+layout result that downstream renderers and editors can inspect and reuse.
+This release includes structured fields, templates, mail merge, tracked
+comparison, watermarks, chart support, source provenance, and bounded relayout
+caches while preserving unsupported OOXML.
+
+### Added
+
+- Parse and evaluate Word fields with explicit update policies, including safe
+  displayed results for complex fields.
+- Create, reply to, resolve, and remove comments and threaded conversations.
+  Bind content controls to namespace-aware custom XML without rewriting
+  unrelated package data.
+- Create bookmarks and resolve `REF` and `PAGEREF` cross-references through
+  fields and final pagination.
+- Inspect tracked revisions and accept or reject all or a filtered selection
+  while preserving unsupported revision XML.
+- Render accepted or tracked revision views with visible insertions,
+  deletions, and changed paragraphs. Read document-protection intent and its
+  recorded enforcement metadata without claiming to enforce the restriction.
+- Author Word charts and render them through the shared ChartML model.
+- Expand structural templates with conditions and loops, then produce separate
+  or sectioned mail-merge documents from flat records.
+- Compare documents into deterministic tracked revisions whose accepted and
+  rejected views reproduce the edited and original bodies.
+- Author and render text or image watermarks through header-scoped VML.
+- Expose complete native `WordLayoutResult` bundles with owned font data,
+  diagnostics, and result-local source paths for body and related stories.
+- Reuse safe paragraph layout, shaping, and font work through bounded caches
+  that preserve cold-layout bytes, diagnostics, and current provenance.
+- Traverse direct body paragraphs, tables, content controls, and unsupported
+  XML in source order through `Document::body_items`.
+
+### Fixed
+
+- Preserve reader-owned unsupported XML, namespace bindings, table facts,
+  paragraph borders, hyperlink tooltips, header and footer content, and safe
+  field results across opened-document round trips.
+- Keep watermark edits, failed relayouts, tracked views, caller fonts, and
+  context-sensitive paragraphs from leaking stale cached layout state.
+
+### Compatibility
+
+The seven crates.io packages move together to 0.8.0. The release contains
+intentional pre-1.0 Rust source breaks in low-level OOXML and layout structs.
+Python, WASM, CLI, and the high-level `rdocx::Document` facade retain their
+existing surface contracts. The shared and PowerPoint family remains on its
+separate 0.4.0 train.
+
+#### Migration table
 
 | Previous path or crate | Replacement | Compatibility |
 |---|---|---|
@@ -99,6 +150,12 @@ greatest occupied suffix, so gaps do not overwrite an existing part.
 at its intrinsic size. It uses declared per-axis DPI when valid and a 72 DPI
 fallback otherwise. If dimensions cannot be determined, it returns
 `rdocx::Error::UnavailableImageDimensions` before changing the document.
+
+### Contributors
+
+Thanks to Pedro Assumpcao for the ordered-body contribution in PR 36 and the
+reader compatibility work included in this release. Thanks to `@emptinessform`
+for the issue 39 relayout measurements and cache proposal.
 
 ## rpptx-v0.4.0
 

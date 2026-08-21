@@ -409,9 +409,11 @@ an endnote sharing a number.
 The 15 shared and PowerPoint publication candidates use the explicit common
 incubating version in their manifests and workspace pins. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
-source-compatible deprecated shim. The released `rdocx-*` crates
-continue to use the separate workspace version. Version preparation and
-manifest eligibility do not authorize publication. Every release still
+source-compatible deprecated shim. The released `rdocx-*` crates continue to
+use the separate workspace version. That stable workspace is prepared
+coherently at 0.8.0 while the immutable published boundary remains 0.7.0 until
+`/release` is approved. Version preparation and manifest eligibility do not
+authorize publication. Every release still
 requires `/release` at an exact reviewed SHA and separate final approval at
 the external mutation boundary. `oxml-cli-support` is the format-neutral owner
 of range parsing, JSON envelope, and output-path contracts. It has no

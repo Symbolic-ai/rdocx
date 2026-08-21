@@ -129,15 +129,15 @@ release metadata only. Any output delta blocks release preparation.
 
 ## Implementation checklist
 
-- [ ] Move the workspace package version, nine stable workspace pins, eleven
+- [x] Move the workspace package version, nine stable workspace pins, eleven
   inherited lockfile packages, and both Python project versions to 0.8.0.
-- [ ] Update the rdocx WASM assertions, stable CI literal, seven stable README
+- [x] Update the rdocx WASM assertions, stable CI literal, seven stable README
   requirements, README checks, publish preflight, and workflow self-tests.
-- [ ] Rename and strengthen the stable 0.8.0 metadata regression.
-- [ ] Prepare and validate the reviewed `v0.8.0` changelog section with stable
+- [x] Rename and strengthen the stable 0.8.0 metadata regression.
+- [x] Prepare and validate the reviewed `v0.8.0` changelog section with stable
   family scope, migration guidance, and verified contributor credit.
-- [ ] Update exactly HLD 03, HLD 10, HLD 12, and HLD 15 for the prepared state.
-- [ ] Run full verification, the 49-entry hash gate, patched 22-package dry
+- [x] Update exactly HLD 03, HLD 10, HLD 12, and HLD 15 for the prepared state.
+- [x] Run full verification, the 49-entry hash gate, patched 22-package dry
   run, archive inventory and size checks, both WASM checks, Python metadata
   assertions, no-default layout, docs, README tests, and supply-chain checks.
 - [ ] Run microscope and a clean sprint review at the exact prepared SHA.

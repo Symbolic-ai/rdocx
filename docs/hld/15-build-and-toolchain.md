@@ -184,7 +184,7 @@ invocation at the exact reviewed SHA.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.7.0, nine internal pins, eleven
+stable regression requires prepared workspace 0.8.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
 set. The incubating regression requires the exact 0.4.0 versions, pins,
@@ -261,12 +261,14 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group is at 0.7.0, and its two
-Python project versions and rdocx WASM contract literals are also 0.7.0. The
-exact seven-package stable family is published at 0.7.0 from the annotated
+`v{{version}}` tag template. That shared-version group is prepared at 0.8.0,
+and its two Python project versions and rdocx WASM contract literals are also
+0.8.0. The exact seven-package stable family remains published at 0.7.0 from the annotated
 `v0.7.0` tag whose target is the reviewed sprint SHA. Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
-incubating package gained publication authority from the stable release.
+incubating package gains publication authority from the 0.8.0 preparation.
+Creating `v0.8.0`, publishing its crates, and creating its GitHub release remain
+behind separate `/release` approval at the exact reviewed SHA.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.4.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 exact 15-package crates.io family listed above is published from the annotated

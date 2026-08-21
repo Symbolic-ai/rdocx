@@ -1617,7 +1617,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.7.0" "rdocx_wasm"',
+            '"0.8.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.4.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -3899,8 +3899,46 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
 
-    def test_stable_release_family_is_prepared_at_0_7_0(self) -> None:
-        expected_version = "0.7.0"
+    def assert_stable_collaboration_release_notes_contract(
+        self, changelog: str
+    ) -> None:
+        notes = workflow.render_release_notes(changelog, "v0.8.0")
+        added = notes.split("### Added\n\n", 1)[1].split("\n### Fixed", 1)[0]
+        for claim in (
+            "comments and threaded conversations",
+            "content controls to namespace-aware custom XML",
+            "bookmarks and resolve `REF` and `PAGEREF` cross-references",
+            "Inspect tracked revisions",
+            "accept or reject all or a filtered selection",
+            "Render accepted or tracked revision views",
+            "document-protection intent",
+        ):
+            self.assertIn(claim, added, claim)
+
+    def test_v0_8_0_notes_cover_native_collaboration_tranche(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assert_stable_collaboration_release_notes_contract(changelog)
+
+    def test_v0_8_0_notes_reject_an_omitted_collaboration_capability(
+        self,
+    ) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        for claim in (
+            "comments and threaded conversations",
+            "content controls to namespace-aware custom XML",
+            "bookmarks and resolve `REF` and `PAGEREF` cross-references",
+            "Inspect tracked revisions",
+            "accept or reject all or a filtered selection",
+            "Render accepted or tracked revision views",
+            "document-protection intent",
+        ):
+            mutated = changelog.replace(claim, "native collaboration capability", 1)
+            self.assertNotEqual(mutated, changelog, claim)
+            with self.subTest(claim=claim), self.assertRaises(AssertionError):
+                self.assert_stable_collaboration_release_notes_contract(mutated)
+
+    def test_stable_release_family_is_prepared_at_0_8_0(self) -> None:
+        expected_version = "0.8.0"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -4005,7 +4043,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             ci.count(
                 'verify_package "$package_root/rdocx-wasm" '
-                '"@tensorbee/rdocx-wasm" "0.7.0" "rdocx_wasm"'
+                f'"@tensorbee/rdocx-wasm" "{expected_version}" "rdocx_wasm"'
             ),
             1,
         )
@@ -4024,18 +4062,25 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.6"', 'version = "0.6"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.6'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.6"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.6"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.6"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.6"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.6"',),
+            "README.md": ('rdocx = "0.8.0"', 'version = "0.8.0"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.8.0'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.8.0"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.8.0"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.8.0"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.8.0"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.8.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
             for requirement in requirements:
                 self.assertIn(requirement, text, path)
+
+        readme_gate = (workflow.REPO / "scripts/readme_doctests.py").read_text(
+            encoding="utf-8"
+        )
+        for path, requirements in readme_requirements.items():
+            for requirement in requirements:
+                self.assertEqual(readme_gate.count(requirement), 1, path)
 
         for name in incubating_members:
             manifest = tomllib.loads(
@@ -4152,7 +4197,7 @@ class SprintWorkflowTests(unittest.TestCase):
         preparation_packages = (*incubating_packages, "rpptx-wasm")
         expected_version = "0.4.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.7.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.8.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -5199,7 +5244,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_7_0",
+                "test_stable_release_family_is_prepared_at_0_8_0",
                 1,
             ),
             "job-condition": ci.replace(
@@ -5435,7 +5480,7 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_7_0"
+            "test_stable_release_family_is_prepared_at_0_8_0"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
@@ -5782,7 +5827,13 @@ Pedro Assumpcao and the rdocx maintainers.
         stated_versions = re.findall(
             r"on\s+crates\.io at ([0-9]+\.[0-9]+\.[0-9]+)", claude
         )
-        self.assertEqual(stated_versions, [workspace_version])
+        self.assertEqual(stated_versions, ["0.7.0"])
+        prepared_versions = re.findall(
+            r"prepared coherently at workspace version "
+            r"([0-9]+\.[0-9]+\.[0-9]+)",
+            claude,
+        )
+        self.assertEqual(prepared_versions, [workspace_version])
         for name, (_, manifest) in packages.items():
             if not name.startswith("rdocx") or name == "rdocx-py":
                 continue
@@ -5870,6 +5921,14 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace("crates.io at 0.7.0", "crates.io at 0.2.0", 1),
+                verify,
+            ),
+            "prepared-version": (
+                claude.replace(
+                    "prepared coherently at workspace version 0.8.0",
+                    "prepared coherently at workspace version 0.2.0",
+                    1,
+                ),
                 verify,
             ),
             "feature": (
