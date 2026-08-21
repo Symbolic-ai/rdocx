@@ -479,6 +479,15 @@ impl Document {
         }
     }
 
+    /// Commit staged package state without discarding reusable layout work.
+    fn commit_staged_mutation(&mut self, mut candidate: Self) {
+        std::mem::swap(
+            &mut self.normal_layout_engine,
+            &mut candidate.normal_layout_engine,
+        );
+        *self = candidate;
+    }
+
     /// Open a document from a file path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let package = OpcPackage::open(path)?;
@@ -1614,7 +1623,7 @@ impl Document {
             font_family: Some("Calibri".to_owned()),
             opacity: 0.5,
         })?;
-        *self = candidate;
+        self.commit_staged_mutation(candidate);
         Ok(())
     }
 
@@ -1649,7 +1658,7 @@ impl Document {
                 opacity: 0.5,
             }
         })?;
-        *self = candidate;
+        self.commit_staged_mutation(candidate);
         Ok(())
     }
 
@@ -8166,6 +8175,69 @@ mod watermark_tests {
             rel_types::SETTINGS,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
         );
+    }
+
+    fn assert_watermark_mutation_preserves_reusable_engine(
+        mut document: Document,
+        mutate: impl FnOnce(&mut Document),
+    ) {
+        let layout_state = |document: &Document| {
+            (
+                document
+                    .layout_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some(),
+                document
+                    .normal_layout_engine
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some(),
+                document
+                    .deterministic_layout_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some(),
+            )
+        };
+        document.add_paragraph("unchanged cacheable body paragraph");
+
+        LAYOUT_INVOCATIONS.set(0);
+        let accepted_before = document.layout().expect("populate normal layout cache");
+        document
+            .to_pdf_deterministic()
+            .expect("populate deterministic layout cache");
+        assert_eq!(LAYOUT_INVOCATIONS.get(), 2);
+        assert_eq!(layout_state(&document), (true, true, true));
+
+        mutate(&mut document);
+
+        assert_eq!(
+            layout_state(&document),
+            (false, true, false),
+            "completed results are invalidated while reusable work survives"
+        );
+
+        let accepted_after = document
+            .layout()
+            .expect("relayout after watermark mutation");
+        document
+            .to_pdf_deterministic()
+            .expect("deterministic relayout after watermark mutation");
+        assert!(!Arc::ptr_eq(&accepted_before, &accepted_after));
+        assert_eq!(LAYOUT_INVOCATIONS.get(), 4);
+    }
+
+    #[test]
+    fn watermark_mutations_preserve_reusable_engine_and_invalidate_completed_layouts() {
+        assert_watermark_mutation_preserves_reusable_engine(Document::new(), |document| {
+            document.set_text_watermark("DRAFT").unwrap();
+        });
+        assert_watermark_mutation_preserves_reusable_engine(Document::new(), |document| {
+            document
+                .set_image_watermark(PNG, "watermark.png", Length::pt(72.0), Length::pt(36.0))
+                .unwrap();
+        });
     }
 
     #[test]
