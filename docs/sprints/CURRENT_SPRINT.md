@@ -25,7 +25,7 @@ when rows and items repeat from a data source.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-163 | Template syntax | L | in-progress | codex |
-| F-164 | Loops and conditionals | L | pending | - |
+| F-164 | Loops and conditionals | L | in-progress | codex |
 | F-165 | Repeating table rows and lists | M | pending | - |
 
 ## Sequencing note
