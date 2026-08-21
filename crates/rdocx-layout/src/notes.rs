@@ -14,7 +14,8 @@ use std::collections::HashMap;
 
 use rdocx_oxml::styles::CT_Styles;
 
-use crate::engine::layout_paragraph;
+use crate::WordStory;
+use crate::engine::{SourceRegistry, layout_paragraph_with_source};
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
 use oxml_layout::{
@@ -92,7 +93,7 @@ impl NoteRegistry {
     /// section carrying the reference rather than the document's last section.
     /// `content_widths` may repeat, and a repeat costs nothing: the common
     /// document, whose sections share a page size, lays each note out once.
-    pub fn build(
+    pub(crate) fn build(
         input: &LayoutInput,
         styles: &CT_Styles,
         media: &MediaRegistry,
@@ -100,6 +101,7 @@ impl NoteRegistry {
         num_state: &mut NumberingState,
         content_widths: &[f64],
         diagnostics: &mut Vec<Diagnostic>,
+        sources: Option<&SourceRegistry>,
     ) -> Result<Self> {
         let mut notes = HashMap::new();
         let mut continuation_separator = false;
@@ -149,8 +151,14 @@ impl NoteRegistry {
 
                     let mut lines = Vec::new();
                     let mut revision_ranges = Vec::new();
-                    for paragraph in &note.paragraphs {
-                        let block = layout_paragraph(
+                    let story = match kind {
+                        NoteStream::Footnote => WordStory::Footnote { id: note.id },
+                        NoteStream::Endnote => WordStory::Endnote { id: note.id },
+                    };
+                    for (paragraph_index, paragraph) in note.paragraphs.iter().enumerate() {
+                        let source =
+                            sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
+                        let block = layout_paragraph_with_source(
                             paragraph,
                             note_width,
                             styles,
@@ -159,6 +167,7 @@ impl NoteRegistry {
                             fm,
                             num_state,
                             diagnostics,
+                            source,
                         )?;
                         let first = lines.len();
                         if block.has_visible_revision && !block.lines.is_empty() {
@@ -216,6 +225,7 @@ fn shape_marker(id: i32, fm: &mut FontManager) -> Result<Option<TextSegment>> {
 
     Ok(Some(TextSegment {
         text,
+        source: None,
         font_id,
         font_size: size,
         glyph_ids: shaped.glyph_ids,
@@ -293,6 +303,7 @@ mod tests {
             &mut num_state,
             widths,
             &mut diagnostics,
+            None,
         )
         .expect("the registry builds")
     }

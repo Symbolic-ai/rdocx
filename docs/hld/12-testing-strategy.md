@@ -90,6 +90,20 @@ entity-decoded settings, unsupported colour and media diagnostics, atomic
 rejection, and margin-relative centering. No sample authors a watermark, so the
 49-entry hash harness remains unchanged.
 
+The Word glyph-provenance regression resolves every attributed run through its
+result-local `WordSourcePath` and requires the selected paragraph's exact
+Unicode-scalar slice to equal the displayed run. Its in-code fixture covers
+ASCII, emoji, CJK, wrapping, body paragraphs, nested tables,
+headers, footers, footnotes, endnotes, and accepted and tracked revision views.
+Focused tests split sourced text in both Word and shared line stages, distinguish
+duplicate paragraphs from repeated story layout, and keep generated or
+non-bijective text unattributed. A repeated-text field regression places a
+parsed complex cache beside literal text and a public simple field, proving
+that actual projection ownership determines later scalar offsets. Compatibility
+tests compare the existing low-level layout results after stripping provenance.
+Both WASM targets and the package dry-run cover the intentional exhaustive
+public literal change. All 49 hash entries remain unchanged.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

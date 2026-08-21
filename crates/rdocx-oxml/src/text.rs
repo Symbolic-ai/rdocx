@@ -198,7 +198,9 @@ impl Field {
         )
     }
 
-    fn plain_text(&self) -> Option<&str> {
+    /// Return the text this field contributes to [`CT_R::text`].
+    #[doc(hidden)]
+    pub fn projected_text(&self) -> Option<&str> {
         self.is_parsed_complex()
             .then_some(self.cached_result.as_str())
     }
@@ -456,7 +458,7 @@ impl CT_R {
                 RunContent::Break(_) => result.push('\n'),
                 RunContent::Drawing(_) => {} // Drawings have no text content
                 RunContent::Field(field) => {
-                    if let Some(text) = field.plain_text() {
+                    if let Some(text) = field.projected_text() {
                         result.push_str(text);
                     }
                 }

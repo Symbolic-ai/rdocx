@@ -1058,6 +1058,7 @@ fn draw_note(
             glyph_ids: note.marker.glyph_ids.clone(),
             advances: note.marker.advances.clone(),
             text: note.marker.text.clone(),
+            source: None,
             color: note.marker.color,
             bold: note.marker.bold,
             italic: note.marker.italic,
@@ -1101,6 +1102,7 @@ fn draw_note(
                     glyph_ids: seg.glyph_ids.clone(),
                     advances: seg.advances.clone(),
                     text: seg.text.clone(),
+                    source: seg.source,
                     color: seg.color,
                     bold: seg.bold,
                     italic: seg.italic,
@@ -1906,6 +1908,7 @@ fn render_paragraph_lines(
                         glyph_ids: seg.glyph_ids.clone(),
                         advances,
                         text: seg.text.clone(),
+                        source: seg.source,
                         color: seg.color,
                         bold: seg.bold,
                         italic: seg.italic,
@@ -2023,6 +2026,7 @@ fn render_paragraph_lines(
                             glyph_ids: leader_seg.glyph_ids.clone(),
                             advances: leader_seg.advances.clone(),
                             text: leader_seg.text.clone(),
+                            source: None,
                             color: leader_seg.color,
                             bold: leader_seg.bold,
                             italic: leader_seg.italic,
@@ -2659,6 +2663,7 @@ mod tests {
         use oxml_layout::TextSegment;
         let seg = TextSegment {
             text: "Hello".to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1, 2, 3],
@@ -2781,6 +2786,7 @@ mod tests {
         let fm = FontManager::new();
         let seg = TextSegment {
             text: "Hi".to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1],
@@ -3002,6 +3008,7 @@ mod tests {
         use oxml_layout::TextSegment;
         let seg = TextSegment {
             text: text.to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1; text.len()],
@@ -3041,6 +3048,7 @@ mod tests {
         let fm = FontManager::new();
         let seg = TextSegment {
             text: "Click me".to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1, 2, 3],

@@ -1,5 +1,7 @@
 //! Output types for the layout engine: positioned page frames, glyph runs, etc.
 
+use std::num::NonZeroU32;
+
 use crate::paint::{Paint, Stroke};
 use crate::path::Path;
 use crate::transform::Transform;
@@ -83,6 +85,33 @@ impl MediaId {
     }
 }
 
+/// Result-local identity of one format-specific source node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SourceNodeId(NonZeroU32);
+
+impl SourceNodeId {
+    /// Construct an identity from its one-based side-table index.
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// Return the one-based side-table index.
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+/// Exclusive Unicode-scalar range within one source node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceSpan {
+    pub node: SourceNodeId,
+    pub char_start: u32,
+    pub char_end: u32,
+}
+
 /// Kind of field for post-pagination substitution.
 ///
 /// Target carriers stay format-neutral at this shared layout boundary.
@@ -120,6 +149,8 @@ pub struct GlyphRun {
     pub advances: Vec<f64>,
     /// Original text (for PDF ToUnicode mapping).
     pub text: String,
+    /// Exact source range for this run, when it is a direct text projection.
+    pub source: Option<SourceSpan>,
     /// Text color.
     pub color: Color,
     /// Whether the font is bold.

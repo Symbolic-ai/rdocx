@@ -1334,6 +1334,7 @@ fn shape_label_with_properties(
         glyph_ids: shaped.glyph_ids,
         advances: shaped.advances,
         text: text.to_owned(),
+        source: None,
         color: Color::BLACK,
         bold,
         italic,

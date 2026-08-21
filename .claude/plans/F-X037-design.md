@@ -1,6 +1,6 @@
 # F-X037, Trace Word glyphs to source paragraphs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: M
 **Depends on**: F-009, F-151
@@ -170,16 +170,16 @@ move glyphs, change fonts, or alter generated documents and renders.
 
 ## Implementation checklist
 
-- [ ] Add neutral source ids and exclusive scalar spans.
-- [ ] Carry spans through shaping and both splitting stages.
-- [ ] Allocate deterministic result-local Word paragraph paths.
-- [ ] Cover body, nested tables, headers, footers, footnotes, and endnotes.
-- [ ] Keep generated and non-bijective text truthfully unattributed.
-- [ ] Add provenance-returning normal and deterministic layout functions.
-- [ ] Preserve existing low-level layout API output and hash behavior.
-- [ ] Run public-package, WASM, full verification, and archive-size riders.
-- [ ] Update exactly the HLD files listed above.
-- [ ] Record the low-level 0.4.0 and 0.8.0 migration in release notes.
+- [x] Add neutral source ids and exclusive scalar spans.
+- [x] Carry spans through shaping and both splitting stages.
+- [x] Allocate deterministic result-local Word paragraph paths.
+- [x] Cover body, nested tables, headers, footers, footnotes, and endnotes.
+- [x] Keep generated and non-bijective text truthfully unattributed.
+- [x] Add provenance-returning normal and deterministic layout functions.
+- [x] Preserve existing low-level layout API output and hash behavior.
+- [x] Run public-package, WASM, full verification, and archive-size riders.
+- [x] Update exactly the HLD files listed above.
+- [x] Record the low-level 0.4.0 and 0.8.0 migration in release notes.
 
 ## Open questions
 

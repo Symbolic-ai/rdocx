@@ -329,6 +329,17 @@ must be 0.8.0, not a 0.7 patch. The additive `rdocx::Document` facade and
 unchanged Python, WASM, and CLI surfaces do not inherit this low-level source
 break.
 
+The low-level layout boundary also adds `source: Option<SourceSpan>` to the
+exhaustive public `TextSegment` and `GlyphRun` structs. Existing external
+struct literals must supply `None` when they do not own an exact source range.
+`rdocx-layout` adds `WordStory`, `WordSourcePath`, and `WordLayoutResult`, plus
+normal-font and deterministic provenance entry points. Node ids resolve only
+through the result-local Word source table, and ranges use Unicode scalar
+indices in the recorded revision view. The existing layout functions keep
+returning `LayoutResult`. Python, WASM, CLI, and the stable `rdocx::Document`
+facade remain unchanged by this low-level addition. The exhaustive literal
+change is part of the planned incubating 0.4.0 and stable 0.8.0 source boundary.
+
 Native callers resolve tracked changes through `accept_all`, `reject_all`, the
 exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.
 Each method returns the number of modeled revision elements resolved. Shared

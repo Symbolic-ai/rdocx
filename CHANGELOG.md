@@ -19,6 +19,7 @@ crate family has been published separately at version 0.1.2.
 | `rdocx_layout::error::{LayoutError, Result}` | `oxml_layout::{LayoutError, Result}` | The types also remain exact re-exports at the `rdocx_layout` root |
 | `rdocx_layout::line::{InlineItem, LayoutLine, LineBreakParams, LineItem, TextSegment, break_into_lines}` | The same names at the `oxml_layout` root | The old `rdocx_layout::line` module is removed |
 | `rdocx_layout::output::{Color, DocumentMetadata, FieldKind, FontData, FontId, GlyphRun, LayoutResult, OutlineEntry, PageFrame, Point, PositionedElement, Rect}` | The same names at the `oxml_layout` root | Types previously exported at the `rdocx_layout` root remain exact re-exports there |
+| Exhaustive `TextSegment` and `GlyphRun` literals | Add `source: Option<SourceSpan>` | Use `None` for generated or unattributed text. Word provenance results supply exact result-local node ids and Unicode-scalar ranges |
 | `rdocx_pdf` | `oxml_pdf` | `rdocx-pdf` is a deprecated exact re-export shim |
 | `rdocx_pdf::raster::{render_page_to_png, render_all_pages}` | `oxml_pdf::{render_page_to_png, render_all_pages}` | The old nested `raster` path is removed. The functions remain available at the `rdocx_pdf` root through the shim |
 
@@ -77,6 +78,14 @@ oxml-pdf = "0.1.2"    # PDF and PNG rendering backends
   `PageFrame::new(...)` when a default background is wanted.
 - `LayoutResult` is non-exhaustive and adds `diagnostics`. Construct it with
   `LayoutResult::new(...)` when an empty diagnostics list is wanted.
+- `oxml_layout::TextSegment` and `oxml_layout::GlyphRun` add the required
+  `source: Option<SourceSpan>` field. External exhaustive literals must set it
+  to `None` unless they own an exact source range. This source change ships in
+  the incubating 0.4.0 family and the stable 0.8.0 family. Word callers can use
+  `rdocx_layout::layout_document_with_provenance` or its deterministic variant
+  to receive `WordLayoutResult`, resolve result-local nodes to
+  `WordSourcePath`, and interpret exclusive character ranges as Unicode scalar
+  indices in the recorded revision view.
 - The nested `rdocx_pdf::raster` module is removed. Import its two rendering
   functions from the `oxml_pdf` root or from the compatible `rdocx_pdf` root.
 

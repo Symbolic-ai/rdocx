@@ -23,10 +23,11 @@ use crate::notes::NoteRegistry;
 use crate::paginator::{self, HeaderFooterContent, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
+use crate::{WordSourcePath, WordStory};
 use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, FieldKind, FontManager, GlyphRun, GroupElement,
     InlineItem, LayoutResult, NoteRef, NoteStream, PageFrame, Point, PositionedElement, Rect,
-    Result, TextSegment, Transform, Underline, break_into_lines,
+    Result, SourceNodeId, SourceSpan, TextSegment, Transform, Underline, break_into_lines,
 };
 
 #[derive(Clone, Copy)]
@@ -45,6 +46,133 @@ enum RawOrder {
     BeforeRaw,
     Raw(usize),
     AfterRaw,
+}
+
+/// Immutable source identities allocated once before layout starts.
+pub(crate) struct SourceRegistry {
+    nodes: Vec<WordSourcePath>,
+    ids: HashMap<WordSourcePath, SourceNodeId>,
+}
+
+impl SourceRegistry {
+    fn for_input(input: &LayoutInput) -> Self {
+        let mut registry = Self {
+            nodes: Vec::new(),
+            ids: HashMap::new(),
+        };
+
+        for (body_index, content) in input.document.body.content.iter().enumerate() {
+            match content {
+                BodyContent::Paragraph(_) => registry.insert(WordSourcePath {
+                    story: WordStory::Document,
+                    children: vec![body_index],
+                }),
+                BodyContent::Table(table) => {
+                    registry.collect_table(table, &WordStory::Document, &[body_index])
+                }
+                BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {}
+            }
+        }
+
+        let mut headers = input.headers.iter().collect::<Vec<_>>();
+        headers.sort_unstable_by_key(|(relationship_id, _)| *relationship_id);
+        for (relationship_id, header) in headers {
+            let story = WordStory::Header {
+                relationship_id: relationship_id.clone(),
+            };
+            for paragraph_index in 0..header.paragraphs.len() {
+                registry.insert(WordSourcePath {
+                    story: story.clone(),
+                    children: vec![paragraph_index],
+                });
+            }
+        }
+
+        let mut footers = input.footers.iter().collect::<Vec<_>>();
+        footers.sort_unstable_by_key(|(relationship_id, _)| *relationship_id);
+        for (relationship_id, footer) in footers {
+            let story = WordStory::Footer {
+                relationship_id: relationship_id.clone(),
+            };
+            for paragraph_index in 0..footer.paragraphs.len() {
+                registry.insert(WordSourcePath {
+                    story: story.clone(),
+                    children: vec![paragraph_index],
+                });
+            }
+        }
+
+        for (story_kind, stream) in [
+            (NoteStream::Footnote, input.footnotes.as_ref()),
+            (NoteStream::Endnote, input.endnotes.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(story, stream)| stream.map(|stream| (story, stream)))
+        {
+            for note in &stream.footnotes {
+                if stream.get_by_id(note.id).is_none() {
+                    continue;
+                }
+                let story = match story_kind {
+                    NoteStream::Footnote => WordStory::Footnote { id: note.id },
+                    NoteStream::Endnote => WordStory::Endnote { id: note.id },
+                };
+                for paragraph_index in 0..note.paragraphs.len() {
+                    registry.insert(WordSourcePath {
+                        story: story.clone(),
+                        children: vec![paragraph_index],
+                    });
+                }
+            }
+        }
+
+        registry
+    }
+
+    fn collect_table(&mut self, table: &CT_Tbl, story: &WordStory, prefix: &[usize]) {
+        for (row_index, row) in table.rows.iter().enumerate() {
+            for (cell_index, cell) in row.cells.iter().enumerate() {
+                for (content_index, content) in cell.content.iter().enumerate() {
+                    let mut children = prefix.to_vec();
+                    children.extend([row_index, cell_index, content_index]);
+                    match content {
+                        CellContent::Paragraph(_) => self.insert(WordSourcePath {
+                            story: story.clone(),
+                            children,
+                        }),
+                        CellContent::Table(table) => {
+                            self.collect_table(table, story, &children);
+                        }
+                        CellContent::ContentControl(_) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn insert(&mut self, path: WordSourcePath) {
+        if self.ids.contains_key(&path) {
+            return;
+        }
+        let index = u32::try_from(self.nodes.len() + 1)
+            .expect("a layout result cannot contain more than u32::MAX source paragraphs");
+        let id = SourceNodeId::new(index).expect("source ids are one based");
+        self.nodes.push(path.clone());
+        self.ids.insert(path, id);
+    }
+
+    pub(crate) fn id(&self, story: &WordStory, children: &[usize]) -> Option<SourceNodeId> {
+        self.ids
+            .get(&WordSourcePath {
+                story: story.clone(),
+                children: children.to_vec(),
+            })
+            .copied()
+    }
+
+    fn into_nodes(self) -> Vec<WordSourcePath> {
+        self.nodes
+    }
 }
 
 fn project_paragraph_runs(para: &CT_P, view: RevisionView) -> Vec<ProjectedRun<'_>> {
@@ -178,6 +306,27 @@ fn projected_paragraph_text(para: &CT_P, view: RevisionView) -> String {
         .collect()
 }
 
+fn projected_content_char_starts(run: &CT_R) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(run.content.len());
+    let mut char_offset = 0usize;
+    for content in &run.content {
+        starts.push(char_offset);
+        char_offset += match content {
+            RunContent::Text(text) | RunContent::DeletedText(text) => text.text.chars().count(),
+            RunContent::Tab | RunContent::Break(_) => 1,
+            RunContent::Field(field) => field
+                .projected_text()
+                .map_or(0, |text| text.chars().count()),
+            RunContent::Drawing(_)
+            | RunContent::FootnoteRef { .. }
+            | RunContent::EndnoteRef { .. }
+            | RunContent::CommentReference { .. } => 0,
+        };
+    }
+    debug_assert_eq!(char_offset, run.text().chars().count());
+    starts
+}
+
 fn paragraph_has_visible_revision(para: &CT_P) -> bool {
     let property_revision = para.properties.as_ref().is_some_and(|properties| {
         properties.numbering_revision.is_some()
@@ -264,6 +413,24 @@ impl Engine {
 
     /// Lay out the entire document.
     pub fn layout(&mut self, input: &LayoutInput) -> Result<LayoutResult> {
+        self.layout_inner(input, None)
+    }
+
+    /// Lay out the document and retain its result-local Word source table.
+    pub(crate) fn layout_with_provenance(
+        &mut self,
+        input: &LayoutInput,
+    ) -> Result<(LayoutResult, Vec<WordSourcePath>)> {
+        let sources = SourceRegistry::for_input(input);
+        let result = self.layout_inner(input, Some(&sources))?;
+        Ok((result, sources.into_nodes()))
+    }
+
+    fn layout_inner(
+        &mut self,
+        input: &LayoutInput,
+        sources: Option<&SourceRegistry>,
+    ) -> Result<LayoutResult> {
         // Load user-provided / DOCX-embedded fonts (highest priority)
         if !input.fonts.is_empty() {
             self.font_manager.load_additional_fonts(&input.fonts);
@@ -293,7 +460,7 @@ impl Engine {
         let mut current_blocks: Vec<LayoutBlock> = Vec::new();
         let mut current_sect_pr: Option<CT_SectPr> = None; // Will be set from paragraph sect_pr
 
-        for content in &input.document.body.content {
+        for (body_index, content) in input.document.body.content.iter().enumerate() {
             match content {
                 BodyContent::Paragraph(para) => {
                     // Check if this paragraph ends a section (has sect_pr)
@@ -305,7 +472,9 @@ impl Engine {
                         .unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
-                    let mut para_block = layout_paragraph(
+                    let source =
+                        sources.and_then(|sources| sources.id(&WordStory::Document, &[body_index]));
+                    let mut para_block = layout_paragraph_with_source(
                         para,
                         geometry.content_width(),
                         styles,
@@ -314,6 +483,7 @@ impl Engine {
                         &mut self.font_manager,
                         &mut num_state,
                         &mut diagnostics,
+                        source,
                     )?;
 
                     if !document_wraps {
@@ -340,6 +510,7 @@ impl Engine {
                             &mut self.font_manager,
                             &mut num_state,
                             &mut diagnostics,
+                            sources,
                         )?;
                         let title_pg = sect_pr.title_pg.unwrap_or(false);
                         sections.push(paginator::Section {
@@ -356,7 +527,7 @@ impl Engine {
                     let sect_pr_for_layout = current_sect_pr.as_ref().unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
-                    let table_block = table::layout_table(
+                    let table_block = table::layout_table_with_provenance(
                         tbl,
                         geometry.content_width(),
                         styles,
@@ -365,6 +536,9 @@ impl Engine {
                         &mut self.font_manager,
                         &mut num_state,
                         &mut diagnostics,
+                        sources,
+                        &WordStory::Document,
+                        &[body_index],
                     )?;
                     current_blocks.push(LayoutBlock::Table(table_block));
                 }
@@ -382,6 +556,7 @@ impl Engine {
             &mut self.font_manager,
             &mut num_state,
             &mut diagnostics,
+            sources,
         )?;
         let final_title_pg = final_sect_pr.title_pg.unwrap_or(false);
         sections.push(paginator::Section {
@@ -410,6 +585,7 @@ impl Engine {
             &mut num_state,
             &content_widths,
             &mut diagnostics,
+            sources,
         )?;
 
         // Paginate across all sections
@@ -583,6 +759,30 @@ pub fn layout_paragraph(
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ParagraphBlock> {
+    layout_paragraph_with_source(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        None,
+    )
+}
+
+pub(crate) fn layout_paragraph_with_source(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    source_node: Option<SourceNodeId>,
+) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
 
@@ -668,6 +868,7 @@ pub fn layout_paragraph(
 
                 inline_items.push(InlineItem::Marker(TextSegment {
                     text: marker.marker_text,
+                    source: None,
                     font_id,
                     font_size: marker_font_size,
                     glyph_ids: shaped.glyph_ids,
@@ -695,6 +896,7 @@ pub fn layout_paragraph(
                         let shaped = fm.shape_text(font_id, " ", marker_font_size)?;
                         inline_items.push(InlineItem::Text(TextSegment {
                             text: " ".to_owned(),
+                            source: None,
                             font_id,
                             font_size: marker_font_size,
                             glyph_ids: shaped.glyph_ids,
@@ -738,8 +940,11 @@ pub fn layout_paragraph(
     // Process ordinary and revision-wrapped runs in their preserved order.
     let mut marker_boundary = None;
     let mut marker_raw_before = None;
+    let mut projection_char_offset = 0usize;
     for projected in project_paragraph_runs(para, input.revision_view) {
         let run = projected.run;
+        let projected_run_start = projection_char_offset;
+        projection_char_offset += run.text().chars().count();
         if marker_boundary != Some(projected.boundary) {
             marker_boundary = Some(projected.boundary);
             marker_raw_before = None;
@@ -832,7 +1037,9 @@ pub fn layout_paragraph(
             fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run.text())?;
         let metrics = fm.metrics(font_id, font_size)?;
 
-        for content in &run.content {
+        let content_char_starts = projected_content_char_starts(run);
+        for (content_index, content) in run.content.iter().enumerate() {
+            let content_char_start = projected_run_start + content_char_starts[content_index];
             match content {
                 RunContent::Text(ct_text) | RunContent::DeletedText(ct_text) => {
                     let text = if effective_rpr.caps == Some(true) {
@@ -846,6 +1053,21 @@ pub fn layout_paragraph(
                     }
 
                     let mut shaped = fm.shape_text(font_id, &text, font_size)?;
+                    let source = if text == ct_text.text {
+                        source_node.and_then(|node| {
+                            let char_start = u32::try_from(content_char_start).ok()?;
+                            let char_end =
+                                u32::try_from(content_char_start + ct_text.text.chars().count())
+                                    .ok()?;
+                            Some(SourceSpan {
+                                node,
+                                char_start,
+                                char_end,
+                            })
+                        })
+                    } else {
+                        None
+                    };
 
                     // Apply character spacing from run properties (in twips)
                     if let Some(spacing) = effective_rpr.spacing {
@@ -858,6 +1080,7 @@ pub fn layout_paragraph(
 
                     inline_items.extend(convert::text_segments(TextSegment {
                         text,
+                        source,
                         font_id,
                         font_size,
                         glyph_ids: shaped.glyph_ids,
@@ -1050,6 +1273,7 @@ pub fn layout_paragraph(
                                 }
                                 inline_items.extend(convert::text_segments(TextSegment {
                                     text,
+                                    source: None,
                                     font_id: segment_font_id,
                                     font_size: segment_font_size,
                                     glyph_ids: shaped.glyph_ids,
@@ -1095,6 +1319,7 @@ pub fn layout_paragraph(
                         && projected.ordinary_run_index.is_none();
                     inline_items.push(InlineItem::Text(TextSegment {
                         text: marker,
+                        source: None,
                         font_id,
                         font_size: sup_size,
                         glyph_ids: shaped.glyph_ids,
@@ -1205,6 +1430,7 @@ fn push_targeted_bookmark_markers(
 fn push_bookmark_marker(items: &mut Vec<InlineItem>, target: usize, font_id: oxml_layout::FontId) {
     items.push(InlineItem::Text(TextSegment {
         text: "\u{2060}".to_owned(),
+        source: None,
         font_id,
         font_size: 1.0,
         glyph_ids: vec![0],
@@ -1828,6 +2054,7 @@ fn layout_header_footer(
     fm: &mut FontManager,
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
 ) -> Result<Option<HeaderFooterContent>> {
     let mut has_content = false;
     let mut header_blocks = Vec::new();
@@ -1867,8 +2094,12 @@ fn layout_header_footer(
                     diagnostics,
                 )?;
             }
-            for para in &hdr.paragraphs {
-                let block = layout_paragraph(
+            let story = WordStory::Header {
+                relationship_id: href.rel_id.clone(),
+            };
+            for (paragraph_index, para) in hdr.paragraphs.iter().enumerate() {
+                let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
+                let block = layout_paragraph_with_source(
                     para,
                     width,
                     styles,
@@ -1877,6 +2108,7 @@ fn layout_header_footer(
                     fm,
                     num_state,
                     diagnostics,
+                    source,
                 )?;
                 target_blocks.push(block);
             }
@@ -1891,8 +2123,12 @@ fn layout_header_footer(
             HdrFtrType::Even => &mut even_footer_blocks,
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
-            for para in &ftr.paragraphs {
-                let block = layout_paragraph(
+            let story = WordStory::Footer {
+                relationship_id: fref.rel_id.clone(),
+            };
+            for (paragraph_index, para) in ftr.paragraphs.iter().enumerate() {
+                let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
+                let block = layout_paragraph_with_source(
                     para,
                     width,
                     styles,
@@ -1901,6 +2137,7 @@ fn layout_header_footer(
                     fm,
                     num_state,
                     diagnostics,
+                    source,
                 )?;
                 target_blocks.push(block);
             }
@@ -1990,6 +2227,7 @@ fn layout_watermark(
                 glyph_ids: shaped.glyph_ids,
                 advances: shaped.advances,
                 text: text.clone(),
+                source: None,
                 color,
                 bold: false,
                 italic: false,
@@ -2756,6 +2994,553 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn every_sourced_glyph_run_resolves_to_its_exact_word_text() {
+        use rdocx_oxml::document::CT_SectPr;
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef};
+
+        let body_text = "Body ASCII 🚀 界 wraps across several exact source slices ".repeat(5);
+        let mut input = make_input_with_text(&body_text);
+
+        let mut outer = CT_Tbl::new();
+        let mut outer_row = CT_Row::new();
+        let mut outer_cell = CT_Tc::new();
+        outer_cell.paragraphs_mut()[0].add_run("outer cell");
+        let mut nested = CT_Tbl::new();
+        let mut nested_row = CT_Row::new();
+        let mut nested_cell = CT_Tc::new();
+        nested_cell.paragraphs_mut()[0].add_run("nested cell");
+        nested_row.cells.push(nested_cell);
+        nested.rows.push(nested_row);
+        outer_cell.content.push(CellContent::Table(nested));
+        outer_row.cells.push(outer_cell);
+        outer.rows.push(outer_row);
+        input.document.body.add_table(outer);
+
+        let mut references = CT_P::new();
+        let mut reference_run = CT_R::new("");
+        reference_run.content = vec![
+            RunContent::FootnoteRef { id: 4 },
+            RunContent::EndnoteRef { id: 9 },
+        ];
+        references.runs.push(reference_run);
+        input.document.body.add_paragraph(references);
+
+        let mut header = CT_HdrFtr::new();
+        let mut header_paragraph = CT_P::new();
+        header_paragraph.add_run("header text");
+        header.paragraphs.push(header_paragraph);
+        input.headers.insert("rIdHeader".to_owned(), header);
+
+        let mut footer = CT_HdrFtr::new();
+        let mut footer_paragraph = CT_P::new();
+        footer_paragraph.add_run("footer text");
+        footer.paragraphs.push(footer_paragraph);
+        input.footers.insert("rIdFooter".to_owned(), footer);
+
+        let mut section = CT_SectPr::default_letter();
+        section.header_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdHeader".to_owned(),
+        });
+        section.footer_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdFooter".to_owned(),
+        });
+        input.document.body.sect_pr = Some(section);
+
+        let mut footnote_paragraph = CT_P::new();
+        footnote_paragraph.add_run("footnote text");
+        input.footnotes = Some(CT_Footnotes {
+            footnotes: vec![CT_Footnote {
+                id: 4,
+                note_type: NoteType::Normal,
+                paragraphs: vec![footnote_paragraph],
+            }],
+        });
+        let mut endnote_paragraph = CT_P::new();
+        endnote_paragraph.add_run("endnote text");
+        input.endnotes = Some(CT_Footnotes {
+            footnotes: vec![CT_Footnote {
+                id: 9,
+                note_type: NoteType::Normal,
+                paragraphs: vec![endnote_paragraph],
+            }],
+        });
+
+        let expected = HashMap::from([
+            (
+                WordSourcePath {
+                    story: WordStory::Document,
+                    children: vec![0],
+                },
+                body_text,
+            ),
+            (
+                WordSourcePath {
+                    story: WordStory::Document,
+                    children: vec![1, 0, 0, 0],
+                },
+                "outer cell".to_owned(),
+            ),
+            (
+                WordSourcePath {
+                    story: WordStory::Document,
+                    children: vec![1, 0, 0, 1, 0, 0, 0],
+                },
+                "nested cell".to_owned(),
+            ),
+            (
+                WordSourcePath {
+                    story: WordStory::Header {
+                        relationship_id: "rIdHeader".to_owned(),
+                    },
+                    children: vec![0],
+                },
+                "header text".to_owned(),
+            ),
+            (
+                WordSourcePath {
+                    story: WordStory::Footer {
+                        relationship_id: "rIdFooter".to_owned(),
+                    },
+                    children: vec![0],
+                },
+                "footer text".to_owned(),
+            ),
+            (
+                WordSourcePath {
+                    story: WordStory::Footnote { id: 4 },
+                    children: vec![0],
+                },
+                "footnote text".to_owned(),
+            ),
+            (
+                WordSourcePath {
+                    story: WordStory::Endnote { id: 9 },
+                    children: vec![0],
+                },
+                "endnote text".to_owned(),
+            ),
+        ]);
+
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("layout with provenance");
+        let mut seen = std::collections::HashSet::new();
+        for run in result.layout.pages.iter().flat_map(|page| {
+            page.elements.iter().filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run),
+                _ => None,
+            })
+        }) {
+            let Some(span) = run.source else {
+                continue;
+            };
+            let path = result.source_node(span.node).expect("source node resolves");
+            let source_text = expected.get(path).expect("source path belongs to fixture");
+            let selected = source_text
+                .chars()
+                .skip(span.char_start as usize)
+                .take((span.char_end - span.char_start) as usize)
+                .collect::<String>();
+            assert_eq!(selected, run.text, "mismatch at {path:?}");
+            seen.insert(path.clone());
+        }
+        assert_eq!(
+            seen.len(),
+            expected.len(),
+            "every supported story is sourced"
+        );
+        for path in expected.keys() {
+            assert!(seen.contains(path), "missing source path {path:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_text_and_repeated_stories_keep_distinct_source_nodes() {
+        use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef};
+
+        let repeated = "duplicate phrase ".repeat(220);
+        let mut input = make_input_with_text(&repeated);
+        let mut second = CT_P::new();
+        second.add_run(&repeated);
+        input.document.body.add_paragraph(second);
+
+        let mut header = CT_HdrFtr::new();
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("repeated header");
+        header.paragraphs.push(paragraph);
+        input.headers.insert("rIdRepeated".to_owned(), header);
+        input
+            .document
+            .body
+            .sect_pr
+            .as_mut()
+            .expect("default section")
+            .header_refs
+            .push(HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: "rIdRepeated".to_owned(),
+            });
+
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("layout repeated stories");
+        assert!(result.layout.pages.len() > 1, "header must be reused");
+        let mut first_body = std::collections::HashSet::new();
+        let mut second_body = std::collections::HashSet::new();
+        let mut header_nodes = std::collections::HashSet::new();
+        let mut header_runs = 0usize;
+        for run in result.layout.pages.iter().flat_map(|page| {
+            page.elements.iter().filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run),
+                _ => None,
+            })
+        }) {
+            let Some(source) = run.source else {
+                continue;
+            };
+            match result.source_node(source.node).expect("source resolves") {
+                WordSourcePath {
+                    story: WordStory::Document,
+                    children,
+                } if children == &[0] => {
+                    first_body.insert(source.node);
+                }
+                WordSourcePath {
+                    story: WordStory::Document,
+                    children,
+                } if children == &[1] => {
+                    second_body.insert(source.node);
+                }
+                WordSourcePath {
+                    story: WordStory::Header { relationship_id },
+                    children,
+                } if relationship_id == "rIdRepeated" && children == &[0] => {
+                    header_nodes.insert(source.node);
+                    header_runs += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(first_body.len(), 1);
+        assert_eq!(second_body.len(), 1);
+        assert_ne!(
+            first_body, second_body,
+            "duplicate paragraphs must not alias"
+        );
+        assert_eq!(header_nodes.len(), 1, "repeated header reuses one node");
+        assert!(header_runs > 1, "header must be emitted more than once");
+    }
+
+    #[test]
+    fn accepted_and_tracked_views_record_projection_local_ranges() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>A</w:t></w:r><w:del w:id="1" w:author="Ada"><w:r><w:delText>B</w:delText></w:r></w:del><w:ins w:id="2" w:author="Ada"><w:r><w:t>C</w:t></w:r></w:ins></w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("revision XML parses");
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+
+        for (view, expected) in [
+            (RevisionView::Accepted, "AC"),
+            (RevisionView::Tracked, "ABC"),
+        ] {
+            assert_eq!(projected_paragraph_text(paragraph, view), expected);
+            let mut input = make_input_with_text("");
+            input.document = document.clone();
+            input.revision_view = view;
+            let result = crate::layout_document_deterministic_with_provenance(&input)
+                .expect("revision layout with provenance");
+            assert_eq!(result.revision_view, view);
+            let mut selected = String::new();
+            for run in result.layout.pages.iter().flat_map(|page| {
+                page.elements.iter().filter_map(|element| match element {
+                    PositionedElement::Text(run) => Some(run),
+                    _ => None,
+                })
+            }) {
+                let Some(span) = run.source else {
+                    continue;
+                };
+                assert!(matches!(
+                    result.source_node(span.node),
+                    Some(WordSourcePath {
+                        story: WordStory::Document,
+                        children,
+                    }) if children == &[0]
+                ));
+                let exact = expected
+                    .chars()
+                    .skip(span.char_start as usize)
+                    .take((span.char_end - span.char_start) as usize)
+                    .collect::<String>();
+                assert_eq!(exact, run.text);
+                selected.push_str(&run.text);
+            }
+            assert_eq!(selected, expected);
+        }
+    }
+
+    #[test]
+    fn field_projection_ownership_disambiguates_repeated_literal_ranges() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DATE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>a</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).expect("complex field parses");
+        let BodyContent::Paragraph(parsed) = &document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let [RunContent::Field(complex)] = parsed.runs[0].content.as_slice() else {
+            panic!("expected projected complex field");
+        };
+
+        let cases = [
+            (
+                vec![
+                    RunContent::Field(complex.clone()),
+                    RunContent::Text(rdocx_oxml::text::CT_Text::new("a")),
+                    RunContent::Field(Field::new("DATE", "a")),
+                ],
+                "aa",
+                vec![("a", 1, 2)],
+            ),
+            (
+                vec![
+                    RunContent::Text(rdocx_oxml::text::CT_Text::new("a")),
+                    RunContent::Field(complex.clone()),
+                    RunContent::Text(rdocx_oxml::text::CT_Text::new("aa")),
+                    RunContent::Field(Field::new("DATE", "a")),
+                    RunContent::Text(rdocx_oxml::text::CT_Text::new("a")),
+                ],
+                "aaaaa",
+                vec![("a", 0, 1), ("aa", 2, 4), ("a", 4, 5)],
+            ),
+        ];
+
+        for (content, expected_projection, expected_literals) in cases {
+            let mut input = make_input_with_text("");
+            let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+                panic!("expected paragraph");
+            };
+            let mut run = CT_R::new("");
+            run.content = content;
+            assert_eq!(run.text(), expected_projection);
+            paragraph.runs = vec![run];
+
+            let result = crate::layout_document_deterministic_with_provenance(&input)
+                .expect("mixed field layout");
+            let sourced = result
+                .layout
+                .pages
+                .iter()
+                .flat_map(|page| &page.elements)
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => run
+                        .source
+                        .map(|span| (run.text.as_str(), span.char_start, span.char_end)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(sourced, expected_literals);
+        }
+    }
+
+    #[test]
+    fn generated_or_transformed_text_remains_unattributed() {
+        use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::numbering::{
+            CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat,
+        };
+        use rdocx_oxml::properties::CT_RPr;
+        use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
+        use rdocx_oxml::units::Twips;
+
+        let mut input = make_input_with_text("ordinary");
+
+        let mut transformed = CT_P::new();
+        let mut caps = CT_R::new("straße");
+        caps.properties = Some(CT_RPr {
+            caps: Some(true),
+            ..Default::default()
+        });
+        transformed.runs.push(caps);
+        input.document.body.add_paragraph(transformed);
+
+        let mut generated = CT_P::new();
+        generated.properties = Some(CT_PPr {
+            tabs: Some(CT_Tabs {
+                tabs: vec![CT_TabStop {
+                    val: ST_TabJc::Left,
+                    pos: Twips(3600),
+                    leader: Some(ST_TabLeader::Dot),
+                    source_occurrence: None,
+                }],
+            }),
+            ..Default::default()
+        });
+        let mut generated_run = CT_R::new("");
+        generated_run.content = vec![
+            RunContent::Text(rdocx_oxml::text::CT_Text::new("left")),
+            RunContent::Tab,
+            RunContent::Text(rdocx_oxml::text::CT_Text::new("right")),
+            RunContent::Field(Field::new("PAGE", "7")),
+            RunContent::Text(rdocx_oxml::text::CT_Text::new("after")),
+            RunContent::FootnoteRef { id: 4 },
+        ];
+        generated.runs.push(generated_run);
+        input.document.body.add_paragraph(generated);
+
+        let mut list = CT_P::new();
+        list.properties = Some(CT_PPr {
+            num_id: Some(1),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        list.add_run("listed");
+        input.document.body.add_paragraph(list);
+        let mut level = CT_Lvl::new(0);
+        level.start = Some(1);
+        level.num_fmt = Some(ST_NumberFormat::Decimal);
+        level.lvl_text = Some("%1.".to_owned());
+        let mut abstract_num = CT_AbstractNum::new(1);
+        abstract_num.levels.push(level);
+        input.numbering = Some(CT_Numbering {
+            abstract_nums: vec![abstract_num],
+            nums: vec![CT_Num {
+                num_id: 1,
+                abstract_num_id: 1,
+                extra_xml: Vec::new(),
+                extra_attributes: Vec::new(),
+            }],
+            root_attributes: Vec::new(),
+            extra_xml: Vec::new(),
+        });
+
+        let mut note = CT_P::new();
+        note.add_run("note body");
+        input.footnotes = Some(CT_Footnotes {
+            footnotes: vec![CT_Footnote {
+                id: 4,
+                note_type: NoteType::Normal,
+                paragraphs: vec![note],
+            }],
+        });
+
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("generated text layout");
+        let runs = result
+            .layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.elements)
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            runs.iter()
+                .any(|run| run.text == "ordinary" && run.source.is_some())
+        );
+        assert!(
+            runs.iter()
+                .any(|run| run.text == "after" && run.source.is_some())
+        );
+        assert!(
+            runs.iter()
+                .any(|run| run.text == "STRASSE" && run.source.is_none())
+        );
+        assert!(
+            runs.iter()
+                .any(|run| run.text == "1." && run.source.is_none())
+        );
+        assert!(runs.iter().any(|run| {
+            !run.text.is_empty()
+                && run.text.chars().all(|character| character == '.')
+                && run.source.is_none()
+        }));
+        assert!(
+            runs.iter()
+                .any(|run| run.field_kind == Some(FieldKind::Page) && run.source.is_none())
+        );
+        assert!(
+            runs.iter()
+                .any(|run| run.note.is_some() && run.source.is_none())
+        );
+    }
+
+    #[test]
+    fn existing_low_level_layout_functions_keep_identical_output() {
+        let input = make_input_with_text("compatibility 🚀 text that wraps ".repeat(30).as_str());
+        let ordinary = crate::layout_document_deterministic(&input).expect("ordinary layout");
+        let mut sourced = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("provenance layout")
+            .into_layout_result();
+        for page in &mut sourced.pages {
+            for element in &mut page.elements {
+                if let PositionedElement::Text(run) = element {
+                    run.source = None;
+                }
+            }
+        }
+        assert_eq!(format!("{ordinary:?}"), format!("{sourced:?}"));
+    }
+
+    #[test]
+    fn caller_font_and_deterministic_provenance_variants_return_complete_maps() {
+        let mut input = make_input_with_text("caller font provenance");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("Caller Carlito".to_owned()),
+            font_hansi: Some("Caller Carlito".to_owned()),
+            ..Default::default()
+        });
+        input.fonts.push(oxml_layout::FontFile {
+            family: "Caller Carlito".to_owned(),
+            data: include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").to_vec(),
+        });
+
+        let normal = crate::layout_document_with_provenance(&input).expect("caller font layout");
+        let deterministic = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("deterministic caller font layout");
+        for result in [&normal, &deterministic] {
+            assert!(
+                result
+                    .layout
+                    .fonts
+                    .iter()
+                    .any(|font| font.data == input.fonts[0].data),
+                "the caller-provided font bytes shaped the result"
+            );
+            let runs = result
+                .layout
+                .pages
+                .iter()
+                .flat_map(|page| &page.elements)
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) if run.source.is_some() => Some(run),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!runs.is_empty(), "caller-font text is sourced");
+            assert_eq!(
+                runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+                "caller font provenance"
+            );
+            for run in runs {
+                let source = run.source.expect("run is sourced");
+                assert!(matches!(
+                    result.source_node(source.node),
+                    Some(WordSourcePath {
+                        story: WordStory::Document,
+                        children,
+                    }) if children == &[0]
+                ));
+            }
         }
     }
 

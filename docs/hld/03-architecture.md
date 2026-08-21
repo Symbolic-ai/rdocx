@@ -85,6 +85,13 @@ output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
 format.
 
+`SourceNodeId` and `SourceSpan` are the format-neutral provenance carriers at
+this boundary. A text segment and its positioned glyph run can hold one
+result-local node id plus an exclusive Unicode-scalar range. Shared line
+breaking preserves and subdivides that range without learning what the node
+means. Consumers must resolve an id through the format-specific result that
+created it and must not compare ids from different results.
+
 One construct is an exception and is called out rather than glossed. A text
 segment carries an optional `NoteRef`, a footnote or endnote reference, and
 notes are a WordprocessingML idea with no PresentationML counterpart. It sits
@@ -293,6 +300,15 @@ both sides, applies neutral decorations, and carries changed-paragraph state
 through pagination. The `rdocx` facade owns the concrete `RenderOptions` value
 that passes this selection into layout. Default accepted renders reuse the
 normal and deterministic caches, while tracked renders remain uncached.
+
+The same Word projection owns glyph provenance. `rdocx-layout` allocates one
+deterministic `WordSourcePath` for each modeled paragraph in the document,
+arbitrarily nested tables, headers, footers, footnotes, and endnotes. A
+`WordLayoutResult` resolves shared node ids through that result-local table and
+records the selected revision view. Ordinary text ranges address the selected
+projection. Parsed complex-field caches advance projection offsets, while new
+simple fields do not. Generated markers, evaluated fields, note labels, and
+non-bijective display transformations remain unattributed.
 
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The

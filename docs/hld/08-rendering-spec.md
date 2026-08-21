@@ -18,7 +18,17 @@ pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
                           diagnostics: Vec<Diagnostic> }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
+pub struct SourceNodeId(NonZeroU32)
+pub struct SourceSpan { node: SourceNodeId, char_start: u32, char_end: u32 }
 ```
+
+`TextSegment` and `GlyphRun` each carry `source: Option<SourceSpan>`. The node
+is meaningful only within the result that allocated it. `char_start` and
+`char_end` are exclusive Unicode-scalar offsets, not byte, UTF-16, grapheme, or
+glyph-cluster positions. Word assigns spans before shaping. Its initial text
+segmentation and the shared line breaker both count scalars at byte split
+points, so every wrapped fragment retains an exact contiguous source range.
+Generated text uses `None`.
 
 **A slide is a page with a fixed size.** Font subsetting, ToUnicode CMaps, JPEG
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
@@ -442,6 +452,14 @@ separate `Mutex<Option<Arc<_>>>` caches. `render_page_to_png`,
 deterministic page renderer uses its own result, while caller-supplied font
 layouts remain uncached because those fonts are not part of a stable cache key.
 
+The low-level Word engine keeps its existing `LayoutResult` entry points and
+discards provenance there. `layout_document_with_provenance` and
+`layout_document_deterministic_with_provenance` allocate one immutable source
+table before layout and return it with the positioned output as
+`WordLayoutResult`. Repeated header and note layout reuses the same node rather
+than allocating per page. Source metadata does not change shaping, pagination,
+font selection, or rendered bytes.
+
 ### Word revision views
 
 `LayoutInput::revision_view` selects the accepted or tracked projection before
@@ -453,6 +471,12 @@ insertions and move destinations and omits deletions and move sources. Tracked
 layout includes both sides. It forces single underline on insertion and move
 destination text and single strike on deletion and move source text while
 retaining the remaining resolved formatting.
+
+Provenance ranges are local to this selected projection. The field model's
+`Field::projected_text` decision is the single owner of whether a field cache
+advances a run's projection offset, which prevents repeated cached and literal
+text from producing a plausible but false range. Field display glyphs remain
+unattributed even when a parsed complex cache contributes to later offsets.
 
 A tracked paragraph with visible revised content or a property-only revision
 carries a changed marker into pagination. Every page fragment of that paragraph

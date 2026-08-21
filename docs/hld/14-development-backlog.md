@@ -2291,9 +2291,13 @@ display transformation cannot preserve an exact source slice remain
 unattributed rather than reporting a false location.
 
 The existing `layout_document` functions retain their `LayoutResult` return
-type and discard provenance. New provenance variants return the Word-specific
-bundle. F-X032 exposes that bundle through cached and caller-font facade paths,
-so external renderers receive pages, fonts, and source resolution together.
+type and discard provenance. `layout_document_with_provenance` and
+`layout_document_deterministic_with_provenance` return the Word-specific
+bundle. The field model exposes its parsed-complex projection ownership through
+`Field::projected_text`, so identical cached and literal text cannot shift a
+later range. F-X032 exposes the bundle through cached and caller-font facade
+paths, so external renderers receive pages, fonts, and source resolution
+together.
 
 This is an intentional low-level pre-1.0 source break for exhaustive
 `TextSegment` and `GlyphRun` literals and belongs in the planned 0.4.0 and
@@ -2308,7 +2312,9 @@ footnotes, endnotes, and both revision views. Both splitting stages preserve
 contiguous ranges. Generated markers, evaluated fields, and non-bijective text
 transformations remain unattributed. Caller-font and cached layouts carry the
 same complete source map, packaged crates remain below 10 MiB, WASM checks
-pass, and all 49 hash entries remain unchanged.
+pass, and all 49 hash entries remain unchanged. The repeated-text field
+regression proves that parsed complex fields advance projection offsets and
+new simple fields do not.
 
 ### F-X038, Cache relayout work across document edits (L)
 
