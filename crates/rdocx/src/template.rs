@@ -76,6 +76,12 @@ impl SentinelPool {
 struct Scope {
     name: String,
     value: Value,
+    deferred: bool,
+}
+
+enum ResolvedValue<'a> {
+    Value(&'a Value),
+    Deferred,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +127,7 @@ enum Block<T> {
 struct Evaluated<T> {
     source_index: usize,
     value: T,
+    scopes: Vec<Scope>,
 }
 
 pub(crate) fn render(document: &mut Document, data: &Value) -> Result<usize> {
@@ -397,7 +404,7 @@ fn render_table(
                 render_nested_tables_in_row(row, root, scopes, sentinels, structural_change)?;
             Ok(nested + stage_row_scalars(row, root, scopes, sentinels)?)
         };
-    let (evaluated, count) = evaluate_blocks(
+    let (evaluated, mut count) = evaluate_blocks(
         &blocks,
         root,
         &mut local_scopes,
@@ -414,12 +421,21 @@ fn render_table(
                 .filter(|(at, _)| *at == row.source_index)
                 .map(|(_, raw)| (new_index, raw.clone())),
         );
-        content_controls.extend(
-            old_controls
-                .iter()
-                .filter(|(at, _, _)| *at == row.source_index)
-                .map(|(_, before, control)| (new_index, *before, control.clone())),
-        );
+        for (_, before, control) in old_controls
+            .iter()
+            .filter(|(at, _, _)| *at == row.source_index)
+        {
+            let mut control = control.clone();
+            count += render_nested_tables_in_control(
+                &mut control,
+                root,
+                &row.scopes,
+                sentinels,
+                structural_change,
+            )?;
+            count += stage_control_scalars(&mut control, root, &row.scopes, sentinels)?;
+            content_controls.push((new_index, *before, control));
+        }
     }
     let new_len = evaluated.len();
     extra_xml.extend(
@@ -428,12 +444,18 @@ fn render_table(
             .filter(|(at, _)| *at == old_len)
             .map(|(_, raw)| (new_len, raw.clone())),
     );
-    content_controls.extend(
-        old_controls
-            .iter()
-            .filter(|(at, _, _)| *at == old_len)
-            .map(|(_, before, control)| (new_len, *before, control.clone())),
-    );
+    for (_, before, control) in old_controls.iter().filter(|(at, _, _)| *at == old_len) {
+        let mut control = control.clone();
+        count += render_nested_tables_in_control(
+            &mut control,
+            root,
+            scopes,
+            sentinels,
+            structural_change,
+        )?;
+        count += stage_control_scalars(&mut control, root, scopes, sentinels)?;
+        content_controls.push((new_len, *before, control));
+    }
     table.rows = evaluated.into_iter().map(|row| row.value).collect();
     table.extra_xml = extra_xml;
     table.content_controls = content_controls;
@@ -715,11 +737,13 @@ where
                 output.push(Evaluated {
                     source_index: *source_index,
                     value,
+                    scopes: scopes.clone(),
                 });
             }
             Block::For { name, path, body } => {
                 let values = match resolve_value(root, scopes, path)? {
-                    Value::Array(values) => values.clone(),
+                    ResolvedValue::Value(Value::Array(values)) => values.clone(),
+                    ResolvedValue::Deferred => Vec::new(),
                     _ => {
                         return Err(template_error(&format!(
                             "loop path `{}` does not resolve to an array",
@@ -727,10 +751,21 @@ where
                         )));
                     }
                 };
+                if values.is_empty() {
+                    scopes.push(Scope {
+                        name: name.clone(),
+                        value: Value::Null,
+                        deferred: true,
+                    });
+                    let mut validation_sentinels = SentinelPool::new(&[]);
+                    evaluate_blocks(body, root, scopes, &mut validation_sentinels, render_item)?;
+                    scopes.pop();
+                }
                 for value in values {
                     scopes.push(Scope {
                         name: name.clone(),
                         value,
+                        deferred: false,
                     });
                     let evaluated = evaluate_blocks(body, root, scopes, sentinels, render_item)?;
                     scopes.pop();
@@ -738,16 +773,17 @@ where
                     count += evaluated.1;
                 }
             }
-            Block::If { path, body } => {
-                if is_truthy(resolve_value(root, scopes, path)?) {
+            Block::If { path, body } => match resolve_value(root, scopes, path)? {
+                ResolvedValue::Value(value) if is_truthy(value) => {
                     let evaluated = evaluate_blocks(body, root, scopes, sentinels, render_item)?;
                     output.extend(evaluated.0);
                     count += evaluated.1;
-                } else {
+                }
+                ResolvedValue::Value(_) | ResolvedValue::Deferred => {
                     let mut validation_sentinels = SentinelPool::new(&[]);
                     evaluate_blocks(body, root, scopes, &mut validation_sentinels, render_item)?;
                 }
-            }
+            },
         }
     }
     Ok((output, count))
@@ -811,7 +847,13 @@ fn scan_source(
                     .into_iter()
                     .map(str::to_owned)
                     .collect::<Vec<_>>();
-                let value = scalar_text(resolve_value(data, scopes, &path)?, &path)?;
+                let value = match resolve_value(data, scopes, &path)? {
+                    ResolvedValue::Value(value) => scalar_text(value, &path)?,
+                    ResolvedValue::Deferred => {
+                        cursor = end + 2;
+                        continue;
+                    }
+                };
                 let literal = source[start..end + 2].to_owned();
                 let entry = resolved
                     .entry(literal)
@@ -936,22 +978,39 @@ fn stage_control_scalars(
     Ok(count)
 }
 
-fn resolve_value<'a>(root: &'a Value, scopes: &'a [Scope], path: &[String]) -> Result<&'a Value> {
+fn resolve_value<'a>(
+    root: &'a Value,
+    scopes: &'a [Scope],
+    path: &[String],
+) -> Result<ResolvedValue<'a>> {
     let display_path = path.join(".");
     for scope in scopes.iter().rev() {
         if path
             .first()
             .is_some_and(|component| component == &scope.name)
         {
-            return traverse_path(&scope.value, &path[1..], &display_path);
+            if scope.deferred {
+                return Ok(ResolvedValue::Deferred);
+            }
+            return traverse_path(&scope.value, &path[1..], &display_path)
+                .map(ResolvedValue::Value);
         }
     }
     for scope in scopes.iter().rev() {
+        if scope.deferred {
+            if path.first().is_some_and(|component| {
+                root.as_object()
+                    .is_some_and(|object| object.contains_key(component))
+            }) {
+                return traverse_path(root, path, &display_path).map(ResolvedValue::Value);
+            }
+            return Ok(ResolvedValue::Deferred);
+        }
         if let Some(value) = try_traverse_path(&scope.value, path) {
-            return Ok(value);
+            return Ok(ResolvedValue::Value(value));
         }
     }
-    traverse_path(root, path, &display_path)
+    traverse_path(root, path, &display_path).map(ResolvedValue::Value)
 }
 
 fn try_traverse_path<'a>(mut value: &'a Value, path: &[String]) -> Option<&'a Value> {

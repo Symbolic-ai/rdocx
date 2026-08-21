@@ -6402,6 +6402,100 @@ mod tests {
     }
 
     #[test]
+    fn empty_loop_bodies_are_preflighted_without_requiring_an_item() {
+        let mut valid = Document::new();
+        valid.add_paragraph("{% for item in items %}");
+        valid.add_paragraph("{{ item.name }}");
+        valid.add_paragraph("{% endfor %}");
+        assert_eq!(
+            valid
+                .render_template(&serde_json::json!({"items": []}))
+                .unwrap(),
+            0
+        );
+        assert!(valid.paragraphs().is_empty());
+
+        for invalid_body in ["{{ item.name", "{{ config.missing }}"] {
+            let mut document = Document::new();
+            document.add_paragraph("{% for item in items %}");
+            document.add_paragraph(invalid_body);
+            document.add_paragraph("{% endfor %}");
+            let before = document.document.to_xml().unwrap();
+
+            assert!(
+                document
+                    .render_template(&serde_json::json!({"items": [], "config": {}}))
+                    .is_err()
+            );
+            assert_eq!(document.document.to_xml().unwrap(), before);
+        }
+
+        let mut nested = Document::new();
+        for text in [
+            "{% for item in items %}",
+            "{% for child in config.missing %}",
+            "{{ child.name }}",
+            "{% endfor %}",
+            "{% endfor %}",
+        ] {
+            nested.add_paragraph(text);
+        }
+        let before = nested.document.to_xml().unwrap();
+        assert!(
+            nested
+                .render_template(&serde_json::json!({"items": [], "config": {}}))
+                .is_err()
+        );
+        assert_eq!(nested.document.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn repeated_table_level_controls_use_the_row_loop_scope() {
+        let xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>{% for item in items %}</w:t></w:r></w:p></w:tc></w:tr><w:sdt><w:sdtPr><w:tag w:val="row-control"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>control {{ item.name }}</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:tc><w:p><w:r><w:t>row {{ item.name }}</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/></w:body></w:document>"#;
+        let mut document = Document::new();
+        document.document = CT_Document::from_xml(xml).unwrap();
+
+        assert_eq!(
+            document
+                .render_template(&serde_json::json!({
+                    "items": [{"name": "one"}, {"name": "two"}]
+                }))
+                .unwrap(),
+            4
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let BodyContent::Table(table) = &reopened.document.body.content[0] else {
+            panic!("expected table");
+        };
+        assert_eq!(
+            table
+                .rows
+                .iter()
+                .map(|row| row.cells[0].text())
+                .collect::<Vec<_>>(),
+            ["row one", "row two"]
+        );
+        assert_eq!(table.content_controls.len(), 2);
+        assert_eq!(
+            table
+                .content_controls
+                .iter()
+                .map(|(_, _, control)| {
+                    control
+                        .content
+                        .iter()
+                        .find_map(|content| match content {
+                            SdtContent::Row(row) => Some(row.cells[0].text()),
+                            _ => None,
+                        })
+                        .expect("expected controlled row")
+                })
+                .collect::<Vec<_>>(),
+            ["control one", "control two"]
+        );
+    }
+
+    #[test]
     fn replace_text_in_header_and_footer() {
         let mut doc = Document::new();
         assert!(!doc.has_header_footer_content());
