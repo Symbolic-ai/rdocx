@@ -273,6 +273,17 @@ property, or row. Resolution stages the complete main-document XML, resolves
 selected descendants before their enclosing subtree, reparses the result, and
 commits once only after validation succeeds.
 
+The `rdocx` facade also owns deterministic comparison of the modeled main
+body. A concrete hierarchical longest-common-subsequence alignment covers body
+content, paragraph runs, table rows, nested tables, lists, and modeled content
+inside existing content-control shells. It emits canonical fixed-prefix run,
+paragraph-mark, row, and numbering revisions at their schema-defined owners.
+Formatting-only differences retain the original formatting and produce stable
+`ComparisonDiagnostic` values instead. Inputs with existing modeled revisions
+or differing control shells are rejected. Comparison stages the candidate,
+proves that accepting it matches the edited modeled structure and rejecting it
+matches the original, then commits once.
+
 `rdocx-layout` owns the renderer-only revision projection. The
 `LayoutInput::revision_view` selector chooses an accepted or tracked view. The
 engine merges ordinary runs and typed revision runs at their preserved

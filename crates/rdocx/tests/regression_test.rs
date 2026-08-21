@@ -1522,6 +1522,35 @@ fn contextual_row_markers_keep_or_remove_the_owning_row() {
 }
 
 #[test]
+fn contextual_cleanup_preserves_foreign_property_shells() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><x:rPr xmlns:x="urn:foreign-property"><w:del w:id="91" w:author="lookalike"/></x:rPr><w:t>kept</w:t></w:r><w:ins w:id="93" w:author="Ada"><w:r><w:t> accepted</w:t></w:r></w:ins></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.accept_all().unwrap(), 1);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains(r#"<x:rPr xmlns:x="urn:foreign-property">"#));
+    assert!(saved.contains(r#"w:id="91" w:author="lookalike""#));
+    assert!(saved.contains("<w:t>kept</w:t>"));
+    assert!(saved.contains("<w:t> accepted</w:t>"));
+}
+
+#[test]
+fn table_cleanup_retains_rows_owned_by_content_controls() {
+    let xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:sdt><w:sdtPr><w:tag w:val="retained-row"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>retained</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:trPr><w:del w:id="92" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>deleted</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.accept_all().unwrap(), 1);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains(r#"w:val="retained-row""#), "{saved}");
+    assert!(saved.contains("<w:t>retained</w:t>"), "{saved}");
+    assert!(!saved.contains("<w:t>deleted</w:t>"), "{saved}");
+}
+
+#[test]
 fn contextual_paragraph_markers_merge_the_adjacent_paragraphs() {
     let xml = wrap_word_body(
         r#"<w:p><w:pPr><w:rPr><w:del w:id="1" w:author="Ada"/></w:rPr></w:pPr><w:r><w:t>first</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t> second</w:t></w:r></w:p>"#,
@@ -3987,5 +4016,906 @@ fn empty_and_single_record_merges_have_stable_boundaries() {
                 mail_merge_record(&[("Name", "same"), ("Full Name", "same")]),
             ])
             .is_ok()
+    );
+}
+
+#[test]
+fn repeated_content_produces_a_deterministic_comparison() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>repeat</w:t></w:r><w:r><w:t>repeat</w:t></w:r></w:p><w:p><w:r><w:t>repeat</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>repeat row</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>repeat row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>repeat</w:t></w:r><w:r><w:t>changed</w:t></w:r></w:p><w:p><w:r><w:t>repeat</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>repeat row</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>changed row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut first = document_with_content_controls(&original_xml);
+    let mut second = document_with_content_controls(&original_xml);
+
+    assert_eq!(
+        first
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap(),
+        second
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap()
+    );
+    assert_eq!(first.to_bytes().unwrap(), second.to_bytes().unwrap());
+}
+
+#[test]
+fn comparison_metadata_is_escaped_and_ids_do_not_collide() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:bookmarkStart w:id="0" w:name="kept"/><w:r><w:t>old</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:bookmarkStart w:id="0" w:name="kept"/><w:r><w:t>new</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut document = document_with_content_controls(&original_xml);
+    document
+        .compare(&edited, "Ada & \"Bob\"", "2026-08-21T09:30:00+01:00")
+        .unwrap();
+
+    let xml = document_xml(&mut document);
+    assert!(xml.contains(r#"w:author="Ada &amp; &quot;Bob&quot;""#));
+    assert!(
+        document
+            .revisions()
+            .iter()
+            .all(|revision| revision.id() != 0)
+    );
+    let before = document.to_bytes().unwrap();
+    assert!(document.compare(&edited, "Ada", "not-a-date").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn accepting_a_comparison_reproduces_the_edited_body_exactly() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>old body</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>old cell</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>old nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="scope"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>new body</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new cell</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="scope"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>new control</w:t></w:r></w:p><w:p><w:r><w:t>added control child</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert!(!compared.revisions().is_empty());
+    compared.accept_all().unwrap();
+    assert!(
+        compared
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(compared.revisions().is_empty());
+}
+
+#[test]
+fn rejecting_a_comparison_reproduces_the_original_body_exactly() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>one</w:t></w:r><w:r><w:t>changed</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>changed row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    compared.reject_all().unwrap();
+    assert!(
+        compared
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(compared.revisions().is_empty());
+}
+
+#[test]
+fn formatting_only_changes_report_diagnostics_without_revisions() {
+    let original_xml =
+        wrap_word_body(r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p>"#);
+    let edited_xml =
+        wrap_word_body(r#"<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>same</w:t></w:r></w:p>"#);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    let before = body_from_document(&mut compared);
+    let diagnostics = compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+
+    assert_eq!(
+        diagnostics,
+        vec![rdocx::ComparisonDiagnostic {
+            location: "body/paragraph[0]/run[0]".to_owned(),
+            message: "formatting differs and the original formatting was retained".to_owned(),
+        }]
+    );
+    assert!(compared.revisions().is_empty());
+    assert_eq!(body_from_document(&mut compared), before);
+}
+
+#[test]
+fn a_failed_comparison_leaves_the_original_package_unchanged() {
+    let existing_xml = wrap_word_body(
+        r#"<w:p><w:ins w:id="4" w:author="prior"><w:r><w:t>tracked</w:t></w:r></w:ins></w:p>"#,
+    );
+    let edited = Document::new();
+    let mut document = document_with_content_controls(&existing_xml);
+    let before = document.to_bytes().unwrap();
+
+    assert!(
+        document
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comparison_preserves_unmodelled_xml_byte_for_byte() {
+    let body_raw = r#"<x:bodyOpaque xmlns:x="urn:comparison-body" x:value="keep"/>"#;
+    let paragraph_raw =
+        r#"<x:paragraphOpaque xmlns:x="urn:comparison-paragraph"><x:nested/></x:paragraphOpaque>"#;
+    let table_raw = r#"<x:tableOpaque xmlns:x="urn:comparison-table" x:value="keep"/>"#;
+    let cell_raw = r#"<x:cellOpaque xmlns:x="urn:comparison-cell" x:value="keep"/>"#;
+    let control_raw =
+        r#"<x:controlOpaque xmlns:x="urn:comparison-control"><x:nested/></x:controlOpaque>"#;
+    let body = |value: &str| {
+        wrap_word_body(&format!(
+            r#"{body_raw}<w:p><w:r><w:t>{value} body</w:t>{paragraph_raw}</w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/>{table_raw}<w:tr><w:tc>{cell_raw}<w:p><w:r><w:t>{value} cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="raw-scope"/></w:sdtPr><w:sdtContent>{control_raw}<w:p><w:r><w:t>{value} control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+        ))
+    };
+    let original_xml = body("old");
+    let edited_xml = body("new");
+    let edited = document_with_content_controls(&edited_xml);
+    let mut document = document_with_content_controls(&original_xml);
+    document
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+
+    let xml = document_xml(&mut document);
+    for raw in [body_raw, table_raw, cell_raw, control_raw] {
+        assert_eq!(xml.matches(raw).count(), 1, "{xml}");
+    }
+    assert_eq!(xml.matches(paragraph_raw).count(), 2, "{xml}");
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_xml = document_xml(&mut reopened);
+    for raw in [body_raw, table_raw, cell_raw, control_raw] {
+        assert_eq!(reopened_xml.matches(raw).count(), 1, "{reopened_xml}");
+    }
+    assert_eq!(reopened_xml.matches(paragraph_raw).count(), 2);
+}
+
+#[test]
+fn inserted_and_deleted_body_blocks_resolve_without_empty_containers() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>inserted</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>"#,
+    );
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut inserted = document_with_content_controls(&original_xml);
+    inserted
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&inserted.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let diagnostics = accepted
+        .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let mut rejected = Document::from_bytes(&inserted.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let diagnostics = rejected
+        .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let empty_xml = wrap_word_body(r#"<w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#);
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>only row</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let empty = document_with_content_controls(&empty_xml);
+    let table = document_with_content_controls(&table_xml);
+    let mut inserted_table = document_with_content_controls(&empty_xml);
+    inserted_table
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    inserted_table.reject_all().unwrap();
+    assert!(
+        inserted_table
+            .compare(&empty, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let final_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>final</w:t></w:r></w:p>"#,
+    );
+    let final_document = document_with_content_controls(&final_xml);
+    let mut inserted_final = document_with_content_controls(&empty_xml);
+    inserted_final
+        .compare(&final_document, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    inserted_final.reject_all().unwrap();
+    assert!(
+        inserted_final
+            .compare(&empty, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_revises_nested_control_content_without_replacing_its_shell() {
+    let body = |value: &str, paragraph_tag: &str| {
+        wrap_word_body(&format!(
+            r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="{paragraph_tag}"/></w:sdtPr><w:sdtContent><w:r><w:t>{value} paragraph control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:sdt><w:sdtPr><w:tag w:val="table-control"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>{value} table control</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:sdt><w:sdtPr><w:tag w:val="row-control"/></w:sdtPr><w:sdtContent><w:tc><w:p><w:r><w:t>{value} row control</w:t></w:r></w:p></w:tc></w:sdtContent></w:sdt><w:tc><w:sdt><w:sdtPr><w:tag w:val="cell-control"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{value} cell control</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>"#,
+        ))
+    };
+    let original_xml = body("old", "paragraph-control");
+    let edited_xml = body("new", "paragraph-control");
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked_xml = document_xml(&mut compared);
+    for tag in [
+        "paragraph-control",
+        "table-control",
+        "row-control",
+        "cell-control",
+    ] {
+        assert_eq!(tracked_xml.matches(&format!(r#"w:val="{tag}""#)).count(), 1);
+    }
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let diagnostics = accepted
+        .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let diagnostics = rejected
+        .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let changed_shell_xml = body("old", "changed-shell");
+    let changed_shell = document_with_content_controls(&changed_shell_xml);
+    let mut unchanged = document_with_content_controls(&original_xml);
+    let before = unchanged.to_bytes().unwrap();
+    assert!(
+        unchanged
+            .compare(&changed_shell, "Ada", "2026-08-21T09:30:00Z")
+            .is_err()
+    );
+    assert_eq!(unchanged.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comparison_preserves_content_control_whitespace_slots() {
+    let first_slot = "\r\n\t \t\r\n";
+    let second_slot = "\n \t \n";
+    let body = |value: &str| {
+        wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="pretty"/></w:sdtPr><w:sdtContent>{first_slot}<w:p><w:r><w:t>{value}</w:t></w:r></w:p>{second_slot}</w:sdtContent></w:sdt>"#,
+        ))
+    };
+    let original_xml = body("old");
+    let edited_xml = body("new");
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    assert!(tracked.contains(first_slot), "{tracked:?}");
+    assert!(tracked.contains(second_slot), "{tracked:?}");
+
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_deletes_text_without_corrupting_tabs() {
+    let original_xml =
+        wrap_word_body(r#"<w:p><w:r><w:t>old</w:t><w:tab/><w:t>tail</w:t></w:r></w:p>"#);
+    let edited_xml =
+        wrap_word_body(r#"<w:p><w:r><w:t>new</w:t><w:tab/><w:t>tail</w:t></w:r></w:p>"#);
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    assert!(tracked.contains("<w:tab/>"), "{tracked}");
+    assert!(!tracked.contains("delTextab"), "{tracked}");
+
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_reports_formatting_inside_matched_table_rows() {
+    let original_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:shd w:fill="FF0000"/></w:tcPr><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:shd w:fill="0000FF"/></w:tcPr><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>same</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    let diagnostics = compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.location.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "body/table[0]/row[0]/cell[0]",
+            "body/table[0]/row[0]/cell[0]/content[0]",
+            "body/table[0]/row[0]/cell[0]/content[0]/run[0]",
+        ]
+    );
+    assert!(compared.revisions().is_empty());
+}
+
+#[test]
+fn comparison_replaces_paragraphs_and_tables_before_an_anchor() {
+    let paragraph_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>old paragraph</w:t></w:r></w:p><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new table</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let paragraph = document_with_content_controls(&paragraph_xml);
+    let table = document_with_content_controls(&table_xml);
+
+    let mut paragraph_to_table = document_with_content_controls(&paragraph_xml);
+    paragraph_to_table
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&paragraph_to_table.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&table, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&paragraph_to_table.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&paragraph, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut table_to_paragraph = document_with_content_controls(&table_xml);
+    table_to_paragraph
+        .compare(&paragraph, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&table_to_paragraph.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&paragraph, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&table_to_paragraph.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&table, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_preserves_unrelated_modeled_fields() {
+    let field =
+        r#"<w:fldSimple w:instr="AUTHOR"><w:r><w:t>stored author</w:t></w:r></w:fldSimple>"#;
+    let original_xml = wrap_word_body(&format!(
+        r#"<w:p>{field}<w:r><w:t>old text</w:t></w:r></w:p>"#
+    ));
+    let edited_xml = wrap_word_body(&format!(
+        r#"<w:p>{field}<w:r><w:t>new text</w:t></w:r></w:p>"#
+    ));
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert_eq!(
+        document_xml(&mut compared).matches("<w:fldSimple").count(),
+        1
+    );
+
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document_xml(&mut accepted).matches("<w:fldSimple").count(),
+        1
+    );
+
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document_xml(&mut rejected).matches("<w:fldSimple").count(),
+        1
+    );
+}
+
+#[test]
+fn final_paragraph_markers_stay_outside_formatted_run_properties() {
+    let anchor = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>anchor</w:t></w:r></w:p>"#;
+    let added = r#"<w:p><w:r><w:t>added</w:t></w:r></w:p>"#;
+    let original_xml = wrap_word_body(anchor);
+    let edited_xml = wrap_word_body(&format!("{anchor}{added}"));
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    let marker = tracked.find("<w:ins").unwrap();
+    let properties_start = tracked.find("<w:pPr").unwrap();
+    let properties_end = tracked.find("</w:pPr>").unwrap();
+    let first_run = tracked.find("<w:r>").unwrap();
+    assert!(
+        properties_start < marker && marker < properties_end,
+        "{tracked}"
+    );
+    assert!(properties_end < first_run, "{tracked}");
+    assert_eq!(tracked.matches("<w:b/>").count(), 1, "{tracked}");
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut deletion = document_with_content_controls(&edited_xml);
+    deletion
+        .compare(&original, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut deletion);
+    let marker = tracked.find("<w:del").unwrap();
+    let properties_start = tracked.find("<w:pPr").unwrap();
+    let properties_end = tracked.find("</w:pPr>").unwrap();
+    let first_run = tracked.find("<w:r>").unwrap();
+    assert!(
+        properties_start < marker && marker < properties_end,
+        "{tracked}"
+    );
+    assert!(properties_end < first_run, "{tracked}");
+    let mut accepted = Document::from_bytes(&deletion.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn whole_row_markers_target_the_outer_row_properties() {
+    let anchor_xml = wrap_word_body(r#"<w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#);
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:trPr><w:cantSplit/></w:trPr><w:tc><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let anchor = document_with_content_controls(&anchor_xml);
+    let table = document_with_content_controls(&table_xml);
+    let mut compared = document_with_content_controls(&anchor_xml);
+
+    compared
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    let marker = tracked.find("<w:ins").unwrap();
+    let outer_cell = tracked.find("<w:tc>").unwrap();
+    let nested_properties = tracked.find("<w:tblHeader/>").unwrap();
+    assert!(marker < outer_cell, "{tracked}");
+    assert!(marker < nested_properties, "{tracked}");
+    assert_eq!(tracked.matches("<w:ins").count(), 1, "{tracked}");
+
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut deletion = document_with_content_controls(&table_xml);
+    deletion
+        .compare(&anchor, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut deletion);
+    assert!(tracked.find("<w:del").unwrap() < tracked.find("<w:tc>").unwrap());
+    let mut accepted = Document::from_bytes(&deletion.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn whole_table_marking_includes_control_owned_rows() {
+    let anchor_xml = wrap_word_body(r#"<w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#);
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:sdt><w:sdtPr><w:tag w:val="owned-row"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>same row</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:tc><w:p><w:r><w:t>same row</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let anchor = document_with_content_controls(&anchor_xml);
+    let table = document_with_content_controls(&table_xml);
+
+    let mut insertion = document_with_content_controls(&anchor_xml);
+    insertion
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut insertion);
+    assert_eq!(tracked.matches(r#"<w:trPr><w:ins"#).count(), 2, "{tracked}");
+    let mut rejected = Document::from_bytes(&insertion.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut deletion = document_with_content_controls(&table_xml);
+    deletion
+        .compare(&anchor, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut deletion);
+    assert_eq!(tracked.matches(r#"<w:trPr><w:del"#).count(), 2, "{tracked}");
+    let mut accepted = Document::from_bytes(&deletion.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn table_row_insertions_stay_inside_table_schema_boundaries() {
+    let original_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xmls = [
+        wrap_word_body(
+            r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>inserted</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        ),
+        wrap_word_body(
+            r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>inserted</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        ),
+    ];
+    let original = document_with_content_controls(&original_xml);
+
+    for edited_xml in edited_xmls {
+        let edited = document_with_content_controls(&edited_xml);
+        let mut compared = document_with_content_controls(&original_xml);
+        compared
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap();
+        let tracked = document_xml(&mut compared);
+        let table_start = tracked.find("<w:tbl>").unwrap();
+        let table_end = tracked.find("</w:tbl>").unwrap();
+        let inserted_row = tracked
+            .find("<w:ins")
+            .unwrap_or_else(|| panic!("{tracked}"));
+        assert!(
+            table_start < inserted_row && inserted_row < table_end,
+            "{tracked}"
+        );
+
+        let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn comparison_adds_and_removes_numbering_without_a_property_owner() {
+    let plain_xml = wrap_word_body(r#"<w:p><w:r><w:t>item</w:t></w:r></w:p>"#);
+    let numbered_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let plain = document_with_content_controls(&plain_xml);
+    let numbered = document_with_content_controls(&numbered_xml);
+
+    let mut addition = document_with_content_controls(&plain_xml);
+    addition
+        .compare(&numbered, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let addition_xml = document_xml(&mut addition);
+    assert!(addition_xml.contains("<w:pPrChange"), "{addition_xml}");
+    let mut accepted = Document::from_bytes(&addition.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&numbered, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&addition.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&plain, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut removal = document_with_content_controls(&numbered_xml);
+    removal
+        .compare(&plain, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let removal_xml = document_xml(&mut removal);
+    assert!(removal_xml.contains("<w:pPrChange"), "{removal_xml}");
+    let mut accepted = Document::from_bytes(&removal.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&plain, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&removal.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&numbered, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn numbering_changes_preserve_unrelated_paragraph_properties() {
+    let unnumbered_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:keepNext/><w:jc w:val="center"/></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let numbered_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:keepNext/><w:numPr><w:ilvl w:val="1"/><w:numId w:val="9"/></w:numPr><w:jc w:val="center"/></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+
+    for (original_xml, edited_xml) in [
+        (&unnumbered_xml, &numbered_xml),
+        (&numbered_xml, &unnumbered_xml),
+    ] {
+        let original = document_with_content_controls(original_xml);
+        let edited = document_with_content_controls(edited_xml);
+        let mut compared = document_with_content_controls(original_xml);
+        compared
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap();
+
+        let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        accepted.accept_all().unwrap();
+        let accepted_xml = document_xml(&mut accepted);
+        assert!(accepted_xml.contains("<w:keepNext"), "{accepted_xml}");
+        assert!(
+            accepted_xml.contains(r#"<w:jc w:val="center"/>"#),
+            "{accepted_xml}"
+        );
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        rejected.reject_all().unwrap();
+        let rejected_xml = document_xml(&mut rejected);
+        assert!(rejected_xml.contains("<w:keepNext"), "{rejected_xml}");
+        assert!(
+            rejected_xml.contains(r#"<w:jc w:val="center"/>"#),
+            "{rejected_xml}"
+        );
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn resolving_empty_paragraph_property_changes_cleans_only_empty_owners() {
+    let empty_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:pPrChange w:id="1" w:author="Ada"><w:pPr/></w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let retained_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:keepNext/><w:pPrChange w:id="1" w:author="Ada"><w:pPr><w:keepNext/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+
+    for accept in [true, false] {
+        let mut empty = document_with_content_controls(&empty_xml);
+        if accept {
+            empty.accept_all().unwrap();
+        } else {
+            empty.reject_all().unwrap();
+        }
+        let empty = document_xml(&mut empty);
+        assert!(!empty.contains("<w:pPr"), "{empty}");
+
+        let mut retained = document_with_content_controls(&retained_xml);
+        if accept {
+            retained.accept_all().unwrap();
+        } else {
+            retained.reject_all().unwrap();
+        }
+        let retained = document_xml(&mut retained);
+        assert_eq!(retained.matches("<w:pPr>").count(), 1, "{retained}");
+        assert_eq!(retained.matches("<w:keepNext").count(), 1, "{retained}");
+        assert!(!retained.contains("<w:pPrChange"), "{retained}");
+    }
+}
+
+#[test]
+fn rejecting_an_attributed_empty_prior_paragraph_owner_preserves_it_exactly() {
+    let prior = format!(
+        r#"<old:pPr xmlns:old="{}" xmlns:ext="urn:producer" ext:flag="keep" ext:mode="exact"/>"#,
+        rdocx_oxml::namespace::W_NS
+    );
+    let tracked_xml = wrap_word_body(&format!(
+        r#"<w:p><w:pPr><w:pPrChange w:id="1" w:author="Ada">{prior}</w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    ));
+    let mut tracked = document_with_content_controls(&tracked_xml);
+
+    let mut accepted = Document::from_bytes(&tracked.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let accepted = document_xml(&mut accepted);
+    assert!(!accepted.contains("<w:pPr"), "{accepted}");
+    assert!(!accepted.contains("ext:flag"), "{accepted}");
+
+    let mut rejected = Document::from_bytes(&tracked.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let rejected = document_xml(&mut rejected);
+    assert!(rejected.contains(&prior), "{rejected}");
+    assert!(!rejected.contains("<w:pPrChange"), "{rejected}");
+
+    let tracked_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:pPrChange xmlns:ext="urn:inherited" w:id="2" w:author="Ada"><w:pPr ext:flag="keep"/></w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let mut tracked = document_with_content_controls(&tracked_xml);
+    let mut rejected = Document::from_bytes(&tracked.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let rejected = document_xml(&mut rejected);
+    assert!(rejected.contains("<w:pPr"), "{rejected}");
+    assert!(
+        rejected.contains(r#"xmlns:ext="urn:inherited""#),
+        "{rejected}"
+    );
+    assert!(rejected.contains(r#"ext:flag="keep""#), "{rejected}");
+    assert!(!rejected.contains("<w:pPrChange"), "{rejected}");
+}
+
+#[test]
+fn control_block_replacement_keeps_whitespace_before_the_replacement() {
+    let before = "\r\n\t  \t\r\n";
+    let between = "\n\t \n";
+    let control = |first: &str| {
+        wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="block-replacement"/></w:sdtPr><w:sdtContent>{before}{first}{between}<w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+        ))
+    };
+    let paragraph_xml = control(r#"<w:p><w:r><w:t>old paragraph</w:t></w:r></w:p>"#);
+    let table_xml = control(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let paragraph = document_with_content_controls(&paragraph_xml);
+    let table = document_with_content_controls(&table_xml);
+    let mut compared = document_with_content_controls(&paragraph_xml);
+
+    compared
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let accepted_xml = document_xml(&mut accepted);
+    assert!(accepted_xml.contains(before), "{accepted_xml:?}");
+    assert!(accepted_xml.contains(between), "{accepted_xml:?}");
+    assert!(accepted_xml.find(before).unwrap() < accepted_xml.find("<w:tbl>").unwrap());
+    assert!(accepted_xml.find("</w:tbl>").unwrap() < accepted_xml.find(between).unwrap());
+    assert!(
+        accepted
+            .compare(&table, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let rejected_xml = document_xml(&mut rejected);
+    assert!(rejected_xml.find(before).unwrap() < rejected_xml.find("<w:p>").unwrap());
+    assert!(
+        rejected
+            .compare(&paragraph, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
     );
 }

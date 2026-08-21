@@ -1,6 +1,6 @@
 # F-167, Document comparison
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: L
 **Depends on**: F-149
@@ -127,17 +127,17 @@ Any delta is unexplained and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Confirm the API, metadata, exactness, existing-revision, and formatting policy.
-- [ ] Obtain approval for `crates/rdocx/src/comparison.rs`.
-- [ ] Generalize the private staging clone helper.
-- [ ] Implement deterministic hierarchical alignment.
-- [ ] Generate run, paragraph, row, and numbering revisions in schema order.
-- [ ] Emit formatting-only diagnostics without property revisions.
-- [ ] Preserve raw XML and content-control ownership boundaries.
-- [ ] Validate accepted and rejected postconditions before committing.
-- [ ] Add the named gate and focused unit, integration, and round-trip coverage.
-- [ ] Run the parser, packaging, full verification, and unchanged-harness riders.
-- [ ] Update exactly HLD 03, HLD 04, HLD 10, and HLD 12.
+- [x] Confirm the API, metadata, exactness, existing-revision, and formatting policy.
+- [x] Obtain approval for `crates/rdocx/src/comparison.rs`.
+- [x] Generalize the private staging clone helper.
+- [x] Implement deterministic hierarchical alignment.
+- [x] Generate run, paragraph, row, and numbering revisions in schema order.
+- [x] Emit formatting-only diagnostics without property revisions.
+- [x] Preserve raw XML and content-control ownership boundaries.
+- [x] Validate accepted and rejected postconditions before committing.
+- [x] Add the named gate and focused unit, integration, and round-trip coverage.
+- [x] Run the parser, packaging, full verification, and unchanged-harness riders.
+- [x] Update exactly HLD 03, HLD 04, HLD 10, and HLD 12.
 
 ## Open questions
 

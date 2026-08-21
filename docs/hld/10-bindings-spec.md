@@ -338,6 +338,16 @@ changes return an error before mutation. These eight methods are additive on
 `rdocx::Document` only. Python, WASM, and CLI surfaces remain unchanged and
 continue to preserve the resulting document when they save it.
 
+Native callers generate tracked changes with `Document::compare`, supplying an
+edited document, author, and RFC 3339 timestamp. The additive
+`ComparisonDiagnostic` value reports stable formatting-only locations and
+messages without turning those differences into revisions. Comparison rejects
+existing modeled revisions and unsupported structural shell differences, and
+it commits only after accepting and rejecting staged copies reproduce their
+respective modeled baselines. This API is native Rust only. Python, WASM, and
+CLI surfaces gain no comparison method and preserve comparison output when
+they save their owned document.
+
 Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive
 option-taking counterparts cover PDF bytes and files, single-page and all-page

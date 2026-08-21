@@ -67,6 +67,18 @@ references, entity-escaped bookmark names, collision-safe identity allocation,
 and foreign same-local-name attributes. The methods are opt-in and no sample
 invokes them, so the 49-entry hash harness must remain unchanged.
 
+The document-comparison regression gate compares paragraphs, tables, cells,
+nested tables, lists, and modeled content inside existing content-control
+shells. Accepting the generated revisions must reproduce the edited normalized
+modeled body exactly, while rejection must reproduce the original and leave no
+residual tracked containers. Focused coverage locks down deterministic repeated
+content alignment, escaped metadata and collision-free ids, schema placement
+for run, paragraph, row, and numbering markers, formatting-only diagnostics,
+atomic failure, and empty property-owner cleanup. The paired round-trip test
+proves that unmodeled XML and namespace declarations retain their exact bytes
+through comparison, save, and reopen. No sample invokes comparison, so the
+49-entry hash harness remains unchanged.
+
 ## The hash harness
 
 The single highest-value mechanism in the plan is

@@ -313,6 +313,17 @@ namespace, parse, or serialization failure leaves the package part bytes and
 live document unchanged. The ordinary deterministic save path writes the
 validated result later and preserves every unrelated part and relationship.
 
+Document comparison uses the same package boundary. It clones the complete
+typed document and package state, aligns only modeled main-body content, and
+serializes generated revisions with the canonical `w`, `xml`, and `mc`
+prefixes in schema order. Reparse remains prefix tolerant. Revision metadata
+is XML escaped, while unmodeled body, paragraph, table, cell, and
+content-control XML keeps its stored byte order. The staged candidate is
+accepted and rejected independently to prove both structural postconditions.
+Any metadata, alignment, unsupported-shell, parse, serialization, or
+postcondition failure leaves the original package, typed state, and caches
+unchanged.
+
 Template rendering follows the same staged package boundary. A stack parser
 pairs nested controls within one body or table-row container before evaluation.
 The evaluator clones typed body entries and rows into candidate sequences, so
