@@ -7523,3 +7523,113 @@ and `level_raw_is_lgl_stays_before_suffix`.
 **Notes for future sessions.** New typed `CT_TcPr` properties must be placed in
 the existing absolute sequence. Namespace ownership can live above a preserved
 child, so raw serialization must carry the complete external binding scope.
+
+### F-163, Template syntax
+
+**Sprint.** S50
+**Completed.** 2026-08-21
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native `Document` facade now renders scalar
+`{{ path.to.value }}` tags from `serde_json::Value`. Tags may cross formatted
+Word runs in body content, tables, headers, footers, text boxes, and chart
+labels. Strings, numbers, booleans, and null have documented conversions.
+
+**Non-obvious choices.** Rendering evaluates against a staged document clone
+and commits only after every tag and value validates. Collision-free sentinels
+keep replacement text containing template syntax from being evaluated again.
+The first matched run owns replacement formatting while unmatched run content
+and unmodelled XML remain in place.
+
+**Deviations from the design plan.** None. Microscope review added direct
+table-cell coverage for the shared cross-run replacement path.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, facade ownership,
+`docs/hld/04-opc-and-packaging.md`, staged preservation,
+`docs/hld/10-bindings-spec.md`, the additive native API, and
+`docs/hld/12-testing-strategy.md`, scalar template gates.
+
+**Tests.** `a_tag_split_across_five_formatted_runs_preserves_surrounding_formatting`,
+`dotted_scalar_paths_render_supported_json_leaves`,
+`invalid_template_input_leaves_the_document_unchanged`, and
+`template_render_preserves_unmodelled_paragraph_xml`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Scalar rendering is deliberately non-recursive.
+Object and array leaves are invalid scalar values, and any invalid input must
+leave both typed content and package state unchanged.
+
+### F-164, Loops and conditionals
+
+**Sprint.** S50
+**Completed.** 2026-08-21
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Dedicated marker paragraphs and rows now define nested
+`for` and `if` blocks over body entries and table rows. Loop variables use
+lexical scopes, conditionals use documented JSON truthiness, and section-ending
+paragraphs retain their section properties when cloned.
+
+**Non-obvious choices.** A container-aware stack parser rejects mismatched,
+crossed, or cross-container markers before mutation. Row markers are resolved
+against their owning table depth, so nested table markers cannot be mistaken
+for outer row controls. Preflight covers scalar paths even when a conditional
+branch will not render.
+
+**Deviations from the design plan.** None. Microscope review corrected the
+structural-only commit path, nested-table marker ownership, false-branch
+preflight, and populated nested-table rejection for an outer marker row.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, structural evaluator
+ownership, `docs/hld/04-opc-and-packaging.md`, atomic container evaluation,
+`docs/hld/10-bindings-spec.md`, block syntax and scope, and
+`docs/hld/12-testing-strategy.md`, nested structural gates.
+
+**Tests.** `a_nested_loop_and_conditional_generate_the_expected_document`,
+`mismatched_or_cross_container_blocks_fail_without_mutation`,
+`loop_scopes_shadow_root_values_and_restore_after_exit`, and
+`structural_generation_preserves_schema_order_and_raw_xml`, plus focused
+regressions for row-only output, nested tables, false branches, and marker-row
+content.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Structural controls remain limited to the main
+body and its tables. Other relationship-resolved stories retain scalar-only
+rendering through the shared replacement path.
+
+### F-165, Repeating table rows and lists
+
+**Sprint.** S50
+**Completed.** 2026-08-21
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** One row loop may now repeat several adjacent template rows
+for each record. Deep clones retain table banding, grid spans, vertical merge
+state, content controls, ordered row and cell XML, and source numbering
+identity. Repeated numbered paragraphs continue one list sequence.
+
+**Non-obvious choices.** A recursive preflight validates every numbering
+reference in repeated body entries, rows, nested tables, and content controls
+before the staged candidate can commit. Valid repetition keeps the existing
+`numbering.xml` definitions unchanged instead of synthesizing new identities.
+
+**Deviations from the design plan.** None. Microscope review added direct
+typed content-control coverage to the repeated row round trip.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, multi-row clone
+ownership, `docs/hld/04-opc-and-packaging.md`, numbering and raw XML
+preservation, `docs/hld/10-bindings-spec.md`, repeated structure semantics,
+and `docs/hld/12-testing-strategy.md`, thirty-row and continuous-list gates.
+
+**Tests.** `three_template_rows_over_ten_records_produce_thirty_preserved_rows`,
+`repeated_numbered_items_keep_one_continuous_sequence`, and
+`repeated_rows_and_lists_preserve_properties_and_raw_xml`, including atomic
+rejection of an invalid repeated numbering reference.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Repeated list items preserve their source
+`numId` and level. A missing definition is a render error rather than a reason
+to create or renumber package state.

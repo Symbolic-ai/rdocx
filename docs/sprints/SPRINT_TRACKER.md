@@ -272,6 +272,9 @@ defended.
 | F-161 | S49 | L | 4 | 1 | 2026-08-20 | Deterministic native field evaluation with pinned Word results and cached fallback |
 | F-162 | S49 | M | 2 | 1 | 2026-08-20 | Atomic field cache updates with explicit update-aware save operations |
 | F-203 | S49 | M | 2 | 1 | 2026-08-20 | Namespace-aware table-property parsing with absolute schema-slot preservation |
+| F-163 | S50 | L | 4 | 1 | 2026-08-21 | Atomic scalar template rendering across Word run boundaries |
+| F-164 | S50 | L | 4 | 1 | 2026-08-21 | Nested loops and conditionals over body entries and table rows |
+| F-165 | S50 | M | 2 | 1 | 2026-08-21 | Multi-row repetition with preserved table and numbering semantics |
 
 ## Velocity
 
