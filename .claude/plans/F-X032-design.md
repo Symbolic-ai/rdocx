@@ -1,6 +1,6 @@
 # F-X032, Expose complete Word layout results
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S51
 **Size**: S
 **Depends on**: F-009, F-151, F-X037
