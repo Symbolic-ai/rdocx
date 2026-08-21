@@ -2237,17 +2237,21 @@ ceremony reads the release plan, completed delivery records, relevant commits,
 and contributor history, then prepares the versioned `CHANGELOG.md` section
 with highlights, user-visible additions and fixes, compatibility or migration
 guidance, and contributor credit. Its generated agent skill keeps the ceremony
-identical across tools. Release preflight rejects a missing, empty, or
-placeholder section. The publish workflow renders that reviewed section and
-passes it to `gh release create` without replacing it with
-`--generate-notes`.
+identical across tools. The deterministic workflow CLI checks one exact SemVer
+tag section with the complete ordered heading set and renders only its reviewed
+body without changing the changelog. Missing, duplicate, semantically empty,
+or placeholder sections fail. Raw HTML alone is not meaningful release text.
+The publish workflow validates the same source before crates.io publication,
+renders it once into runner-temporary storage, byte-compares a fresh render
+immediately before GitHub release creation, and passes only that artifact to
+`gh release create`.
 
 **Depends on**: F-X025.
 **Test gate**: regression. The custom command prepares complete notes from the
 reviewed release record, its generated skill is in sync, release-note
 extraction returns the exact versioned changelog section for both tag families,
-missing or incomplete notes fail, and the publish workflow can create a GitHub
-release only from that reviewed output.
+missing or incomplete notes fail, validation precedes every crates.io publish
+command, and GitHub can consume only the byte-identical reviewed artifact.
 
 ### F-X035, Tag rpptx-v0.4.0 (S)
 

@@ -3735,6 +3735,67 @@ class SprintWorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(actual_publish_commands, expected_publish_commands)
 
+    def assert_release_notes_publish_contract(self, publish: str) -> None:
+        publish_job = self.yaml_block(publish, "  publish:")
+        prepublish = self.yaml_step(publish_job, "Verify reviewed release notes")
+        validation_command = (
+            "run: python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --check'
+        )
+        self.assertEqual(
+            self.yaml_direct_lines(prepublish, 8),
+            (validation_command,),
+        )
+        self.assert_no_success_short_circuit(self.operative_lines(prepublish))
+        for publish_command in (
+            "cargo publish -p rdocx-opc",
+            "cargo publish -p oxml-core",
+        ):
+            self.assertLess(
+                publish_job.index(prepublish),
+                publish_job.index(publish_command),
+                publish_command,
+            )
+
+        release = self.yaml_block(publish, "  release:")
+        steps = self.yaml_steps(release)
+        self.assertEqual(
+            tuple(
+                self.yaml_step_identity(step, index)
+                for index, step in enumerate(steps, 1)
+            ),
+            ("step:1", "Create GitHub Release from reviewed notes"),
+        )
+        create = self.yaml_step(release, "Create GitHub Release from reviewed notes")
+        self.assertEqual(
+            self.yaml_direct_lines(create, 8),
+            ("run: |", "env:"),
+        )
+        self.assertIn(
+            "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+            self.yaml_direct_lines(create, 10),
+        )
+        commands = (
+            "python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --check',
+            "python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render > '
+            '"$RUNNER_TEMP/release-notes.md"',
+            "python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render | cmp - '
+            '"$RUNNER_TEMP/release-notes.md"',
+            'gh release create "${{ github.ref_name }}" --notes-file '
+            '"$RUNNER_TEMP/release-notes.md"',
+        )
+        self.assertEqual(self.yaml_run_lines(create), commands)
+        self.assertEqual(create.count("python3 scripts/sprint_workflow.py"), 3)
+        self.assertEqual(create.count('"${{ github.ref_name }}" --check'), 1)
+        self.assertEqual(create.count("--render"), 2)
+        self.assertEqual(create.count("cmp -"), 1)
+        self.assertEqual(create.count("--notes-file"), 1)
+        self.assertNotIn("--generate-notes", publish)
+        self.assert_no_success_short_circuit(self.operative_lines(create))
+
     def test_preset_geometry_provenance_is_recorded(self) -> None:
         rendering = (workflow.REPO / "docs/hld/08-rendering-spec.md").read_text(
             encoding="utf-8"
@@ -4332,6 +4393,627 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("Leave it\n`reviewed`", run_sprint)
         self.assertIn("/release", close_sprint)
         self.assertIn("deferred to /release", complete_feature)
+
+    def assert_release_command_notes_contract(self, release: str) -> None:
+        preflight = release[release.index("## Preconditions") : release.index("## Final approval")]
+        approval = release[release.index("## Final approval") : release.index("## Release")]
+        publication = release[release.index("## Release") : release.index("## Finalise the release F-ID")]
+
+        self.assertIn(
+            "python3 scripts/sprint_workflow.py release-notes <requested-tag>\n"
+            "   --check",
+            preflight,
+        )
+        self.assertIn(
+            "python3 scripts/sprint_workflow.py release-notes\n"
+            "   <requested-tag> --render",
+            preflight,
+        )
+        self.assertIn("committed `CHANGELOG.md`", preflight)
+        self.assertIn("notes source as\n`CHANGELOG.md`", approval)
+        self.assertIn("Include the rendered notes", approval)
+        self.assertIn("compare it byte\n   for byte", publication)
+        self.assertIn(
+            "python3 scripts/sprint_workflow.py release-notes\n"
+            "   <requested-tag> --render",
+            publication,
+        )
+
+    def test_release_notes_are_checked_before_approval_and_after_publication(
+        self,
+    ) -> None:
+        release = (workflow.REPO / ".claude/commands/release.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_release_command_notes_contract(release)
+
+        mutations = {
+            "missing-check": release.replace(
+                "python3 scripts/sprint_workflow.py release-notes "
+                "<requested-tag>\n   --check",
+                "release-notes omitted",
+                1,
+            ),
+            "wrong-validator-executable": release.replace(
+                "python3 scripts/sprint_workflow.py release-notes "
+                "<requested-tag>\n   --check",
+                "echo release-notes <requested-tag>\n   --check",
+                1,
+            ),
+            "missing-render-review": release.replace(
+                "Include the rendered notes", "Summarise the notes", 1
+            ),
+            "missing-source": release.replace(
+                "notes source as\n`CHANGELOG.md`", "notes source elsewhere", 1
+            ),
+            "missing-published-body-comparison": release.replace(
+                "compare it byte\n   for byte", "inspect it", 1
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, release, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_release_command_notes_contract(mutated)
+
+    def test_release_notes_command_is_a_generated_agent_ceremony(self) -> None:
+        command_path = workflow.REPO / ".claude/commands/release-notes.md"
+        skill_path = workflow.REPO / ".agents/skills/release-notes/SKILL.md"
+        interface_path = (
+            workflow.REPO / ".agents/skills/release-notes/agents/openai.yaml"
+        )
+        command = command_path.read_text(encoding="utf-8")
+        skill = skill_path.read_text(encoding="utf-8")
+        interface = interface_path.read_text(encoding="utf-8")
+        digest = hashlib.sha256(command_path.read_bytes()).hexdigest()
+        normalized = " ".join(command.split())
+
+        for evidence in (
+            "design plan",
+            "AS_BUILT.md",
+            "reviewed commits",
+            "merged pull requests",
+            "contributor",
+            "compatibility",
+        ):
+            self.assertIn(evidence, normalized)
+        self.assertIn("# /release-notes {vX.Y.Z | rpptx-vX.Y.Z}", command)
+        self.assertIn("Canonical source: `.claude/commands/release-notes.md`.", skill)
+        self.assertIn(f"Source SHA-256: `{digest}`.", skill)
+        self.assertIn("allow_implicit_invocation: false", interface)
+
+    def test_release_notes_require_complete_reviewed_changelog_sections(self) -> None:
+        complete = """# Changelog
+
+## v0.8.0
+
+### Highlights
+
+Stable layout access is now available.
+
+### Added
+
+Document layout accessors.
+
+### Fixed
+
+Source positions survive layout.
+
+### Compatibility
+
+Review the layout source changes before upgrading.
+
+### Contributors
+
+Pedro Assumpcao and the rdocx maintainers.
+
+## rpptx-v0.4.0
+
+### Highlights
+
+The incubating family is now publishable.
+
+### Added
+
+The complete PowerPoint package family.
+
+### Fixed
+
+Publication metadata for the incubating crates.
+
+### Compatibility
+
+This family remains incubating.
+
+### Contributors
+
+The rdocx maintainers.
+"""
+
+        stable = workflow.render_release_notes(complete, "v0.8.0")
+        incubating = workflow.render_release_notes(complete, "rpptx-v0.4.0")
+        expected_stable = """### Highlights
+
+Stable layout access is now available.
+
+### Added
+
+Document layout accessors.
+
+### Fixed
+
+Source positions survive layout.
+
+### Compatibility
+
+Review the layout source changes before upgrading.
+
+### Contributors
+
+Pedro Assumpcao and the rdocx maintainers.
+"""
+        self.assertEqual(stable, expected_stable)
+        self.assertNotIn("## v0.8.0", stable)
+        self.assertNotIn("rpptx-v0.4.0", stable)
+        self.assertIn("The incubating family is now publishable.", incubating)
+
+        raw_html_with_markdown = (
+            "<div hidden>Ignored raw HTML text.</div>\n\n"
+            "Stable layout access is now available."
+        )
+        valid_html = complete.replace(
+            "Stable layout access is now available.",
+            raw_html_with_markdown,
+            1,
+        )
+        self.assertEqual(
+            workflow.render_release_notes(valid_html, "v0.8.0"),
+            expected_stable.replace(
+                "Stable layout access is now available.",
+                raw_html_with_markdown,
+                1,
+            ),
+        )
+
+        section_text = {
+            "Highlights": "Stable layout access is now available.",
+            "Added": "Document layout accessors.",
+            "Fixed": "Source positions survive layout.",
+            "Compatibility": (
+                "Review the layout source changes before upgrading."
+            ),
+            "Contributors": "Pedro Assumpcao and the rdocx maintainers.",
+        }
+        empty_html_forms = {
+            "empty-container": "<div></div>",
+            "adjacent-empty-forms": (
+                "<span></span><br><release-note></release-note><!-- hidden -->"
+                "<?empty?><!EMPTY><![CDATA[hidden cdata text]]>"
+                "&nbsp;&#32;&#x20;&ZeroWidthSpace;"
+            ),
+            "non-visible-containers": (
+                "<script>hidden script text</script>"
+                "<style>hidden style text</style>"
+                "<template>hidden template text</template>"
+                "<head>hidden head text</head>"
+                "<title>hidden title text</title>"
+            ),
+            "ordinary-container-content": (
+                "<div>Visible-looking raw HTML text</div>"
+            ),
+            "hidden-attribute": "<div hidden>Invisible release notes</div>",
+            "hidden-css": (
+                '<section style="display: none">Invisible release notes</section>'
+            ),
+            "iframe-fallback": "<iframe>Fallback release notes</iframe>",
+            "noscript-content": "<noscript>Fallback release notes</noscript>",
+            "custom-container": (
+                "<release-note>Raw custom-element text</release-note>"
+            ),
+        }
+        for heading, original in section_text.items():
+            for form, empty_text in empty_html_forms.items():
+                mutated = complete.replace(
+                    f"### {heading}\n\n{original}",
+                    f"### {heading}\n\n{empty_text}",
+                    1,
+                )
+                self.assertNotEqual(mutated, complete)
+                with self.subTest(empty_heading=heading, empty_form=form):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"section `### {re.escape(heading)}` is empty",
+                    ):
+                        workflow.render_release_notes(mutated, "v0.8.0")
+
+        empty_markdown_forms = {
+            "empty-inline-link": "[](https://example.com/release-notes)",
+            "reference-definition": (
+                "[release-notes]: https://example.com/release-notes"
+            ),
+            "multiline-reference-definition": (
+                "[release-notes]:\n"
+                "  <https://example.com/release-notes>\n"
+                '  "hidden reference title"'
+            ),
+            "empty-fence-with-info": "```python\n\n```",
+            "adjacent-empty-forms": (
+                "[](https://example.com)![](release.png)[][release-notes]<>\n"
+                "[release-notes]: https://example.com/release-notes"
+            ),
+            "empty-list-item": "1. [](https://example.com/release-notes)",
+            "escaped-asterisk": r"\*",
+            "escaped-backslash": r"\\",
+            "escaped-open-bracket": r"\[",
+            "escaped-exclamation": r"\!",
+            "escape-guard-collision": "\u2060\\*\u2060",
+        }
+        for heading, original in section_text.items():
+            for form, empty_text in empty_markdown_forms.items():
+                mutated = complete.replace(
+                    f"### {heading}\n\n{original}",
+                    f"### {heading}\n\n{empty_text}",
+                    1,
+                )
+                self.assertNotEqual(mutated, complete)
+                with self.subTest(empty_markdown_heading=heading, empty_form=form):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"section `### {re.escape(heading)}` is empty",
+                    ):
+                        workflow.render_release_notes(mutated, "v0.8.0")
+
+        invisible_code_payloads = {
+            "zero-width-space": "\u200b",
+            "word-joiner": "\u2060",
+            "directional-marks": "\u200e\u200f",
+            "directional-isolates": "\u2066\u2069",
+            "unicode-spacing": "\u00a0\u202f",
+            "soft-hyphen-and-bom": "\u00ad\ufeff",
+            "combining-and-variation": "\u0301\ufe0f",
+        }
+        for heading, original in section_text.items():
+            for payload_name, payload in invisible_code_payloads.items():
+                for code_form, empty_text in (
+                    ("inline", f"`{payload}`"),
+                    ("fenced", f"```text\n{payload}\n```"),
+                ):
+                    mutated = complete.replace(
+                        f"### {heading}\n\n{original}",
+                        f"### {heading}\n\n{empty_text}",
+                        1,
+                    )
+                    self.assertNotEqual(mutated, complete)
+                    with self.subTest(
+                        invisible_code_heading=heading,
+                        payload=payload_name,
+                        code_form=code_form,
+                    ):
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            rf"section `### {re.escape(heading)}` is empty",
+                        ):
+                            workflow.render_release_notes(mutated, "v0.8.0")
+
+        meaningful_markdown_forms = {
+            "link-label": (
+                "[Stable layout access](https://example.com/release-notes)"
+            ),
+            "fenced-code": "```html\n<div></div>\n```",
+            "inline-code": "`<release-note></release-note>`",
+            "inline-symbol": "`✨`",
+            "fenced-symbol": "```text\n✨\n```",
+            "symbol-with-formatting": "`\u200b✨\u2060`",
+            "autolink": "<https://example.com/release-notes>",
+            "image-label": "![Stable layout diagram](release.png)",
+            "escaped-element": r"\<w:document\>",
+            "escaped-custom-element": (
+                r"\<release-note\>Visible release words\</release-note\>"
+            ),
+            "escaped-comment": r"\<!-- Visible release words --\>",
+            "escaped-processing-instruction": r"\<?release-notes?\>",
+            "escaped-declaration": r"\<!RELEASE-NOTES\>",
+            "escaped-cdata": r"\<![CDATA[Visible release words]]\>",
+            "escaped-entity": r"\&nbsp;",
+            "escaped-brackets": r"\[release\]",
+            "escaped-punctuation-before-letters": r"\*release",
+            "escaped-punctuation-after-letters": r"release\!",
+            "backslash-before-letter": r"\release",
+        }
+        for form, meaningful_text in meaningful_markdown_forms.items():
+            valid_markdown = complete.replace(
+                "Stable layout access is now available.",
+                meaningful_text,
+                1,
+            )
+            with self.subTest(meaningful_markdown=form):
+                self.assertEqual(
+                    workflow.render_release_notes(valid_markdown, "v0.8.0"),
+                    expected_stable.replace(
+                        "Stable layout access is now available.",
+                        meaningful_text,
+                        1,
+                    ),
+                )
+
+        commented_duplicate = complete.replace(
+            "### Added\n\nDocument layout accessors.",
+            "<!--\n### Added\n\nHidden comment text.\n-->\n\n"
+            "### Added\n\nDocument layout accessors.",
+            1,
+        )
+        self.assertIn(
+            "Document layout accessors.",
+            workflow.render_release_notes(commented_duplicate, "v0.8.0"),
+        )
+        fenced_duplicate = complete.replace(
+            "### Added\n\nDocument layout accessors.",
+            "````markdown\n```\n### Added\n\nHidden code text.\n````\n\n"
+            "### Added\n\nDocument layout accessors.",
+            1,
+        )
+        self.assertIn(
+            "Document layout accessors.",
+            workflow.render_release_notes(fenced_duplicate, "v0.8.0"),
+        )
+
+        for tag in ("script", "pre", "style", "textarea"):
+            opener = f'<{tag.upper()} data-release="hidden">'
+            raw_block = (
+                f"{opener}\n### Added\n\nHidden raw HTML text.\n</{tag}>\n\n"
+            )
+            raw_duplicate = complete.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            expected = stable.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            with self.subTest(raw_html_duplicate=tag):
+                self.assertEqual(
+                    workflow.render_release_notes(raw_duplicate, "v0.8.0"),
+                    expected,
+                )
+
+            hidden = f"# Changelog\n\n{opener}\n{complete}\n</{tag}>\n"
+            with self.subTest(raw_html_hidden=tag), self.assertRaises(ValueError):
+                workflow.render_release_notes(hidden, "v0.8.0")
+
+        compact = "\n".join(line for line in complete.splitlines() if line.strip())
+        bounded_raw_blocks = (
+            ("container", '<DIV data-release="hidden">', "</DIV>"),
+            ("custom-tag", '<release-note data-hidden="true">', "</release-note>"),
+            ("processing-instruction", "<?release-notes", "?>"),
+            ("declaration", "<!HIDDEN", ">"),
+            ("cdata", "<![CDATA[", "]]>")
+        )
+        for name, opener, closer in bounded_raw_blocks:
+            raw_block = (
+                f"{opener}\n### Added\nHidden raw block text.\n{closer}\n\n"
+            )
+            raw_duplicate = complete.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            expected = stable.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            with self.subTest(bounded_raw_duplicate=name):
+                self.assertEqual(
+                    workflow.render_release_notes(raw_duplicate, "v0.8.0"),
+                    expected,
+                )
+
+            hidden = f"# Changelog\n\n{opener}\n{compact}\n{closer}\n"
+            with self.subTest(bounded_raw_hidden=name), self.assertRaises(ValueError):
+                workflow.render_release_notes(hidden, "v0.8.0")
+
+        with self.assertRaises(ValueError):
+            workflow.render_release_notes(f"<!--\n{complete}\n-->\n", "v0.8.0")
+        for marker in ("````", "```````", "~~~~", "~~~~~~~"):
+            inner = marker[0] * 3
+            fenced = f"# Changelog\n\n{marker}markdown\n{inner}\n{complete}\n{marker}\n"
+            with self.subTest(fence=marker), self.assertRaises(ValueError):
+                workflow.render_release_notes(fenced, "v0.8.0")
+
+        mutations = {
+            "missing-section": complete.replace("### Fixed", "### Repairs", 1),
+            "duplicate-section": complete.replace(
+                "### Compatibility",
+                "### Added\n\nDuplicate entry.\n\n### Compatibility",
+                1,
+            ),
+            "empty-section": complete.replace(
+                "### Contributors\n\nPedro Assumpcao and the rdocx maintainers.",
+                "### Contributors\n",
+                1,
+            ),
+            "placeholder": complete.replace(
+                "Stable layout access is now available.", "TBD", 1
+            ),
+            "duplicate-tag": complete.replace(
+                "## rpptx-v0.4.0", "## v0.8.0\n\nDuplicate.\n\n## rpptx-v0.4.0", 1
+            ),
+            "duplicate-tag-with-trailing-space": complete.replace(
+                "## rpptx-v0.4.0",
+                "## v0.8.0   \n\nDuplicate.\n\n## rpptx-v0.4.0",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                workflow.render_release_notes(mutated, "v0.8.0")
+
+        for invalid in (
+            "0.8.0",
+            "release-v0.8.0",
+            "v0.8",
+            "rpptx-v0.4.0-rc1",
+            "v01.2.3",
+            "v1.02.3",
+            "rpptx-v1.2.03",
+        ):
+            with self.subTest(tag=invalid), self.assertRaises(ValueError):
+                workflow.render_release_notes(complete, invalid)
+
+    def test_release_notes_cli_check_and_render_do_not_mutate_the_source(self) -> None:
+        sections = "".join(
+            f"### {heading}\n\nReviewed {heading.lower()} evidence.\n\n"
+            for heading in workflow.RELEASE_NOTE_HEADINGS
+        )
+        changelog = f"# Changelog\n\n## v1.2.3\n\n{sections}"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "CHANGELOG.md"
+            path.write_text(changelog, encoding="utf-8")
+            before = path.read_bytes()
+            with patch.object(workflow, "CHANGELOG", path):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    result = workflow.cmd_release_notes(
+                        argparse.Namespace(tag="v1.2.3", check=True, render=False)
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(output.getvalue(), "release-notes v1.2.3: ok\n")
+
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    result = workflow.cmd_release_notes(
+                        argparse.Namespace(tag="v1.2.3", check=False, render=True)
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(output.getvalue(), sections.rstrip() + "\n")
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_publish_workflow_uses_only_rendered_reviewed_release_notes(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_release_notes_publish_contract(publish)
+
+        create_step = self.yaml_step(
+            self.yaml_block(publish, "  release:"),
+            "Create GitHub Release from reviewed notes",
+        )
+        publish_job = self.yaml_block(publish, "  publish:")
+        prepublish_step = self.yaml_step(
+            publish_job,
+            "Verify reviewed release notes",
+        )
+        stable_publish_step = self.yaml_step(
+            publish_job,
+            "Publish stable allowlist",
+        )
+        incubating_publish_step = self.yaml_step(
+            publish_job,
+            "Publish incubating allowlist",
+        )
+        prepublish_after_stable = publish.replace(prepublish_step, "", 1).replace(
+            stable_publish_step,
+            stable_publish_step + prepublish_step,
+            1,
+        )
+        prepublish_after_incubating = publish.replace(
+            prepublish_step,
+            "",
+            1,
+        ).replace(
+            incubating_publish_step,
+            incubating_publish_step + prepublish_step,
+            1,
+        )
+        render_line = (
+            "          python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render > '
+            '"$RUNNER_TEMP/release-notes.md"\n'
+        )
+        compare_line = (
+            "          python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render | cmp - '
+            '"$RUNNER_TEMP/release-notes.md"\n'
+        )
+        release_line = (
+            '          gh release create "${{ github.ref_name }}" --notes-file '
+            '"$RUNNER_TEMP/release-notes.md"\n'
+        )
+        mutations = {
+            "missing-prepublish-validation": publish.replace(
+                prepublish_step,
+                "",
+                1,
+            ),
+            "prepublish-validation-after-stable-publish": prepublish_after_stable,
+            "prepublish-validation-after-incubating-publish": (
+                prepublish_after_incubating
+            ),
+            "wrong-prepublish-validator-executable": publish.replace(
+                prepublish_step,
+                prepublish_step.replace(
+                    "python3 scripts/sprint_workflow.py",
+                    "echo",
+                    1,
+                ),
+                1,
+            ),
+            "conditional-prepublish-validation": publish.replace(
+                prepublish_step,
+                prepublish_step.replace(
+                    "        run:",
+                    "        if: startsWith(github.ref_name, 'v')\n        run:",
+                    1,
+                ),
+                1,
+            ),
+            "ignored-prepublish-validation-failure": publish.replace(
+                prepublish_step,
+                prepublish_step.replace(
+                    "        run:",
+                    "        continue-on-error: true\n        run:",
+                    1,
+                ),
+                1,
+            ),
+            "generated-notes": publish.replace(
+                '--notes-file "$RUNNER_TEMP/release-notes.md"',
+                "--generate-notes",
+                1,
+            ),
+            "missing-extraction": publish.replace(render_line, "", 1),
+            "different-notes-file": publish.replace(
+                '--notes-file "$RUNNER_TEMP/release-notes.md"',
+                '--notes-file "$RUNNER_TEMP/other.md"',
+                1,
+            ),
+            "release-before-byte-comparison": publish.replace(
+                compare_line + release_line,
+                release_line + compare_line,
+                1,
+            ),
+            "overwrite-rendered-artifact": publish.replace(
+                release_line,
+                '          printf \'tampered\' > "$RUNNER_TEMP/release-notes.md"\n'
+                + release_line,
+                1,
+            ),
+            "wrong-validator-executable": publish.replace(
+                "          python3 scripts/sprint_workflow.py release-notes",
+                "          echo release-notes",
+                1,
+            ),
+            "unreviewed-step-before-validator": publish.replace(
+                create_step,
+                "      - name: Replace validator\n"
+                "        run: cp other.py scripts/sprint_workflow.py\n"
+                + create_step,
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, publish, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_release_notes_publish_contract(mutated)
 
     def assert_verify_runs_the_release_regressions(self, verify: str) -> None:
         """The local gate must run the module holding the release preflights.

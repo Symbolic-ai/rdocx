@@ -190,6 +190,16 @@ whole-module command. This keeps both release family preflights and future
 release-contract regressions in the ordinary CI gate with the external command
 their stable-family checks require.
 
+Every stable or incubating tag also requires one reviewed `CHANGELOG.md`
+section whose second-level heading is the exact tag. The required ordered
+subsections are Highlights, Added, Fixed, Compatibility, and Contributors.
+The deterministic workflow CLI checks that contract and renders only the
+reviewed body. Both modes are read-only. `publish.yml` runs the check before
+either crates.io allowlist, stores one render in runner-temporary storage, and
+byte-compares a fresh render with that artifact immediately before passing it
+to `gh release create --notes-file`. Generated GitHub notes are not a release
+source.
+
 The workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
 member of the 22-package publishable union. Cargo rewrites packaged path
@@ -262,6 +272,14 @@ one namespace. The stable path validates the workspace version, its internal
 pins, and the exact seven-package stable set. The incubating path validates the
 common explicit version, workspace pins, and the exact 15-package incubating
 set.
+
+`/release-notes TAG` is the deliberate preparation ceremony for the same two
+namespaces. It derives human-written highlights, additions, fixes,
+compatibility guidance, and contributor credit from reviewed repository
+evidence, then updates the exact changelog section for review with the code.
+`/release` renders and inspects that section at the reviewed SHA before its
+separate final approval. After publication it requires the GitHub release body
+to equal the same rendered bytes.
 
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the

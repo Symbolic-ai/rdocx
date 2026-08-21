@@ -14,6 +14,7 @@ Subcommands:
     record-verification SNN ...  record a /verify result
     validate-handoff PATH ...    check a worker handoff before integration
     close-preflight SNN          the checks /close-sprint requires
+    release-notes TAG            validate or render reviewed release notes
 
 Exit codes: 0 ok, 1 refused, 2 usage.
 """
@@ -23,8 +24,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import string
 import subprocess
 import sys
+import unicodedata
+from html.parser import HTMLParser
 from pathlib import Path
 
 SCHEMA_VERSION = 2
@@ -38,6 +42,7 @@ SPRINT_TRACKER = REPO / "docs" / "sprints" / "SPRINT_TRACKER.md"
 AS_BUILT = REPO / "docs" / "sprints" / "AS_BUILT.md"
 PLANS = REPO / ".claude" / "plans"
 REVIEWS = REPO / ".claude" / "reviews"
+CHANGELOG = REPO / "CHANGELOG.md"
 
 SPRINT_RE = re.compile(r"^# Current Sprint, (S\d+(?:\.\d+)?)$", re.MULTILINE)
 VALIDATION_ONLY_RE = re.compile(
@@ -56,6 +61,80 @@ BACKLOG_ROW_RE = re.compile(
 FID_RE = re.compile(r"^F-[A-Za-z0-9]+$")
 SPRINT_ID_RE = re.compile(r"^S\d+(?:\.\d+)?$")
 HANDOFF_FIELD_RE = re.compile(r"^\*\*([A-Za-z][A-Za-z -]*)\*\*:\s*(.+?)\s*$", re.MULTILINE)
+SEMVER_COMPONENT_RE = r"(?:0|[1-9][0-9]*)"
+RELEASE_TAG_RE = re.compile(
+    rf"^(?:rpptx-)?v{SEMVER_COMPONENT_RE}\."
+    rf"{SEMVER_COMPONENT_RE}\.{SEMVER_COMPONENT_RE}$"
+)
+RELEASE_NOTE_PLACEHOLDER_RE = re.compile(
+    r"\b(?:TBD|TODO|FIXME|CHANGEME|PLACEHOLDER)\b|\?\?\?|\[insert\b",
+    re.IGNORECASE,
+)
+RELEASE_NOTE_HEADINGS = (
+    "Highlights",
+    "Added",
+    "Fixed",
+    "Compatibility",
+    "Contributors",
+)
+COMMONMARK_BLOCK_TAGS = (
+    "address|article|aside|base|basefont|blockquote|body|caption|center|col|"
+    "colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|"
+    "form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|"
+    "li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|"
+    "section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
+)
+COMMONMARK_BLOCK_TAG_RE = re.compile(
+    rf"^ {{0,3}}</?(?:{COMMONMARK_BLOCK_TAGS})(?:[ \t/>]|$)",
+    re.IGNORECASE,
+)
+COMMONMARK_COMPLETE_TAG_RE = re.compile(
+    r"^ {0,3}(?:"
+    r"</[A-Za-z][A-Za-z0-9-]*[ \t]*>|"
+    r"<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*)?[ \t]*/?>"
+    r")[ \t]*$"
+)
+COMMONMARK_BOUNDED_RAW_HTML = (
+    (re.compile(r"^ {0,3}<\?"), re.compile(r"\?>")),
+    (re.compile(r"^ {0,3}<![A-Z]"), re.compile(r">")),
+    (re.compile(r"^ {0,3}<!\[CDATA\["), re.compile(r"\]\]>")),
+)
+HTML_VOID_ELEMENTS = frozenset(
+    (
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    )
+)
+COMMONMARK_REFERENCE_DEFINITION_RE = re.compile(
+    r"^ {0,3}\[(?:\\.|[^\[\]\r\n]){1,999}\]:"
+)
+COMMONMARK_REFERENCE_TITLE_RE = re.compile(
+    r"^ {0,3}(?:"
+    r'"(?:\\.|[^"\r\n])*"|'
+    r"'(?:\\.|[^'\r\n])*'|"
+    r"\((?:\\.|[^)\r\n])*\)"
+    r")[ \t]*$"
+)
+COMMONMARK_AUTOLINK_RE = re.compile(
+    r"<(?P<label>"
+    r"(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*|"
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[^<>\s@]+)"
+    r")>"
+)
+COMMONMARK_ESCAPABLE_PUNCTUATION = frozenset(string.punctuation)
+MARKDOWN_ESCAPE_GUARD = "\N{WORD JOINER}"
 
 # Every field a worker must have filled in before /integrate-feature will look
 # at its branch. A missing one means the worker stopped early, and integrating
@@ -127,6 +206,482 @@ WORKER_FIELDS = (
 def die(msg: str) -> None:
     print(f"sprint_workflow: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def protect_markdown_escapes(source: str) -> str:
+    """Protect visible CommonMark escapes before classifying raw HTML."""
+    protected: list[str] = []
+    index = 0
+    while index < len(source):
+        if (
+            source[index] == "\\"
+            and index + 1 < len(source)
+            and source[index + 1] in COMMONMARK_ESCAPABLE_PUNCTUATION
+        ):
+            # The format-only guard cannot collide with Markdown syntax and
+            # does not make an otherwise empty section meaningful.
+            protected.append(MARKDOWN_ESCAPE_GUARD)
+            index += 2
+            continue
+        protected.append(source[index])
+        index += 1
+    return "".join(protected)
+
+
+def markdown_heading_lines(lines: list[str], prefix: str) -> list[tuple[int, str]]:
+    """Return exact Markdown headings outside non-rendered Markdown contexts."""
+    headings: list[tuple[int, str]] = []
+    fence: tuple[str, int] | None = None
+    in_comment = False
+    raw_html_end: re.Pattern[str] | None = None
+    raw_html_until_blank = False
+    for index, line in enumerate(lines):
+        without_newline = protect_markdown_escapes(line.rstrip("\r\n"))
+        if fence is not None:
+            marker, minimum_length = fence
+            close = re.fullmatch(rf" {{0,3}}({re.escape(marker)}+)[ \t]*", without_newline)
+            if close is not None and len(close.group(1)) >= minimum_length:
+                fence = None
+            continue
+        if raw_html_end is not None:
+            if raw_html_end.search(without_newline):
+                raw_html_end = None
+            continue
+        if raw_html_until_blank:
+            if not without_newline.strip():
+                raw_html_until_blank = False
+            continue
+
+        visible: list[str] = []
+        cursor = 0
+        while cursor < len(without_newline):
+            if in_comment:
+                end = without_newline.find("-->", cursor)
+                if end < 0:
+                    visible.append(" " * (len(without_newline) - cursor))
+                    cursor = len(without_newline)
+                    continue
+                visible.append(" " * (end + 3 - cursor))
+                cursor = end + 3
+                in_comment = False
+                continue
+            start = without_newline.find("<!--", cursor)
+            if start < 0:
+                visible.append(without_newline[cursor:])
+                break
+            visible.append(without_newline[cursor:start])
+            visible.append(" " * 4)
+            cursor = start + 4
+            in_comment = True
+
+        visible_line = "".join(visible)
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})", visible_line)
+        if opening is not None:
+            marker = opening.group(1)
+            fence = (marker[0], len(marker))
+            continue
+        raw_html = re.match(
+            r"^ {0,3}<(?P<tag>script|pre|style|textarea)(?:[ \t>]|$)",
+            visible_line,
+            re.IGNORECASE,
+        )
+        if raw_html is not None:
+            tag = raw_html.group("tag").lower()
+            close = re.compile(rf"</{re.escape(tag)}\s*>", re.IGNORECASE)
+            if close.search(visible_line[raw_html.end() :]) is None:
+                raw_html_end = close
+            continue
+        matched_bounded_raw_html = False
+        for start_pattern, close in COMMONMARK_BOUNDED_RAW_HTML:
+            start = start_pattern.match(visible_line)
+            if start is None:
+                continue
+            if close.search(visible_line[start.end() :]) is None:
+                raw_html_end = close
+            matched_bounded_raw_html = True
+            break
+        if matched_bounded_raw_html:
+            continue
+        if COMMONMARK_BLOCK_TAG_RE.match(visible_line) is not None:
+            raw_html_until_blank = True
+            continue
+        if COMMONMARK_COMPLETE_TAG_RE.fullmatch(visible_line) is not None:
+            raw_html_until_blank = True
+            continue
+        if visible_line.startswith(prefix):
+            headings.append((index, visible_line.rstrip()[len(prefix) :]))
+    return headings
+
+
+class MarkdownOutsideRawHtml(HTMLParser):
+    """Collect Markdown source that is not contained by a raw HTML element."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.hidden_tags: list[str] = []
+        self.text: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        del attrs
+        tag = tag.lower()
+        if tag not in HTML_VOID_ELEMENTS:
+            self.hidden_tags.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        for index in range(len(self.hidden_tags) - 1, -1, -1):
+            if self.hidden_tags[index] == tag:
+                del self.hidden_tags[index:]
+                break
+
+    def handle_data(self, data: str) -> None:
+        if not self.hidden_tags:
+            self.text.append(data)
+
+
+def closing_markdown_delimiter(
+    source: str, opening_index: int, opening: str, closing: str
+) -> int | None:
+    """Find one escaped, balanced Markdown delimiter within bounded source."""
+    depth = 1
+    index = opening_index + 1
+    while index < len(source):
+        character = source[index]
+        if character == "\\":
+            index += 2
+            continue
+        if character == opening:
+            depth += 1
+        elif character == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def markdown_without_link_destinations(source: str) -> str:
+    """Keep rendered labels while removing inline and reference destinations."""
+    visible: list[str] = []
+    index = 0
+    while index < len(source):
+        if source[index] == "\\" and index + 1 < len(source):
+            visible.append(source[index : index + 2])
+            index += 2
+            continue
+        image = source[index] == "!" and source[index + 1 : index + 2] == "["
+        label_start = index + 1 if image else index
+        if source[label_start : label_start + 1] != "[":
+            visible.append(source[index])
+            index += 1
+            continue
+        label_end = closing_markdown_delimiter(source, label_start, "[", "]")
+        if label_end is None:
+            visible.append(source[index])
+            index += 1
+            continue
+        suffix_start = label_end + 1
+        suffix_end: int | None = None
+        if source[suffix_start : suffix_start + 1] == "(":
+            suffix_end = closing_markdown_delimiter(source, suffix_start, "(", ")")
+        elif source[suffix_start : suffix_start + 1] == "[":
+            suffix_end = closing_markdown_delimiter(source, suffix_start, "[", "]")
+        if suffix_end is None:
+            visible.append(source[index : label_end + 1])
+            index = label_end + 1
+            continue
+        visible.append(source[label_start + 1 : label_end])
+        index = suffix_end + 1
+    return "".join(visible)
+
+
+def markdown_code_span(source: str, index: int) -> tuple[int, int] | None:
+    """Return the content bounds for a code span beginning at index."""
+    run_end = index
+    while run_end < len(source) and source[run_end] == "`":
+        run_end += 1
+    marker = source[index:run_end]
+    close = source.find(marker, run_end)
+    while close >= 0 and (
+        source[close - 1 : close] == "`"
+        or source[close + len(marker) : close + len(marker) + 1] == "`"
+    ):
+        close = source.find(marker, close + len(marker))
+    if close < 0:
+        return None
+    return run_end, close
+
+
+def markdown_without_inline_code(source: str) -> tuple[str, bool]:
+    """Remove code-span syntax and report whether a span renders code content."""
+    visible: list[str] = []
+    index = 0
+    while index < len(source):
+        if source[index] != "`":
+            visible.append(source[index])
+            index += 1
+            continue
+        bounds = markdown_code_span(source, index)
+        if bounds is None:
+            run_end = index
+            while run_end < len(source) and source[run_end] == "`":
+                run_end += 1
+            marker = source[index:run_end]
+            visible.append(marker)
+            index = run_end
+            continue
+        run_end, close = bounds
+        marker = source[index:run_end]
+        code = source[run_end:close].replace("\n", " ")
+        if code.startswith(" ") and code.endswith(" ") and code.strip():
+            code = code[1:-1]
+        if contains_meaningful_rendered_character(code):
+            return "", True
+        index = close + len(marker)
+    return "".join(visible), False
+
+
+def escape_html_syntax(source: str) -> str:
+    """Escape code text only for the internal HTML visibility pass."""
+    return source.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def protect_inline_code_from_html(source: str) -> str:
+    """Keep HTML-like code-span content visible to the Markdown pass."""
+    protected: list[str] = []
+    index = 0
+    while index < len(source):
+        if source[index] != "`":
+            protected.append(source[index])
+            index += 1
+            continue
+        bounds = markdown_code_span(source, index)
+        if bounds is None:
+            run_end = index
+            while run_end < len(source) and source[run_end] == "`":
+                run_end += 1
+            marker = source[index:run_end]
+            protected.append(marker)
+            index = run_end
+            continue
+        run_end, close = bounds
+        marker = source[index:run_end]
+        protected.append(marker)
+        protected.append(escape_html_syntax(source[run_end:close]))
+        protected.append(marker)
+        index = close + len(marker)
+    return "".join(protected)
+
+
+def protect_markdown_code_from_html(section: str) -> str:
+    """Protect fenced and inline code before parsing surrounding raw HTML."""
+    protected: list[str] = []
+    prose: list[str] = []
+    fence: tuple[str, int] | None = None
+
+    def flush_prose() -> None:
+        if prose:
+            protected.append(protect_inline_code_from_html("".join(prose)))
+            prose.clear()
+
+    for line in section.splitlines(keepends=True):
+        without_newline = line.rstrip("\r\n")
+        if fence is not None:
+            marker, minimum_length = fence
+            close = re.fullmatch(
+                rf" {{0,3}}({re.escape(marker)}+)[ \t]*", without_newline
+            )
+            if close is not None and len(close.group(1)) >= minimum_length:
+                protected.append(line)
+                fence = None
+            else:
+                protected.append(escape_html_syntax(line))
+            continue
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})", without_newline)
+        if opening is not None:
+            marker = opening.group(1)
+            info = without_newline[opening.end() :]
+            if marker[0] == "~" or "`" not in info:
+                flush_prose()
+                protected.append(line)
+                fence = (marker[0], len(marker))
+                continue
+        prose.append(line)
+    flush_prose()
+    return "".join(protected)
+
+
+def markdown_prose_and_code(section: str) -> tuple[str, bool]:
+    """Remove non-rendered block syntax and report visible fenced code."""
+    prose: list[str] = []
+    fence: tuple[str, int] | None = None
+    reference_continuation: str | None = None
+    for line in section.splitlines(keepends=True):
+        without_newline = line.rstrip("\r\n")
+        if fence is not None:
+            marker, minimum_length = fence
+            close = re.fullmatch(
+                rf" {{0,3}}({re.escape(marker)}+)[ \t]*", without_newline
+            )
+            if close is not None and len(close.group(1)) >= minimum_length:
+                fence = None
+            elif contains_meaningful_rendered_character(without_newline):
+                return "", True
+            continue
+        if reference_continuation is not None:
+            if not without_newline.strip():
+                reference_continuation = None
+                continue
+            if reference_continuation == "destination":
+                reference_continuation = "title"
+                continue
+            if COMMONMARK_REFERENCE_TITLE_RE.fullmatch(without_newline) is not None:
+                reference_continuation = None
+                continue
+            reference_continuation = None
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})", without_newline)
+        if opening is not None:
+            marker = opening.group(1)
+            info = without_newline[opening.end() :]
+            if marker[0] == "~" or "`" not in info:
+                fence = (marker[0], len(marker))
+                continue
+        reference = COMMONMARK_REFERENCE_DEFINITION_RE.match(without_newline)
+        if reference is not None:
+            reference_continuation = (
+                "destination"
+                if not without_newline[reference.end() :].strip()
+                else "title"
+            )
+            continue
+        prose.append(line)
+    return "".join(prose), False
+
+
+def markdown_without_block_markers(source: str) -> str:
+    """Remove list and quote markers that do not represent section text."""
+    visible: list[str] = []
+    for line in source.splitlines(keepends=True):
+        while True:
+            quote = re.match(r"^ {0,3}>[ \t]?", line)
+            if quote is None:
+                break
+            line = line[quote.end() :]
+        while True:
+            marker = re.match(r"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])(?:[ \t]+|$)", line)
+            if marker is None:
+                break
+            line = line[marker.end() :]
+        task = re.match(r"^\[[ xX]\](?:[ \t]+|$)", line)
+        if task is not None:
+            line = line[task.end() :]
+        visible.append(line)
+    return "".join(visible)
+
+
+def contains_meaningful_rendered_character(source: str) -> bool:
+    """Accept alphanumeric text and pictographs, but not Markdown syntax alone."""
+    return any(
+        character.isalnum() or unicodedata.category(character) == "So"
+        for character in source
+    )
+
+
+def has_meaningful_visible_text(section: str) -> bool:
+    """Return whether one bounded section renders meaningful HTML or Markdown."""
+    section = protect_markdown_escapes(section)
+    section = protect_markdown_code_from_html(section)
+    section = COMMONMARK_AUTOLINK_RE.sub(lambda match: match.group("label"), section)
+    parser = MarkdownOutsideRawHtml()
+    parser.feed(section)
+    parser.close()
+    prose, fenced_code = markdown_prose_and_code("".join(parser.text))
+    if fenced_code:
+        return True
+    prose, inline_code = markdown_without_inline_code(prose)
+    if inline_code:
+        return True
+    prose = markdown_without_link_destinations(prose)
+    prose = markdown_without_block_markers(prose)
+    return contains_meaningful_rendered_character(prose)
+
+
+def render_release_notes(changelog: str, tag: str) -> str:
+    """Validate and return one reviewed changelog section body."""
+    if not RELEASE_TAG_RE.fullmatch(tag):
+        raise ValueError(
+            f"{tag!r} is not a release tag, expected vX.Y.Z or rpptx-vX.Y.Z"
+        )
+
+    lines = changelog.splitlines(keepends=True)
+    release_matches = [
+        index
+        for index, heading in markdown_heading_lines(lines, "## ")
+        if heading == tag
+    ]
+    if len(release_matches) != 1:
+        raise ValueError(
+            f"CHANGELOG.md must contain exactly one `## {tag}` heading, "
+            f"found {len(release_matches)}"
+        )
+
+    start = release_matches[0] + 1
+    later_sections = [
+        index
+        for index, _ in markdown_heading_lines(lines[start:], "## ")
+    ]
+    end = start + later_sections[0] if later_sections else len(lines)
+    body_lines = lines[start:end]
+    while body_lines and not body_lines[0].strip():
+        body_lines.pop(0)
+    while body_lines and not body_lines[-1].strip():
+        body_lines.pop()
+    body = "".join(body_lines)
+    if not body.strip():
+        raise ValueError(f"`## {tag}` has no release-note body")
+    if RELEASE_NOTE_PLACEHOLDER_RE.search(body):
+        raise ValueError(f"`## {tag}` contains a placeholder token")
+
+    headings = markdown_heading_lines(body_lines, "### ")
+    found = [heading for _, heading in headings]
+    for required in RELEASE_NOTE_HEADINGS:
+        count = found.count(required)
+        if count != 1:
+            raise ValueError(
+                f"`## {tag}` must contain exactly one `### {required}` heading, "
+                f"found {count}"
+            )
+    required_positions = [found.index(required) for required in RELEASE_NOTE_HEADINGS]
+    if required_positions != sorted(required_positions):
+        raise ValueError(f"`## {tag}` required headings are out of order")
+
+    for heading_index, (line_index, heading) in enumerate(headings):
+        if heading not in RELEASE_NOTE_HEADINGS:
+            continue
+        next_line = (
+            headings[heading_index + 1][0]
+            if heading_index + 1 < len(headings)
+            else len(body_lines)
+        )
+        section_text = "".join(body_lines[line_index + 1 : next_line])
+        if not has_meaningful_visible_text(section_text):
+            raise ValueError(f"`## {tag}` section `### {heading}` is empty")
+
+    return body.rstrip() + "\n"
+
+
+def cmd_release_notes(args: argparse.Namespace) -> int:
+    try:
+        notes = render_release_notes(CHANGELOG.read_text(encoding="utf-8"), args.tag)
+    except (OSError, ValueError) as error:
+        die(f"release notes: {error}")
+    if args.render:
+        sys.stdout.write(notes)
+    else:
+        print(f"release-notes {args.tag}: ok")
+    return 0
 
 
 def state_path(sprint: str) -> Path:
@@ -572,6 +1127,7 @@ def main() -> int:
     p = sub.add_parser("record-verification"); p.add_argument("sprint"); p.add_argument("--scope", choices=["fast", "feature", "full"], required=True); p.add_argument("--passed", action="store_true"); p.add_argument("--harness", default="unchecked"); p.set_defaults(fn=cmd_record_verification)
     p = sub.add_parser("validate-handoff"); p.add_argument("path"); p.add_argument("--fid", required=True); p.set_defaults(fn=cmd_validate_handoff)
     p = sub.add_parser("close-preflight"); p.add_argument("sprint"); p.set_defaults(fn=cmd_close_preflight)
+    p = sub.add_parser("release-notes"); p.add_argument("tag"); mode = p.add_mutually_exclusive_group(required=True); mode.add_argument("--check", action="store_true"); mode.add_argument("--render", action="store_true"); p.set_defaults(fn=cmd_release_notes)
 
     args = ap.parse_args()
     if getattr(args, "fid", None) and not FID_RE.match(args.fid):

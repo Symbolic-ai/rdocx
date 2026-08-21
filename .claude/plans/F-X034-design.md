@@ -1,6 +1,6 @@
 # F-X034, Reviewed release notes for every release
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: S
 **Depends on**: F-X025
@@ -134,16 +134,16 @@ metadata do not affect generated Office or rendered output.
 
 ## Implementation checklist
 
-- [ ] Add the canonical `/release-notes TAG` ceremony.
-- [ ] Generate and validate its agent skill adapter.
-- [ ] Add deterministic check and render modes to the existing sprint CLI.
-- [ ] Require complete versioned changelog sections for both tag families.
-- [ ] Publish only the rendered reviewed notes file.
-- [ ] Extend `/release` preflight, approval summary, and post-release check.
-- [ ] Add mutation-sensitive workflow and command contract tests.
-- [ ] Regenerate agent skill adapters after the command edit.
-- [ ] Run full verification and the unchanged hash harness.
-- [ ] Update exactly the HLD files listed above.
+- [x] Add the canonical `/release-notes TAG` ceremony.
+- [x] Generate and validate its agent skill adapter.
+- [x] Add deterministic check and render modes to the existing sprint CLI.
+- [x] Require complete versioned changelog sections for both tag families.
+- [x] Publish only the rendered reviewed notes file.
+- [x] Extend `/release` preflight, approval summary, and post-release check.
+- [x] Add mutation-sensitive workflow and command contract tests.
+- [x] Regenerate agent skill adapters after the command edit.
+- [x] Run full verification and the unchanged hash harness.
+- [x] Update exactly the HLD files listed above.
 
 ## Open questions
 

@@ -44,18 +44,25 @@ Refuse before any tag or push if one check fails:
    satisfies its complete version and package contract above. Reject any other
    prefix, suffix, mixed family, or partial version preparation.
 2. The current branch is the active `sprint/sNN` branch and the tree is clean.
-3. The release F-ID named `Tag <requested-tag>` is `reviewed` in the sprint run
+3. Run `python3 scripts/sprint_workflow.py release-notes <requested-tag>
+   --check`, then run `python3 scripts/sprint_workflow.py release-notes
+   <requested-tag> --render` and inspect that exact body. The source must be
+   the committed `CHANGELOG.md` section headed by the exact tag at the current
+   HEAD. The notes must cover only the selected family and contain reviewed
+   highlights, additions, fixes, compatibility guidance, and contributor
+   credit.
+4. The release F-ID named `Tag <requested-tag>` is `reviewed` in the sprint run
    state, remains `in-progress` in both delivery trackers, and every dependency
    is completed.
-4. The latest recorded `/verify --full` passed at the current HEAD with the
+5. The latest recorded `/verify --full` passed at the current HEAD with the
    declared hash-harness result.
-5. The latest recorded `/sprint-review SNN` is clean at the current HEAD, and
+6. The latest recorded `/sprint-review SNN` is clean at the current HEAD, and
    its review file reports zero blocking findings.
-6. `cargo metadata --no-deps` at the reviewed HEAD confirms the exact selected
+7. `cargo metadata --no-deps` at the reviewed HEAD confirms the exact selected
    family, its versions, publication eligibility, and internal version pins.
    The other family's packages must not appear in the selected workflow
    allowlist.
-7. The exact locally patched `cargo publish --workspace --dry-run` command in
+8. The exact locally patched `cargo publish --workspace --dry-run` command in
    `/verify` step 10 passes from the clean tree. The 21 patches keep packaged
    internal dependencies on this reviewed source graph instead of the reserved
    registry placeholders, and they do not enter any archive. A dry run uploads
@@ -64,21 +71,23 @@ Refuse before any tag or push if one check fails:
    contain its complete bundled TTF and legal-file inventory. The
    `rdocx-layout` archive must not duplicate those assets. The `rpptx` archive
    must contain `assets/default.pptx`.
-8. `.github/workflows/publish.yml` binds the stable predicate to exactly the
+9. `.github/workflows/publish.yml` binds the stable predicate to exactly the
    stable set and the incubating predicate to exactly the incubating set, each
    in dependency order. Every real publish command is the bare verified form
    `cargo publish -p <package>`, failures propagate, and registry waits remain
    between dependency layers.
-9. Fetch the remote release-tag namespaces. The exact requested tag must be
+10. Fetch the remote release-tag namespaces. The exact requested tag must be
    absent locally and from `origin`. Refuse a conflicting or already-published
    version rather than treating it as success.
 
 ## Final approval
 
 Report the exact HEAD SHA, requested tag, selected family, selected package
-set, version, remote, and workflow that will run. Ask for a separate explicit
-go or no-go immediately before the first external mutation. Approval given
-earlier in the feature or sprint does not count at this boundary.
+set, version, remote, workflow that will run, and notes source as
+`CHANGELOG.md` under the exact tag heading. Include the rendered notes in the
+review and ask for a separate explicit go or no-go immediately before the
+first external mutation. Approval given earlier in the feature or sprint does
+not count at this boundary.
 
 ## Release
 
@@ -95,7 +104,10 @@ After approval, preserve this order:
    compilation, duplicate-version, or registry failure into success.
 5. Verify `cargo info <package>@X.Y.Z` for every package in the selected set,
    verify the owner for each registry entry, and inspect the GitHub release tag
-   and target SHA. Do not claim the unselected family was published.
+   and target SHA. Fetch the published GitHub release body and compare it byte
+   for byte with a fresh `python3 scripts/sprint_workflow.py release-notes
+   <requested-tag> --render` result from the reviewed SHA. Do not claim the
+   unselected family was published.
 
 If the branch push succeeds but tag push fails, report that exact state. If the
 tag push succeeds but publication fails, retain the tag and report the failed
@@ -118,6 +130,8 @@ verified:
 - A version bump or uncommitted change is still required.
 - Verification or sprint review covers a different SHA.
 - The requested tag and prepared family do not match exactly.
+- The exact reviewed release-note section is missing, invalid, or differs from
+  the published GitHub release body.
 - A local dry-run is offered as a substitute for successful publication.
 - Any command would merge to `main`, create an `sNN` tag, or create both
   release-family tags.

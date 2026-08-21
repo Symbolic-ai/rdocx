@@ -23,6 +23,9 @@ jobs:
       - name: Verify release metadata
         run: python3 -m unittest scripts.test_sprint_workflow.SprintWorkflowTests.test_stable_release_family_is_prepared_at_0_7_0 scripts.test_sprint_workflow.SprintWorkflowTests.test_incubating_release_family_is_prepared_at_0_3_0
 
+      - name: Verify reviewed release notes
+        run: python3 scripts/sprint_workflow.py release-notes "${{ github.ref_name }}" --check
+
       - name: Verify publication archives
         run: |
           cargo publish --workspace --dry-run \
@@ -107,7 +110,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      - name: Create GitHub Release
-        run: gh release create "${{ github.ref_name }}" --generate-notes
+      - name: Create GitHub Release from reviewed notes
+        run: |
+          python3 scripts/sprint_workflow.py release-notes "${{ github.ref_name }}" --check
+          python3 scripts/sprint_workflow.py release-notes "${{ github.ref_name }}" --render > "$RUNNER_TEMP/release-notes.md"
+          python3 scripts/sprint_workflow.py release-notes "${{ github.ref_name }}" --render | cmp - "$RUNNER_TEMP/release-notes.md"
+          gh release create "${{ github.ref_name }}" --notes-file "$RUNNER_TEMP/release-notes.md"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

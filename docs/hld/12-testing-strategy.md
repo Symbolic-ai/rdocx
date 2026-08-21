@@ -25,6 +25,18 @@ a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
 `saving_is_reproducible`.
 
+The release-notes regression gate validates both release tag families through
+the same deterministic parser used by publication. It requires one exact
+version section, the complete ordered heading set, meaningful rendered
+Markdown in every section, and no placeholder tokens. Raw HTML cannot satisfy
+semantic emptiness, while escaped element-like Markdown, visible link labels,
+and real code content remain valid. Check and render modes leave the changelog
+unchanged, and rendering returns the reviewed body byte for byte. Workflow
+mutation matrices also require this validator before either crates.io publish
+path, preserve the rendered artifact until a fresh byte comparison immediately
+before GitHub release creation, and bind the release command to the same
+preflight and post-publication body check.
+
 The Word field regression matrix records Microsoft Word 16.104 build
 16.104.25121423 with an en-US locale, Gregorian calendar, period decimal
 separator, comma grouping separator, and UTC clock context. Its readable
@@ -650,7 +662,9 @@ unresolved-symbol link failure that is easy to misdiagnose.
 The dedicated release regression job runs the complete standard-library test
 module after checkout. It is unconditional and failure-propagating, so stale
 stable or incubating version carriers fail on pull requests before a release
-tag can reach the publication workflow.
+tag can reach the publication workflow. The same module holds the reviewed
+release-notes parser, command, publication-order, exact-body, and generated
+skill contracts.
 
 Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
 from the official source archive. `scripts/install_pinned_poppler.py` enforces
