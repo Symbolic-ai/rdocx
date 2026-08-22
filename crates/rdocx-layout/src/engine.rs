@@ -1241,6 +1241,32 @@ impl Engine {
                 let _ = rebuilt_range;
             }
         }
+        // Metrics-only empty carriers must still resolve through the result,
+        // but they do not get to move a glyph-bearing font earlier in the
+        // deterministic result order.
+        let mut carrier_fonts = Vec::new();
+        fn collect_carrier_fonts(elements: &[PositionedElement], fonts: &mut Vec<FontId>) {
+            for element in elements {
+                match element {
+                    PositionedElement::Text(run)
+                        if run.text.is_empty() && run.glyph_ids.is_empty() =>
+                    {
+                        if !fonts.contains(&run.font_id) {
+                            fonts.push(run.font_id);
+                        }
+                    }
+                    PositionedElement::Group(group) => {
+                        collect_carrier_fonts(&group.children, fonts)
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for page in &pages {
+            collect_carrier_fonts(&page.elements, &mut carrier_fonts);
+        }
+        self.font_manager.replay_layout_font_trace(&carrier_fonts);
+
         // Remap persistent manager ids to result-local ids and omit faces that
         // are no longer present in the current layout.
         let fonts = if self.font_manager.every_loaded_font_is_current() {
@@ -3515,11 +3541,66 @@ pub(crate) fn layout_paragraph_with_source(
         fm,
     )?;
 
+    let attributed_empty_paragraph = inline_items.is_empty();
+    if attributed_empty_paragraph {
+        let mut caret_rpr = style_resolver::resolve_run_properties(para_style_id, None, styles);
+        if let Some(paragraph_mark_rpr) = direct_ppr.and_then(|ppr| ppr.rpr.as_ref()) {
+            caret_rpr.merge_from(paragraph_mark_rpr);
+        }
+        let font_size = caret_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0);
+        let bold = caret_rpr.bold.unwrap_or(false);
+        let italic = caret_rpr.italic.unwrap_or(false);
+        let font_family = resolve_font_family(&caret_rpr, input.theme.as_ref());
+        let font_id = fm.resolve_font_for_metrics(font_family.as_deref(), bold, italic)?;
+        let metrics = fm.metrics(font_id, font_size)?;
+        inline_items.push(InlineItem::Text(TextSegment {
+            text: String::new(),
+            source: source_node.map(|node| SourceSpan {
+                node,
+                char_start: 0,
+                char_end: 0,
+            }),
+            font_id,
+            font_size,
+            glyph_ids: Vec::new(),
+            advances: Vec::new(),
+            width: 0.0,
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+            line_gap: 0.0,
+            color: resolve_run_color(&caret_rpr, input.theme.as_ref()),
+            bold,
+            italic,
+            underline: None,
+            strike: false,
+            dstrike: false,
+            highlight: None,
+            baseline_offset: 0.0,
+            hyperlink_url: None,
+            field_kind: None,
+            note: None,
+        }));
+    }
+
     // Line breaking
     let line_params = convert::line_break_params(&effective_ppr, available_width);
 
+    let legacy_empty_line = if attributed_empty_paragraph {
+        let mut lines = break_into_lines(&[], &line_params, fm)?;
+        convert::restore_word_line_heights(&mut lines, &effective_ppr);
+        lines.pop()
+    } else {
+        None
+    };
+
     let mut lines = break_into_lines(&inline_items, &line_params, fm)?;
     convert::restore_word_line_heights(&mut lines, &effective_ppr);
+    if let (Some(line), Some(legacy)) = (lines.first_mut(), legacy_empty_line) {
+        line.ascent = legacy.ascent;
+        line.descent = legacy.descent;
+        line.line_gap = legacy.line_gap;
+        line.height = legacy.height;
+    }
 
     let mut result = block::build_paragraph_block(
         lines,

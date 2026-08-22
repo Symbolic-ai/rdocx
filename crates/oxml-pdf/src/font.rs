@@ -35,7 +35,9 @@ pub(crate) fn collect_glyph_usage(layout: &LayoutResult) -> HashMap<FontId, Font
 
     for page in &layout.pages {
         walk(&page.elements, &mut |element, _| {
-            if let PositionedElement::Text(run) = element {
+            if let PositionedElement::Text(run) = element
+                && !(run.text.is_empty() && run.glyph_ids.is_empty())
+            {
                 let entry = usage.entry(run.font_id).or_insert_with(|| FontUsage {
                     glyph_to_unicode: BTreeMap::new(),
                     remapper: GlyphRemapper::new(),

@@ -80,7 +80,10 @@ fn alpha_key(alpha: f64) -> Option<u32> {
 fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) {
     for element in elements {
         match element {
-            PositionedElement::Text(run) => insert_alpha(keys, run.color.a),
+            PositionedElement::Text(run) if !(run.text.is_empty() && run.glyph_ids.is_empty()) => {
+                insert_alpha(keys, run.color.a)
+            }
+            PositionedElement::Text(_) => {}
             PositionedElement::Line { color, .. } | PositionedElement::FilledRect { color, .. } => {
                 insert_alpha(keys, color.a)
             }
@@ -421,6 +424,10 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     for (page_idx, page) in layout.pages.iter().enumerate() {
         let mut elem_idx = 0;
         walk(&page.elements, &mut |element, _| {
+            if matches!(element, PositionedElement::Text(run) if run.text.is_empty() && run.glyph_ids.is_empty())
+            {
+                return;
+            }
             let current_idx = elem_idx;
             elem_idx += 1;
             if let PositionedElement::Image {
@@ -912,11 +919,13 @@ struct EmitState<'a> {
 fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &mut EmitState<'_>) {
     for element in elements {
         let elem_idx = state.leaf_index;
-        if !matches!(element, PositionedElement::Group(_)) {
+        if !matches!(element, PositionedElement::Group(_))
+            && !matches!(element, PositionedElement::Text(run) if run.text.is_empty() && run.glyph_ids.is_empty())
+        {
             state.leaf_index += 1;
         }
         match element {
-            PositionedElement::Text(run) => {
+            PositionedElement::Text(run) if !(run.text.is_empty() && run.glyph_ids.is_empty()) => {
                 if let Some(prepared) = state.prepared_fonts.get(&run.font_id)
                     && state.font_refs.contains_key(&run.font_id)
                 {
@@ -959,6 +968,7 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
                     content.restore_state();
                 }
             }
+            PositionedElement::Text(_) => {}
             PositionedElement::Line {
                 start,
                 end,

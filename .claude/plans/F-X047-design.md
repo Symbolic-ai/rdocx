@@ -1,6 +1,6 @@
 # F-X047, Attribute empty Word paragraphs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: S
 **Depends on**: F-X037
@@ -39,7 +39,7 @@ paragraphs or non-Word layout inputs.
 | Category | Test | Asserts |
 |---|---|---|
 | regression | `empty_word_stories_emit_one_attributed_zero_width_segment` | Body, table, header, footer, footnote, and endnote paragraphs each carry the right source node and `0..0` range. |
-| regression | `empty_paragraph_uses_resolved_default_metrics` | Direct paragraph and style defaults choose the caret font and line height. |
+| regression | `empty_paragraph_uses_resolved_default_metrics` | Direct paragraph and style defaults choose the caret font, size, ascent, and descent. |
 | regression | `empty_segment_is_backend_invisible_and_layout_compatible` | Ordinary and provenance layouts match structurally, non-empty paragraphs do not change, and PDF plus raster emit no new glyph. |
 
 The test gate is **regression**. Both backends and the deterministic hash
@@ -55,6 +55,10 @@ harness must remain unchanged.
 
 - Layout and text shaping: re-read `docs/hld/08-rendering-spec.md`, run every
   backend baseline in deterministic font mode, and require unchanged hashes.
+- Public API of a published crate: re-read `docs/hld/10-bindings-spec.md`. The
+  hidden metrics-only resolver is additive on the pre-1.0 `oxml-layout`
+  surface and does not change binding APIs. Run the workspace package dry-run
+  and assert every generated archive remains below 10 MiB.
 
 ## Hash harness
 
@@ -63,10 +67,10 @@ built-in backend should emit a glyph or move content.
 
 ## Implementation checklist
 
-- [ ] Add one empty segment only to empty Word paragraph lines.
-- [ ] Resolve default font metrics without shaping a glyph.
-- [ ] Attach the correct optional source node and `0..0` scalar range.
-- [ ] Cover every Word story, compatibility, backends, and hashes.
+- [x] Add one empty segment only to empty Word paragraph lines.
+- [x] Resolve default font metrics without shaping a glyph.
+- [x] Attach the correct optional source node and `0..0` scalar range.
+- [x] Cover every Word story, compatibility, backends, and hashes.
 
 ## Open questions
 

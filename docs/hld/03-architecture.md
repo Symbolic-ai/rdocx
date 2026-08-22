@@ -105,6 +105,13 @@ breaking preserves and subdivides that range without learning what the node
 means. Consumers must resolve an id through the format-specific result that
 created it and must not compare ids from different results.
 
+An otherwise empty Word paragraph crosses the same boundary as one empty,
+zero-width text segment. The segment resolves the paragraph mark's default
+font and metrics without shaping a glyph. Attributed results attach the
+paragraph node with scalar range `0..0`, while ordinary results retain the
+same structure with no source id. The shared PDF and raster backends treat an
+empty run with no glyph ids as non-drawing content.
+
 One construct is an exception and is called out rather than glossed. A text
 segment carries an optional `NoteRef`, a footnote or endnote reference, and
 notes are a WordprocessingML idea with no PresentationML counterpart. It sits

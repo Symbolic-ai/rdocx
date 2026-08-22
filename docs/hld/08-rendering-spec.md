@@ -33,6 +33,13 @@ The shared line breaker alone discovers UAX 14 opportunities, reshapes each
 exact byte slice, and subdivides the scalar source range, so every wrapped
 fragment retains an exact contiguous source range. Generated text uses `None`.
 
+An empty Word paragraph contributes one `TextSegment` with empty text, zero
+width, no glyph ids, and the resolved paragraph-mark font metrics. Its source
+is the paragraph node at scalar range `0..0` when provenance is requested and
+`None` otherwise. The original empty-line box remains unchanged, so the
+carrier does not move later content. PDF font collection and emission skip
+empty no-glyph runs, and raster draws no pixels for them.
+
 **A slide is a page with a fixed size.** Font subsetting, ToUnicode CMaps, JPEG
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does
