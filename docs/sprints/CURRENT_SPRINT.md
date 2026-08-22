@@ -1,90 +1,62 @@
-# Current Sprint, S51
+# Current Sprint, S52
 
-**Milestone**: M16 Document automation.
+**Milestone**: M17 Security and compliance.
 
-**Goal**: close M16 with mail merge, document comparison, and watermarks, then
-ship the completed milestone with the community-requested ordered-body and
-complete-layout reader surfaces, including traceable glyph provenance and
-bounded relayout caches for viewer and editor integrations. Keep each operation
-package-preserving and bounded to its declared document stories. Establish
-reviewed release notes as the permanent publication contract before the
-incubating 0.4.0 and stable 0.8.0 releases through a reusable `/release-notes`
-ceremony.
+**Goal**: open the files that currently cannot be opened at all. Add
+standards-compatible read and write support for OOXML agile encryption, then
+verify digital signatures over their complete declared part sets so callers
+can distinguish trusted packages from altered or partially covered ones.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for WordprocessingML ownership, field and
-  template evaluation boundaries, typed story traversal, and atomic facade
-  mutation.
-- `docs/hld/04-opc-and-packaging.md`, for staged package updates, relationship
-  integrity, media allocation, raw XML preservation, and fail-closed commits.
-- `docs/hld/08-rendering-spec.md`, for accepted and tracked revision views,
-  deterministic pagination, headers, and page-level visual output.
-- `docs/hld/10-bindings-spec.md`, for the native Rust revision surface and the
+- `docs/hld/03-architecture.md`, for keeping package security ownership below
+  the native Word facade and preserving the existing document model boundary.
+- `docs/hld/04-opc-and-packaging.md`, for package relationships, part naming,
+  integrity validation, and staged failure-safe package replacement.
+- `docs/hld/10-bindings-spec.md`, for additive native Word APIs and the
   unchanged Python, WASM, and CLI compatibility boundaries.
-- `docs/hld/12-testing-strategy.md`, for readable in-code fixtures, regression
-  tests, deterministic golden rendering, and the hash-harness gate.
-- `docs/hld/14-development-backlog.md`, for the M16 end gate and the exact
-  S51 story scope, dependencies, community contribution, and release gates.
-- `docs/hld/15-build-and-toolchain.md`, for the two release families, version
-  carriers, publication allowlists, and reviewed release SHA.
+- `docs/hld/12-testing-strategy.md`, for readable regression fixtures,
+  round-trip evidence, external reference metadata, and full workspace gates.
+- `docs/hld/14-development-backlog.md`, for the M17 security goal and the exact
+  encryption and signature verification stories, dependencies, and gates.
+- `docs/hld/15-build-and-toolchain.md`, for dependency policy, supply-chain
+  review, feature graphs, packaging, and publication-safe verification.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-166 | Mail merge | M | done | - |
-| F-167 | Document comparison | L | done | - |
-| F-168 | Watermarks | S | done | - |
-| F-X032 | Expose complete Word layout results | S | done | - |
-| F-X033 | Integrate PR 36 ordered body items | S | done | - |
-| F-X034 | Reviewed release notes for every release | S | done | - |
-| F-X035 | Tag rpptx-v0.4.0 | S | done | - |
-| F-X036 | Tag v0.8.0 | S | done | - |
-| F-X037 | Trace Word glyphs to source paragraphs | M | done | - |
-| F-X038 | Cache relayout work across document edits | L | done | - |
+| F-169 | Agile encryption, read | L | pending | - |
+| F-171 | Digital signature verification | L | pending | - |
+| F-170 | Agile encryption, write | M | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-166 comes first because it composes the existing field and
-structural-template evaluators. F-167 follows as the flagship comparison path
-over body text, tables, and lists. F-168 completes the milestone through the
-independent header and renderer path. F-X037 then carries exact Word source
-provenance through the layout engine. F-X032 opens that combined layout result
-to external renderers without shipping an intermediate public signature.
-F-X038 then makes that editor path reusable without stale style, font,
-diagnostic, or provenance state. F-X033 integrates PR 36 only after the product
-wave is present on its sprint base, so current GitHub CI sees the real result
-and Pedro Assumpcao's commit remains in the merge record. F-X034 establishes
-reviewed release notes before either release tag. F-X035 publishes the missing
-incubating chart dependency, low-level provenance types, and shared font-cache
-work at 0.4.0. F-X036 can prepare and publish stable 0.8.0 only after that
-registry dependency is verified.
+F-169 and F-171 are independent roots. Encryption reading starts first because
+it removes the current hard-open failure and establishes the parameter parsing,
+key derivation, and authenticated package boundary that F-170 must reuse.
+Signature verification can proceed independently against the package
+relationship graph. F-170 follows F-169 so files written here use the same
+validated agile-encryption model that the reader accepts. M17 continues in S53
+with signature creation, tagged PDF, PDF/A, and redaction.
 
 ## Definition of done for this sprint
 
-- A fixture record set drives `MERGEFIELD` into one document per record and
-  one section per record, with absent fields rendered empty.
-- Comparing a document with its edited copy produces tracked revisions that,
-  when accepted, reproduce the edited copy exactly.
-- Formatting-only comparison differences are reported as diagnostics rather
-  than revisions.
-- Text and image watermarks round-trip through header `w:pict` shapes and render
-  behind body text on every page.
-- Third-party renderers can obtain positioned pages together with every font
-  used by shaping, including caller-provided fonts on WASM.
-- Every attributed glyph run resolves to one exact Word story path and Unicode
-  scalar range, while generated text remains truthfully unattributed.
-- Warm relayout is exactly equal to cold layout, rebuilds only changed safe
-  paragraphs, and never serves stale styles, fonts, diagnostics, or source ids.
-- Direct body paragraphs, tables, content controls, and unsupported XML are
-  readable once each in exact source order through the PR 36 API.
-- Every release uses reviewed notes with highlights, user-visible changes,
-  compatibility guidance, and contributor credit.
-- The incubating 0.4.0 and stable 0.8.0 families publish only after their
-  separate reviewed-SHA approvals and registry verification.
-- Every operation preserves unrelated package parts, relationships, schema
-  order, and the unchanged hash-harness baseline unless a reviewed plan
-  declares an intentional delta.
+- A password-protected document produced by Word opens with the correct
+  password and fails cleanly with the wrong password.
+- Wrong-password, malformed-parameter, authentication, and decryption failures
+  leave the caller and package state unchanged.
+- A document encrypted here decrypts here, and parameters fixed by the
+  specification match the reviewed Word reference bytes.
+- A validly signed document verifies every declared part, while a modified
+  document fails with the changed or uncovered part named.
+- Signature verification refuses missing, duplicate, external, or partially
+  covered package relationships rather than reporting a weaker success.
+- Encryption and verification preserve unrelated parts, content types,
+  relationships, and unmodelled XML through their declared round trips.
+- New cryptographic dependencies and feature edges satisfy the repository
+  supply-chain, default-off, WASM, packaging, and licence gates.
+- The full workspace gate passes with all 49 deterministic hashes unchanged
+  unless an approved design declares a reviewed delta.
