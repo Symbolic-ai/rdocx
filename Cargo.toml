@@ -98,6 +98,8 @@ cfb = "0.14.0"
 hmac = "0.13.0"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
+ring = { version = "0.17.14", default-features = false, features = ["std"] }
+x509-cert = { version = "0.3.0", default-features = false, features = ["std"] }
 fontdb = { version = "0.23", default-features = false, features = [
     "std",
     "fs",

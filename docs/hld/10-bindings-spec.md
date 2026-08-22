@@ -208,6 +208,12 @@ These constructors are additive and unavailable without the feature. Python,
 WASM, and CLI manifests do not enable the feature, so their API and dependency
 graphs remain unchanged.
 
+When native callers enable the default-off `digital-signatures` feature,
+`Document::verify_signatures` directly returns the shared package verification
+reports. The additive API distinguishes cryptographic verification and
+complete declared coverage from certificate-chain trust. It does not expand
+Python, WASM, or CLI surfaces and those dependency graphs remain unchanged.
+
 Paragraph mutation supports explicit hard breaks and hyperlinks backed by a
 document relationship. Table column mutation keeps the table width, grid
 column, and every covering cell width consistent. A cell with `gridSpan`

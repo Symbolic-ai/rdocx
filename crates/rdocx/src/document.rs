@@ -532,6 +532,14 @@ impl Document {
         Self::from_package(package)
     }
 
+    /// Verify package signatures without asserting certificate-chain trust.
+    #[cfg(feature = "digital-signatures")]
+    pub fn verify_signatures(
+        &self,
+    ) -> std::result::Result<Vec<oxml_opc::SignatureReport>, oxml_opc::OpcError> {
+        self.package.verify_signatures()
+    }
+
     fn from_package(package: OpcPackage) -> Result<Self> {
         let doc_part_name = package.main_document_part().ok_or(Error::NoDocumentPart)?;
 

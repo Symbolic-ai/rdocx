@@ -1,6 +1,6 @@
 # F-171, Digital signature verification
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: L
 **Depends on**: none
@@ -112,14 +112,14 @@ Expected to be unchanged. Verification is read-only and default-off.
 
 ## Implementation checklist
 
-- [ ] Add the approved default-off feature and minimal dependency graph.
-- [ ] Discover signature origins and parts through normalized relationships.
-- [ ] Parse and canonicalize the supported XML Signature profile.
-- [ ] Verify reference digests, relationship transforms, and RSA-SHA256.
-- [ ] Compute complete coverage and return typed failure reports.
-- [ ] Add native `Document` forwarding without binding expansion.
-- [ ] Add independent in-source valid, tampered, partial, and malformed cases.
-- [ ] Run focused signature, package, no-default, WASM, supply-chain, package,
+- [x] Add the approved default-off feature and minimal dependency graph.
+- [x] Discover signature origins and parts through normalized relationships.
+- [x] Parse and canonicalize the supported XML Signature profile.
+- [x] Verify reference digests, relationship transforms, and RSA-SHA256.
+- [x] Compute complete coverage and return typed failure reports.
+- [x] Add native `Document` forwarding without binding expansion.
+- [x] Add independent in-source valid, tampered, partial, and malformed cases.
+- [x] Run focused signature, package, no-default, WASM, supply-chain, package,
       and harness checks.
 
 ## Open questions

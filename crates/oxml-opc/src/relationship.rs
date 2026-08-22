@@ -12,6 +12,10 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
     pub const THUMBNAIL: &str =
         "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail";
+    pub const DIGITAL_SIGNATURE_ORIGIN: &str =
+        "http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/origin";
+    pub const DIGITAL_SIGNATURE: &str =
+        "http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/signature";
 
     // Shared officeDocument relationships.
     pub const DOCUMENT: &str =

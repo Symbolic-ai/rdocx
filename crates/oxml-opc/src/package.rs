@@ -60,6 +60,8 @@ pub struct OpcPackage {
     pub part_rels: HashMap<String, Relationships>,
     /// All parts keyed by their URI (e.g. "/word/document.xml").
     pub parts: HashMap<String, Vec<u8>>,
+    #[cfg(feature = "digital-signatures")]
+    pub(crate) signature_source: Option<crate::signature::SignatureSource>,
 }
 
 impl OpcPackage {
@@ -214,6 +216,11 @@ impl OpcPackage {
             package_rels,
             part_rels,
             parts,
+            #[cfg(feature = "digital-signatures")]
+            signature_source: Some(crate::signature::SignatureSource {
+                content_types_xml: ct_xml.clone(),
+                content_types: ContentTypes::from_xml(ct_xml)?,
+            }),
         })
     }
 
@@ -230,6 +237,9 @@ impl OpcPackage {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         // Write [Content_Types].xml
+        #[cfg(feature = "digital-signatures")]
+        let ct_xml = crate::signature::content_types_bytes(self)?;
+        #[cfg(not(feature = "digital-signatures"))]
         let ct_xml = self.content_types.to_xml()?;
         zip.start_file("[Content_Types].xml", options)?;
         zip.write_all(&ct_xml)?;
@@ -274,6 +284,16 @@ impl OpcPackage {
     /// Set (or replace) a part's raw bytes.
     pub fn set_part(&mut self, part_name: &str, data: Vec<u8>) {
         self.parts.insert(part_name.to_string(), data);
+    }
+
+    /// Verify every digital signature discovered through the OPC relationship graph.
+    ///
+    /// Cryptographic validity authenticates the embedded certificate's key. It does
+    /// not establish that the certificate chains to a trusted root. Certificate
+    /// trust remains caller policy.
+    #[cfg(feature = "digital-signatures")]
+    pub fn verify_signatures(&self) -> Result<Vec<crate::SignatureReport>> {
+        crate::signature::verify_signatures(self)
     }
 
     /// Get the relationships for a specific part.
@@ -326,6 +346,8 @@ impl OpcPackage {
             package_rels: Relationships::new(),
             part_rels: HashMap::new(),
             parts: HashMap::new(),
+            #[cfg(feature = "digital-signatures")]
+            signature_source: None,
         }
     }
 

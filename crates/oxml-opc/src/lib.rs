@@ -12,8 +12,14 @@ mod encryption;
 mod error;
 mod package;
 pub mod relationship;
+#[cfg(feature = "digital-signatures")]
+mod signature;
 
 pub use content_types::{ContentType, ContentTypes};
 pub use error::OpcError;
 pub use package::{OpcPackage, PackagePart, PackageReadLimits};
 pub use relationship::{Relationship, Relationships};
+#[cfg(feature = "digital-signatures")]
+pub use signature::{
+    CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
+};

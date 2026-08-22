@@ -87,6 +87,8 @@ on CI runners as it always would have.
 |---|---|---|---|
 | `oxml-opc` | `agile-encryption` | off | Adds native read support for password-protected OOXML packages |
 | `rdocx` | `agile-encryption` | off | Forwards encrypted native document opens to `oxml-opc` |
+| `oxml-opc` | `digital-signatures` | off | Adds read-only OPC signature verification and coverage reports |
+| `rdocx` | `digital-signatures` | off | Forwards native signature verification to `oxml-opc` |
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
@@ -107,6 +109,7 @@ discovery in that graph. Native `rpptx`, `rpptx-render`, and the presentation
 Python binding retain system fonts through the same explicit forwarding
 pattern. Bundled font bytes remain available in both modes. The Python, WASM,
 and CLI manifests do not opt in to `agile-encryption`.
+They also do not opt in to `digital-signatures`.
 
 ## Packaging
 
@@ -133,6 +136,12 @@ every later publication.
 The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
 must live under its own crate's directory**: a workspace-root `assets/` compiles
 locally but is not collected into the published tarball.
+
+Public API changes in published crates run the verified workspace packaging
+dry run against local patches for every internal crate. Every generated
+archive must remain below the crates.io 10 MiB limit. Default-off features are
+present in package metadata even when archive verification builds the default
+graph.
 
 The publishable `rpptx-cli` binary contains nine commands. Its `thumbnail`
 command uses the deterministic presentation renderer, and its `outline`
@@ -483,6 +492,11 @@ artifact.
 `oxml-opc`. AES, CBC, CFB, HMAC, and SHA dependencies have the named
 default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
 Python, WASM, or CLI graphs.
+Ring, SHA-256, base64, and X.509 parsing have the named default-off
+`oxml-opc/digital-signatures` consumer. They do not enter ordinary, Python,
+WASM, or CLI graphs. The verifier authenticates with the embedded public key.
+Certificate-chain trust requires caller policy and no ambient trust-store
+dependency is part of the workspace graph.
 
 The single advisory exception, an unmaintained transitive font dependency,
 carries its exit route in a comment. Keep that discipline: an ignore without a

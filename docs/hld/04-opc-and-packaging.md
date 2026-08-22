@@ -70,7 +70,7 @@ constants are kept. Added:
 
 ```rust
 // Package-level. Note the package namespace, not officeDocument.
-CORE_PROPERTIES, THUMBNAIL
+CORE_PROPERTIES, THUMBNAIL, DIGITAL_SIGNATURE_ORIGIN, DIGITAL_SIGNATURE
 
 // Shared officeDocument
 EXTENDED_PROPERTIES   // docProps/app.xml
@@ -333,6 +333,24 @@ limits without adding a whole-package ciphertext buffer. Word emits a
 hash-sized encrypted HMAC key, while the ECMA shape permits a salt-sized key,
 so both validated lengths are accepted. Integrity, truncation, or length
 failure is reported before ZIP parsing and leaves no partially opened package.
+
+The default-off `oxml-opc/digital-signatures` feature discovers signature
+origins and signature parts only through normalized internal package
+relationships. It parses XML Signature elements by expanded name and accepts
+the strict RSA-SHA256, SHA-256 digest, and exclusive-canonicalization profile.
+The OPC relationship transform selects exact declared relationship IDs,
+rejects missing, duplicate, external, and absent targets, and emits canonical
+ID order. Unsupported or weak algorithms fail closed.
+
+Each report keeps cryptographic validity separate from complete declared
+coverage. Cryptographic validity authenticates `SignedInfo`, every direct
+reference, and every manifest reference against the embedded X.509 public key.
+Coverage is complete only when every non-signature part, content types part,
+and non-signature relationship is declared. Certificate-chain trust is not
+inferred and remains caller policy. Verification is read-only. A loaded
+package retains the original content-types bytes while its typed content types
+remain unchanged, so saving does not invalidate a signature by reserializing
+equivalent XML.
 
 Comment mutations validate coordinates and allocate every required id before
 changing package or document state. Saving keeps the comments and

@@ -75,6 +75,11 @@ alone. `rdocx-wasm` consumes the complete `rdocx` facade rather than using this
 lower-level seam as a second document model. Its default-off
 `agile-encryption` edge stays inside the package boundary and adds CFB plus
 cryptographic primitives only when a named native consumer enables it.
+The default-off `digital-signatures` edge follows the same boundary. It keeps
+exclusive XML canonicalization, OPC relationship transforms, RSA-SHA256
+verification, and X.509 parsing in `oxml-opc`. `rdocx` only forwards the
+native package report. Ordinary and WASM graphs do not include the signature
+dependencies.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It

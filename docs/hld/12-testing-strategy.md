@@ -56,6 +56,17 @@ inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
 
+The digital-signature regression gate constructs its DOCX and signature XML
+in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
+and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace
+prefixes. Focused tests verify prefix tolerance, strict algorithms, exclusive
+canonicalization, relationship selection and order, complete declared
+coverage, named part mutation, malformed or partial coverage, and read-only
+save and reopen behavior. The optional openability oracle is Microsoft Word
+16.104 build 16.104.25121423. It confirms that Word opens the generated DOCX.
+It does not establish certificate trust or replace the Rust cryptographic and
+coverage assertions.
+
 The scalar template unit gate splits one tag across five differently formatted
 runs and proves that the first matched run supplies replacement formatting
 while unmatched prefix and suffix formatting remain intact. The structural

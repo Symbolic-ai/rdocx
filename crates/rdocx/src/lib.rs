@@ -46,6 +46,10 @@ pub use field::{FieldDateTime, FieldEvaluation, FieldEvaluationContext, FieldOut
 pub use oxml_chart::{ChartData, ChartKind};
 pub use oxml_core::Length;
 pub use oxml_opc::PackageReadLimits;
+#[cfg(feature = "digital-signatures")]
+pub use oxml_opc::{
+    CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
+};
 pub use paragraph::{
     Alignment, BorderStyle, Paragraph, ParagraphBorderRef, ParagraphRef, SectionBreak,
     TabAlignment, TabLeader,
@@ -66,5 +70,12 @@ mod tests {
     #[test]
     fn public_length_is_the_shared_type() {
         let _: oxml_core::Length = Length::emu(1);
+    }
+
+    #[cfg(feature = "digital-signatures")]
+    #[test]
+    fn native_document_forwards_signature_verification() {
+        let document = crate::Document::new();
+        assert!(document.verify_signatures().unwrap().is_empty());
     }
 }

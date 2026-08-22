@@ -22,6 +22,12 @@ agile-encryption = [
     "dep:sha1",
     "dep:sha2",
 ]
+digital-signatures = [
+    "dep:base64",
+    "dep:ring",
+    "dep:sha2",
+    "dep:x509-cert",
+]
 
 [package.metadata.release]
 shared-version = "incubating"
@@ -38,3 +44,5 @@ cfb = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 sha1 = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+x509-cert = { workspace = true, optional = true }

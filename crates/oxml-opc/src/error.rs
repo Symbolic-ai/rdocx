@@ -52,6 +52,21 @@ pub enum OpcError {
     #[error("invalid encrypted package stream")]
     InvalidEncryptedPackage,
 
+    #[cfg(feature = "digital-signatures")]
+    #[error("invalid digital signature XML: {0}")]
+    InvalidSignatureXml(String),
+
+    #[cfg(feature = "digital-signatures")]
+    #[error("unsupported digital signature {kind}: {algorithm}")]
+    UnsupportedSignatureAlgorithm {
+        kind: &'static str,
+        algorithm: String,
+    },
+
+    #[cfg(feature = "digital-signatures")]
+    #[error("invalid signing certificate: {0}")]
+    InvalidSigningCertificate(String),
+
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
 }
