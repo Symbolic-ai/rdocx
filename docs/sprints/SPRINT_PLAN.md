@@ -884,18 +884,29 @@ because `oxml-chart`, the low-level provenance types, and shared font-cache
 work must exist on crates.io before the stable dependency graph can publish.
 Both release tags retain separate final approval boundaries.
 
-#### Sprint S52, Encryption
+#### Sprint S52, Encryption and renderer follow-ups
 
-**Goal**: open the files that currently cannot be opened at all.
+**Goal**: open the files that currently cannot be opened at all, then close the
+community-reported rendering and interactive-layout gaps with exact public
+regressions.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-169 | Agile encryption, read | L |
 | F-170 | Agile encryption, write | M |
 | F-171 | Digital signature verification | L |
+| F-X039 | Share layout payloads and transfer reusable engines | M |
+| F-X040 | Restart pagination and cache table blocks | L |
+| F-X041 | Remove duplicated glyphs at break opportunities | M |
+| F-X042 | Prove headers and footers in PDF output | S |
 
 Reading comes first and matters most. A password-protected document is a hard
 stop for a user today, where an unsigned one is only a missing assurance.
+F-X039 establishes shared ownership and a checked editor handoff before F-X040
+retains pagination tails. F-X041 fixes Issue 23 at the common layout layer, and
+F-X042 closes Issue 15 with a public DOCX-to-PDF gate. The four cross-cutting
+stories carry the detailed follow-ups from Issue 39 without weakening the
+security deliverables.
 
 #### Sprint S53, Signatures and accessible PDF
 

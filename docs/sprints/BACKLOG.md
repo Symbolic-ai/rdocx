@@ -439,4 +439,8 @@ regenerated, never hand-edited.
 | F-X036 | Tag v0.8.0                                  | S51 | S | done |
 | F-X037 | Trace Word glyphs to source paragraphs     | S51 | M | done |
 | F-X038 | Cache relayout work across document edits  | S51 | L | done |
+| F-X039 | Share layout payloads and transfer reusable engines | S52 | M | pending |
+| F-X040 | Restart pagination and cache table blocks  | S52 | L | pending |
+| F-X041 | Remove duplicated glyphs at break opportunities | S52 | M | pending |
+| F-X042 | Prove headers and footers in PDF output    | S52 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
