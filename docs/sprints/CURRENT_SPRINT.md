@@ -37,7 +37,7 @@ relayout reuse without weakening correctness.
 | F-X042 | Prove headers and footers in PDF output | S | in-progress | codex |
 | F-170 | Agile encryption, write | M | in-progress | codex |
 | F-X040 | Restart pagination and cache table blocks | L | in-progress | codex |
-| F-X043 | Reuse bundled-fallback caller-font layouts | M | pending | - |
+| F-X043 | Reuse bundled-fallback caller-font layouts | M | in-progress | codex |
 | F-X044 | Scale paragraph-cache lookup for editors | M | pending | - |
 | F-X045 | Cache headers and footers transactionally | M | pending | - |
 | F-X046 | Reuse substituted pages exactly | S | pending | - |
