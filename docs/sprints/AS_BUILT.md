@@ -8025,3 +8025,391 @@ comparison.
 comments, and Issue 37 is closed. The later Issue 39 proposals for shared
 `FontData` bytes and public engine handoff did not ship in 0.8.0. Review
 those as separate follow-up changes against the post-release code.
+
+### F-169, Agile encryption, read
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** A default-off `agile-encryption` feature now opens
+Microsoft Agile encrypted OOXML packages through `OpcPackage` and the native
+Word facade. The reader validates AES-128, AES-192, AES-256 and the declared
+SHA family, verifies the password, authenticates the complete encrypted
+package before ZIP parsing, and decrypts bounded segments.
+
+**Non-obvious choices.** Package authentication precedes ZIP construction, and
+every wrong-password, malformed, or tampered input fails without publishing a
+partial package. The Microsoft Word reference is encoded in source rather than
+stored as an opaque fixture.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `word_agile_document_opens_only_with_its_password`,
+`agile_parameters_reject_unknown_or_inconsistent_algorithms`, and
+`tampered_agile_package_fails_before_zip_parsing`, plus no-default, WASM,
+dependency-direction, package, and supply-chain gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The feature stays out of default and WASM
+graphs. Authentication is part of the package boundary, not a facade policy.
+
+### F-171, Digital signature verification
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** A default-off `digital-signatures` feature discovers OPC
+signature origins through relationships, applies exclusive canonicalization
+and the OPC relationship transform, verifies RSA-SHA256 and X.509 material,
+and reports exact declared part and relationship coverage through `OpcPackage`
+and `Document`.
+
+**Non-obvious choices.** Cryptographic validity and certificate trust are
+separate results. The verifier uses `ring` rather than the advisory-blocked
+RustCrypto RSA crate, and it fails closed for external, duplicate, missing,
+or partially covered references.
+
+**Deviations from the design plan.** The implementation changed the planned
+RSA dependency to `ring` after the supply-chain gate rejected the former.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `valid_signature_reports_complete_declared_coverage`,
+`signature_parser_is_prefix_tolerant_and_algorithm_strict`,
+`partial_or_malformed_coverage_never_reports_success`, and
+`verification_does_not_change_package_bytes`. Microsoft Word 16.104 opened the
+generated signed document.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Verification proves signed bytes and declared
+coverage. Certificate-chain trust remains caller policy.
+
+### F-X039, Share layout payloads and transfer reusable engines
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Layout font bytes now use `Arc<[u8]>`, pages use
+`Arc<PageFrame>`, and the Word facade can transfer reusable normal-layout work
+between documents only after exact context compatibility succeeds.
+
+**Non-obvious choices.** Owned single-page facade methods remain source
+compatible. The transfer API moves no public `Engine`, preserves both sides on
+rejection, and includes every layout-sensitive context component, including
+the wrapping-drawing predicate.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, and `docs/hld/10-bindings-spec.md`.
+
+**Tests.** Arc pointer-sharing, compatible and incompatible engine transfer,
+staged failure preservation, poison recovery, completed-cache preservation,
+and PDF, raster, diagnostics, outline, font, and provenance equivalence.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** PR 40 and PR 41 proposed raw engine take and set
+methods. The checked transfer boundary intentionally makes incompatible cache
+ownership unrepresentable.
+
+### F-X041, Remove duplicated glyphs at break opportunities
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word line breaking now reshapes each final run exactly
+once, removing duplicated glyph vectors at break opportunities while keeping
+the shared line-breaking layer format-neutral.
+
+**Non-obvious choices.** Deterministic bundled caller fonts drive the regression
+and every baseline. The behavior commit owns the exact expected baseline
+movement rather than folding it into another layout change.
+
+**Deviations from the design plan.** The reviewed hash declaration was expanded
+to match the mechanically affected PDF streams and embedded subsets.
+
+**Spec sections touched.** `docs/hld/03-architecture.md` and
+`docs/hld/08-rendering-spec.md`.
+
+**Tests.** `break_opportunities_emit_every_scalar_and_glyph_once`,
+`reported_words_do_not_duplicate_boundary_glyphs`, and
+`fixed_break_runs_match_pdf_and_raster_backends`, plus the pinned golden-PNG
+gate.
+
+**Hash harness.** Intentional 26-entry delta. Five page-one PNGs changed, and
+the pages, resources, and bytes PDF fingerprints changed for all seven samples.
+All 21 XML entries stayed unchanged. The resulting 49-entry baseline and all
+seven 150 DPI golden pixels pass.
+
+**Notes for future sessions.** Corrected glyph vectors can change embedded font
+subsets even when a sample's first-page pixels stay identical.
+
+### F-X042, Prove headers and footers in PDF output
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Readable in-code DOCX packages now prove first, even,
+default, blank, and inherited header and footer variants through public layout,
+save and reopen, and deterministic PDF text extraction. The proof exposed and
+fixed same-type footer inheritance.
+
+**Non-obvious choices.** A dev-only Flate decoder reads this repository's
+deterministic PDF object shape without adding a production API or relying on an
+unpinned external text extractor. Explicit blank variants never borrow a
+default.
+
+**Deviations from the design plan.** The planned test-only story gained one
+narrow production correction after the regression exposed footer inheritance
+being omitted from effective section state.
+
+**Spec sections touched.** None. Existing HLD intent already required the
+correct behavior.
+
+**Tests.** `authored_reopened_headers_and_footers_reach_pdf`,
+`blank_first_and_even_variants_do_not_borrow_defaults`, and
+`header_footer_pdf_fixture_preserves_unrelated_package_state`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Header and footer inheritance must remain
+separate and same-type. Unrelated package parts and raw XML are preservation
+authority.
+
+### F-170, Agile encryption, write
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `OpcPackage` and `Document` now stage Word-compatible Agile
+encrypted output using AES-256-CBC, SHA-512, 100,000 spins, fresh secrets, CFB
+version 3, complete DataSpaces streams, and authenticated segmented package
+ciphertext.
+
+**Non-obvious choices.** Caller-owned `Vec<u8>` output reserves the complete
+append before publication and rolls back injected partial failures. File saves
+use same-volume replacement, including `MoveFileExW` on Windows. DataSpaces
+bytes are decoded independently in tests.
+
+**Deviations from the design plan.** The generic writer parameter was narrowed
+to a caller-owned byte buffer because arbitrary `Write` cannot promise
+failure-atomic publication.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `agile_writer_emits_word_profile_parameters`, DataSpaces decoding,
+fresh plaintext secret checks, output reserve failure, existing-destination
+replacement, and native round trip. Microsoft Word 16.104 build
+16.104.25121423 opened password `rdocx-f170` and rejected an incorrect
+password, as observed by the user.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Word's DataSpaces transform block-size field is
+zero in this envelope, while the outer compound file must be CFB version 3.
+
+### F-X040, Restart pagination and cache table blocks
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The reusable Word engine now restarts only from exact safe
+single-section page boundaries and caches safe table blocks transactionally.
+Warm edits rebuild a bounded changed region and restore only byte-equal final
+page Arcs.
+
+**Non-obvious choices.** Notes, fields, floats, tables in restart regions,
+multi-section state, backgrounds, unsupported content, keep constraints, and
+provenance-changing insertions conservatively use a full layout. A
+traversal-sensitive block disables later retained reads for that layout.
+
+**Deviations from the design plan.** Microscope review added the document-wide
+wrapping predicate and deletion and provenance fallbacks to the exact context.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** `warm_restart_rebuilds_only_the_bounded_changed_region`,
+`unsafe_pagination_state_falls_back_to_full_layout`,
+`earlier_note_insertion_invalidates_later_cached_markers`, and
+`safe_tables_reuse_transactionally_and_with_bounds`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Exact state and typed equality are correctness
+authority. Fingerprints may only prefilter candidates.
+
+### F-X043, Reuse bundled fallback caller-font layouts
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The Word facade now combines caller fonts at highest
+priority with deterministic bundled fallbacks and retains a private reusable
+engine across edits. A checked transfer moves that engine only for an exact
+caller-font and document context match.
+
+**Non-obvious choices.** The strict caller-only path remains isolated and still
+fails for incomplete font sets. No system font can enter the bundled-only path,
+and staged mutations and poison recovery preserve the private engine safely.
+
+**Deviations from the design plan.** The result remains an owned
+`WordLayoutResult` whose heavy page and font payloads already share Arcs.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** Caller override with bundled fallback, strict isolation, compatible
+and incompatible checked transfer, warm versus fresh equality, staged failure,
+poison recovery, WASM, package, and hash gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** This is the safe remaining behavior from PR 40
+and PR 41 by `emptinessform`. Raw engine access was intentionally not adopted.
+
+### F-X044, Scale paragraph-cache lookup for editors
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Paragraph cache lookup now uses a borrowed deterministic
+fingerprint as a prefilter, keeps typed `CT_P` equality authoritative, avoids a
+key clone on hits, and no longer performs an ordered remove and reinsert. The
+paragraph partition holds 4,096 entries and 56 MiB inside the shared 64 MiB
+layout envelope.
+
+**Non-obvious choices.** Hits retain FIFO position. Unsafe traversal still
+disables later reads, and late failures publish no staged paragraph or table
+work.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** `paragraph_fingerprint_collision_requires_typed_equality`,
+`editor_scale_paragraph_cache_avoids_warm_thrash`,
+`unsafe_prefix_still_disables_later_paragraph_hits`,
+`scaled_paragraph_cache_warm_equals_cold`, and bounds and failure publication
+gates. The 700-paragraph edit records 699 hits and one build.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** This safely incorporates the editor workload
+from PR 41 by `emptinessform` without making a 64-bit hash authoritative.
+
+### F-X045, Cache headers and footers transactionally
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Safe header and footer variants now reuse exact typed
+blocks through a transactional 64-entry, 4 MiB cache. Hits rebind current
+source ids and replay diagnostics and font traces.
+
+**Non-obvious choices.** Identity includes complete section geometry,
+relationships, resolved parts, media, revision, fonts, provenance, and the
+outer reusable context. Opaque XML bypasses reuse unless it is the supported
+namespace-resolved watermark projection.
+
+**Deviations from the design plan.** Microscope review expanded retained-byte
+accounting, tightened opaque XML namespace checks, and added inherited-variant
+hit evidence.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** Exact first, even, default, header, footer, inherited, image,
+watermark, same-width geometry, context, provenance, late-failure, oversized,
+and combined-bound regressions, plus full warm and fresh PDF equality.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** This replaces PR 41's hash-keyed immediate
+publication cache with typed equality and whole-layout publication.
+
+### F-X046, Reuse substituted pages exactly
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Restart records now retain aligned pristine and substituted
+page pairs so unchanged PAGE, NUMPAGES, and PAGEREF pages can reuse the exact
+prior output Arc without enabling pagination restart for field-bearing blocks.
+
+**Non-obvious choices.** Page number, total pages, bookmark targets, revision,
+font trace, pristine identity, and returned canonical font space are exact key
+material. Field-free pages in the same record retain pointer identity too, and
+all pair and vector capacity stays within the existing 32-entry, 2 MiB budget.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** `unchanged_page_fields_reuse_substituted_frames`,
+`changed_substitution_context_reshapes_pages`,
+`substituted_page_reuse_is_bounded_and_complete_equal`, and complete PDF and
+raster backend equality.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** This is the bounded exact substitute for PR
+41's unbounded pristine and substituted page map.
+
+### F-X047, Attribute empty Word paragraphs
+
+**Sprint.** S52
+**Completed.** 2026-08-22
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Every otherwise empty Word paragraph now emits one
+zero-width empty text segment with resolved paragraph-mark font metrics. In
+provenance mode it carries the paragraph source node and scalar range `0..0`.
+Body, table, header, footer, footnote, and endnote stories all participate.
+
+**Non-obvious choices.** The carrier shapes no glyph, preserves the legacy
+empty-line box, does not perturb first glyph-use font ordering, and is ignored
+by PDF font, alpha, ordinal, and paint emission. Non-Word empty-glyph runs keep
+their former behavior.
+
+**Deviations from the design plan.** A hidden additive metrics-only resolver on
+the pre-1.0 `oxml-layout` surface earned and passed the public API package
+rider.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** `empty_word_stories_emit_one_attributed_zero_width_segment`,
+`empty_paragraph_uses_resolved_default_metrics`, and
+`empty_segment_is_backend_invisible_and_layout_compatible`, including literal
+carrier removal for PDF and raster comparison.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** This completes the safe remaining visible
+behavior from PR 41 by `emptinessform` without synthesizing a space or glyph.

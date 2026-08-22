@@ -4986,3 +4986,304 @@ fn control_block_replacement_keeps_whitespace_before_the_replacement() {
             .is_empty()
     );
 }
+
+#[test]
+fn fixed_break_runs_match_pdf_and_raster_backends() {
+    let mut document = Document::new();
+    document.add_paragraph(&"financial planning ttf-parser double  spaces allocated ".repeat(12));
+    let (family, bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+    let layout = document
+        .layout_with_fonts(&[(family, bytes)])
+        .expect("caller-font deterministic layout");
+    let mut fonts =
+        oxml_layout::FontManager::new_with_fonts(vec![(family.to_owned(), bytes.to_vec())]);
+    for run in layout.layout.pages.iter().flat_map(|page| {
+        page.elements.iter().filter_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.source.is_some() => Some(run),
+            _ => None,
+        })
+    }) {
+        let font_family = layout
+            .layout
+            .fonts
+            .iter()
+            .find(|font| font.id == run.font_id)
+            .expect("run font is in result")
+            .family
+            .clone();
+        let font_id = fonts
+            .resolve_font(Some(&font_family), run.bold, run.italic)
+            .expect("caller run font resolves");
+        let independently_shaped = fonts
+            .shape_text(font_id, &run.text, run.font_size)
+            .expect("emitted chunk reshapes");
+        assert_eq!(run.glyph_ids, independently_shaped.glyph_ids);
+        assert_eq!(run.advances, independently_shaped.advances);
+    }
+
+    let direct_pdf = oxml_pdf::render_to_pdf(&layout.layout);
+    let direct_png = oxml_pdf::render_page_to_png(&layout.layout, 0, 96.0)
+        .expect("raster backend renders first page");
+    assert_eq!(
+        document
+            .to_pdf_with_fonts(&[(family, bytes)])
+            .expect("PDF facade"),
+        direct_pdf
+    );
+    assert!(!direct_png.is_empty());
+}
+
+fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
+    use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+    use rdocx_oxml::header_footer::CT_HdrFtr;
+
+    let document = CT_Document::from_xml(
+        br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p/><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:pPr/></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:footnoteReference w:id="4"/><w:endnoteReference w:id="9"/></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/></w:sectPr></w:body></w:document>"#,
+    )
+    .expect("empty story document parses");
+    let mut header = CT_HdrFtr::new();
+    header.paragraphs.push(rdocx_oxml::text::CT_P::new());
+    let mut footer = CT_HdrFtr::new();
+    footer.paragraphs.push(rdocx_oxml::text::CT_P::new());
+    let empty_note = |id| CT_Footnote {
+        id,
+        note_type: NoteType::Normal,
+        paragraphs: vec![rdocx_oxml::text::CT_P::new()],
+    };
+
+    rdocx_layout::LayoutInput {
+        document,
+        styles: rdocx_oxml::styles::CT_Styles::new_default(),
+        numbering: None,
+        headers: HashMap::from([("rIdHeader".to_owned(), header)]),
+        footers: HashMap::from([("rIdFooter".to_owned(), footer)]),
+        images: HashMap::new(),
+        charts: HashMap::new(),
+        chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+        chart_color_map: oxml_drawing::color::ColorMap::default(),
+        core_properties: None,
+        hyperlink_urls: HashMap::new(),
+        footnotes: Some(CT_Footnotes {
+            footnotes: vec![empty_note(4)],
+        }),
+        endnotes: Some(CT_Footnotes {
+            footnotes: vec![empty_note(9)],
+        }),
+        theme: None,
+        fonts: Vec::new(),
+        revision_view: rdocx_layout::RevisionView::Accepted,
+    }
+}
+
+#[test]
+fn empty_word_stories_emit_one_attributed_zero_width_segment() {
+    use rdocx_layout::{WordSourcePath, WordStory};
+
+    let result =
+        rdocx_layout::layout_document_deterministic_with_provenance(&empty_story_layout_input())
+            .expect("empty Word stories lay out");
+    let attributed = result
+        .layout
+        .pages
+        .iter()
+        .flat_map(|page| &page.elements)
+        .filter_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let actual = attributed
+        .iter()
+        .filter_map(|run| run.source)
+        .filter_map(|source| result.source_node(source.node))
+        .collect::<Vec<_>>();
+    assert_eq!(attributed.len(), 6, "attributed empty stories: {actual:?}");
+    let expected = [
+        WordSourcePath {
+            story: WordStory::Document,
+            children: vec![0],
+        },
+        WordSourcePath {
+            story: WordStory::Document,
+            children: vec![1, 0, 0, 0],
+        },
+        WordSourcePath {
+            story: WordStory::Header {
+                relationship_id: "rIdHeader".to_owned(),
+            },
+            children: vec![0],
+        },
+        WordSourcePath {
+            story: WordStory::Footer {
+                relationship_id: "rIdFooter".to_owned(),
+            },
+            children: vec![0],
+        },
+        WordSourcePath {
+            story: WordStory::Footnote { id: 4 },
+            children: vec![0],
+        },
+        WordSourcePath {
+            story: WordStory::Endnote { id: 9 },
+            children: vec![0],
+        },
+    ];
+    for path in expected {
+        let matching = attributed
+            .iter()
+            .filter(|run| {
+                run.source.is_some_and(|source| {
+                    source.char_start == 0
+                        && source.char_end == 0
+                        && result.source_node(source.node) == Some(&path)
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "missing or duplicate caret for {path:?}");
+        assert_eq!(matching[0].advances.iter().sum::<f64>(), 0.0);
+        assert_eq!(matching[0].advances, Vec::<f64>::new());
+        assert_eq!(matching[0].glyph_ids, Vec::<u16>::new());
+    }
+}
+
+#[test]
+fn empty_paragraph_uses_resolved_default_metrics() {
+    use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+    use rdocx_oxml::units::HalfPoint;
+
+    let mut input = empty_story_layout_input();
+    input.document = CT_Document::from_xml(
+        br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p/><w:p/></w:body></w:document>"#,
+    )
+    .expect("metric document parses");
+    input.styles.styles[0].rpr = Some(CT_RPr {
+        font_ascii: Some("Caladea".to_owned()),
+        font_hansi: Some("Caladea".to_owned()),
+        sz: Some(HalfPoint(28)),
+        ..Default::default()
+    });
+    let BodyContent::Paragraph(direct) = &mut input.document.body.content[0] else {
+        panic!("direct paragraph");
+    };
+    direct.properties = Some(CT_PPr {
+        rpr: Some(CT_RPr {
+            font_ascii: Some("Carlito".to_owned()),
+            font_hansi: Some("Carlito".to_owned()),
+            sz: Some(HalfPoint(36)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let media = rdocx_layout::MediaRegistry::new(&input.images);
+    let mut font_manager =
+        oxml_layout::FontManager::new_deterministic().expect("deterministic metric fonts load");
+    let mut numbering = rdocx_layout::style_resolver::NumberingState::new();
+    let mut diagnostics = Vec::new();
+    for index in 0..2 {
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[index] else {
+            panic!("metric paragraph");
+        };
+        let block = rdocx_layout::engine::layout_paragraph(
+            paragraph,
+            400.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut font_manager,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("metric paragraph lays out");
+        let oxml_layout::LineItem::Text(segment) = &block.lines[0].items[0] else {
+            panic!("empty paragraph carrier");
+        };
+        assert_eq!(segment.width, 0.0);
+        let resolved = font_manager
+            .metrics(segment.font_id, segment.font_size)
+            .expect("carrier metrics resolve");
+        assert_eq!(segment.ascent, resolved.ascent);
+        assert_eq!(segment.descent, resolved.descent);
+    }
+
+    let result = rdocx_layout::layout_document_deterministic_with_provenance(&input)
+        .expect("empty metric paragraphs lay out");
+    let empty_runs = result
+        .layout
+        .pages
+        .iter()
+        .flat_map(|page| &page.elements)
+        .filter_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(empty_runs.len(), 2);
+    let metric = |children: &[usize]| {
+        let run = empty_runs
+            .iter()
+            .find(|run| {
+                run.source.is_some_and(|source| {
+                    matches!(
+                        result.source_node(source.node),
+                        Some(rdocx_layout::WordSourcePath {
+                            story: rdocx_layout::WordStory::Document,
+                            children: actual,
+                        }) if actual == children
+                    )
+                })
+            })
+            .expect("empty paragraph run");
+        let family = result
+            .layout
+            .fonts
+            .iter()
+            .find(|font| font.id == run.font_id)
+            .expect("caret font retained")
+            .family
+            .as_str();
+        (family, run.font_size)
+    };
+    assert_eq!(metric(&[0]), ("Carlito", 18.0));
+    assert_eq!(metric(&[1]), ("Caladea", 14.0));
+}
+
+#[test]
+fn empty_segment_is_backend_invisible_and_layout_compatible() {
+    let mut input = empty_story_layout_input();
+    input.document = CT_Document::from_xml(
+        br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:rPr><w:u w:val="double"/><w:highlight w:val="yellow"/><w:strike/></w:rPr></w:pPr></w:p><w:p><w:r><w:t>visible</w:t></w:r></w:p></w:body></w:document>"#,
+    )
+    .expect("compatibility document parses");
+    let ordinary = rdocx_layout::layout_document_deterministic(&input).expect("ordinary layout");
+    let mut attributed = rdocx_layout::layout_document_deterministic_with_provenance(&input)
+        .expect("attributed layout")
+        .into_layout_result();
+    assert!(attributed.pages.iter().flat_map(|page| &page.elements).any(
+        |element| matches!(element, oxml_layout::PositionedElement::Text(run)
+            if run.text == "visible" && !run.glyph_ids.is_empty())
+    ));
+    for page in &mut attributed.pages {
+        for element in &mut std::sync::Arc::make_mut(page).elements {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                run.source = None;
+            }
+        }
+    }
+    assert_eq!(format!("{ordinary:?}"), format!("{attributed:?}"));
+
+    let mut without_empty = attributed.clone();
+    for page in &mut without_empty.pages {
+        std::sync::Arc::make_mut(page).elements.retain(|element| {
+            !matches!(element, oxml_layout::PositionedElement::Text(run) if run.text.is_empty())
+        });
+    }
+    assert_eq!(
+        oxml_pdf::render_to_pdf(&attributed),
+        oxml_pdf::render_to_pdf(&without_empty)
+    );
+    assert_eq!(
+        oxml_pdf::render_page_to_png(&attributed, 0, 96.0),
+        oxml_pdf::render_page_to_png(&without_empty, 0, 96.0)
+    );
+}

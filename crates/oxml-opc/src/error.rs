@@ -28,6 +28,45 @@ pub enum OpcError {
     #[error("invalid relationship XML")]
     InvalidRelationship,
 
+    #[cfg(feature = "agile-encryption")]
+    #[error("unsupported encryption: {0}")]
+    UnsupportedEncryption(&'static str),
+
+    #[cfg(feature = "agile-encryption")]
+    #[error("unsupported encryption algorithm: {0}")]
+    UnsupportedEncryptionAlgorithm(String),
+
+    #[cfg(feature = "agile-encryption")]
+    #[error("invalid agile encryption information")]
+    InvalidEncryptionInfo,
+
+    #[cfg(feature = "agile-encryption")]
+    #[error("invalid password")]
+    InvalidPassword,
+
+    #[cfg(feature = "agile-encryption")]
+    #[error("encrypted package failed integrity verification")]
+    EncryptedPackageIntegrity,
+
+    #[cfg(feature = "agile-encryption")]
+    #[error("invalid encrypted package stream")]
+    InvalidEncryptedPackage,
+
+    #[cfg(feature = "digital-signatures")]
+    #[error("invalid digital signature XML: {0}")]
+    InvalidSignatureXml(String),
+
+    #[cfg(feature = "digital-signatures")]
+    #[error("unsupported digital signature {kind}: {algorithm}")]
+    UnsupportedSignatureAlgorithm {
+        kind: &'static str,
+        algorithm: String,
+    },
+
+    #[cfg(feature = "digital-signatures")]
+    #[error("invalid signing certificate: {0}")]
+    InvalidSigningCertificate(String),
+
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
 }

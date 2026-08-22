@@ -1,6 +1,8 @@
 //! Layout engine orchestrator: ties all phases together.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Write as _};
+use std::sync::Arc;
 
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
@@ -390,7 +392,7 @@ fn revision_is_visible(revision: &CT_Revision) -> bool {
 /// The layout engine.
 pub struct Engine {
     font_manager: FontManager,
-    paragraph_cache_context: Option<ParagraphCacheContext>,
+    paragraph_cache_context: Option<ReusableEngineContext>,
     paragraph_cache: VecDeque<ParagraphCacheEntry>,
     paragraph_cache_bytes: usize,
     paragraph_cache_hits: usize,
@@ -402,19 +404,89 @@ pub struct Engine {
     #[cfg(test)]
     pending_paragraph_cache_peak_bytes: usize,
     paragraph_cache_reads_enabled: bool,
+    table_cache: VecDeque<TableCacheEntry>,
+    table_cache_bytes: usize,
+    table_cache_hits: usize,
+    table_cache_builds: usize,
+    pending_table_cache: Option<VecDeque<TableCacheEntry>>,
+    pending_table_cache_bytes: usize,
+    #[cfg(test)]
+    pending_table_cache_peak_entries: usize,
+    #[cfg(test)]
+    pending_table_cache_peak_bytes: usize,
+    header_footer_cache: VecDeque<HeaderFooterCacheEntry>,
+    header_footer_cache_bytes: usize,
+    header_footer_cache_hits: usize,
+    header_footer_cache_builds: usize,
+    pending_header_footer_cache: Option<VecDeque<HeaderFooterCacheEntry>>,
+    pending_header_footer_cache_bytes: usize,
+    #[cfg(test)]
+    pending_header_footer_cache_peak_entries: usize,
+    #[cfg(test)]
+    pending_header_footer_cache_peak_bytes: usize,
+    header_footer_cache_reads_enabled: bool,
+    restart_cache: Option<RestartCache>,
+    #[cfg(test)]
+    last_rebuilt_page_range: Option<std::ops::Range<usize>>,
 }
 
 #[derive(Clone, PartialEq)]
-struct ParagraphCacheContext {
+struct ReusableEngineContext {
+    revision_view: RevisionView,
+    has_wrapping_drawing: bool,
     styles: CT_Styles,
+    numbering: Option<rdocx_oxml::numbering::CT_Numbering>,
+    sections: Vec<CT_SectPr>,
+    headers: HashMap<String, rdocx_oxml::header_footer::CT_HdrFtr>,
+    footers: HashMap<String, rdocx_oxml::header_footer::CT_HdrFtr>,
+    images: HashMap<String, crate::input::ImageData>,
+    charts: HashMap<String, std::result::Result<Box<oxml_chart::CT_ChartSpace>, String>>,
+    chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet,
+    chart_color_map: oxml_drawing::color::ColorMap,
+    core_properties: Option<rdocx_oxml::core_properties::CoreProperties>,
+    hyperlink_urls: HashMap<String, String>,
+    footnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
+    endnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
     theme: Option<rdocx_oxml::theme::Theme>,
+    fonts: Vec<oxml_layout::FontFile>,
+    background_xml: Option<Vec<u8>>,
 }
 
-impl ParagraphCacheContext {
+impl ReusableEngineContext {
     fn for_input(input: &LayoutInput) -> Self {
+        let mut sections = input
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        sections.extend(input.document.body.sect_pr.iter().cloned());
         Self {
+            revision_view: input.revision_view,
+            has_wrapping_drawing: document_has_wrapping_drawing(input),
             styles: input.styles.clone(),
+            numbering: input.numbering.clone(),
+            sections,
+            headers: input.headers.clone(),
+            footers: input.footers.clone(),
+            images: input.images.clone(),
+            charts: input.charts.clone(),
+            chart_theme: input.chart_theme.clone(),
+            chart_color_map: input.chart_color_map.clone(),
+            core_properties: input.core_properties.clone(),
+            hyperlink_urls: input.hyperlink_urls.clone(),
+            footnotes: input.footnotes.clone(),
+            endnotes: input.endnotes.clone(),
             theme: input.theme.clone(),
+            fonts: input.fonts.clone(),
+            background_xml: input.document.background_xml.clone(),
         }
     }
 }
@@ -427,6 +499,7 @@ struct ParagraphCacheKey {
 }
 
 struct ParagraphCacheEntry {
+    fingerprint: u64,
     key: ParagraphCacheKey,
     block: ParagraphBlock,
     diagnostics: Vec<Diagnostic>,
@@ -434,8 +507,105 @@ struct ParagraphCacheEntry {
     bytes: usize,
 }
 
-const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 256;
-const PARAGRAPH_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
+#[derive(Clone, PartialEq)]
+struct TableCacheKey {
+    table: CT_Tbl,
+    content_width_bits: u64,
+    revision_view: RevisionView,
+    with_provenance: bool,
+}
+
+struct TableCacheEntry {
+    key: TableCacheKey,
+    block: table::TableBlock,
+    diagnostics: Vec<Diagnostic>,
+    font_trace: Vec<FontId>,
+    bytes: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderFooterStoryKind {
+    Header,
+    Footer,
+}
+
+#[derive(Clone, PartialEq)]
+struct HeaderFooterCacheKey {
+    story: HeaderFooterStoryKind,
+    variant: HdrFtrType,
+    section: CT_SectPr,
+    relationship_id: String,
+    part: rdocx_oxml::header_footer::CT_HdrFtr,
+    resolved_part_bytes: Vec<u8>,
+    with_provenance: bool,
+}
+
+#[derive(Clone)]
+struct HeaderFooterVariantContent {
+    blocks: Vec<ParagraphBlock>,
+    watermark: Option<GroupElement>,
+}
+
+struct HeaderFooterCacheEntry {
+    key: HeaderFooterCacheKey,
+    content: HeaderFooterVariantContent,
+    diagnostics: Vec<Diagnostic>,
+    font_trace: Vec<FontId>,
+    bytes: usize,
+}
+
+struct RestartCache {
+    body: Vec<String>,
+    with_provenance: bool,
+    raw_pages: Vec<Arc<PageFrame>>,
+    pages: Vec<Arc<PageFrame>>,
+    substitution_inputs: Vec<Option<FieldSubstitutionInputs>>,
+    outlines: Vec<oxml_layout::OutlineEntry>,
+    checkpoints: Vec<paginator::PaginationCheckpoint>,
+    font_trace: Vec<FontId>,
+    bytes: usize,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct FieldSubstitutionInputs {
+    page_index: usize,
+    page_number: usize,
+    total_pages: usize,
+    bookmark_pages: Vec<(usize, usize)>,
+    font_identity: Vec<FontId>,
+    revision_view: RevisionView,
+}
+
+const CACHE_MAX_ENTRIES: usize = 4_224;
+const CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 4_096;
+const PARAGRAPH_CACHE_MAX_BYTES: usize = 56 * 1024 * 1024;
+const TABLE_CACHE_MAX_ENTRIES: usize = 32;
+const TABLE_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const HEADER_FOOTER_CACHE_MAX_ENTRIES: usize = 64;
+const HEADER_FOOTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const RESTART_CACHE_MAX_ENTRIES: usize = 32;
+const RESTART_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const _: () = assert!(PARAGRAPH_CACHE_MAX_ENTRIES == 4_096);
+const _: () = assert!(PARAGRAPH_CACHE_MAX_BYTES == 56 * 1024 * 1024);
+const _: () = assert!(HEADER_FOOTER_CACHE_MAX_ENTRIES == 64);
+const _: () = assert!(HEADER_FOOTER_CACHE_MAX_BYTES == 4 * 1024 * 1024);
+const _: () = assert!(CACHE_MAX_ENTRIES == 4_224);
+const _: () = assert!(CACHE_MAX_BYTES == 64 * 1024 * 1024);
+const _: () = assert!(
+    PARAGRAPH_CACHE_MAX_ENTRIES
+        + TABLE_CACHE_MAX_ENTRIES
+        + HEADER_FOOTER_CACHE_MAX_ENTRIES
+        + RESTART_CACHE_MAX_ENTRIES
+        <= CACHE_MAX_ENTRIES
+);
+const _: () = assert!(
+    PARAGRAPH_CACHE_MAX_BYTES
+        + TABLE_CACHE_MAX_BYTES
+        + HEADER_FOOTER_CACHE_MAX_BYTES
+        + RESTART_CACHE_MAX_BYTES
+        <= CACHE_MAX_BYTES
+);
 const CACHE_SOURCE_NODE: SourceNodeId = match SourceNodeId::new(1) {
     Some(node) => node,
     None => panic!("one is a valid source node id"),
@@ -463,6 +633,30 @@ impl Engine {
             #[cfg(test)]
             pending_paragraph_cache_peak_bytes: 0,
             paragraph_cache_reads_enabled: false,
+            table_cache: VecDeque::new(),
+            table_cache_bytes: 0,
+            table_cache_hits: 0,
+            table_cache_builds: 0,
+            pending_table_cache: None,
+            pending_table_cache_bytes: 0,
+            #[cfg(test)]
+            pending_table_cache_peak_entries: 0,
+            #[cfg(test)]
+            pending_table_cache_peak_bytes: 0,
+            header_footer_cache: VecDeque::new(),
+            header_footer_cache_bytes: 0,
+            header_footer_cache_hits: 0,
+            header_footer_cache_builds: 0,
+            pending_header_footer_cache: None,
+            pending_header_footer_cache_bytes: 0,
+            #[cfg(test)]
+            pending_header_footer_cache_peak_entries: 0,
+            #[cfg(test)]
+            pending_header_footer_cache_peak_bytes: 0,
+            header_footer_cache_reads_enabled: false,
+            restart_cache: None,
+            #[cfg(test)]
+            last_rebuilt_page_range: None,
         }
     }
 
@@ -479,6 +673,19 @@ impl Engine {
     /// layout input, without bundled or system-font discovery.
     pub(crate) fn new_with_caller_fonts() -> Self {
         Self::with_font_manager(FontManager::new_with_fonts(Vec::new()))
+    }
+
+    /// Take a reusable engine only when its complete retained-work context
+    /// matches the proposed receiver input.
+    #[doc(hidden)]
+    pub fn take_if_compatible(source: &mut Option<Self>, input: &LayoutInput) -> Option<Self> {
+        let compatible = source.as_ref().is_some_and(|engine| {
+            engine.paragraph_cache_context.as_ref()
+                == Some(&ReusableEngineContext::for_input(input))
+                && engine.pending_paragraph_cache.is_none()
+                && engine.pending_header_footer_cache.is_none()
+        });
+        compatible.then(|| source.take()).flatten()
     }
 
     /// Lay out the entire document.
@@ -506,34 +713,62 @@ impl Engine {
         let fonts_changed = self.font_manager.load_additional_fonts(&input.fonts);
         self.font_manager.begin_layout();
 
-        let paragraph_context = ParagraphCacheContext::for_input(input);
+        let paragraph_context = ReusableEngineContext::for_input(input);
         if fonts_changed {
             self.paragraph_cache.clear();
             self.paragraph_cache_bytes = 0;
+            self.table_cache.clear();
+            self.table_cache_bytes = 0;
+            self.header_footer_cache.clear();
+            self.header_footer_cache_bytes = 0;
         }
         let context_matches =
             !fonts_changed && self.paragraph_cache_context.as_ref() == Some(&paragraph_context);
         self.paragraph_cache_reads_enabled = context_matches;
+        self.header_footer_cache_reads_enabled = context_matches;
         self.pending_paragraph_cache = Some(VecDeque::new());
         self.pending_paragraph_cache_bytes = 0;
+        self.pending_table_cache = Some(VecDeque::new());
+        self.pending_table_cache_bytes = 0;
+        self.pending_header_footer_cache = Some(VecDeque::new());
+        self.pending_header_footer_cache_bytes = 0;
         #[cfg(test)]
         {
             self.pending_paragraph_cache_peak_entries = 0;
             self.pending_paragraph_cache_peak_bytes = 0;
+            self.pending_table_cache_peak_entries = 0;
+            self.pending_table_cache_peak_bytes = 0;
+            self.pending_header_footer_cache_peak_entries = 0;
+            self.pending_header_footer_cache_peak_bytes = 0;
         }
 
         let result = self.layout_transaction(input, sources);
         let pending = self.pending_paragraph_cache.take().unwrap_or_default();
+        let pending_tables = self.pending_table_cache.take().unwrap_or_default();
+        let pending_header_footers = self.pending_header_footer_cache.take().unwrap_or_default();
         self.pending_paragraph_cache_bytes = 0;
+        self.pending_table_cache_bytes = 0;
+        self.pending_header_footer_cache_bytes = 0;
         self.paragraph_cache_reads_enabled = false;
+        self.header_footer_cache_reads_enabled = false;
         if result.is_ok() {
             if !context_matches {
                 self.paragraph_cache.clear();
                 self.paragraph_cache_bytes = 0;
+                self.table_cache.clear();
+                self.table_cache_bytes = 0;
+                self.header_footer_cache.clear();
+                self.header_footer_cache_bytes = 0;
                 self.paragraph_cache_context = Some(paragraph_context);
             }
             for entry in pending {
                 self.publish_paragraph_cache_entry(entry);
+            }
+            for entry in pending_tables {
+                self.publish_table_cache_entry(entry);
+            }
+            for entry in pending_header_footers {
+                self.publish_header_footer_cache_entry(entry);
             }
         }
         let current_fonts = self
@@ -549,6 +784,24 @@ impl Engine {
                 .all(|font_id| current_fonts.contains(font_id))
         });
         self.paragraph_cache_bytes = self.paragraph_cache.iter().map(|entry| entry.bytes).sum();
+        self.table_cache.retain(|entry| {
+            entry
+                .font_trace
+                .iter()
+                .all(|font_id| current_fonts.contains(font_id))
+        });
+        self.table_cache_bytes = self.table_cache.iter().map(|entry| entry.bytes).sum();
+        self.header_footer_cache.retain(|entry| {
+            entry
+                .font_trace
+                .iter()
+                .all(|font_id| current_fonts.contains(font_id))
+        });
+        self.header_footer_cache_bytes = self
+            .header_footer_cache
+            .iter()
+            .map(|entry| entry.bytes)
+            .sum();
         self.font_manager.retain_current_fonts();
         result
     }
@@ -558,6 +811,7 @@ impl Engine {
         input: &LayoutInput,
         sources: Option<&SourceRegistry>,
     ) -> Result<LayoutResult> {
+        let retained_context_matches = self.paragraph_cache_reads_enabled;
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
         let media = MediaRegistry::new(&input.images);
@@ -624,11 +878,11 @@ impl Engine {
                     if let Some(sect_pr) = para_sect_pr {
                         let geometry = sect_pr_to_geometry(&sect_pr);
                         let header_footer = layout_header_footer(
+                            self,
                             &sect_pr,
                             input,
                             styles,
                             &media,
-                            &mut self.font_manager,
                             &mut num_state,
                             &mut diagnostics,
                             sources,
@@ -648,13 +902,12 @@ impl Engine {
                     let sect_pr_for_layout = current_sect_pr.as_ref().unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
-                    let table_block = table::layout_table_with_provenance(
+                    let table_block = self.layout_body_table(
                         tbl,
                         geometry.content_width(),
                         styles,
                         input,
                         &media,
-                        &mut self.font_manager,
                         &mut num_state,
                         &mut diagnostics,
                         sources,
@@ -670,11 +923,11 @@ impl Engine {
         // Remaining blocks belong to the final section
         let final_geometry = sect_pr_to_geometry(&final_sect_pr);
         let final_hf = layout_header_footer(
+            self,
             &final_sect_pr,
             input,
             styles,
             &media,
-            &mut self.font_manager,
             &mut num_state,
             &mut diagnostics,
             sources,
@@ -709,13 +962,177 @@ impl Engine {
             sources,
         )?;
 
-        // Paginate across all sections
-        let (mut pages, outlines) =
-            paginator::paginate_sections(&sections, &self.font_manager, &media, &notes);
+        let mut body = input
+            .document
+            .body
+            .content
+            .iter()
+            .map(|content| format!("{content:?}"))
+            .collect::<Vec<_>>();
+        let mut font_trace = self.font_manager.current_layout_fonts().to_vec();
+        let restart_record_eligible = sections.len() == 1
+            && input.document.background_xml.is_none()
+            && input.footnotes.is_none()
+            && input.endnotes.is_none()
+            && !document_wraps
+            && sections[0].header_footer.is_none()
+            && input.document.body.content.iter().all(|content| {
+                matches!(content, BodyContent::Paragraph(_) | BodyContent::Table(_))
+            })
+            && sections[0].blocks.iter().all(restart_record_block_is_safe);
+        let restart_eligible =
+            restart_record_eligible && sections[0].blocks.iter().all(restart_block_is_safe);
+        let reusable_restart_record = restart_record_eligible
+            && retained_context_matches
+            && self.restart_cache.as_ref().is_some_and(|cache| {
+                cache.font_trace == font_trace
+                    && cache.with_provenance == sources.is_some()
+                    && (sources.is_none() || cache.body.len() == body.len())
+            });
+        let reusable_restart = restart_eligible && reusable_restart_record;
+        let first_changed = reusable_restart.then(|| {
+            let cache = self.restart_cache.as_ref().expect("restart cache exists");
+            body.iter()
+                .zip(&cache.body)
+                .position(|(current, previous)| current != previous)
+                .unwrap_or_else(|| body.len().min(cache.body.len()))
+        });
+        let restart_checkpoint = first_changed.and_then(|first_changed| {
+            self.restart_cache
+                .as_ref()
+                .expect("restart cache exists")
+                .checkpoints
+                .iter()
+                .rev()
+                .find(|checkpoint| checkpoint.next_block_index <= first_changed)
+                .copied()
+        });
+        let tail_source = restart_checkpoint.and_then(|restart| {
+            let cache = self.restart_cache.as_ref().expect("restart cache exists");
+            let common_suffix = body
+                .iter()
+                .rev()
+                .zip(cache.body.iter().rev())
+                .take_while(|(current, previous)| current == previous)
+                .count();
+            let new_tail = body.len() - common_suffix;
+            let old_tail = cache.body.len() - common_suffix;
+            cache
+                .checkpoints
+                .iter()
+                .find(|checkpoint| {
+                    checkpoint.next_block_index == old_tail && new_tail > restart.next_block_index
+                })
+                .copied()
+                .map(|old| {
+                    (
+                        paginator::PaginationCheckpoint {
+                            next_block_index: new_tail,
+                            page_count: old.page_count,
+                            next_header_page_number: old.next_header_page_number,
+                        },
+                        old,
+                    )
+                })
+        });
+
+        let (mut pages, mut outlines, mut checkpoints) = if restart_eligible {
+            let recorded = paginator::paginate_single_section_recorded(
+                &sections[0],
+                &self.font_manager,
+                &media,
+                &notes,
+                restart_checkpoint,
+                tail_source.map(|(stop, _)| stop),
+            );
+            let mut pages = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                self.restart_cache
+                    .as_ref()
+                    .expect("a restart checkpoint belongs to retained pages")
+                    .raw_pages[..checkpoint.page_count]
+                    .iter()
+                    .map(|page| PageFrame::clone(page))
+                    .collect()
+            });
+            pages.extend(recorded.pages);
+            let mut outlines = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                self.restart_cache
+                    .as_ref()
+                    .expect("a restart checkpoint belongs to retained outlines")
+                    .outlines
+                    .iter()
+                    .filter(|outline| outline.page_index < checkpoint.page_count)
+                    .cloned()
+                    .collect()
+            });
+            outlines.extend(recorded.outlines);
+            let mut checkpoints = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                self.restart_cache
+                    .as_ref()
+                    .expect("a restart checkpoint belongs to retained state")
+                    .checkpoints
+                    .iter()
+                    .copied()
+                    .filter(|candidate| candidate.page_count <= checkpoint.page_count)
+                    .collect()
+            });
+            checkpoints.extend(recorded.checkpoints);
+            if let (Some(stopped), Some((_, old_tail))) = (recorded.stopped_at, tail_source) {
+                debug_assert_eq!(stopped.page_count, old_tail.page_count);
+                let cache = self.restart_cache.as_ref().expect("restart cache exists");
+                pages.extend(
+                    cache.raw_pages[old_tail.page_count..]
+                        .iter()
+                        .map(|page| PageFrame::clone(page)),
+                );
+                outlines.extend(
+                    cache
+                        .outlines
+                        .iter()
+                        .filter(|outline| outline.page_index >= old_tail.page_count)
+                        .cloned(),
+                );
+                let block_delta =
+                    stopped.next_block_index as isize - old_tail.next_block_index as isize;
+                checkpoints.extend(
+                    cache
+                        .checkpoints
+                        .iter()
+                        .filter(|candidate| candidate.page_count > old_tail.page_count)
+                        .map(|candidate| paginator::PaginationCheckpoint {
+                            next_block_index: candidate
+                                .next_block_index
+                                .checked_add_signed(block_delta)
+                                .expect("common suffix block index remains in range"),
+                            page_count: candidate.page_count,
+                            next_header_page_number: candidate.next_header_page_number,
+                        }),
+                );
+            }
+            checkpoints.sort_unstable_by_key(|checkpoint| checkpoint.next_block_index);
+            checkpoints.dedup();
+            (pages, outlines, checkpoints)
+        } else {
+            let (pages, outlines) =
+                paginator::paginate_sections(&sections, &self.font_manager, &media, &notes);
+            (pages, outlines, Vec::new())
+        };
 
         // Endnotes read at the end of the document, so they follow the last
         // body page rather than sitting at the foot of their reference's page.
         paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
+
+        apply_page_background(&mut pages, input);
+
+        let mut pages = pages.into_iter().map(Arc::new).collect::<Vec<_>>();
+        if reusable_restart_record && let Some(cache) = self.restart_cache.as_ref() {
+            for (page, retained) in pages.iter_mut().zip(&cache.raw_pages) {
+                if page_frames_equal(page, retained) {
+                    *page = Arc::clone(retained);
+                }
+            }
+        }
+        let mut raw_pages = restart_record_eligible.then(|| pages.clone());
 
         // Post-pagination pass: record bookmark targets and substitute fields.
         let total_pages = pages.len();
@@ -733,7 +1150,50 @@ impl Engine {
                 })
             })
             .collect::<HashMap<_, _>>();
-        for page in &mut pages {
+        let mut bookmark_identity = bookmark_pages
+            .iter()
+            .map(|(&target, &page_number)| (target, page_number))
+            .collect::<Vec<_>>();
+        bookmark_identity.sort_unstable();
+        let mut substitution_inputs = Vec::with_capacity(pages.len());
+        let mut reuse_result_pages = vec![false; pages.len()];
+        for (page_index, page) in pages.iter_mut().enumerate() {
+            if !page_has_substitution_state(page) {
+                reuse_result_pages[page_index] = self.restart_cache.as_ref().is_some_and(|cache| {
+                    cache.substitution_inputs.get(page_index) == Some(&None)
+                        && cache
+                            .raw_pages
+                            .get(page_index)
+                            .is_some_and(|retained| Arc::ptr_eq(page, retained))
+                });
+                substitution_inputs.push(None);
+                continue;
+            }
+            let inputs = FieldSubstitutionInputs {
+                page_index,
+                page_number: page.page_number,
+                total_pages,
+                bookmark_pages: bookmark_identity.clone(),
+                font_identity: font_trace.clone(),
+                revision_view: input.revision_view,
+            };
+            let reusable = self.restart_cache.as_ref().is_some_and(|cache| {
+                cache
+                    .substitution_inputs
+                    .get(page_index)
+                    .and_then(Option::as_ref)
+                    == Some(&inputs)
+                    && cache
+                        .raw_pages
+                        .get(page_index)
+                        .is_some_and(|retained| Arc::ptr_eq(page, retained))
+            });
+            if reusable {
+                reuse_result_pages[page_index] = true;
+                substitution_inputs.push(Some(inputs));
+                continue;
+            }
+            let page = Arc::make_mut(page);
             let page_num = page.page_number;
             substitute_fields(
                 &mut page.elements,
@@ -742,10 +1202,70 @@ impl Engine {
                 &bookmark_pages,
                 &mut self.font_manager,
             );
+            substitution_inputs.push(Some(inputs));
         }
 
-        // Post-pagination pass: apply page background color
-        apply_page_background(&mut pages, input);
+        #[cfg(test)]
+        {
+            self.last_rebuilt_page_range = Some(0..pages.len());
+        }
+        if restart_checkpoint.is_some()
+            && let Some(cache) = self.restart_cache.as_ref()
+            && cache.font_trace == font_trace
+        {
+            let mut rebuilt_start = pages.len();
+            let mut rebuilt_end = 0;
+            for (page_index, (page, retained)) in pages.iter().zip(&cache.raw_pages).enumerate() {
+                if page_frames_equal(page, retained) {
+                    reuse_result_pages[page_index] = true;
+                } else {
+                    rebuilt_start = rebuilt_start.min(page_index);
+                    rebuilt_end = page_index + 1;
+                }
+            }
+            if pages.len() != cache.pages.len() {
+                rebuilt_start = rebuilt_start.min(pages.len().min(cache.pages.len()));
+                rebuilt_end = pages.len();
+            }
+            let rebuilt_range = if rebuilt_start < rebuilt_end {
+                rebuilt_start..rebuilt_end
+            } else {
+                0..0
+            };
+            #[cfg(test)]
+            {
+                self.last_rebuilt_page_range = Some(rebuilt_range);
+            }
+            #[cfg(not(test))]
+            {
+                let _ = rebuilt_range;
+            }
+        }
+        // Metrics-only empty carriers must still resolve through the result,
+        // but they do not get to move a glyph-bearing font earlier in the
+        // deterministic result order.
+        let mut carrier_fonts = Vec::new();
+        fn collect_carrier_fonts(elements: &[PositionedElement], fonts: &mut Vec<FontId>) {
+            for element in elements {
+                match element {
+                    PositionedElement::Text(run)
+                        if run.text.is_empty() && run.glyph_ids.is_empty() =>
+                    {
+                        if !fonts.contains(&run.font_id) {
+                            fonts.push(run.font_id);
+                        }
+                    }
+                    PositionedElement::Group(group) => {
+                        collect_carrier_fonts(&group.children, fonts)
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for page in &pages {
+            collect_carrier_fonts(&page.elements, &mut carrier_fonts);
+        }
+        self.font_manager.replay_layout_font_trace(&carrier_fonts);
 
         // Remap persistent manager ids to result-local ids and omit faces that
         // are no longer present in the current layout.
@@ -755,6 +1275,14 @@ impl Engine {
             let current_fonts = self.font_manager.current_layout_fonts().to_vec();
             canonicalize_layout_fonts(&mut pages, &self.font_manager, &current_fonts)?
         };
+        if let Some(cache) = self.restart_cache.as_ref() {
+            for (page_index, reuse) in reuse_result_pages.into_iter().enumerate() {
+                if reuse && let Some(retained) = cache.pages.get(page_index) {
+                    pages[page_index] = Arc::clone(retained);
+                }
+            }
+        }
+        let mut retained_pages = restart_record_eligible.then(|| pages.clone());
 
         // Convert core properties to document metadata
         let metadata = input.core_properties.as_ref().map(|cp| DocumentMetadata {
@@ -765,6 +1293,44 @@ impl Engine {
             creator: Some("rdocx".to_string()),
         });
 
+        if restart_record_eligible
+            && pages.len().max(checkpoints.len()) <= RESTART_CACHE_MAX_ENTRIES
+            && let Some(raw_pages) = raw_pages.as_mut()
+            && let Some(retained_pages) = retained_pages.as_mut()
+        {
+            body.shrink_to_fit();
+            raw_pages.shrink_to_fit();
+            retained_pages.shrink_to_fit();
+            substitution_inputs.shrink_to_fit();
+            outlines.shrink_to_fit();
+            checkpoints.shrink_to_fit();
+            font_trace.shrink_to_fit();
+            let mut candidate = RestartCache {
+                body,
+                with_provenance: sources.is_some(),
+                raw_pages: std::mem::take(raw_pages),
+                pages: std::mem::take(retained_pages),
+                substitution_inputs,
+                outlines: outlines.clone(),
+                checkpoints,
+                font_trace,
+                bytes: 0,
+            };
+            candidate.outlines.shrink_to_fit();
+            for inputs in candidate.substitution_inputs.iter_mut().flatten() {
+                inputs.bookmark_pages.shrink_to_fit();
+                inputs.font_identity.shrink_to_fit();
+            }
+            let bytes = restart_cache_bytes(&candidate);
+            if bytes <= RESTART_CACHE_MAX_BYTES {
+                candidate.bytes = bytes;
+                self.restart_cache = Some(candidate);
+            } else {
+                self.restart_cache = None;
+            }
+        } else {
+            self.restart_cache = None;
+        }
         let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
         result.diagnostics = diagnostics;
         Ok(result)
@@ -783,6 +1349,10 @@ impl Engine {
         source_node: Option<SourceNodeId>,
     ) -> Result<ParagraphBlock> {
         if !paragraph_is_cache_safe(paragraph, styles) {
+            // Traversal-sensitive content can change generated state consumed
+            // by later blocks. The conservative boundary is the first such
+            // block, after which no retained block is read in this layout.
+            self.paragraph_cache_reads_enabled = false;
             return layout_paragraph_with_source(
                 paragraph,
                 content_width,
@@ -796,27 +1366,20 @@ impl Engine {
             );
         }
 
-        let key = ParagraphCacheKey {
-            paragraph: paragraph.clone(),
-            content_width_bits: content_width.to_bits(),
-            revision_view: input.revision_view,
-        };
+        let fingerprint = paragraph_fingerprint(paragraph);
         if self.paragraph_cache_reads_enabled
-            && let Some(index) = self
-                .paragraph_cache
-                .iter()
-                .position(|entry| entry.key == key)
+            && let Some(entry) = self.paragraph_cache.iter().find(|entry| {
+                entry.fingerprint == fingerprint
+                    && entry.key.paragraph == *paragraph
+                    && entry.key.content_width_bits == content_width.to_bits()
+                    && entry.key.revision_view == input.revision_view
+            })
         {
-            let entry = self
-                .paragraph_cache
-                .remove(index)
-                .expect("paragraph cache index exists");
             let mut block = entry.block.clone();
             rebind_paragraph_source(&mut block, source_node);
             diagnostics.extend(entry.diagnostics.iter().cloned());
             self.font_manager
                 .replay_layout_font_trace(&entry.font_trace);
-            self.paragraph_cache.push_back(entry);
             self.paragraph_cache_hits += 1;
             return Ok(block);
         }
@@ -841,13 +1404,18 @@ impl Engine {
         let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
         if let Some(font_trace) = font_trace {
             let bytes = paragraph_cache_entry_bytes(
-                &key.paragraph,
+                paragraph,
                 &block,
                 &cached_diagnostics,
                 font_trace.len(),
             );
             self.stage_paragraph_cache_entry(ParagraphCacheEntry {
-                key,
+                fingerprint,
+                key: ParagraphCacheKey {
+                    paragraph: paragraph.clone(),
+                    content_width_bits: content_width.to_bits(),
+                    revision_view: input.revision_view,
+                },
                 block: block.clone(),
                 diagnostics: cached_diagnostics,
                 font_trace,
@@ -859,9 +1427,102 @@ impl Engine {
         Ok(block)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn layout_body_table(
+        &mut self,
+        table: &CT_Tbl,
+        content_width: f64,
+        styles: &CT_Styles,
+        input: &LayoutInput,
+        media: &MediaRegistry,
+        numbering: &mut NumberingState,
+        diagnostics: &mut Vec<Diagnostic>,
+        sources: Option<&SourceRegistry>,
+        story: &WordStory,
+        path: &[usize],
+    ) -> Result<table::TableBlock> {
+        if !table_is_cache_safe(table, styles) {
+            self.paragraph_cache_reads_enabled = false;
+            return table::layout_table_with_provenance(
+                table,
+                content_width,
+                styles,
+                input,
+                media,
+                &mut self.font_manager,
+                numbering,
+                diagnostics,
+                sources,
+                story,
+                path,
+            );
+        }
+
+        let key = TableCacheKey {
+            table: table.clone(),
+            content_width_bits: content_width.to_bits(),
+            revision_view: input.revision_view,
+            with_provenance: sources.is_some(),
+        };
+        if self.paragraph_cache_reads_enabled
+            && let Some(index) = self.table_cache.iter().position(|entry| entry.key == key)
+        {
+            let entry = self
+                .table_cache
+                .remove(index)
+                .expect("table cache index exists");
+            let mut block = entry.block.clone();
+            rebind_table_sources(table, &mut block, sources, story, path);
+            diagnostics.extend(entry.diagnostics.iter().cloned());
+            self.font_manager
+                .replay_layout_font_trace(&entry.font_trace);
+            self.table_cache.push_back(entry);
+            self.table_cache_hits += 1;
+            return Ok(block);
+        }
+
+        let diagnostics_start = diagnostics.len();
+        self.font_manager.begin_paragraph_font_trace();
+        let block_result = table::layout_table_with_provenance(
+            table,
+            content_width,
+            styles,
+            input,
+            media,
+            &mut self.font_manager,
+            numbering,
+            diagnostics,
+            sources,
+            story,
+            path,
+        );
+        let font_trace = self.font_manager.finish_paragraph_font_trace();
+        let block = block_result?;
+        self.table_cache_builds += 1;
+
+        let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
+        if let Some(font_trace) = font_trace {
+            let bytes =
+                table_cache_entry_bytes(&key, &block, &cached_diagnostics, font_trace.len());
+            self.stage_table_cache_entry(TableCacheEntry {
+                key,
+                block: block.clone(),
+                diagnostics: cached_diagnostics,
+                font_trace,
+                bytes,
+            });
+        }
+        Ok(block)
+    }
+
     #[cfg(test)]
     fn paragraph_cache_counts(&self) -> (usize, usize) {
         (self.paragraph_cache_hits, self.paragraph_cache_builds)
+    }
+
+    #[cfg(test)]
+    fn table_cache_counts(&self) -> (usize, usize) {
+        (self.table_cache_hits, self.table_cache_builds)
     }
 
     fn publish_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
@@ -909,6 +1570,134 @@ impl Engine {
             self.pending_paragraph_cache_peak_bytes = self
                 .pending_paragraph_cache_peak_bytes
                 .max(self.pending_paragraph_cache_bytes);
+        }
+    }
+
+    fn publish_table_cache_entry(&mut self, entry: TableCacheEntry) {
+        if entry.bytes > TABLE_CACHE_MAX_BYTES {
+            return;
+        }
+        while self.table_cache.len() >= TABLE_CACHE_MAX_ENTRIES
+            || self.table_cache_bytes.saturating_add(entry.bytes) > TABLE_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = self.table_cache.pop_front() else {
+                break;
+            };
+            self.table_cache_bytes = self.table_cache_bytes.saturating_sub(evicted.bytes);
+        }
+        self.table_cache_bytes += entry.bytes;
+        self.table_cache.push_back(entry);
+        let restart_entries = self.restart_cache.as_ref().map_or(0, restart_cache_entries);
+        let restart_bytes = self.restart_cache.as_ref().map_or(0, |cache| cache.bytes);
+        debug_assert!(
+            self.paragraph_cache.len() + self.table_cache.len() + restart_entries
+                <= CACHE_MAX_ENTRIES
+        );
+        debug_assert!(
+            self.paragraph_cache_bytes + self.table_cache_bytes + restart_bytes <= CACHE_MAX_BYTES
+        );
+    }
+
+    fn stage_table_cache_entry(&mut self, entry: TableCacheEntry) {
+        if entry.bytes > TABLE_CACHE_MAX_BYTES {
+            return;
+        }
+        let Some(pending) = self.pending_table_cache.as_mut() else {
+            return;
+        };
+        while pending.len() >= TABLE_CACHE_MAX_ENTRIES
+            || self.pending_table_cache_bytes.saturating_add(entry.bytes) > TABLE_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = pending.pop_front() else {
+                break;
+            };
+            self.pending_table_cache_bytes =
+                self.pending_table_cache_bytes.saturating_sub(evicted.bytes);
+        }
+        self.pending_table_cache_bytes += entry.bytes;
+        pending.push_back(entry);
+        #[cfg(test)]
+        {
+            self.pending_table_cache_peak_entries =
+                self.pending_table_cache_peak_entries.max(pending.len());
+            self.pending_table_cache_peak_bytes = self
+                .pending_table_cache_peak_bytes
+                .max(self.pending_table_cache_bytes);
+        }
+    }
+
+    #[cfg(test)]
+    fn header_footer_cache_counts(&self) -> (usize, usize) {
+        (
+            self.header_footer_cache_hits,
+            self.header_footer_cache_builds,
+        )
+    }
+
+    fn publish_header_footer_cache_entry(&mut self, entry: HeaderFooterCacheEntry) {
+        if entry.bytes > HEADER_FOOTER_CACHE_MAX_BYTES {
+            return;
+        }
+        while self.header_footer_cache.len() >= HEADER_FOOTER_CACHE_MAX_ENTRIES
+            || self.header_footer_cache_bytes.saturating_add(entry.bytes)
+                > HEADER_FOOTER_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = self.header_footer_cache.pop_front() else {
+                break;
+            };
+            self.header_footer_cache_bytes =
+                self.header_footer_cache_bytes.saturating_sub(evicted.bytes);
+        }
+        self.header_footer_cache_bytes += entry.bytes;
+        self.header_footer_cache.push_back(entry);
+        let restart_entries = self.restart_cache.as_ref().map_or(0, restart_cache_entries);
+        let restart_bytes = self.restart_cache.as_ref().map_or(0, |cache| cache.bytes);
+        debug_assert!(
+            self.paragraph_cache.len()
+                + self.table_cache.len()
+                + self.header_footer_cache.len()
+                + restart_entries
+                <= CACHE_MAX_ENTRIES
+        );
+        debug_assert!(
+            self.paragraph_cache_bytes
+                + self.table_cache_bytes
+                + self.header_footer_cache_bytes
+                + restart_bytes
+                <= CACHE_MAX_BYTES
+        );
+    }
+
+    fn stage_header_footer_cache_entry(&mut self, entry: HeaderFooterCacheEntry) {
+        if entry.bytes > HEADER_FOOTER_CACHE_MAX_BYTES {
+            return;
+        }
+        let Some(pending) = self.pending_header_footer_cache.as_mut() else {
+            return;
+        };
+        while pending.len() >= HEADER_FOOTER_CACHE_MAX_ENTRIES
+            || self
+                .pending_header_footer_cache_bytes
+                .saturating_add(entry.bytes)
+                > HEADER_FOOTER_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = pending.pop_front() else {
+                break;
+            };
+            self.pending_header_footer_cache_bytes = self
+                .pending_header_footer_cache_bytes
+                .saturating_sub(evicted.bytes);
+        }
+        self.pending_header_footer_cache_bytes += entry.bytes;
+        pending.push_back(entry);
+        #[cfg(test)]
+        {
+            self.pending_header_footer_cache_peak_entries = self
+                .pending_header_footer_cache_peak_entries
+                .max(pending.len());
+            self.pending_header_footer_cache_peak_bytes = self
+                .pending_header_footer_cache_peak_bytes
+                .max(self.pending_header_footer_cache_bytes);
         }
     }
 }
@@ -967,8 +1756,348 @@ fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
     })
 }
 
+fn header_footer_part_is_cache_safe(
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    styles: &CT_Styles,
+) -> bool {
+    if !part.extra_xml.is_empty() {
+        return false;
+    }
+    let raw_watermark_count = part
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| &paragraph.runs)
+        .flat_map(|run| &run.extra_xml)
+        .filter(|raw| raw_xml_root_is_word_pict(raw, &part.extra_namespaces))
+        .count();
+    if raw_watermark_count != part.watermarks().len() {
+        return false;
+    }
+    part.paragraphs.iter().all(|paragraph| {
+        if !paragraph.extra_xml.is_empty() {
+            return false;
+        }
+        let mut projected = paragraph.clone();
+        for run in &mut projected.runs {
+            if run.extra_xml.len() != run.extra_xml_positions.len()
+                || !run
+                    .extra_xml
+                    .iter()
+                    .all(|raw| raw_xml_root_is_word_pict(raw, &part.extra_namespaces))
+            {
+                return false;
+            }
+            run.extra_xml.clear();
+            run.extra_xml_positions.clear();
+        }
+        paragraph_is_cache_safe(&projected, styles)
+    })
+}
+
+fn raw_xml_root_is_word_pict(raw: &[u8], namespaces: &[(String, String)]) -> bool {
+    let raw = raw
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .map_or(raw, |start| &raw[start..]);
+    let Some((name, attributes)) = raw.strip_prefix(b"<").and_then(|raw| {
+        let name_end = raw
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'>' | b'/'))?;
+        Some((&raw[..name_end], &raw[name_end..]))
+    }) else {
+        return false;
+    };
+    let mut components = name.rsplitn(2, |byte| *byte == b':');
+    if components.next() != Some(b"pict".as_slice()) {
+        return false;
+    }
+    let prefix = components.next();
+    let declaration = prefix.map_or_else(
+        || "xmlns".to_owned(),
+        |prefix| format!("xmlns:{}", String::from_utf8_lossy(prefix)),
+    );
+    if let Some(namespace) = raw_xml_start_attribute(attributes, declaration.as_bytes()) {
+        return namespace == rdocx_oxml::namespace::W_NS.as_bytes();
+    }
+    let Some(prefix) = prefix.and_then(|prefix| std::str::from_utf8(prefix).ok()) else {
+        return false;
+    };
+    if prefix == "w" {
+        return !namespaces.iter().any(|(name, namespace)| {
+            name != "xmlns:w" && namespace == rdocx_oxml::namespace::W_NS
+        });
+    }
+    namespaces.iter().any(|(name, namespace)| {
+        name.strip_prefix("xmlns:") == Some(prefix) && namespace == rdocx_oxml::namespace::W_NS
+    })
+}
+
+fn raw_xml_start_attribute<'a>(mut input: &'a [u8], expected: &[u8]) -> Option<&'a [u8]> {
+    loop {
+        input = input
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .map_or(input, |start| &input[start..]);
+        if input.first().is_none_or(|byte| matches!(byte, b'>' | b'/')) {
+            return None;
+        }
+        let name_end = input
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'=' | b'>' | b'/'))?;
+        let name = &input[..name_end];
+        input = &input[name_end..];
+        input = input
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .map_or(input, |start| &input[start..]);
+        if input.first() != Some(&b'=') {
+            return None;
+        }
+        input = &input[1..];
+        input = input
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .map_or(input, |start| &input[start..]);
+        let quote = *input.first()?;
+        if !matches!(quote, b'\'' | b'"') {
+            return None;
+        }
+        input = &input[1..];
+        let value_end = input.iter().position(|byte| *byte == quote)?;
+        let value = &input[..value_end];
+        input = &input[value_end + 1..];
+        if name == expected {
+            return Some(value);
+        }
+    }
+}
+
+fn header_footer_section_is_cache_safe(section: &CT_SectPr) -> bool {
+    section.change.is_none() && section.extra_xml.is_empty()
+}
+
+fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
+    table.extra_xml.is_empty()
+        && table.content_controls.is_empty()
+        && table.properties.as_ref().is_none_or(|properties| {
+            properties.change.is_none() && properties.revision_xml.is_empty()
+        })
+        && table.rows.iter().all(|row| {
+            row.extra_xml.is_empty()
+                && row.content_controls.is_empty()
+                && row.properties.as_ref().is_none_or(|properties| {
+                    properties.revision_markers.is_empty() && properties.revision_xml.is_empty()
+                })
+                && row.cells.iter().all(|cell| {
+                    cell.extra_xml.is_empty()
+                        && cell
+                            .properties
+                            .as_ref()
+                            .is_none_or(|properties| properties.extra_xml.is_empty())
+                        && cell.content.iter().all(|content| match content {
+                            CellContent::Paragraph(paragraph) => {
+                                paragraph_is_cache_safe(paragraph, styles)
+                            }
+                            CellContent::Table(_) | CellContent::ContentControl(_) => false,
+                        })
+                })
+        })
+}
+
+fn rebind_table_sources(
+    table: &CT_Tbl,
+    block: &mut table::TableBlock,
+    sources: Option<&SourceRegistry>,
+    story: &WordStory,
+    table_path: &[usize],
+) {
+    for (row_index, (row, block_row)) in table.rows.iter().zip(&mut block.rows).enumerate() {
+        for (cell_index, (cell, block_cell)) in
+            row.cells.iter().zip(&mut block_row.cells).enumerate()
+        {
+            let mut block_paragraphs = block_cell.paragraphs.iter_mut();
+            for (content_index, content) in cell.content.iter().enumerate() {
+                let CellContent::Paragraph(_) = content else {
+                    continue;
+                };
+                let Some(paragraph) = block_paragraphs.next() else {
+                    break;
+                };
+                let mut source_path = table_path.to_vec();
+                source_path.extend([row_index, cell_index, content_index]);
+                let source = sources.and_then(|sources| sources.id(story, &source_path));
+                rebind_paragraph_source(paragraph, source);
+            }
+        }
+    }
+}
+
+fn table_cache_entry_bytes(
+    key: &TableCacheKey,
+    block: &table::TableBlock,
+    diagnostics: &[Diagnostic],
+    font_trace_len: usize,
+) -> usize {
+    let diagnostic_bytes = diagnostics
+        .len()
+        .saturating_mul(std::mem::size_of::<Diagnostic>())
+        .saturating_add(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.capacity())
+                .fold(0usize, usize::saturating_add),
+        );
+    std::mem::size_of::<TableCacheEntry>()
+        .saturating_add(table_key_retained_bytes(&key.table))
+        .saturating_add(table_block_retained_bytes(block))
+        .saturating_add(font_trace_len.saturating_mul(std::mem::size_of::<FontId>()))
+        .saturating_add(diagnostic_bytes)
+}
+
+fn table_key_retained_bytes(table: &CT_Tbl) -> usize {
+    let grid_bytes = table.grid.as_ref().map_or(0, |grid| {
+        grid.columns
+            .capacity()
+            .saturating_mul(std::mem::size_of::<rdocx_oxml::table::CT_TblGridCol>())
+    });
+    table
+        .rows
+        .capacity()
+        .saturating_mul(std::mem::size_of::<CT_Row>())
+        .saturating_add(grid_bytes)
+        .saturating_add(format!("{table:?}").len())
+        .saturating_add(
+            table
+                .rows
+                .iter()
+                .map(|row| {
+                    row.cells
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<CT_Tc>())
+                        .saturating_add(
+                            row.cells
+                                .iter()
+                                .map(|cell| {
+                                    cell.content
+                                        .capacity()
+                                        .saturating_mul(std::mem::size_of::<CellContent>())
+                                        .saturating_add(
+                                            cell.content
+                                                .iter()
+                                                .map(|content| match content {
+                                                    CellContent::Paragraph(paragraph) => paragraph
+                                                        .runs
+                                                        .capacity()
+                                                        .saturating_mul(std::mem::size_of::<CT_R>())
+                                                        .saturating_add(
+                                                            paragraph
+                                                                .runs
+                                                                .iter()
+                                                                .map(|run| {
+                                                                    run.content
+                                                                        .capacity()
+                                                                        .saturating_mul(
+                                                                            std::mem::size_of::<
+                                                                                RunContent,
+                                                                            >(
+                                                                            ),
+                                                                        )
+                                                                })
+                                                                .fold(
+                                                                    0usize,
+                                                                    usize::saturating_add,
+                                                                ),
+                                                        ),
+                                                    CellContent::Table(_)
+                                                    | CellContent::ContentControl(_) => usize::MAX,
+                                                })
+                                                .fold(0usize, usize::saturating_add),
+                                        )
+                                })
+                                .fold(0usize, usize::saturating_add),
+                        )
+                })
+                .fold(0usize, usize::saturating_add),
+        )
+}
+
+fn table_block_retained_bytes(block: &table::TableBlock) -> usize {
+    fn border_bytes(borders: &rdocx_oxml::table::CT_TblBorders) -> usize {
+        [
+            &borders.top,
+            &borders.bottom,
+            &borders.left,
+            &borders.right,
+            &borders.inside_h,
+            &borders.inside_v,
+        ]
+        .into_iter()
+        .map(|edge| {
+            edge.as_ref()
+                .and_then(|edge| edge.color.as_ref())
+                .map_or(0, String::capacity)
+        })
+        .fold(0usize, usize::saturating_add)
+    }
+
+    let rows = block
+        .rows
+        .iter()
+        .map(|row| {
+            row.cells
+                .capacity()
+                .saturating_mul(std::mem::size_of::<table::TableCell>())
+                .saturating_add(
+                    row.cells
+                        .iter()
+                        .map(|cell| {
+                            cell.paragraphs
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<ParagraphBlock>())
+                                .saturating_add(
+                                    cell.paragraphs
+                                        .iter()
+                                        .map(|paragraph| {
+                                            paragraph_cache_entry_bytes(
+                                                &CT_P::new(),
+                                                paragraph,
+                                                &[],
+                                                0,
+                                            )
+                                        })
+                                        .fold(0usize, usize::saturating_add),
+                                )
+                                .saturating_add(cell.borders.as_ref().map_or(0, border_bytes))
+                        })
+                        .fold(0usize, usize::saturating_add),
+                )
+        })
+        .fold(0usize, usize::saturating_add);
+    std::mem::size_of::<table::TableBlock>()
+        .saturating_add(
+            block
+                .col_widths
+                .capacity()
+                .saturating_mul(std::mem::size_of::<f64>()),
+        )
+        .saturating_add(
+            block
+                .rows
+                .capacity()
+                .saturating_mul(std::mem::size_of::<table::TableRow>()),
+        )
+        .saturating_add(
+            block
+                .header_row_indices
+                .capacity()
+                .saturating_mul(std::mem::size_of::<usize>()),
+        )
+        .saturating_add(rows)
+        .saturating_add(block.borders.as_ref().map_or(0, border_bytes))
+}
+
 fn canonicalize_layout_fonts(
-    pages: &mut [PageFrame],
+    pages: &mut [Arc<PageFrame>],
     font_manager: &FontManager,
     current_fonts: &[FontId],
 ) -> Result<Vec<oxml_layout::FontData>> {
@@ -1025,9 +2154,208 @@ fn canonicalize_layout_fonts(
         fonts.push(font);
     }
     for page in pages {
-        rewrite(&mut page.elements, &remap);
+        rewrite(&mut Arc::make_mut(page).elements, &remap);
     }
     Ok(fonts)
+}
+
+fn restart_block_is_safe(block: &LayoutBlock) -> bool {
+    let LayoutBlock::Paragraph(paragraph) = block else {
+        return false;
+    };
+    restart_record_block_is_safe(block)
+        && paragraph.lines.iter().all(|line| {
+            line.items.iter().all(|item| match item {
+                LineItem::Text(text) | LineItem::Marker(text) => text.field_kind.is_none(),
+                LineItem::Tab {
+                    leader: Some(text), ..
+                } => text.field_kind.is_none(),
+                _ => true,
+            })
+        })
+}
+
+fn restart_record_block_is_safe(block: &LayoutBlock) -> bool {
+    let LayoutBlock::Paragraph(paragraph) = block else {
+        return false;
+    };
+    paragraph.anchored.is_empty()
+        && paragraph.lines.len() <= 2
+        && paragraph.heading_level.is_none()
+        && !paragraph.keep_next
+        && !paragraph.keep_lines
+        && paragraph.lines.iter().all(|line| {
+            line.items.iter().all(|item| match item {
+                LineItem::Text(text) | LineItem::Marker(text) => text.note.is_none(),
+                LineItem::Tab {
+                    leader: Some(text), ..
+                } => text.note.is_none(),
+                LineItem::Tab { leader: None, .. } => true,
+                LineItem::Image { .. } | LineItem::Group { .. } => false,
+                _ => false,
+            })
+        })
+}
+
+fn page_has_substitution_state(page: &PageFrame) -> bool {
+    page.elements.iter().any(|element| {
+        matches!(
+            element,
+            PositionedElement::Text(run) if run.field_kind.is_some()
+        )
+    })
+}
+
+fn restart_cache_entries(cache: &RestartCache) -> usize {
+    cache.raw_pages.len().max(cache.checkpoints.len())
+}
+
+fn page_frames_equal(left: &PageFrame, right: &PageFrame) -> bool {
+    left.page_number == right.page_number
+        && left.width == right.width
+        && left.height == right.height
+        && left.elements == right.elements
+        && left.background == right.background
+}
+
+fn restart_cache_bytes(cache: &RestartCache) -> usize {
+    let vector_bytes = cache
+        .body
+        .capacity()
+        .saturating_mul(std::mem::size_of::<String>())
+        .saturating_add(
+            cache
+                .raw_pages
+                .capacity()
+                .saturating_add(cache.pages.capacity())
+                .saturating_mul(std::mem::size_of::<Arc<PageFrame>>()),
+        )
+        .saturating_add(
+            cache
+                .substitution_inputs
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Option<FieldSubstitutionInputs>>()),
+        )
+        .saturating_add(
+            cache
+                .outlines
+                .capacity()
+                .saturating_mul(std::mem::size_of::<oxml_layout::OutlineEntry>()),
+        )
+        .saturating_add(
+            cache
+                .checkpoints
+                .capacity()
+                .saturating_mul(std::mem::size_of::<paginator::PaginationCheckpoint>()),
+        )
+        .saturating_add(
+            cache
+                .font_trace
+                .capacity()
+                .saturating_mul(std::mem::size_of::<FontId>()),
+        );
+    let body_bytes = cache
+        .body
+        .iter()
+        .map(String::capacity)
+        .fold(0usize, usize::saturating_add);
+    debug_assert_eq!(cache.raw_pages.len(), cache.pages.len());
+    let page_bytes = cache
+        .raw_pages
+        .iter()
+        .zip(&cache.pages)
+        .map(|(pristine, substituted)| {
+            let substituted_bytes = if Arc::ptr_eq(pristine, substituted) {
+                0
+            } else {
+                page_frame_retained_bytes(substituted)
+            };
+            page_frame_retained_bytes(pristine).saturating_add(substituted_bytes)
+        })
+        .fold(0usize, usize::saturating_add);
+    let outline_bytes = cache
+        .outlines
+        .iter()
+        .map(|outline| outline.title.capacity())
+        .fold(0usize, usize::saturating_add);
+    let substitution_bytes = cache
+        .substitution_inputs
+        .iter()
+        .filter_map(Option::as_ref)
+        .map(|inputs| {
+            inputs
+                .bookmark_pages
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(usize, usize)>())
+                .saturating_add(
+                    inputs
+                        .font_identity
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<FontId>()),
+                )
+        })
+        .fold(0usize, usize::saturating_add);
+    std::mem::size_of::<RestartCache>()
+        .saturating_add(vector_bytes)
+        .saturating_add(body_bytes)
+        .saturating_add(page_bytes)
+        .saturating_add(substitution_bytes)
+        .saturating_add(outline_bytes)
+}
+
+fn page_frame_retained_bytes(page: &PageFrame) -> usize {
+    fn glyph_bytes(run: &GlyphRun) -> usize {
+        run.text
+            .capacity()
+            .saturating_add(
+                run.glyph_ids
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u16>()),
+            )
+            .saturating_add(
+                run.advances
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<f64>()),
+            )
+    }
+
+    fn element_bytes(element: &PositionedElement) -> usize {
+        match element {
+            PositionedElement::Text(run) => glyph_bytes(run),
+            PositionedElement::Image {
+                data, content_type, ..
+            } => data.capacity().saturating_add(content_type.capacity()),
+            PositionedElement::LinkAnnotation { url, .. } => url.capacity(),
+            PositionedElement::Group(group) => group
+                .children
+                .capacity()
+                .saturating_mul(std::mem::size_of::<PositionedElement>())
+                .saturating_add(
+                    group
+                        .children
+                        .iter()
+                        .map(element_bytes)
+                        .fold(0usize, usize::saturating_add),
+                )
+                .saturating_add(format!("{:?}", group.effects).len()),
+            PositionedElement::Path(path) => format!("{path:?}").len(),
+            _ => 0,
+        }
+    }
+
+    std::mem::size_of::<PageFrame>()
+        .saturating_add(
+            page.elements
+                .capacity()
+                .saturating_mul(std::mem::size_of::<PositionedElement>()),
+        )
+        .saturating_add(
+            page.elements
+                .iter()
+                .map(element_bytes)
+                .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(format!("{:?}", page.background).len())
 }
 
 fn rebind_text_source(text: &mut TextSegment, source_node: Option<SourceNodeId>) {
@@ -1063,6 +2391,213 @@ fn rebind_paragraph_source(block: &mut ParagraphBlock, source_node: Option<Sourc
             }
         }
     }
+}
+
+fn rebind_header_footer_sources(
+    story_kind: HeaderFooterStoryKind,
+    relationship_id: &str,
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    blocks: &mut [ParagraphBlock],
+    sources: Option<&SourceRegistry>,
+) {
+    let story = match story_kind {
+        HeaderFooterStoryKind::Header => WordStory::Header {
+            relationship_id: relationship_id.to_owned(),
+        },
+        HeaderFooterStoryKind::Footer => WordStory::Footer {
+            relationship_id: relationship_id.to_owned(),
+        },
+    };
+    for (paragraph_index, block) in blocks.iter_mut().enumerate() {
+        debug_assert!(paragraph_index < part.paragraphs.len());
+        let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
+        rebind_paragraph_source(block, source);
+    }
+}
+
+fn header_footer_cache_entry_bytes(
+    key: &HeaderFooterCacheKey,
+    content: &HeaderFooterVariantContent,
+    diagnostics: &Vec<Diagnostic>,
+    font_trace: &Vec<FontId>,
+) -> usize {
+    let block_bytes = key
+        .part
+        .paragraphs
+        .iter()
+        .zip(&content.blocks)
+        .map(|(paragraph, block)| paragraph_cache_entry_bytes(paragraph, block, &[], 0))
+        .fold(0usize, usize::saturating_add);
+    let diagnostic_bytes = diagnostics
+        .capacity()
+        .saturating_mul(std::mem::size_of::<Diagnostic>())
+        .saturating_add(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.capacity())
+                .fold(0usize, usize::saturating_add),
+        );
+    let watermark_bytes = content.watermark.as_ref().map_or(0, |watermark| {
+        page_frame_retained_bytes(&PageFrame::new(
+            1,
+            0.0,
+            0.0,
+            vec![PositionedElement::Group(watermark.clone())],
+        ))
+    });
+    let section_capacity = key
+        .section
+        .header_refs
+        .capacity()
+        .saturating_mul(std::mem::size_of::<rdocx_oxml::header_footer::HdrFtrRef>())
+        .saturating_add(
+            key.section
+                .footer_refs
+                .capacity()
+                .saturating_mul(std::mem::size_of::<rdocx_oxml::header_footer::HdrFtrRef>()),
+        )
+        .saturating_add(key.section.columns.as_ref().map_or(0, |columns| {
+            columns
+                .columns
+                .capacity()
+                .saturating_mul(std::mem::size_of::<rdocx_oxml::document::CT_Column>())
+        }))
+        .saturating_add(
+            key.section
+                .extra_xml
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<u8>>()),
+        )
+        .saturating_add(
+            key.section
+                .header_refs
+                .iter()
+                .chain(&key.section.footer_refs)
+                .map(|reference| reference.rel_id.capacity())
+                .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(
+            key.section
+                .extra_xml
+                .iter()
+                .map(Vec::capacity)
+                .fold(0usize, usize::saturating_add),
+        );
+    let paragraph_raw_capacity = key
+        .part
+        .paragraphs
+        .iter()
+        .map(|paragraph| {
+            paragraph
+                .extra_xml
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(usize, Vec<u8>)>())
+                .saturating_add(
+                    paragraph
+                        .extra_xml
+                        .iter()
+                        .map(|(_, raw)| raw.capacity())
+                        .fold(0usize, usize::saturating_add),
+                )
+                .saturating_add(
+                    paragraph
+                        .runs
+                        .iter()
+                        .map(|run| {
+                            run.extra_xml
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<Vec<u8>>())
+                                .saturating_add(
+                                    run.extra_xml
+                                        .iter()
+                                        .map(Vec::capacity)
+                                        .fold(0usize, usize::saturating_add),
+                                )
+                                .saturating_add(
+                                    run.extra_xml_positions
+                                        .capacity()
+                                        .saturating_mul(std::mem::size_of::<usize>()),
+                                )
+                        })
+                        .fold(0usize, usize::saturating_add),
+                )
+        })
+        .fold(0usize, usize::saturating_add);
+    let watermark_capacity = key
+        .part
+        .watermarks()
+        .iter()
+        .map(|watermark| {
+            std::mem::size_of::<VmlWatermark>().saturating_add(match watermark {
+                VmlWatermark::Text {
+                    text,
+                    color,
+                    font_family,
+                    ..
+                } => text
+                    .capacity()
+                    .saturating_add(color.capacity())
+                    .saturating_add(font_family.as_ref().map_or(0, String::capacity)),
+                VmlWatermark::Image {
+                    relationship_id, ..
+                } => relationship_id.capacity(),
+            })
+        })
+        .fold(0usize, usize::saturating_add);
+    let part_capacity = key
+        .part
+        .paragraphs
+        .capacity()
+        .saturating_mul(std::mem::size_of::<CT_P>())
+        .saturating_add(
+            content
+                .blocks
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ParagraphBlock>()),
+        )
+        .saturating_add(
+            key.part
+                .extra_namespaces
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(String, String)>()),
+        )
+        .saturating_add(
+            key.part
+                .extra_xml
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<u8>>()),
+        )
+        .saturating_add(
+            key.part
+                .extra_namespaces
+                .iter()
+                .map(|(prefix, namespace)| prefix.capacity().saturating_add(namespace.capacity()))
+                .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(
+            key.part
+                .extra_xml
+                .iter()
+                .map(Vec::capacity)
+                .fold(0usize, usize::saturating_add),
+        );
+    std::mem::size_of::<HeaderFooterCacheEntry>()
+        .saturating_add(key.relationship_id.capacity())
+        .saturating_add(key.resolved_part_bytes.capacity())
+        .saturating_add(format!("{:?}", key.section).len())
+        .saturating_add(format!("{:?}", key.part).len())
+        .saturating_add(section_capacity)
+        .saturating_add(part_capacity)
+        .saturating_add(paragraph_raw_capacity)
+        .saturating_add(watermark_capacity)
+        .saturating_add(block_bytes)
+        .saturating_add(watermark_bytes)
+        .saturating_add(diagnostic_bytes)
+        .saturating_add(
+            font_trace
+                .capacity()
+                .saturating_mul(std::mem::size_of::<FontId>()),
+        )
 }
 
 fn paragraph_cache_entry_bytes(
@@ -1264,6 +2799,31 @@ fn paragraph_cache_entry_bytes(
         .saturating_add(block.borders.as_ref().map_or(0, border_bytes))
         .saturating_add(font_trace_len * std::mem::size_of::<FontId>())
         .saturating_add(diagnostic_bytes)
+}
+
+struct StableParagraphFingerprint(u64);
+
+impl StableParagraphFingerprint {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl fmt::Write for StableParagraphFingerprint {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        for byte in value.bytes() {
+            self.0 ^= u64::from(byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Ok(())
+    }
+}
+
+fn paragraph_fingerprint(paragraph: &CT_P) -> u64 {
+    let mut fingerprint = StableParagraphFingerprint::new();
+    let written = write!(&mut fingerprint, "{paragraph:?}");
+    debug_assert!(written.is_ok());
+    fingerprint.0
 }
 
 /// Apply page background color from `w:background` element to all pages.
@@ -1700,7 +3260,7 @@ pub(crate) fn layout_paragraph_with_source(
                         shaped.width += extra * shaped.advances.len() as f64;
                     }
 
-                    inline_items.extend(convert::text_segments(TextSegment {
+                    inline_items.push(InlineItem::Text(TextSegment {
                         text,
                         source,
                         font_id,
@@ -1893,7 +3453,7 @@ pub(crate) fn layout_paragraph_with_source(
                                     }
                                     shaped.width += extra * shaped.advances.len() as f64;
                                 }
-                                inline_items.extend(convert::text_segments(TextSegment {
+                                inline_items.push(InlineItem::Text(TextSegment {
                                     text,
                                     source: None,
                                     font_id: segment_font_id,
@@ -1981,11 +3541,66 @@ pub(crate) fn layout_paragraph_with_source(
         fm,
     )?;
 
+    let attributed_empty_paragraph = inline_items.is_empty();
+    if attributed_empty_paragraph {
+        let mut caret_rpr = style_resolver::resolve_run_properties(para_style_id, None, styles);
+        if let Some(paragraph_mark_rpr) = direct_ppr.and_then(|ppr| ppr.rpr.as_ref()) {
+            caret_rpr.merge_from(paragraph_mark_rpr);
+        }
+        let font_size = caret_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0);
+        let bold = caret_rpr.bold.unwrap_or(false);
+        let italic = caret_rpr.italic.unwrap_or(false);
+        let font_family = resolve_font_family(&caret_rpr, input.theme.as_ref());
+        let font_id = fm.resolve_font_for_metrics(font_family.as_deref(), bold, italic)?;
+        let metrics = fm.metrics(font_id, font_size)?;
+        inline_items.push(InlineItem::Text(TextSegment {
+            text: String::new(),
+            source: source_node.map(|node| SourceSpan {
+                node,
+                char_start: 0,
+                char_end: 0,
+            }),
+            font_id,
+            font_size,
+            glyph_ids: Vec::new(),
+            advances: Vec::new(),
+            width: 0.0,
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+            line_gap: 0.0,
+            color: resolve_run_color(&caret_rpr, input.theme.as_ref()),
+            bold,
+            italic,
+            underline: None,
+            strike: false,
+            dstrike: false,
+            highlight: None,
+            baseline_offset: 0.0,
+            hyperlink_url: None,
+            field_kind: None,
+            note: None,
+        }));
+    }
+
     // Line breaking
     let line_params = convert::line_break_params(&effective_ppr, available_width);
 
+    let legacy_empty_line = if attributed_empty_paragraph {
+        let mut lines = break_into_lines(&[], &line_params, fm)?;
+        convert::restore_word_line_heights(&mut lines, &effective_ppr);
+        lines.pop()
+    } else {
+        None
+    };
+
     let mut lines = break_into_lines(&inline_items, &line_params, fm)?;
     convert::restore_word_line_heights(&mut lines, &effective_ppr);
+    if let (Some(line), Some(legacy)) = (lines.first_mut(), legacy_empty_line) {
+        line.ascent = legacy.ascent;
+        line.descent = legacy.descent;
+        line.line_gap = legacy.line_gap;
+        line.height = legacy.height;
+    }
 
     let mut result = block::build_paragraph_block(
         lines,
@@ -2669,11 +4284,11 @@ fn decode_xml_attribute(value: &[u8]) -> Option<String> {
 
 /// Lay out header and footer content (both Default and First-page).
 fn layout_header_footer(
+    engine: &mut Engine,
     sect_pr: &CT_SectPr,
     input: &LayoutInput,
     styles: &CT_Styles,
     media: &MediaRegistry,
-    fm: &mut FontManager,
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
     sources: Option<&SourceRegistry>,
@@ -2703,36 +4318,25 @@ fn layout_header_footer(
             HdrFtrType::Even => (&mut even_header_blocks, &mut even_watermark),
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
-            if target_watermark.is_none()
-                && let Some(projected) = hdr.watermarks().first()
-            {
-                *target_watermark = layout_watermark(
-                    projected,
-                    &href.rel_id,
-                    input,
-                    media,
-                    fm,
-                    geometry,
-                    diagnostics,
-                )?;
-            }
-            let story = WordStory::Header {
-                relationship_id: href.rel_id.clone(),
-            };
-            for (paragraph_index, para) in hdr.paragraphs.iter().enumerate() {
-                let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
-                let block = layout_paragraph_with_source(
-                    para,
-                    width,
-                    styles,
-                    input,
-                    media,
-                    fm,
-                    num_state,
-                    diagnostics,
-                    source,
-                )?;
-                target_blocks.push(block);
+            let content = layout_header_footer_variant(
+                engine,
+                HeaderFooterStoryKind::Header,
+                href.hdr_ftr_type,
+                sect_pr,
+                &href.rel_id,
+                hdr,
+                input,
+                styles,
+                media,
+                num_state,
+                diagnostics,
+                sources,
+                width,
+                geometry,
+            )?;
+            target_blocks.extend(content.blocks);
+            if target_watermark.is_none() {
+                *target_watermark = content.watermark;
             }
             has_content = true;
         }
@@ -2745,24 +4349,23 @@ fn layout_header_footer(
             HdrFtrType::Even => &mut even_footer_blocks,
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
-            let story = WordStory::Footer {
-                relationship_id: fref.rel_id.clone(),
-            };
-            for (paragraph_index, para) in ftr.paragraphs.iter().enumerate() {
-                let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
-                let block = layout_paragraph_with_source(
-                    para,
-                    width,
-                    styles,
-                    input,
-                    media,
-                    fm,
-                    num_state,
-                    diagnostics,
-                    source,
-                )?;
-                target_blocks.push(block);
-            }
+            let content = layout_header_footer_variant(
+                engine,
+                HeaderFooterStoryKind::Footer,
+                fref.hdr_ftr_type,
+                sect_pr,
+                &fref.rel_id,
+                ftr,
+                input,
+                styles,
+                media,
+                num_state,
+                diagnostics,
+                sources,
+                width,
+                geometry,
+            )?;
+            target_blocks.extend(content.blocks);
             has_content = true;
         }
     }
@@ -2783,6 +4386,190 @@ fn layout_header_footer(
     } else {
         Ok(None)
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_header_footer_variant(
+    engine: &mut Engine,
+    story_kind: HeaderFooterStoryKind,
+    variant: HdrFtrType,
+    sect_pr: &CT_SectPr,
+    relationship_id: &str,
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    input: &LayoutInput,
+    styles: &CT_Styles,
+    media: &MediaRegistry,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
+    width: f64,
+    geometry: PageGeometry,
+) -> Result<HeaderFooterVariantContent> {
+    let cache_safe = header_footer_section_is_cache_safe(sect_pr)
+        && header_footer_part_is_cache_safe(part, styles);
+    let resolved_part_bytes = match story_kind {
+        HeaderFooterStoryKind::Header => part.to_xml_header(),
+        HeaderFooterStoryKind::Footer => part.to_xml_footer(),
+    };
+    if !cache_safe || resolved_part_bytes.is_err() {
+        return layout_header_footer_variant_uncached(
+            story_kind,
+            relationship_id,
+            part,
+            input,
+            styles,
+            media,
+            &mut engine.font_manager,
+            num_state,
+            diagnostics,
+            sources,
+            false,
+            width,
+            geometry,
+        );
+    }
+
+    let key = HeaderFooterCacheKey {
+        story: story_kind,
+        variant,
+        section: sect_pr.clone(),
+        relationship_id: relationship_id.to_owned(),
+        part: part.clone(),
+        resolved_part_bytes: resolved_part_bytes.expect("checked resolved part bytes"),
+        with_provenance: sources.is_some(),
+    };
+    let hit = engine
+        .header_footer_cache_reads_enabled
+        .then(|| {
+            engine
+                .header_footer_cache
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| {
+                    (
+                        entry.content.clone(),
+                        entry.diagnostics.clone(),
+                        entry.font_trace.clone(),
+                    )
+                })
+        })
+        .flatten();
+    if let Some((mut content, cached_diagnostics, font_trace)) = hit {
+        rebind_header_footer_sources(
+            story_kind,
+            relationship_id,
+            part,
+            &mut content.blocks,
+            sources,
+        );
+        diagnostics.extend(cached_diagnostics);
+        engine.font_manager.replay_layout_font_trace(&font_trace);
+        engine.header_footer_cache_hits += 1;
+        return Ok(content);
+    }
+
+    let diagnostics_start = diagnostics.len();
+    engine.font_manager.begin_paragraph_font_trace();
+    let content_result = layout_header_footer_variant_uncached(
+        story_kind,
+        relationship_id,
+        part,
+        input,
+        styles,
+        media,
+        &mut engine.font_manager,
+        num_state,
+        diagnostics,
+        None,
+        true,
+        width,
+        geometry,
+    );
+    let font_trace = engine.font_manager.finish_paragraph_font_trace();
+    let mut content = content_result?;
+    engine.header_footer_cache_builds += 1;
+    let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
+    if let Some(font_trace) = font_trace {
+        let bytes =
+            header_footer_cache_entry_bytes(&key, &content, &cached_diagnostics, &font_trace);
+        engine.stage_header_footer_cache_entry(HeaderFooterCacheEntry {
+            key,
+            content: content.clone(),
+            diagnostics: cached_diagnostics,
+            font_trace,
+            bytes,
+        });
+    }
+    rebind_header_footer_sources(
+        story_kind,
+        relationship_id,
+        part,
+        &mut content.blocks,
+        sources,
+    );
+    Ok(content)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_header_footer_variant_uncached(
+    story_kind: HeaderFooterStoryKind,
+    relationship_id: &str,
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    input: &LayoutInput,
+    styles: &CT_Styles,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
+    cache_source: bool,
+    width: f64,
+    geometry: PageGeometry,
+) -> Result<HeaderFooterVariantContent> {
+    let watermark = if story_kind == HeaderFooterStoryKind::Header {
+        match part.watermarks().first() {
+            Some(projected) => layout_watermark(
+                projected,
+                relationship_id,
+                input,
+                media,
+                fm,
+                geometry,
+                diagnostics,
+            )?,
+            None => None,
+        }
+    } else {
+        None
+    };
+    let story = match story_kind {
+        HeaderFooterStoryKind::Header => WordStory::Header {
+            relationship_id: relationship_id.to_owned(),
+        },
+        HeaderFooterStoryKind::Footer => WordStory::Footer {
+            relationship_id: relationship_id.to_owned(),
+        },
+    };
+    let mut blocks = Vec::with_capacity(part.paragraphs.len());
+    for (paragraph_index, paragraph) in part.paragraphs.iter().enumerate() {
+        let source = if cache_source {
+            Some(CACHE_SOURCE_NODE)
+        } else {
+            sources.and_then(|sources| sources.id(&story, &[paragraph_index]))
+        };
+        blocks.push(layout_paragraph_with_source(
+            paragraph,
+            width,
+            styles,
+            input,
+            media,
+            fm,
+            num_state,
+            diagnostics,
+            source,
+        )?);
+    }
+    Ok(HeaderFooterVariantContent { blocks, watermark })
 }
 
 fn layout_watermark(
@@ -3619,6 +5406,630 @@ mod tests {
         }
     }
 
+    fn header_footer_part(text: &str) -> rdocx_oxml::header_footer::CT_HdrFtr {
+        let mut part = rdocx_oxml::header_footer::CT_HdrFtr::new();
+        let mut paragraph = CT_P::new();
+        paragraph.add_run(text);
+        part.paragraphs.push(paragraph);
+        part
+    }
+
+    fn image_watermark_header(text: &str, width_pt: f64) -> rdocx_oxml::header_footer::CT_HdrFtr {
+        rdocx_oxml::header_footer::CT_HdrFtr::from_xml(
+            format!(
+                r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:p><w:r><w:pict><v:shape style="width:{width_pt}pt;height:36pt"><v:fill opacity=".5"/><v:imagedata r:id="rIdWatermark"/></v:shape></w:pict><w:t>{text}</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .expect("watermark header parses")
+    }
+
+    fn cacheable_header_footer_input(body: &str) -> LayoutInput {
+        use rdocx_oxml::header_footer::HdrFtrRef;
+
+        let mut input = make_input_with_text(body);
+        let mut section = CT_SectPr::default_letter();
+        section.title_pg = Some(true);
+        for (variant, suffix) in [
+            (HdrFtrType::Default, "default"),
+            (HdrFtrType::First, "first"),
+            (HdrFtrType::Even, "even"),
+        ] {
+            let header_id = format!("rId-{suffix}-header");
+            let footer_id = format!("rId-{suffix}-footer");
+            section.header_refs.push(HdrFtrRef {
+                hdr_ftr_type: variant,
+                rel_id: header_id.clone(),
+            });
+            section.footer_refs.push(HdrFtrRef {
+                hdr_ftr_type: variant,
+                rel_id: footer_id.clone(),
+            });
+            let header = if variant == HdrFtrType::Default {
+                image_watermark_header(&format!("{suffix} header"), 72.0)
+            } else {
+                header_footer_part(&format!("{suffix} header"))
+            };
+            input.headers.insert(header_id, header);
+            input
+                .footers
+                .insert(footer_id, header_footer_part(&format!("{suffix} footer")));
+        }
+        input.images.insert(
+            "rId-default-header\0rIdWatermark".to_owned(),
+            ImageData {
+                data: vec![1, 2, 3, 4],
+                content_type: "image/png".to_owned(),
+            },
+        );
+        input.document.body.sect_pr = Some(section);
+        input
+    }
+
+    fn header_footer_page_text(page: &PageFrame) -> String {
+        page.elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn assert_header_footer_context_miss(
+        base: &LayoutInput,
+        name: &str,
+        mutate: impl FnOnce(&mut LayoutInput),
+    ) {
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(base).expect("prime exact identity");
+        let mut changed = base.clone();
+        mutate(&mut changed);
+        engine
+            .layout(&changed)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(engine.header_footer_cache_counts(), (0, 12), "{name}");
+    }
+
+    #[test]
+    fn safe_header_footer_variants_reuse_exactly() {
+        let mut input = cacheable_header_footer_input(&"body ".repeat(4_000));
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (cold, cold_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("cold header/footer layout");
+        assert!(cold.pages.len() > 2);
+        assert!(header_footer_page_text(&cold.pages[0]).contains("first header"));
+        assert!(header_footer_page_text(&cold.pages[0]).contains("first footer"));
+        assert!(header_footer_page_text(&cold.pages[1]).contains("even header"));
+        assert!(header_footer_page_text(&cold.pages[1]).contains("even footer"));
+        assert!(header_footer_page_text(&cold.pages[2]).contains("default header"));
+        assert!(header_footer_page_text(&cold.pages[2]).contains("default footer"));
+        assert_eq!(engine.header_footer_cache_counts(), (0, 6));
+        assert_eq!(engine.header_footer_cache.len(), 6);
+        assert!(
+            engine
+                .header_footer_cache
+                .iter()
+                .all(|entry| !entry.font_trace.is_empty())
+        );
+
+        for (index, entry) in engine.header_footer_cache.iter_mut().enumerate() {
+            entry.diagnostics = vec![Diagnostic {
+                message: format!("cached header/footer diagnostic {index}"),
+            }];
+        }
+        input.document.body.content.insert(
+            0,
+            BodyContent::Paragraph({
+                let mut paragraph = CT_P::new();
+                paragraph.add_run("inserted body source");
+                paragraph
+            }),
+        );
+        let (warm, warm_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm header/footer layout");
+        let (fresh, fresh_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh comparison layout");
+        assert_eq!(format!("{:?}", warm.pages), format!("{:?}", fresh.pages));
+        assert_eq!(format!("{:?}", warm.fonts), format!("{:?}", fresh.fonts));
+        assert_eq!(
+            format!("{:?}", warm.outlines),
+            format!("{:?}", fresh.outlines)
+        );
+        assert_eq!(warm_sources, fresh_sources);
+        assert_ne!(cold_sources, warm_sources);
+        assert_eq!(engine.header_footer_cache_counts(), (6, 6));
+        assert_eq!(warm.diagnostics.len(), 6);
+        assert!(warm.diagnostics.iter().all(|diagnostic| {
+            diagnostic
+                .message
+                .starts_with("cached header/footer diagnostic")
+        }));
+        let header_source = warm
+            .pages
+            .iter()
+            .flat_map(|page| &page.elements)
+            .filter_map(|element| match element {
+                PositionedElement::Text(text) if text.text.contains("header") => text.source,
+                _ => None,
+            })
+            .next()
+            .expect("cached header text has provenance");
+        assert!(matches!(
+            warm_sources[header_source.node.get() as usize - 1].story,
+            WordStory::Header { .. }
+        ));
+
+        // F-X042 resolves inherited references onto each section before layout.
+        // Model that exact input shape and prove both the authored first section
+        // and inherited final section reuse their variants on the next layout.
+        let mut inherited_input = cacheable_header_footer_input(&"second section ".repeat(2_000));
+        let inherited_section = inherited_input
+            .document
+            .body
+            .sect_pr
+            .clone()
+            .expect("final section");
+        let mut first_section_end = CT_P::new();
+        first_section_end.add_run("authored section with shared variants");
+        first_section_end.properties.get_or_insert_default().sect_pr = Some(inherited_section);
+        inherited_input
+            .document
+            .body
+            .content
+            .insert(0, BodyContent::Paragraph(first_section_end));
+        let mut inherited_engine = Engine::new_deterministic().expect("bundled fonts load");
+        inherited_engine
+            .layout_with_provenance(&inherited_input)
+            .expect("cold inherited layout");
+        let (inherited_warm, inherited_sources) = inherited_engine
+            .layout_with_provenance(&inherited_input)
+            .expect("warm inherited layout");
+        let (inherited_fresh, fresh_inherited_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&inherited_input)
+            .expect("fresh inherited layout");
+        assert_eq!(inherited_engine.header_footer_cache_counts(), (12, 12));
+        assert_eq!(
+            format!("{:?}", inherited_warm.pages),
+            format!("{:?}", inherited_fresh.pages)
+        );
+        assert_eq!(inherited_sources, fresh_inherited_sources);
+    }
+
+    #[test]
+    fn header_footer_media_geometry_and_context_changes_miss() {
+        use rdocx_oxml::footnotes::CT_Footnotes;
+        use rdocx_oxml::numbering::CT_Numbering;
+        use rdocx_oxml::theme::Theme;
+        use rdocx_oxml::units::Twips;
+
+        let base = cacheable_header_footer_input("body");
+        assert_header_footer_context_miss(&base, "header text", |input| {
+            input.headers.insert(
+                "rId-first-header".to_owned(),
+                header_footer_part("changed first header"),
+            );
+        });
+        assert_header_footer_context_miss(&base, "media bytes", |input| {
+            input
+                .images
+                .get_mut("rId-default-header\0rIdWatermark")
+                .expect("watermark image")
+                .data
+                .push(5);
+        });
+        assert_header_footer_context_miss(&base, "watermark", |input| {
+            input.headers.insert(
+                "rId-default-header".to_owned(),
+                image_watermark_header("default header", 73.0),
+            );
+        });
+        assert_header_footer_context_miss(&base, "same-width page height", |input| {
+            input
+                .document
+                .body
+                .sect_pr
+                .as_mut()
+                .expect("section")
+                .page_height = Some(Twips(15_841));
+        });
+        assert_header_footer_context_miss(&base, "styles", |input| {
+            input.styles = CT_Styles::new();
+        });
+        assert_header_footer_context_miss(&base, "numbering", |input| {
+            input.numbering = Some(CT_Numbering::new());
+        });
+        assert_header_footer_context_miss(&base, "notes", |input| {
+            input.footnotes = Some(CT_Footnotes::new());
+        });
+        assert_header_footer_context_miss(&base, "theme", |input| {
+            input.theme = Some(Theme::default());
+        });
+        assert_header_footer_context_miss(&base, "revision", |input| {
+            input.revision_view = RevisionView::Tracked;
+        });
+        assert_header_footer_context_miss(&base, "fonts", |input| {
+            let (family, data) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+            input.fonts.push(oxml_layout::FontFile {
+                family: family.to_owned(),
+                data: data.to_vec(),
+            });
+        });
+
+        let mut source_mode = Engine::new_deterministic().expect("bundled fonts load");
+        source_mode.layout(&base).expect("prime unsourced cache");
+        source_mode
+            .layout_with_provenance(&base)
+            .expect("sourced layout misses unsourced entries");
+        assert_eq!(source_mode.header_footer_cache_counts(), (0, 12));
+
+        let mut unsafe_input = base.clone();
+        unsafe_input
+            .headers
+            .get_mut("rId-first-header")
+            .expect("first header")
+            .paragraphs[0]
+            .properties
+            .get_or_insert_default()
+            .num_id = Some(1);
+        let mut unsafe_engine = Engine::new_deterministic().expect("bundled fonts load");
+        unsafe_engine
+            .layout(&unsafe_input)
+            .expect("unsafe part lays out");
+        assert_eq!(unsafe_engine.header_footer_cache_counts(), (0, 5));
+
+        let mut opaque_input = base.clone();
+        let opaque_run = &mut opaque_input
+            .headers
+            .get_mut("rId-first-header")
+            .expect("first header")
+            .paragraphs[0]
+            .runs[0];
+        opaque_run
+            .extra_xml
+            .push(br#"<w:object xmlns:w="urn:unrepresented"/>"#.to_vec());
+        opaque_run.extra_xml_positions.push(0);
+        let mut opaque_engine = Engine::new_deterministic().expect("bundled fonts load");
+        opaque_engine
+            .layout(&opaque_input)
+            .expect("opaque producer XML lays out without reuse");
+        assert_eq!(opaque_engine.header_footer_cache_counts(), (0, 5));
+
+        let foreign_wrapper = rdocx_oxml::header_footer::CT_HdrFtr::from_xml(
+            format!(
+                r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:producer"><w:p><w:r><x:pict><w:pict><v:shape style="width:72pt;height:36pt"><v:textpath string="DRAFT"/></v:shape></w:pict></x:pict></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .expect("foreign pict wrapper parses");
+        assert_eq!(foreign_wrapper.watermarks().len(), 1);
+        assert!(!header_footer_part_is_cache_safe(
+            &foreign_wrapper,
+            &base.styles
+        ));
+        let rebound_word_prefix = rdocx_oxml::header_footer::CT_HdrFtr::from_xml(
+            format!(
+                r#"<q:hdr xmlns:q="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:producer"><q:p><q:r><w:pict><q:pict><v:shape style="width:72pt;height:36pt"><v:textpath string="DRAFT"/></v:shape></q:pict></w:pict></q:r></q:p></q:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .expect("rebound conventional prefix parses");
+        assert_eq!(rebound_word_prefix.watermarks().len(), 1);
+        assert!(!header_footer_part_is_cache_safe(
+            &rebound_word_prefix,
+            &base.styles
+        ));
+    }
+
+    #[test]
+    fn header_footer_cache_publishes_transactionally_and_stays_bounded() {
+        use rdocx_oxml::header_footer::HdrFtrRef;
+
+        let (valid_family, valid_bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+        let (invalid_family, invalid_source) = oxml_layout::bundled_fonts::bundled_font_data()[4];
+        let mut invalid_bytes = invalid_source.to_vec();
+        let table_count = u16::from_be_bytes([invalid_bytes[4], invalid_bytes[5]]) as usize;
+        let head_offset = (0..table_count)
+            .find_map(|table| {
+                let record = 12 + table * 16;
+                (&invalid_bytes[record..record + 4] == b"head").then(|| {
+                    u32::from_be_bytes(
+                        invalid_bytes[record + 8..record + 12]
+                            .try_into()
+                            .expect("head offset"),
+                    ) as usize
+                })
+            })
+            .expect("font has head table");
+        invalid_bytes[head_offset + 18..head_offset + 20].copy_from_slice(&0u16.to_be_bytes());
+
+        let mut failing_input = make_input_with_text("section-ending prefix");
+        let mut section = CT_SectPr::default_letter();
+        section.header_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdHeader".to_owned(),
+        });
+        let BodyContent::Paragraph(prefix) = &mut failing_input.document.body.content[0] else {
+            panic!("prefix paragraph");
+        };
+        prefix.properties.get_or_insert_default().sect_pr = Some(section);
+        prefix.runs[0].properties.get_or_insert_default().font_ascii =
+            Some(valid_family.to_owned());
+        failing_input.headers.insert(
+            "rIdHeader".to_owned(),
+            header_footer_part("staged header before late failure"),
+        );
+        let mut later = CT_P::new();
+        later
+            .add_run("late font failure")
+            .properties
+            .get_or_insert_default()
+            .font_ascii = Some(invalid_family.to_owned());
+        failing_input.document.body.add_paragraph(later);
+        failing_input.fonts.push(oxml_layout::FontFile {
+            family: invalid_family.to_owned(),
+            data: invalid_bytes,
+        });
+        let mut failing = Engine::with_font_manager(FontManager::new_with_fonts(vec![(
+            valid_family.to_owned(),
+            valid_bytes.to_vec(),
+        )]));
+        assert!(failing.layout(&failing_input).is_err());
+        assert!(failing.header_footer_cache.is_empty());
+        assert_eq!(failing.header_footer_cache_bytes, 0);
+        assert_eq!(failing.header_footer_cache_counts(), (0, 1));
+
+        let mut bounded_input = make_input_with_text("bounded body");
+        let mut bounded_section = CT_SectPr::default_letter();
+        for index in 0..(HEADER_FOOTER_CACHE_MAX_ENTRIES * 2) {
+            let relationship_id = format!("rIdHeader{index:03}");
+            bounded_section.header_refs.push(HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: relationship_id.clone(),
+            });
+            bounded_input.headers.insert(
+                relationship_id,
+                header_footer_part(&format!("bounded header {index:03}")),
+            );
+        }
+        bounded_input.document.body.sect_pr = Some(bounded_section);
+        let mut bounded = Engine::new_deterministic().expect("bundled fonts load");
+        bounded
+            .layout(&bounded_input)
+            .expect("bounded pending layout succeeds");
+        assert_eq!(
+            bounded.header_footer_cache.len(),
+            HEADER_FOOTER_CACHE_MAX_ENTRIES
+        );
+        assert!(bounded.header_footer_cache_bytes <= HEADER_FOOTER_CACHE_MAX_BYTES);
+        assert!(
+            bounded.pending_header_footer_cache_peak_entries <= HEADER_FOOTER_CACHE_MAX_ENTRIES
+        );
+        assert!(bounded.pending_header_footer_cache_peak_bytes <= HEADER_FOOTER_CACHE_MAX_BYTES);
+        assert_eq!(
+            bounded.header_footer_cache_bytes,
+            bounded
+                .header_footer_cache
+                .iter()
+                .map(|entry| entry.bytes)
+                .sum::<usize>()
+        );
+        assert!(
+            bounded.paragraph_cache.len()
+                + bounded.table_cache.len()
+                + bounded.header_footer_cache.len()
+                + bounded
+                    .restart_cache
+                    .as_ref()
+                    .map_or(0, |cache| cache.checkpoints.len())
+                <= CACHE_MAX_ENTRIES
+        );
+        assert!(
+            bounded.paragraph_cache_bytes
+                + bounded.table_cache_bytes
+                + bounded.header_footer_cache_bytes
+                + bounded
+                    .restart_cache
+                    .as_ref()
+                    .map_or(0, |cache| cache.bytes)
+                <= CACHE_MAX_BYTES
+        );
+
+        let one = cacheable_header_footer_input("oversized entry body");
+        let mut oversized = Engine::new_deterministic().expect("bundled fonts load");
+        oversized.layout(&one).expect("prime oversized template");
+        let mut entry = oversized
+            .header_footer_cache
+            .pop_front()
+            .expect("header/footer template retained");
+        let mut oversized_key = oversized
+            .header_footer_cache
+            .pop_front()
+            .expect("second header/footer template retained");
+        oversized.header_footer_cache.clear();
+        oversized.header_footer_cache_bytes = 0;
+        let mut reserved_namespace = String::with_capacity(HEADER_FOOTER_CACHE_MAX_BYTES + 1);
+        reserved_namespace.push('x');
+        oversized_key
+            .key
+            .part
+            .extra_namespaces
+            .push((reserved_namespace, "urn:test".to_owned()));
+        oversized_key.bytes = header_footer_cache_entry_bytes(
+            &oversized_key.key,
+            &oversized_key.content,
+            &oversized_key.diagnostics,
+            &oversized_key.font_trace,
+        );
+        assert!(oversized_key.bytes > HEADER_FOOTER_CACHE_MAX_BYTES);
+        oversized.publish_header_footer_cache_entry(oversized_key);
+        assert!(oversized.header_footer_cache.is_empty());
+        assert_eq!(oversized.header_footer_cache_bytes, 0);
+
+        let text = entry.content.blocks[0]
+            .lines
+            .iter_mut()
+            .flat_map(|line| &mut line.items)
+            .find_map(|item| match item {
+                LineItem::Text(text) => Some(text),
+                _ => None,
+            })
+            .expect("template has text");
+        text.advances = vec![0.0; HEADER_FOOTER_CACHE_MAX_BYTES / 8 + 1];
+        entry.bytes = header_footer_cache_entry_bytes(
+            &entry.key,
+            &entry.content,
+            &entry.diagnostics,
+            &entry.font_trace,
+        );
+        assert!(entry.bytes > HEADER_FOOTER_CACHE_MAX_BYTES);
+        oversized.publish_header_footer_cache_entry(entry);
+        assert!(oversized.header_footer_cache.is_empty());
+        assert_eq!(oversized.header_footer_cache_bytes, 0);
+    }
+
+    #[test]
+    fn word_projection_leaves_break_segmentation_to_shared_layout() {
+        let input = make_input_with_text("financial planning");
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let block = layout_paragraph_with_source(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+            SourceNodeId::new(1),
+        )
+        .expect("paragraph lays out");
+        let text_items = block
+            .reflow
+            .expect("line-breaking inputs retained")
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                InlineItem::Text(segment) => Some(segment),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_items.len(), 1);
+        assert_eq!(text_items[0].text, "financial planning");
+        assert_eq!(text_items[0].source.expect("source span").char_start, 0);
+        assert_eq!(text_items[0].source.expect("source span").char_end, 18);
+    }
+
+    #[test]
+    fn break_opportunities_emit_every_scalar_and_glyph_once() {
+        let text = "financial planning ttf-parser  double  spaces e\u{301}lan allocated \u{754c} "
+            .repeat(12);
+        let input = make_input_with_text(&text);
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("deterministic layout");
+        let runs = result
+            .layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.elements)
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.source.is_some() => Some(run),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+            text
+        );
+        let mut expected_start = 0;
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        for run in runs {
+            let source = run.source.expect("filtered sourced run");
+            assert_eq!(source.char_start, expected_start);
+            assert_eq!(
+                source.char_end - source.char_start,
+                run.text.chars().count() as u32
+            );
+            expected_start = source.char_end;
+
+            let family = result
+                .layout
+                .fonts
+                .iter()
+                .find(|font| font.id == run.font_id)
+                .expect("run font is in result")
+                .family
+                .clone();
+            let font_id = fonts
+                .resolve_font(Some(&family), run.bold, run.italic)
+                .expect("bundled run font resolves");
+            let independently_shaped = fonts
+                .shape_text(font_id, &run.text, run.font_size)
+                .expect("emitted chunk reshapes");
+            assert_eq!(
+                run.glyph_ids, independently_shaped.glyph_ids,
+                "{}",
+                run.text
+            );
+            assert_eq!(run.advances, independently_shaped.advances, "{}", run.text);
+        }
+        assert_eq!(expected_start, text.chars().count() as u32);
+    }
+
+    #[test]
+    fn reported_words_do_not_duplicate_boundary_glyphs() {
+        for text in [
+            "ttf-parser follows",
+            "double  spaces follow",
+            "financial planning",
+            "allocated space",
+        ] {
+            let input = make_input_with_text(text);
+            let result = crate::layout_document_deterministic_with_provenance(&input)
+                .expect("deterministic layout");
+            let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+            for run in result.layout.pages.iter().flat_map(|page| {
+                page.elements.iter().filter_map(|element| match element {
+                    PositionedElement::Text(run) if run.source.is_some() => Some(run),
+                    _ => None,
+                })
+            }) {
+                let family = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("run font is in result")
+                    .family
+                    .clone();
+                let font_id = fonts
+                    .resolve_font(Some(&family), run.bold, run.italic)
+                    .expect("bundled run font resolves");
+                let independently_shaped = fonts
+                    .shape_text(font_id, &run.text, run.font_size)
+                    .expect("emitted chunk reshapes");
+                assert_eq!(run.glyph_ids, independently_shaped.glyph_ids, "{text}");
+                assert_eq!(run.advances, independently_shaped.advances, "{text}");
+            }
+        }
+    }
+
     #[test]
     fn warm_relayout_matches_cold_and_rebuilds_only_changed_safe_paragraphs() {
         let mut input = make_input_with_text("first cache-safe paragraph");
@@ -3655,6 +6066,140 @@ mod tests {
         assert_eq!(after_cold, (0, 3));
         assert_eq!(after_warm, (2, 4));
         assert_ne!(output_text(&cold.0), output_text(&warm.0));
+    }
+
+    #[test]
+    fn paragraph_fingerprint_collision_requires_typed_equality() {
+        let first = make_input_with_text("first collision candidate");
+        let second = make_input_with_text("second collision candidate");
+        let BodyContent::Paragraph(second_paragraph) = &second.document.body.content[0] else {
+            panic!("body item is a paragraph");
+        };
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&first).expect("first layout succeeds");
+
+        let forced_fingerprint = paragraph_fingerprint(second_paragraph);
+        let retained = engine
+            .paragraph_cache
+            .front_mut()
+            .expect("first paragraph is retained");
+        assert_ne!(retained.fingerprint, forced_fingerprint);
+        retained.fingerprint = forced_fingerprint;
+
+        let output = engine.layout(&second).expect("collision layout succeeds");
+        assert_eq!(output_text(&output).concat(), "second collision candidate");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 2));
+    }
+
+    #[test]
+    fn editor_scale_paragraph_cache_avoids_warm_thrash() {
+        let mut input = make_input_with_text("editor paragraph 000");
+        for index in 1..700 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("editor paragraph {index:03}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout_with_provenance(&input)
+            .expect("editor cold layout succeeds");
+        assert_eq!(engine.paragraph_cache.len(), 700);
+        assert_eq!(engine.paragraph_cache_counts(), (0, 700));
+
+        set_body_paragraph_text(&mut input, 350, "editor paragraph 350 changed");
+        let warm = engine
+            .layout_with_provenance(&input)
+            .expect("editor warm layout succeeds");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("editor cold comparison succeeds");
+
+        assert_layout_results_equal(&warm.0, &cold.0);
+        assert_eq!(warm.1, cold.1);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+        assert_eq!(engine.paragraph_cache.len(), 701);
+        assert_eq!(
+            engine
+                .paragraph_cache
+                .front()
+                .expect("insertion order has a front")
+                .key
+                .paragraph
+                .text(),
+            "editor paragraph 000"
+        );
+        let rebuilt = engine
+            .last_rebuilt_page_range
+            .clone()
+            .expect("edited layout reports a rebuilt range");
+        assert!(
+            rebuilt.end.saturating_sub(rebuilt.start) <= 2,
+            "{rebuilt:?}"
+        );
+    }
+
+    #[test]
+    fn unsafe_prefix_still_disables_later_paragraph_hits() {
+        let mut note = CT_P::new();
+        let mut note_run = CT_R::new("");
+        note_run.content = vec![RunContent::FootnoteRef { id: 1 }];
+        note.runs.push(note_run);
+
+        let mut field = CT_P::new();
+        let mut field_run = CT_R::new("");
+        field_run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
+        field.runs.push(field_run);
+
+        let mut numbered = CT_P::new();
+        numbered.add_run("numbered prefix");
+        numbered.properties.get_or_insert_default().num_id = Some(1);
+
+        for (name, unsafe_paragraph) in [("note", note), ("field", field), ("numbering", numbered)]
+        {
+            let mut input = make_input_with_text("safe cached suffix");
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.layout(&input).expect("prime safe suffix");
+            input
+                .document
+                .body
+                .content
+                .insert(0, BodyContent::Paragraph(unsafe_paragraph));
+
+            let warm = engine.layout(&input).expect("warm unsafe-prefix layout");
+            let cold = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .expect("cold unsafe-prefix layout");
+            assert_layout_results_equal(&warm, &cold);
+            assert_eq!(engine.paragraph_cache_counts(), (0, 2), "{name}");
+        }
+    }
+
+    #[test]
+    fn scaled_paragraph_cache_warm_equals_cold() {
+        let mut input = make_input_with_text("warm-cold paragraph 000");
+        for index in 1..700 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("warm-cold paragraph {index:03}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut warm_engine = Engine::new_deterministic().expect("bundled fonts load");
+        warm_engine
+            .layout_with_provenance(&input)
+            .expect("prime warm state");
+        set_body_paragraph_text(&mut input, 349, "warm-cold paragraph 349 changed");
+
+        let warm = warm_engine
+            .layout_with_provenance(&input)
+            .expect("warm edited layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("cold edited layout");
+        assert_layout_results_equal(&warm.0, &cold.0);
+        assert_eq!(warm.1, cold.1);
+        assert_eq!(format!("{:?}", warm.0), format!("{:?}", cold.0));
     }
 
     #[test]
@@ -3798,6 +6343,151 @@ mod tests {
     }
 
     #[test]
+    fn compatible_engine_take_reuses_normal_layout_work() {
+        let mut source_input = make_input_with_text("unchanged paragraph");
+        let mut changed = CT_P::new();
+        changed.add_run("old second paragraph");
+        source_input.document.body.add_paragraph(changed);
+
+        let mut source_engine = Engine::new_deterministic().expect("bundled fonts load");
+        source_engine
+            .layout(&source_input)
+            .expect("prime reusable engine");
+        assert_eq!(source_engine.paragraph_cache_counts(), (0, 2));
+
+        let mut receiver_input = source_input.clone();
+        let BodyContent::Paragraph(second) = &mut receiver_input.document.body.content[1] else {
+            panic!("second body paragraph");
+        };
+        second.runs[0].content[0] =
+            RunContent::Text(rdocx_oxml::text::CT_Text::new("new second paragraph"));
+
+        let mut source = Some(source_engine);
+        let mut transferred = Engine::take_if_compatible(&mut source, &receiver_input)
+            .expect("matching context transfers");
+        assert!(source.is_none());
+        transferred
+            .layout(&receiver_input)
+            .expect("transferred layout succeeds");
+        assert_eq!(transferred.paragraph_cache_counts(), (1, 3));
+    }
+
+    #[test]
+    fn incompatible_or_failed_engine_take_preserves_the_source() {
+        fn assert_rejected(label: &str, mut receiver: LayoutInput) {
+            let source_input = make_input_with_text("retained paragraph");
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.layout(&source_input).expect("prime reusable engine");
+            let mut source = Some(engine);
+            assert!(
+                Engine::take_if_compatible(&mut source, &receiver).is_none(),
+                "{label} must reject transfer"
+            );
+            assert!(source.is_some());
+            receiver.document.body.content.clear();
+        }
+
+        let base = make_input_with_text("retained paragraph");
+        let mut changed = base.clone();
+        changed.revision_view = RevisionView::Tracked;
+        assert_rejected("revision view", changed);
+
+        let wrapping = make_wrapping_document(
+            WrapType::Square,
+            Some(rdocx_oxml::drawing::AnchorAlignH::Left),
+            100.0,
+            40.0,
+            5.0,
+        );
+        let mut changed = base.clone();
+        changed.document = wrapping.document;
+        assert_rejected("document wrapping state", changed);
+
+        let mut changed = base.clone();
+        changed.styles = CT_Styles::new();
+        assert_rejected("styles", changed);
+
+        let mut changed = base.clone();
+        changed.numbering = Some(rdocx_oxml::numbering::CT_Numbering::new());
+        assert_rejected("numbering", changed);
+
+        let mut changed = base.clone();
+        changed.headers.insert(
+            "rIdHeader".to_owned(),
+            rdocx_oxml::header_footer::CT_HdrFtr::new(),
+        );
+        assert_rejected("headers", changed);
+
+        let mut changed = base.clone();
+        changed.footers.insert(
+            "rIdFooter".to_owned(),
+            rdocx_oxml::header_footer::CT_HdrFtr::new(),
+        );
+        assert_rejected("footers", changed);
+
+        let mut changed = base.clone();
+        changed.images.insert(
+            "rIdImage".to_owned(),
+            crate::input::ImageData {
+                data: vec![1, 2, 3],
+                content_type: "image/png".to_owned(),
+            },
+        );
+        assert_rejected("images", changed);
+
+        let mut changed = base.clone();
+        changed
+            .charts
+            .insert("rIdChart".to_owned(), Err("missing chart".to_owned()));
+        assert_rejected("charts", changed);
+
+        let mut changed = base.clone();
+        changed.chart_theme.name = Some("Changed".to_owned());
+        assert_rejected("chart theme", changed);
+
+        let mut changed = base.clone();
+        changed.core_properties = Some(rdocx_oxml::core_properties::CoreProperties {
+            title: Some("Changed".to_owned()),
+            ..Default::default()
+        });
+        assert_rejected("core properties", changed);
+
+        let mut changed = base.clone();
+        changed
+            .hyperlink_urls
+            .insert("rIdLink".to_owned(), "https://example.com".to_owned());
+        assert_rejected("hyperlinks", changed);
+
+        let mut changed = base.clone();
+        changed.footnotes = Some(rdocx_oxml::footnotes::CT_Footnotes::new());
+        assert_rejected("footnotes", changed);
+
+        let mut changed = base.clone();
+        changed.endnotes = Some(rdocx_oxml::footnotes::CT_Footnotes::new());
+        assert_rejected("endnotes", changed);
+
+        let mut changed = base.clone();
+        changed.theme = Some(rdocx_oxml::theme::Theme::default());
+        assert_rejected("theme", changed);
+
+        let mut changed = base.clone();
+        changed.fonts.push(oxml_layout::FontFile {
+            family: "Changed".to_owned(),
+            data: vec![1, 2, 3],
+        });
+        assert_rejected("fonts", changed);
+
+        let mut changed = base;
+        changed
+            .document
+            .body
+            .sect_pr
+            .get_or_insert_with(CT_SectPr::default_letter)
+            .page_width = Some(rdocx_oxml::units::Twips(10_000));
+        assert_rejected("sections", changed);
+    }
+
+    #[test]
     fn alternate_content_drawings_bypass_paragraph_reuse() {
         let document = rdocx_oxml::CT_Document::from_xml(
             br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:r><w:t>ordinary text</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor behindDoc="0"><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="914400" cy="457200"/><a:graphic><a:graphicData><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice></mc:AlternateContent></w:r></w:p></w:body></w:document>"#,
@@ -3866,8 +6556,794 @@ mod tests {
         assert_eq!(engine.paragraph_cache_counts(), (3, 4));
     }
 
+    fn safe_table(text: &str) -> CT_Tbl {
+        let mut table = CT_Tbl::new();
+        let mut row = CT_Row::new();
+        let mut cell = CT_Tc::new();
+        cell.paragraphs_mut()[0].add_run(text);
+        row.cells.push(cell);
+        table.rows.push(row);
+        table
+    }
+
+    fn assert_layout_results_equal(left: &LayoutResult, right: &LayoutResult) {
+        assert_eq!(left.pages.len(), right.pages.len());
+        for (left, right) in left.pages.iter().zip(&right.pages) {
+            assert_eq!(left.page_number, right.page_number);
+            assert_eq!(left.width, right.width);
+            assert_eq!(left.height, right.height);
+            assert_eq!(left.elements, right.elements);
+            assert_eq!(left.background, right.background);
+        }
+        assert_eq!(left.fonts.len(), right.fonts.len());
+        for (left, right) in left.fonts.iter().zip(&right.fonts) {
+            assert_eq!(left.id, right.id);
+            assert_eq!(left.family, right.family);
+            assert_eq!(left.data, right.data);
+            assert_eq!(left.face_index, right.face_index);
+            assert_eq!(left.bold, right.bold);
+            assert_eq!(left.italic, right.italic);
+        }
+        assert_eq!(left.diagnostics, right.diagnostics);
+        assert_eq!(left.outlines.len(), right.outlines.len());
+        for (left, right) in left.outlines.iter().zip(&right.outlines) {
+            assert_eq!(left.title, right.title);
+            assert_eq!(left.level, right.level);
+            assert_eq!(left.page_index, right.page_index);
+            assert_eq!(left.y_position, right.y_position);
+        }
+    }
+
     #[test]
-    fn cold_and_warm_diagnostics_are_identical() {
+    fn earlier_note_insertion_invalidates_later_cached_markers() {
+        let mut input = make_input_with_text("safe prefix");
+        let mut later = CT_P::new();
+        later.add_run("safe suffix");
+        input.document.body.add_paragraph(later);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let original = engine.layout(&input).expect("initial layout");
+
+        let mut note_paragraph = CT_P::new();
+        let mut note_run = CT_R::new("");
+        note_run.content = vec![RunContent::FootnoteRef { id: 7 }];
+        note_paragraph.runs.push(note_run);
+        input
+            .document
+            .body
+            .content
+            .insert(1, BodyContent::Paragraph(note_paragraph));
+        let warm_insert = engine.layout(&input).expect("warm insertion layout");
+        let cold_insert = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold insertion layout");
+        assert_layout_results_equal(&warm_insert, &cold_insert);
+        assert_eq!(engine.paragraph_cache_counts(), (1, 3));
+
+        input.document.body.content.remove(1);
+        let warm_delete = engine.layout(&input).expect("warm deletion layout");
+        let cold_delete = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold deletion layout");
+        assert_layout_results_equal(&warm_delete, &cold_delete);
+        assert_layout_results_equal(&original, &warm_delete);
+        assert_eq!(engine.paragraph_cache_counts(), (3, 3));
+    }
+
+    #[test]
+    fn safe_tables_reuse_transactionally_and_with_bounds() {
+        let mut input = make_input_with_text("before table");
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(safe_table("cached cell")));
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let cold = engine.layout(&input).expect("cold table layout");
+        let warm = engine.layout(&input).expect("warm table layout");
+        assert_layout_results_equal(&cold, &warm);
+        assert_eq!(engine.table_cache_counts(), (1, 1));
+
+        let mut provenance_input = input.clone();
+        let mut provenance_engine = Engine::new_deterministic().expect("bundled fonts load");
+        provenance_engine
+            .layout_with_provenance(&provenance_input)
+            .expect("prime sourced table cache");
+        let mut inserted = CT_P::new();
+        inserted.add_run("inserted before table");
+        provenance_input
+            .document
+            .body
+            .content
+            .insert(1, BodyContent::Paragraph(inserted));
+        let (provenance_layout, sources) = provenance_engine
+            .layout_with_provenance(&provenance_input)
+            .expect("warm sourced table layout");
+        let sourced_runs = provenance_layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.elements)
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some((run.text.clone(), run.source)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let cached_cell = sourced_runs
+            .iter()
+            .find_map(|(text, source)| text.starts_with("cached").then_some(*source).flatten())
+            .unwrap_or_else(|| panic!("cached cell keeps provenance: {sourced_runs:?}"));
+        assert_eq!(
+            sources[cached_cell.node.get() as usize - 1].children,
+            [2, 0, 0, 0]
+        );
+        assert_eq!(provenance_engine.table_cache_counts(), (1, 1));
+
+        let mut bounded = make_input_with_text("bounded prefix");
+        for index in 0..(TABLE_CACHE_MAX_ENTRIES + 8) {
+            bounded
+                .document
+                .body
+                .content
+                .push(BodyContent::Table(safe_table(&format!("table {index}"))));
+        }
+        let mut bounded_engine = Engine::new_deterministic().expect("bundled fonts load");
+        bounded_engine
+            .layout(&bounded)
+            .expect("bounded table layout");
+        assert!(bounded_engine.table_cache.len() <= TABLE_CACHE_MAX_ENTRIES);
+        assert!(bounded_engine.table_cache_bytes <= TABLE_CACHE_MAX_BYTES);
+        assert!(bounded_engine.pending_table_cache_peak_entries <= TABLE_CACHE_MAX_ENTRIES);
+        assert!(bounded_engine.pending_table_cache_peak_bytes <= TABLE_CACHE_MAX_BYTES);
+
+        let mut retained_border_block = engine
+            .table_cache
+            .back()
+            .expect("safe table retained")
+            .block
+            .clone();
+        let mut color = String::with_capacity(TABLE_CACHE_MAX_BYTES + 1);
+        color.push_str("00");
+        let mut edge =
+            rdocx_oxml::borders::CT_BorderEdge::new(rdocx_oxml::shared::ST_Border::Single);
+        edge.color = Some(color);
+        retained_border_block.borders = Some(rdocx_oxml::table::CT_TblBorders {
+            top: Some(edge),
+            ..Default::default()
+        });
+        assert!(table_block_retained_bytes(&retained_border_block) > TABLE_CACHE_MAX_BYTES);
+
+        let mut unsafe_table = safe_table("numbered cell");
+        unsafe_table.rows[0].cells[0].paragraphs_mut()[0]
+            .properties
+            .get_or_insert_default()
+            .num_id = Some(1);
+        assert!(!table_is_cache_safe(&unsafe_table, &input.styles));
+
+        let mut preserved_table = safe_table("preserved properties");
+        preserved_table
+            .properties
+            .get_or_insert_default()
+            .revision_xml
+            .push(br#"<w:unknown/>"#.to_vec());
+        assert!(!table_is_cache_safe(&preserved_table, &input.styles));
+
+        let mut preserved_cell = safe_table("preserved cell properties");
+        preserved_cell.rows[0].cells[0]
+            .properties
+            .get_or_insert_default()
+            .extra_xml
+            .push((0, br#"<w:unknown/>"#.to_vec()));
+        assert!(!table_is_cache_safe(&preserved_cell, &input.styles));
+    }
+
+    fn restart_input() -> LayoutInput {
+        let mut input = make_input_with_text("paragraph 000 stable line");
+        for index in 1..140 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("paragraph {index:03} stable line"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        input
+    }
+
+    fn set_body_paragraph_text(input: &mut LayoutInput, index: usize, text: &str) {
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[index] else {
+            panic!("body entry is a paragraph");
+        };
+        paragraph.runs[0].content = vec![RunContent::Text(rdocx_oxml::text::CT_Text {
+            text: text.to_owned(),
+            preserve_space: false,
+        })];
+    }
+
+    fn substituted_restart_input() -> LayoutInput {
+        let mut input = restart_input();
+        let BodyContent::Paragraph(fields) = &mut input.document.body.content[0] else {
+            panic!("body entry is a paragraph");
+        };
+        for (instruction, display) in [
+            ("PAGE", "page"),
+            ("NUMPAGES", "pages"),
+            ("PAGEREF destination", "target"),
+        ] {
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(Field::new(instruction, display))];
+            fields.runs.push(run);
+        }
+        let BodyContent::Paragraph(target) = &mut input.document.body.content[100] else {
+            panic!("body entry is a paragraph");
+        };
+        assert!(target.insert_bookmark_start(0, 46, "destination"));
+        assert!(target.insert_bookmark_end(1, 46));
+        input
+    }
+
+    fn substituted_page_index(engine: &Engine) -> usize {
+        engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained")
+            .substitution_inputs
+            .iter()
+            .position(Option::is_some)
+            .expect("field page retained")
+    }
+
+    #[test]
+    fn unchanged_page_fields_reuse_substituted_frames() {
+        let input = substituted_restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let first = engine.layout(&input).expect("initial field layout");
+        let field_page = substituted_page_index(&engine);
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained");
+        assert!(
+            retained.checkpoints.is_empty(),
+            "field pages remain excluded from pagination restart"
+        );
+        assert!(!Arc::ptr_eq(
+            &retained.raw_pages[field_page],
+            &retained.pages[field_page]
+        ));
+        assert!(
+            retained
+                .raw_pages
+                .iter()
+                .zip(&retained.pages)
+                .zip(&retained.substitution_inputs)
+                .filter(|(_, inputs)| inputs.is_none())
+                .all(|((pristine, substituted), _)| Arc::ptr_eq(pristine, substituted))
+        );
+
+        let warm = engine.layout(&input).expect("warm field layout");
+        assert!(Arc::ptr_eq(
+            &first.pages[field_page],
+            &warm.pages[field_page]
+        ));
+    }
+
+    #[test]
+    fn changed_substitution_context_reshapes_pages() {
+        fn assert_retained_key_miss(
+            label: &str,
+            mutate: impl FnOnce(&mut FieldSubstitutionInputs),
+        ) {
+            let input = substituted_restart_input();
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            let first = engine.layout(&input).expect("initial field layout");
+            let field_page = substituted_page_index(&engine);
+            let retained = engine
+                .restart_cache
+                .as_mut()
+                .expect("restart record retained");
+            mutate(
+                retained.substitution_inputs[field_page]
+                    .as_mut()
+                    .expect("field inputs retained"),
+            );
+            let warm = engine.layout(&input).expect("warm field layout");
+            let cold = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .expect("cold field layout");
+            assert_layout_results_equal(&warm, &cold);
+            assert!(
+                !Arc::ptr_eq(&first.pages[field_page], &warm.pages[field_page]),
+                "{label}"
+            );
+        }
+
+        assert_retained_key_miss("page index must miss", |inputs| inputs.page_index += 1);
+        assert_retained_key_miss("displayed page number must miss", |inputs| {
+            inputs.page_number += 1;
+        });
+        assert_retained_key_miss("page count must miss", |inputs| inputs.total_pages += 1);
+        assert_retained_key_miss("bookmark targets must miss", |inputs| {
+            inputs.bookmark_pages.push((usize::MAX, usize::MAX));
+        });
+        assert_retained_key_miss("font identity must miss", |inputs| {
+            inputs.font_identity.reverse();
+            inputs.font_identity.push(FontId(u32::MAX));
+        });
+        assert_retained_key_miss("revision view must miss", |inputs| {
+            inputs.revision_view = RevisionView::Tracked;
+        });
+
+        let mut input = substituted_restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let first = engine.layout(&input).expect("initial field layout");
+        let field_page = substituted_page_index(&engine);
+        set_body_paragraph_text(&mut input, 0, "changed pristine field page");
+        let warm = engine.layout(&input).expect("changed pristine layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold changed pristine layout");
+        assert_layout_results_equal(&warm, &cold);
+        assert!(!Arc::ptr_eq(
+            &first.pages[field_page],
+            &warm.pages[field_page]
+        ));
+
+        fn set_field_page_family(input: &mut LayoutInput, family: &str) {
+            let BodyContent::Paragraph(fields) = &mut input.document.body.content[0] else {
+                panic!("body entry is a paragraph");
+            };
+            for run in &mut fields.runs {
+                run.properties = Some(rdocx_oxml::properties::CT_RPr {
+                    font_ascii: Some(family.to_owned()),
+                    font_hansi: Some(family.to_owned()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        let mut input = substituted_restart_input();
+        set_field_page_family(&mut input, "Caladea");
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("first bundled-family layout");
+        set_field_page_family(&mut input, "Carlito");
+        let transitioned = engine.layout(&input).expect("font-transition field layout");
+        let field_page = substituted_page_index(&engine);
+        let field_free_page = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained")
+            .substitution_inputs
+            .iter()
+            .position(Option::is_none)
+            .expect("field-free page retained");
+        let warm = engine.layout(&input).expect("post-transition warm layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("post-transition cold layout");
+        assert_layout_results_equal(&warm, &cold);
+        assert!(Arc::ptr_eq(
+            &transitioned.pages[field_page],
+            &warm.pages[field_page]
+        ));
+        assert!(Arc::ptr_eq(
+            &transitioned.pages[field_free_page],
+            &warm.pages[field_free_page]
+        ));
+    }
+
+    #[test]
+    fn substituted_page_reuse_is_bounded_and_complete_equal() {
+        let input = substituted_restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("initial field layout");
+        let warm = engine.layout(&input).expect("warm field layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold field layout");
+        assert_layout_results_equal(&warm, &cold);
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained");
+        assert!(
+            retained.raw_pages.len().max(retained.checkpoints.len()) <= RESTART_CACHE_MAX_ENTRIES
+        );
+        assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
+
+        let mut oversized = make_input_with_text("");
+        oversized.document.body.content.clear();
+        for page in 0..=RESTART_CACHE_MAX_ENTRIES {
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                page_break_before: (page > 0).then_some(true),
+                ..Default::default()
+            });
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
+            paragraph.runs.push(run);
+            oversized.document.body.add_paragraph(paragraph);
+        }
+        let mut bounded = Engine::new_deterministic().expect("bundled fonts load");
+        let result = bounded
+            .layout(&oversized)
+            .expect("oversized layout succeeds");
+        assert_eq!(result.pages.len(), RESTART_CACHE_MAX_ENTRIES + 1);
+        assert!(
+            bounded.restart_cache.is_none(),
+            "an oversized pair set drops the optimization"
+        );
+
+        fn over_limit<T>() -> usize {
+            RESTART_CACHE_MAX_BYTES / std::mem::size_of::<T>() + 1
+        }
+        fn assert_capacity_rejected(label: &str, mutate: impl FnOnce(&mut RestartCache)) {
+            let mut candidate = RestartCache {
+                body: Vec::new(),
+                with_provenance: false,
+                raw_pages: Vec::new(),
+                pages: Vec::new(),
+                substitution_inputs: Vec::new(),
+                outlines: Vec::new(),
+                checkpoints: Vec::new(),
+                font_trace: Vec::new(),
+                bytes: 0,
+            };
+            mutate(&mut candidate);
+            assert!(
+                restart_cache_bytes(&candidate) > RESTART_CACHE_MAX_BYTES,
+                "{label}"
+            );
+        }
+
+        assert_capacity_rejected("body vector capacity is charged", |cache| {
+            cache.body = Vec::with_capacity(over_limit::<String>());
+        });
+        assert_capacity_rejected("pristine page vector capacity is charged", |cache| {
+            cache.raw_pages = Vec::with_capacity(over_limit::<Arc<PageFrame>>());
+        });
+        assert_capacity_rejected("substituted page vector capacity is charged", |cache| {
+            cache.pages = Vec::with_capacity(over_limit::<Arc<PageFrame>>());
+        });
+        assert_capacity_rejected("substitution vector capacity is charged", |cache| {
+            cache.substitution_inputs =
+                Vec::with_capacity(over_limit::<Option<FieldSubstitutionInputs>>());
+        });
+        assert_capacity_rejected("outline vector capacity is charged", |cache| {
+            cache.outlines = Vec::with_capacity(over_limit::<oxml_layout::OutlineEntry>());
+        });
+        assert_capacity_rejected("checkpoint vector capacity is charged", |cache| {
+            cache.checkpoints = Vec::with_capacity(over_limit::<paginator::PaginationCheckpoint>());
+        });
+        assert_capacity_rejected("font trace vector capacity is charged", |cache| {
+            cache.font_trace = Vec::with_capacity(over_limit::<FontId>());
+        });
+        assert_capacity_rejected("body string capacity is charged", |cache| {
+            cache
+                .body
+                .push(String::with_capacity(RESTART_CACHE_MAX_BYTES + 1));
+        });
+        assert_capacity_rejected("outline title capacity is charged", |cache| {
+            cache.outlines.push(oxml_layout::OutlineEntry {
+                title: String::with_capacity(RESTART_CACHE_MAX_BYTES + 1),
+                level: 1,
+                page_index: 0,
+                y_position: 0.0,
+            });
+        });
+        for nested in ["bookmark targets", "font identity"] {
+            assert_capacity_rejected(&format!("{nested} capacity is charged"), |cache| {
+                cache
+                    .substitution_inputs
+                    .push(Some(FieldSubstitutionInputs {
+                        page_index: 0,
+                        page_number: 1,
+                        total_pages: 1,
+                        bookmark_pages: if nested == "bookmark targets" {
+                            Vec::with_capacity(over_limit::<(usize, usize)>())
+                        } else {
+                            Vec::new()
+                        },
+                        font_identity: if nested == "font identity" {
+                            Vec::with_capacity(over_limit::<FontId>())
+                        } else {
+                            Vec::new()
+                        },
+                        revision_view: RevisionView::Accepted,
+                    }));
+            });
+        }
+    }
+
+    #[test]
+    fn warm_restart_rebuilds_only_the_bounded_changed_region() {
+        let mut input = restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let cold_initial = engine.layout(&input).expect("initial pagination");
+        let initial_pages = cold_initial.pages.clone();
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart state retained");
+        assert!(retained.checkpoints.len() > 1);
+        assert!(retained.checkpoints.len() <= RESTART_CACHE_MAX_ENTRIES);
+        assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
+
+        set_body_paragraph_text(&mut input, 70, "paragraph 070 changed line");
+        let warm = engine.layout(&input).expect("warm middle edit");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold middle edit");
+        assert_layout_results_equal(&warm, &cold);
+        let rebuilt = engine
+            .last_rebuilt_page_range
+            .clone()
+            .expect("rebuilt range recorded");
+        assert!(
+            rebuilt.end.saturating_sub(rebuilt.start) <= 2,
+            "{rebuilt:?}"
+        );
+        assert!(
+            warm.pages
+                .iter()
+                .zip(&initial_pages)
+                .take(rebuilt.start)
+                .all(|(current, previous)| Arc::ptr_eq(current, previous))
+        );
+        assert!(
+            warm.pages
+                .iter()
+                .zip(&initial_pages)
+                .skip(rebuilt.end)
+                .all(|(current, previous)| Arc::ptr_eq(current, previous))
+        );
+
+        for (index, label) in [(0, "start"), (139, "tail")] {
+            set_body_paragraph_text(
+                &mut input,
+                index,
+                &format!("paragraph {index:03} {label:>7} line"),
+            );
+            let warm = engine.layout(&input).expect("warm boundary edit");
+            let cold = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .expect("cold boundary edit");
+            assert_layout_results_equal(&warm, &cold);
+        }
+    }
+
+    #[test]
+    fn unsafe_pagination_state_falls_back_to_full_layout() {
+        let mut input = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[20] else {
+            panic!("paragraph");
+        };
+        paragraph.properties.get_or_insert_default().keep_next = Some(true);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let warm = engine.layout(&input).expect("keep layout");
+        assert!(engine.restart_cache.is_none());
+        set_body_paragraph_text(&mut input, 30, "paragraph 030 changed line");
+        let next = engine.layout(&input).expect("fallback relayout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold fallback layout");
+        assert_layout_results_equal(&next, &cold);
+        assert!(!warm.pages.is_empty());
+
+        let assert_fallback = |label: &str, input: LayoutInput| {
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine
+                .layout(&input)
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            assert!(engine.restart_cache.is_none(), "{label}");
+        };
+
+        let mut table = make_input_with_text("before table");
+        table
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(safe_table("table")));
+        assert_fallback("table", table);
+
+        let split = make_input_with_text(&"split paragraph content ".repeat(200));
+        assert_fallback("split paragraph", split);
+
+        assert_fallback(
+            "floating drawing",
+            make_wrapping_document(WrapType::Square, None, 120.0, 60.0, 5.0),
+        );
+        assert_fallback("note continuation", make_input_with_footnote(&["note"]));
+
+        let mut sections = restart_input();
+        let BodyContent::Paragraph(first) = &mut sections.document.body.content[20] else {
+            panic!("paragraph");
+        };
+        first.properties.get_or_insert_default().sect_pr = Some(CT_SectPr::default_letter());
+        assert_fallback("multiple sections", sections);
+
+        let mut background = restart_input();
+        background.document.background_xml = Some(
+            br#"<w:background xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:color="FFFFFF"/>"#
+                .to_vec(),
+        );
+        assert_fallback("page background", background);
+
+        let mut field = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut field.document.body.content[20] else {
+            panic!("paragraph");
+        };
+        let mut field_run = CT_R::new("");
+        field_run.content = vec![RunContent::Field(rdocx_oxml::text::Field::new("PAGE", "1"))];
+        paragraph.runs.push(field_run);
+        let mut field_engine = Engine::new_deterministic().expect("bundled fonts load");
+        field_engine.layout(&field).expect("field layout");
+        let retained = field_engine
+            .restart_cache
+            .as_ref()
+            .expect("field substitution pairs retained");
+        assert!(
+            retained.checkpoints.is_empty(),
+            "fields must not become pagination restart boundaries"
+        );
+
+        let mut header_footer = restart_input();
+        let mut section = CT_SectPr::default_letter();
+        section
+            .header_refs
+            .push(rdocx_oxml::header_footer::HdrFtrRef {
+                hdr_ftr_type: rdocx_oxml::header_footer::HdrFtrType::Default,
+                rel_id: "rIdHeader".to_owned(),
+            });
+        section
+            .footer_refs
+            .push(rdocx_oxml::header_footer::HdrFtrRef {
+                hdr_ftr_type: rdocx_oxml::header_footer::HdrFtrType::Default,
+                rel_id: "rIdFooter".to_owned(),
+            });
+        header_footer.document.body.sect_pr = Some(section);
+        for (relationship_id, is_header) in [("rIdHeader", true), ("rIdFooter", false)] {
+            let mut part = rdocx_oxml::header_footer::CT_HdrFtr::new();
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(relationship_id);
+            part.paragraphs.push(paragraph);
+            if is_header {
+                header_footer
+                    .headers
+                    .insert(relationship_id.to_owned(), part);
+            } else {
+                header_footer
+                    .footers
+                    .insert(relationship_id.to_owned(), part);
+            }
+        }
+        assert_fallback("header and footer", header_footer);
+
+        let mut boundary = restart_input();
+        let mut boundary_engine = Engine::new_deterministic().expect("bundled fonts load");
+        boundary_engine
+            .layout(&boundary)
+            .expect("prime boundary state");
+        let stale = boundary_engine
+            .restart_cache
+            .as_mut()
+            .and_then(|cache| {
+                cache
+                    .checkpoints
+                    .iter_mut()
+                    .find(|checkpoint| checkpoint.next_block_index > 80)
+            })
+            .expect("later checkpoint exists");
+        stale.next_header_page_number += 1;
+        set_body_paragraph_text(&mut boundary, 70, "changed before stale boundary");
+        let warm = boundary_engine
+            .layout(&boundary)
+            .expect("warm boundary mismatch");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&boundary)
+            .expect("cold boundary mismatch");
+        assert_layout_results_equal(&warm, &cold);
+        assert!(
+            boundary_engine
+                .restart_cache
+                .as_ref()
+                .expect("correct state republished")
+                .checkpoints
+                .iter()
+                .all(|checkpoint| {
+                    checkpoint.next_header_page_number == checkpoint.page_count + 1
+                })
+        );
+    }
+
+    #[test]
+    fn warm_and_cold_outputs_are_complete_equals() {
+        let mut input = restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("prime restart state");
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("inserted stable line");
+        input
+            .document
+            .body
+            .content
+            .insert(60, BodyContent::Paragraph(inserted));
+        let warm_insert = engine.layout(&input).expect("warm insertion");
+        let cold_insert = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold insertion");
+        assert_layout_results_equal(&warm_insert, &cold_insert);
+
+        input.document.body.content.remove(60);
+        let warm_delete = engine.layout(&input).expect("warm deletion");
+        let cold_delete = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold deletion");
+        assert_layout_results_equal(&warm_delete, &cold_delete);
+
+        let mut sourced_engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (original, original_sources) = sourced_engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart state");
+        input.document.body.content.insert(
+            60,
+            BodyContent::Paragraph({
+                let mut paragraph = CT_P::new();
+                paragraph.add_run("inserted sourced line");
+                paragraph
+            }),
+        );
+        let (warm_insert, warm_insert_sources) = sourced_engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced insertion");
+        let (cold_insert, cold_insert_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("cold sourced insertion");
+        assert_layout_results_equal(&warm_insert, &cold_insert);
+        assert_eq!(warm_insert_sources, cold_insert_sources);
+
+        input.document.body.content.remove(60);
+        let (warm_delete, warm_delete_sources) = sourced_engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced deletion");
+        assert_layout_results_equal(&warm_delete, &original);
+        assert_eq!(warm_delete_sources, original_sources);
+
+        let mut truncate_engine = Engine::new_deterministic().expect("bundled fonts load");
+        truncate_engine
+            .layout(&input)
+            .expect("prime whole-suffix deletion state");
+        let checkpoint = truncate_engine
+            .restart_cache
+            .as_ref()
+            .and_then(|cache| cache.checkpoints.iter().next_back().copied())
+            .expect("restart cache has a final safe boundary");
+        input
+            .document
+            .body
+            .content
+            .truncate(checkpoint.next_block_index);
+        let warm_truncate = truncate_engine
+            .layout(&input)
+            .expect("warm whole-suffix deletion");
+        let cold_truncate = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold whole-suffix deletion");
+        assert_layout_results_equal(&warm_truncate, &cold_truncate);
+    }
+
+    #[test]
+    fn paragraph_cache_failure_and_eviction_remain_bounded() {
         let mut input = make_input_with_text("");
         input.document = rdocx_oxml::CT_Document::from_xml(
             br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>cache-safe prefix</w:t></w:r></w:p><w:p><w:fldSimple w:instr="REF missing"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:body></w:document>"#,
@@ -3908,6 +7384,11 @@ mod tests {
         };
         prefix.runs[0].properties.get_or_insert_default().font_ascii =
             Some(valid_family.to_owned());
+        failing_input
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(safe_table("staged before failure")));
         let mut later = CT_P::new();
         later
             .add_run("late font failure")
@@ -3921,7 +7402,54 @@ mod tests {
         });
         assert!(failing.layout(&failing_input).is_err());
         assert!(failing.paragraph_cache.is_empty());
+        assert!(failing.table_cache.is_empty());
         assert_eq!(failing.paragraph_cache_counts(), (0, 1));
+        assert_eq!(failing.table_cache_counts(), (0, 1));
+
+        let template_input = make_input_with_text("eviction template");
+        let mut bounded = Engine::new_deterministic().expect("bundled fonts load");
+        bounded
+            .layout(&template_input)
+            .expect("template layout succeeds");
+        let template = bounded
+            .paragraph_cache
+            .pop_front()
+            .expect("template paragraph is retained");
+        bounded.paragraph_cache_bytes = 0;
+        for index in 0..=PARAGRAPH_CACHE_MAX_ENTRIES {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("eviction paragraph {index}"));
+            let bytes = paragraph_cache_entry_bytes(
+                &paragraph,
+                &template.block,
+                &template.diagnostics,
+                template.font_trace.len(),
+            );
+            bounded.publish_paragraph_cache_entry(ParagraphCacheEntry {
+                fingerprint: paragraph_fingerprint(&paragraph),
+                key: ParagraphCacheKey {
+                    paragraph,
+                    content_width_bits: PageGeometry::default().content_width().to_bits(),
+                    revision_view: RevisionView::Accepted,
+                },
+                block: template.block.clone(),
+                diagnostics: template.diagnostics.clone(),
+                font_trace: template.font_trace.clone(),
+                bytes,
+            });
+        }
+        assert_eq!(bounded.paragraph_cache.len(), PARAGRAPH_CACHE_MAX_ENTRIES);
+        assert!(bounded.paragraph_cache_bytes <= PARAGRAPH_CACHE_MAX_BYTES);
+        assert_eq!(
+            bounded
+                .paragraph_cache
+                .front()
+                .expect("FIFO cache has a front")
+                .key
+                .paragraph
+                .text(),
+            "eviction paragraph 1"
+        );
     }
 
     #[test]
@@ -3990,6 +7518,7 @@ mod tests {
         engine.paragraph_cache.clear();
         engine.paragraph_cache_bytes = 0;
         engine.publish_paragraph_cache_entry(ParagraphCacheEntry {
+            fingerprint: paragraph_fingerprint(paragraph),
             key: ParagraphCacheKey {
                 paragraph: paragraph.clone(),
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
@@ -4091,6 +7620,7 @@ mod tests {
         engine.paragraph_cache.clear();
         engine.paragraph_cache_bytes = 0;
         engine.publish_paragraph_cache_entry(ParagraphCacheEntry {
+            fingerprint: paragraph_fingerprint(&paragraph),
             key: ParagraphCacheKey {
                 paragraph,
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
@@ -4587,7 +8117,7 @@ mod tests {
             .expect("provenance layout")
             .into_layout_result();
         for page in &mut sourced.pages {
-            for element in &mut page.elements {
+            for element in &mut Arc::make_mut(page).elements {
                 if let PositionedElement::Text(run) = element {
                     run.source = None;
                 }
@@ -4621,7 +8151,7 @@ mod tests {
                     .layout
                     .fonts
                     .iter()
-                    .any(|font| font.data == input.fonts[0].data),
+                    .any(|font| font.data.as_ref() == input.fonts[0].data.as_slice()),
                 "the caller-provided font bytes shaped the result"
             );
             let runs = result
@@ -5720,7 +9250,7 @@ mod tests {
         let all: String = output
             .pages
             .iter()
-            .map(page_text)
+            .map(|page| page_text(page))
             .collect::<Vec<_>>()
             .join(" | ");
         assert!(

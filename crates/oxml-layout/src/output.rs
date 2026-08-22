@@ -1,6 +1,7 @@
 //! Output types for the layout engine: positioned page frames, glyph runs, etc.
 
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use crate::paint::{Paint, Stroke};
 use crate::path::Path;
@@ -302,7 +303,7 @@ pub struct FontData {
     /// Font family name.
     pub family: String,
     /// Raw TTF/OTF bytes for PDF embedding.
-    pub data: Vec<u8>,
+    pub data: Arc<[u8]>,
     /// Face index within a font collection.
     pub face_index: u32,
     /// Whether this is a bold variant.
@@ -344,7 +345,7 @@ pub struct OutlineEntry {
 #[non_exhaustive]
 pub struct LayoutResult {
     /// Laid-out pages.
-    pub pages: Vec<PageFrame>,
+    pub pages: Vec<Arc<PageFrame>>,
     /// Font data for all fonts used.
     pub fonts: Vec<FontData>,
     /// Optional document metadata for PDF output.
@@ -365,7 +366,7 @@ impl LayoutResult {
     /// assert!(result.diagnostics.is_empty());
     /// ```
     pub fn new(
-        pages: Vec<PageFrame>,
+        pages: Vec<Arc<PageFrame>>,
         fonts: Vec<FontData>,
         metadata: Option<DocumentMetadata>,
         outlines: Vec<OutlineEntry>,
@@ -437,9 +438,11 @@ mod media_id_tests {
 
 #[cfg(test)]
 mod group_output_tests {
+    use std::sync::Arc;
+
     use super::{
-        Color, Diagnostic, Effect, GroupElement, LayoutResult, PageFrame, PathElement,
-        PositionedElement, Rect,
+        Color, Diagnostic, Effect, FontData, FontId, GroupElement, LayoutResult, PageFrame,
+        PathElement, PositionedElement, Rect,
     };
     use crate::{FillRule, Paint, Path, Stroke, Transform};
 
@@ -515,6 +518,31 @@ mod group_output_tests {
     fn layout_result_new_defaults_diagnostics_to_empty() {
         let result = LayoutResult::new(Vec::new(), Vec::new(), None, Vec::new());
         assert_eq!(result.diagnostics, Vec::<Diagnostic>::new());
+    }
+
+    #[test]
+    fn cloned_layout_shares_font_bytes_and_page_frames() {
+        let page = Arc::new(PageFrame::new(1, 612.0, 792.0, Vec::new()));
+        let font_bytes: Arc<[u8]> = Arc::from([1, 2, 3, 4]);
+        let result = LayoutResult::new(
+            vec![Arc::clone(&page)],
+            vec![FontData {
+                id: FontId(1),
+                family: "Shared".to_owned(),
+                data: Arc::clone(&font_bytes),
+                face_index: 0,
+                bold: false,
+                italic: false,
+            }],
+            None,
+            Vec::new(),
+        );
+
+        let cloned = result.clone();
+        assert!(Arc::ptr_eq(&result.pages[0], &cloned.pages[0]));
+        assert!(Arc::ptr_eq(&result.fonts[0].data, &cloned.fonts[0].data));
+        assert_eq!(result.pages[0].page_number, cloned.pages[0].page_number);
+        assert_eq!(result.fonts[0].data.as_ref(), cloned.fonts[0].data.as_ref());
     }
 
     #[test]

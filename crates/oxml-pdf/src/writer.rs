@@ -1,6 +1,7 @@
 //! PDF document writer: assembles pages, fonts, images, metadata, and outlines.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use oxml_layout::{
     Color, FillRule, FontId, GradientStop, LayoutResult, LineCap, LineJoin, Paint, Path,
@@ -28,7 +29,7 @@ struct AlphaStates {
 }
 
 impl AlphaStates {
-    fn new(pages: &[oxml_layout::PageFrame], alloc: &mut impl FnMut() -> Ref) -> Self {
+    fn new(pages: &[Arc<oxml_layout::PageFrame>], alloc: &mut impl FnMut() -> Ref) -> Self {
         let mut keys = BTreeSet::new();
         for page in pages {
             collect_alpha_keys(&page.elements, &mut keys);
@@ -79,7 +80,10 @@ fn alpha_key(alpha: f64) -> Option<u32> {
 fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) {
     for element in elements {
         match element {
-            PositionedElement::Text(run) => insert_alpha(keys, run.color.a),
+            PositionedElement::Text(run) if !(run.text.is_empty() && run.glyph_ids.is_empty()) => {
+                insert_alpha(keys, run.color.a)
+            }
+            PositionedElement::Text(_) => {}
             PositionedElement::Line { color, .. } | PositionedElement::FilledRect { color, .. } => {
                 insert_alpha(keys, color.a)
             }
@@ -140,7 +144,7 @@ struct GradientRegistry {
 }
 
 impl GradientRegistry {
-    fn new(pages: &[oxml_layout::PageFrame], alloc: &mut impl FnMut() -> Ref) -> Self {
+    fn new(pages: &[Arc<oxml_layout::PageFrame>], alloc: &mut impl FnMut() -> Ref) -> Self {
         let mut registry = Self {
             entries: Vec::new(),
             by_occurrence: HashMap::new(),
@@ -420,6 +424,10 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     for (page_idx, page) in layout.pages.iter().enumerate() {
         let mut elem_idx = 0;
         walk(&page.elements, &mut |element, _| {
+            if matches!(element, PositionedElement::Text(run) if run.text.is_empty() && run.glyph_ids.is_empty())
+            {
+                return;
+            }
             let current_idx = elem_idx;
             elem_idx += 1;
             if let PositionedElement::Image {
@@ -911,11 +919,13 @@ struct EmitState<'a> {
 fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &mut EmitState<'_>) {
     for element in elements {
         let elem_idx = state.leaf_index;
-        if !matches!(element, PositionedElement::Group(_)) {
+        if !matches!(element, PositionedElement::Group(_))
+            && !matches!(element, PositionedElement::Text(run) if run.text.is_empty() && run.glyph_ids.is_empty())
+        {
             state.leaf_index += 1;
         }
         match element {
-            PositionedElement::Text(run) => {
+            PositionedElement::Text(run) if !(run.text.is_empty() && run.glyph_ids.is_empty()) => {
                 if let Some(prepared) = state.prepared_fonts.get(&run.font_id)
                     && state.font_refs.contains_key(&run.font_id)
                 {
@@ -958,6 +968,7 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
                     content.restore_state();
                 }
             }
+            PositionedElement::Text(_) => {}
             PositionedElement::Line {
                 start,
                 end,
@@ -1451,6 +1462,7 @@ mod tests {
     fn content_for(elements: Vec<PositionedElement>) -> String {
         let page = page_with(elements);
         let mut next_ref = 100;
+        let page = Arc::new(page);
         let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
             let reference = Ref::new(next_ref);
             next_ref += 1;
@@ -1796,7 +1808,12 @@ mod tests {
                 None,
             )],
         );
-        let layout = LayoutResult::new(vec![first, second], Vec::new(), None, Vec::new());
+        let layout = LayoutResult::new(
+            vec![first.into(), second.into()],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
         let pdf = String::from_utf8_lossy(&write_pdf(&layout)).into_owned();
 
         let pattern_resources: Vec<_> = pdf
@@ -1833,7 +1850,7 @@ mod tests {
             vec![gradient_path],
         );
         let pdf = write_pdf(&LayoutResult::new(
-            vec![PageFrame::new(1, 120.0, 120.0, vec![rotated])],
+            vec![PageFrame::new(1, 120.0, 120.0, vec![rotated]).into()],
             Vec::new(),
             None,
             Vec::new(),
@@ -1888,7 +1905,12 @@ mod tests {
     }
 
     fn pdf_for(elements: Vec<PositionedElement>) -> String {
-        let layout = LayoutResult::new(vec![page_with(elements)], Vec::new(), None, Vec::new());
+        let layout = LayoutResult::new(
+            vec![page_with(elements).into()],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
         String::from_utf8_lossy(&write_pdf(&layout)).into_owned()
     }
 
@@ -2128,7 +2150,7 @@ mod tests {
             note: None,
         });
         let layout = LayoutResult::new(
-            vec![page_with(vec![group(Transform::IDENTITY, vec![text])])],
+            vec![page_with(vec![group(Transform::IDENTITY, vec![text])]).into()],
             Vec::new(),
             None,
             Vec::new(),
@@ -2204,6 +2226,7 @@ mod tests {
         let page = page_with(elements);
         let image_map = HashMap::from([((0, 1), 0)]);
         let mut next_ref = 100;
+        let page = Arc::new(page);
         let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
             let reference = Ref::new(next_ref);
             next_ref += 1;
@@ -2264,7 +2287,7 @@ mod tests {
             font_data: FontData {
                 id: font_id,
                 family: "Test".to_owned(),
-                data: Vec::new(),
+                data: Vec::new().into(),
                 face_index: 0,
                 bold: false,
                 italic: false,
@@ -2315,6 +2338,7 @@ mod tests {
         )]);
         let image_map = HashMap::from([((0, 1), 0)]);
         let mut next_ref = 100;
+        let page = Arc::new(page);
         let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
             let reference = Ref::new(next_ref);
             next_ref += 1;
@@ -2369,15 +2393,18 @@ mod tests {
     #[test]
     fn annotations_remain_outside_the_content_transform() {
         let layout = LayoutResult::new(
-            vec![page_with(vec![PositionedElement::LinkAnnotation {
-                rect: Rect {
-                    x: 72.0,
-                    y: 100.0,
-                    width: 100.0,
-                    height: 15.0,
-                },
-                url: "https://example.com".to_owned(),
-            }])],
+            vec![
+                page_with(vec![PositionedElement::LinkAnnotation {
+                    rect: Rect {
+                        x: 72.0,
+                        y: 100.0,
+                        width: 100.0,
+                        height: 15.0,
+                    },
+                    url: "https://example.com".to_owned(),
+                }])
+                .into(),
+            ],
             Vec::new(),
             None,
             Vec::new(),

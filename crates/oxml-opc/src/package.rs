@@ -60,6 +60,8 @@ pub struct OpcPackage {
     pub part_rels: HashMap<String, Relationships>,
     /// All parts keyed by their URI (e.g. "/word/document.xml").
     pub parts: HashMap<String, Vec<u8>>,
+    #[cfg(feature = "digital-signatures")]
+    pub(crate) signature_source: Option<crate::signature::SignatureSource>,
 }
 
 impl OpcPackage {
@@ -72,6 +74,23 @@ impl OpcPackage {
     /// Open an OPC package from any reader that implements Read + Seek.
     pub fn from_reader<R: Read + Seek>(reader: R) -> Result<Self> {
         Self::from_reader_with_limits(reader, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open an agile-encrypted OPC package with no archive-expansion limit.
+    #[cfg(feature = "agile-encryption")]
+    pub fn from_encrypted_reader<R: Read + Seek>(reader: R, password: &str) -> Result<Self> {
+        Self::from_encrypted_reader_with_limits(reader, password, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Authenticate and open an agile-encrypted OPC package with expansion limits.
+    #[cfg(feature = "agile-encryption")]
+    pub fn from_encrypted_reader_with_limits<R: Read + Seek>(
+        reader: R,
+        password: &str,
+        limits: PackageReadLimits,
+    ) -> Result<Self> {
+        let plaintext = crate::encryption::decrypt_package(reader, password, limits)?;
+        Self::from_reader_with_limits(std::io::Cursor::new(plaintext), limits)
     }
 
     /// Open an OPC package while bounding archive expansion.
@@ -197,6 +216,11 @@ impl OpcPackage {
             package_rels,
             part_rels,
             parts,
+            #[cfg(feature = "digital-signatures")]
+            signature_source: Some(crate::signature::SignatureSource {
+                content_types_xml: ct_xml.clone(),
+                content_types: ContentTypes::from_xml(ct_xml)?,
+            }),
         })
     }
 
@@ -213,6 +237,9 @@ impl OpcPackage {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         // Write [Content_Types].xml
+        #[cfg(feature = "digital-signatures")]
+        let ct_xml = crate::signature::content_types_bytes(self)?;
+        #[cfg(not(feature = "digital-signatures"))]
         let ct_xml = self.content_types.to_xml()?;
         zip.start_file("[Content_Types].xml", options)?;
         zip.write_all(&ct_xml)?;
@@ -249,6 +276,17 @@ impl OpcPackage {
         Ok(())
     }
 
+    /// Append a password-protected CFB envelope around the deterministic OPC ZIP.
+    ///
+    /// The output buffer is unchanged if package serialization, encryption, or
+    /// allocation fails.
+    #[cfg(feature = "agile-encryption")]
+    pub fn write_encrypted_to(&self, output: &mut Vec<u8>, password: &str) -> Result<()> {
+        let mut plaintext = std::io::Cursor::new(Vec::new());
+        self.write_to(&mut plaintext)?;
+        crate::encryption::write_encrypted_package(output, &plaintext.into_inner(), password)
+    }
+
     /// Get raw bytes of a part by its URI.
     pub fn get_part(&self, part_name: &str) -> Option<&[u8]> {
         self.parts.get(part_name).map(|v| v.as_slice())
@@ -257,6 +295,16 @@ impl OpcPackage {
     /// Set (or replace) a part's raw bytes.
     pub fn set_part(&mut self, part_name: &str, data: Vec<u8>) {
         self.parts.insert(part_name.to_string(), data);
+    }
+
+    /// Verify every digital signature discovered through the OPC relationship graph.
+    ///
+    /// Cryptographic validity authenticates the embedded certificate's key. It does
+    /// not establish that the certificate chains to a trusted root. Certificate
+    /// trust remains caller policy.
+    #[cfg(feature = "digital-signatures")]
+    pub fn verify_signatures(&self) -> Result<Vec<crate::SignatureReport>> {
+        crate::signature::verify_signatures(self)
     }
 
     /// Get the relationships for a specific part.
@@ -309,6 +357,8 @@ impl OpcPackage {
             package_rels: Relationships::new(),
             part_rels: HashMap::new(),
             parts: HashMap::new(),
+            #[cfg(feature = "digital-signatures")]
+            signature_source: None,
         }
     }
 

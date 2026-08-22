@@ -72,7 +72,14 @@ the side that owns its target type.
 **`oxml-opc` does not depend on `oxml-core`.** It has its own small local-name
 handling. Staying independent means it is publishable first and consumable
 alone. `rdocx-wasm` consumes the complete `rdocx` facade rather than using this
-lower-level seam as a second document model.
+lower-level seam as a second document model. Its default-off
+`agile-encryption` edge stays inside the package boundary and adds CFB plus
+cryptographic primitives only when a named native consumer enables it.
+The default-off `digital-signatures` edge follows the same boundary. It keeps
+exclusive XML canonicalization, OPC relationship transforms, RSA-SHA256
+verification, and X.509 parsing in `oxml-opc`. `rdocx` only forwards the
+native package report. Ordinary and WASM graphs do not include the signature
+dependencies.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It
@@ -85,12 +92,25 @@ output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
 format.
 
+Completed layout results share each immutable page frame and each font byte
+buffer through `Arc`. Word and Presentation producers establish that ownership
+at their format boundary. PDF, raster, facade page access, diagnostics, and
+provenance consumers borrow the shared values without gaining a format-specific
+dependency.
+
 `SourceNodeId` and `SourceSpan` are the format-neutral provenance carriers at
 this boundary. A text segment and its positioned glyph run can hold one
 result-local node id plus an exclusive Unicode-scalar range. Shared line
 breaking preserves and subdivides that range without learning what the node
 means. Consumers must resolve an id through the format-specific result that
 created it and must not compare ids from different results.
+
+An otherwise empty Word paragraph crosses the same boundary as one empty,
+zero-width text segment. The segment resolves the paragraph mark's default
+font and metrics without shaping a glyph. Attributed results attach the
+paragraph node with scalar range `0..0`, while ordinary results retain the
+same structure with no source id. The shared PDF and raster backends treat an
+empty run with no glyph ids as non-drawing content.
 
 One construct is an exception and is called out rather than glossed. A text
 segment carries an optional `NoteRef`, a footnote or endnote reference, and
@@ -101,9 +121,19 @@ code, and the alternative is a parallel segment type for one field. The pair
 problem less visibly.
 `rdocx-layout` keeps its Word-specific input and converts paragraph alignment,
 tabs, leaders, underlines, spacing, wrapping, and twips in `convert.rs`. The
-converter also preserves Word's established glyph slicing and automatic line
-height at this boundary. That seam is the reason the PDF backend transfers for
-free.
+converter preserves Word's automatic line height and emits one shaped text
+segment for each formatting and provenance span. Shared line breaking alone
+discovers UAX 14 opportunities, reshapes each exact text slice, and subdivides
+source spans. That seam is the reason the PDF backend transfers for free.
+Its reusable normal engine retains one exact private identity for every
+non-body layout input, section properties, and the document-wide wrapping
+state that can affect cached paragraph work. The native Word facade can move a
+compatible engine between two documents without exposing mutable cache state.
+The facade owns a separate deterministic-base engine for layouts where caller
+fonts override the bundled inventory. Missing families resolve from bundled
+faces without consulting system fonts. Checked transfer includes the exact
+caller-font bytes in the complete retained-work context and keeps the engine
+private.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing

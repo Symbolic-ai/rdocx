@@ -231,7 +231,7 @@ pub fn layout_presentation_with_font_manager(
     mut font_manager: FontManager,
 ) -> Result<LayoutResult, RenderInputError> {
     let pages = (0..input.slides.len())
-        .map(|index| layout_slide_with_fonts(input, index, &mut font_manager))
+        .map(|index| layout_slide_with_fonts(input, index, &mut font_manager).map(Arc::new))
         .collect::<Result<Vec<_>, _>>()?;
     let diagnostics = input
         .slides
@@ -3275,7 +3275,7 @@ mod tests {
             Some(PositionedElement::Group(_))
         ));
         let rendered = oxml_pdf::render_page_to_png(
-            &LayoutResult::new(vec![page], Vec::new(), None, Vec::new()),
+            &LayoutResult::new(vec![page.into()], Vec::new(), None, Vec::new()),
             0,
             72.0,
         )

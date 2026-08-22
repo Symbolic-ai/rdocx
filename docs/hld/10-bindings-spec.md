@@ -201,6 +201,30 @@ mutation for a larger value. `Document::set_list_level` can redefine an
 existing level without rebuilding the document. A rejected redefinition is
 side-effect free.
 
+When native callers enable the default-off `agile-encryption` feature,
+`Document::open_encrypted`, `Document::from_encrypted_bytes`, and the bounded
+bytes variant open password-protected OOXML through the shared package layer.
+`Document::save_encrypted` and `Document::to_encrypted_bytes` write the shared
+fixed Agile profile after staging a cloned document and package. A failed save
+does not mutate the live document, and the file API publishes through a
+sibling temporary file. These additive native APIs are unavailable without
+the feature. Python, WASM, and CLI manifests do not enable the feature, so
+their API and dependency graphs remain unchanged.
+
+When native callers enable the default-off `digital-signatures` feature,
+`Document::verify_signatures` directly returns the shared package verification
+reports. The additive API distinguishes cryptographic verification and
+complete declared coverage from certificate-chain trust. It does not expand
+Python, WASM, or CLI surfaces and those dependency graphs remain unchanged.
+
+Native callers rebuilding one Word document from another can call
+`Document::transfer_reusable_layout_from`. The method moves the source's normal
+layout engine only when the complete private retained-work context matches. A
+rejected transfer preserves both engines, a successful transfer preserves both
+completed result caches, and no unchecked engine accessor becomes public. This
+is an additive native Rust method. Python, WASM, and CLI surfaces gain no
+transfer method.
+
 Paragraph mutation supports explicit hard breaks and hyperlinks backed by a
 document relationship. Table column mutation keeps the table width, grid
 column, and every covering cell width consistent. A cell with `gridSpan`
@@ -390,9 +414,15 @@ stay uncached and use a distinct revision-view paragraph identity.
 `Document::layout_with_fonts_and_options` return owned uncached bundles whose
 font mapping contains the exact caller-provided bytes selected for shaping.
 They construct a caller-only engine and cannot observe the normal process font
-snapshot. Deterministic calls remain isolated on the bundled-font-only path.
-The built-in PDF, raster, and page accessors consume these same paths. This is
-an additive pre-1.0 native Rust surface and does not add binding methods.
+snapshot. `Document::layout_with_fonts_and_bundled_fallback` and its
+option-taking counterpart return the same owned result shape while retaining a
+private reusable deterministic-base engine. Caller faces override bundled
+faces, missing families resolve from the bundled inventory, and system fonts
+remain unavailable. The exact-font checked transfer method moves compatible
+private work between documents without exposing `Engine`. Deterministic calls
+remain isolated on the bundled-font-only path. The built-in PDF, raster, and
+page accessors consume their existing paths. These additions are pre-1.0 native
+Rust APIs and do not add Python, WASM, or CLI methods.
 
 Native Word callers author watermarks with `Document::set_text_watermark` and
 `Document::set_image_watermark`. Text uses fixed Word-like defaults of 468 by

@@ -43,7 +43,7 @@ mod tests {
 
     fn layout_with(elements: Vec<PositionedElement>) -> LayoutResult {
         LayoutResult::new(
-            vec![PageFrame::new(1, 612.0, 792.0, elements)],
+            vec![PageFrame::new(1, 612.0, 792.0, elements).into()],
             vec![],
             None,
             vec![],
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn render_with_metadata() {
         let layout = LayoutResult::new(
-            vec![PageFrame::new(1, 612.0, 792.0, vec![])],
+            vec![PageFrame::new(1, 612.0, 792.0, vec![]).into()],
             vec![],
             Some(DocumentMetadata {
                 title: Some("Test Title".to_owned()),
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn render_with_outlines() {
         let layout = LayoutResult::new(
-            vec![PageFrame::new(1, 612.0, 792.0, vec![])],
+            vec![PageFrame::new(1, 612.0, 792.0, vec![]).into()],
             vec![],
             None,
             vec![

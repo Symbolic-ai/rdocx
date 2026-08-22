@@ -32,12 +32,12 @@ regenerated, never hand-edited.
 | M14, Word collaboration layer                  | 9  | 9 | 0 | 0  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
-| M17, Security and compliance                   | 7  | 0 | 0 | 7  |
+| M17, Security and compliance                   | 7  | 3 | 0 | 4  |
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 41 | 38 | 1 | 1  |
-| **Total** | **252** | **215** | **1** | **35** |
+| X, Cross-cutting (opportunistic)            | 50 | 48 | 0 | 1  |
+| **Total** | **261** | **228** | **0** | **32** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -336,9 +336,9 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M17 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-169 | Agile encryption, read                       | S52  | L | pending |
-| F-170 | Agile encryption, write                      | S52  | M | pending |
-| F-171 | Digital signature verification               | S52  | L | pending |
+| F-169 | Agile encryption, read                       | S52  | L | done |
+| F-170 | Agile encryption, write                      | S52  | M | done |
+| F-171 | Digital signature verification               | S52  | L | done |
 | F-172 | Digital signature creation                   | S53  | M | pending |
 | F-173 | Tagged PDF structure tree                    | S53  | L | pending |
 | F-174 | PDF/A conformance                            | S53  | M | pending |
@@ -439,4 +439,13 @@ regenerated, never hand-edited.
 | F-X036 | Tag v0.8.0                                  | S51 | S | done |
 | F-X037 | Trace Word glyphs to source paragraphs     | S51 | M | done |
 | F-X038 | Cache relayout work across document edits  | S51 | L | done |
+| F-X039 | Share layout payloads and transfer reusable engines | S52 | M | done |
+| F-X040 | Restart pagination and cache table blocks  | S52 | L | done |
+| F-X041 | Remove duplicated glyphs at break opportunities | S52 | M | done |
+| F-X042 | Prove headers and footers in PDF output    | S52 | S | done |
+| F-X043 | Reuse bundled-fallback caller-font layouts | S52 | M | done |
+| F-X044 | Scale paragraph-cache lookup for editors   | S52 | M | done |
+| F-X045 | Cache headers and footers transactionally  | S52 | M | done |
+| F-X046 | Reuse substituted pages exactly            | S52 | S | done |
+| F-X047 | Attribute empty Word paragraphs            | S52 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

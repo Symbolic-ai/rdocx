@@ -115,6 +115,8 @@ pub struct Document {
     normal_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
     /// Bundled-font-only layout used by deterministic rendering.
     deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
+    /// Reusable bundled-font engine with caller faces at highest priority.
+    bundled_fallback_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
 }
 
 enum ChartPackageSource<'a> {
@@ -445,6 +447,7 @@ impl Document {
             layout_cache: Mutex::new(None),
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
+            bundled_fallback_layout_engine: Mutex::new(None),
         }
     }
 
@@ -476,6 +479,7 @@ impl Document {
             layout_cache: Mutex::new(None),
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
+            bundled_fallback_layout_engine: Mutex::new(None),
         }
     }
 
@@ -484,6 +488,10 @@ impl Document {
         std::mem::swap(
             &mut self.normal_layout_engine,
             &mut candidate.normal_layout_engine,
+        );
+        std::mem::swap(
+            &mut self.bundled_fallback_layout_engine,
+            &mut candidate.bundled_fallback_layout_engine,
         );
         *self = candidate;
     }
@@ -494,9 +502,35 @@ impl Document {
         Self::from_package(package)
     }
 
+    /// Open a password-protected agile-encrypted document from a file path.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn open_encrypted<P: AsRef<Path>>(path: P, password: &str) -> Result<Self> {
+        let file = std::fs::File::open(path)?;
+        let package = OpcPackage::from_encrypted_reader(file, password)?;
+        Self::from_package(package)
+    }
+
     /// Open a document from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         Self::from_bytes_with_limits(bytes, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open a password-protected agile-encrypted document from bytes.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn from_encrypted_bytes(bytes: &[u8], password: &str) -> Result<Self> {
+        Self::from_encrypted_bytes_with_limits(bytes, password, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open an agile-encrypted document while bounding OPC archive expansion.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn from_encrypted_bytes_with_limits(
+        bytes: &[u8],
+        password: &str,
+        limits: PackageReadLimits,
+    ) -> Result<Self> {
+        let cursor = std::io::Cursor::new(bytes);
+        let package = OpcPackage::from_encrypted_reader_with_limits(cursor, password, limits)?;
+        Self::from_package(package)
     }
 
     /// Open a document from bytes while bounding OPC archive expansion.
@@ -504,6 +538,14 @@ impl Document {
         let cursor = std::io::Cursor::new(bytes);
         let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
         Self::from_package(package)
+    }
+
+    /// Verify package signatures without asserting certificate-chain trust.
+    #[cfg(feature = "digital-signatures")]
+    pub fn verify_signatures(
+        &self,
+    ) -> std::result::Result<Vec<oxml_opc::SignatureReport>, oxml_opc::OpcError> {
+        self.package.verify_signatures()
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
@@ -625,6 +667,7 @@ impl Document {
             layout_cache: Mutex::new(None),
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
+            bundled_fallback_layout_engine: Mutex::new(None),
         })
     }
 
@@ -728,6 +771,26 @@ impl Document {
         let mut buf = std::io::Cursor::new(Vec::new());
         self.package.write_to(&mut buf)?;
         Ok(buf.into_inner())
+    }
+
+    /// Save a password-protected document using the fixed Agile write profile.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn save_encrypted<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<()> {
+        let bytes = self.to_encrypted_bytes(password)?;
+        write_encrypted_file(path.as_ref(), &bytes)?;
+        Ok(())
+    }
+
+    /// Save a password-protected document to a byte vector.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let mut encrypted = Vec::new();
+        candidate
+            .package
+            .write_encrypted_to(&mut encrypted, password)?;
+        Ok(encrypted)
     }
 
     /// Write the in-memory document/styles back into the OPC package parts.
@@ -3258,6 +3321,60 @@ impl Document {
 
     // ---- Layout and PDF conversion ----
 
+    /// Transfer compatible reusable normal-layout work from another document.
+    ///
+    /// The transfer succeeds only when every retained-work input other than
+    /// body content matches exactly. A rejected transfer leaves both engines
+    /// unchanged. Completed layout results remain owned by their documents.
+    pub fn transfer_reusable_layout_from(&mut self, source: &mut Document) -> bool {
+        let input = self.build_layout_input();
+        let transferred = {
+            let mut source_engine = source
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rdocx_layout::engine::Engine::take_if_compatible(&mut source_engine, &input)
+        };
+        let Some(transferred) = transferred else {
+            return false;
+        };
+        let mut receiver_engine = self
+            .normal_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *receiver_engine = Some(transferred);
+        true
+    }
+
+    /// Transfer compatible bundled-fallback layout work from another document.
+    ///
+    /// The exact caller-font slice is part of the compatibility check. A
+    /// rejected transfer leaves both private engines unchanged. This method
+    /// never exposes the engine or permits system-font discovery.
+    pub fn transfer_reusable_bundled_fallback_layout_from(
+        &mut self,
+        source: &mut Document,
+        font_files: &[(&str, &[u8])],
+    ) -> bool {
+        let input = self.build_layout_input_with_fonts(font_files, RenderOptions::default());
+        let transferred = {
+            let mut source_engine = source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rdocx_layout::engine::Engine::take_if_compatible(&mut source_engine, &input)
+        };
+        let Some(transferred) = transferred else {
+            return false;
+        };
+        let mut receiver_engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *receiver_engine = Some(transferred);
+        true
+    }
+
     /// Return the cached normal-font layout with its Word source map.
     ///
     /// Repeated calls share the same accepted-view result until the document
@@ -3295,17 +3412,66 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<rdocx_layout::WordLayoutResult> {
-        let mut input = self.build_layout_input();
-        input.revision_view = options.revision_view;
-        for (family, data) in font_files {
-            input.fonts.push(rdocx_layout::FontFile {
-                family: family.to_string(),
-                data: data.to_vec(),
-            });
-        }
+        let input = self.build_layout_input_with_fonts(font_files, options);
         #[cfg(test)]
         record_layout_invocation();
         Ok(rdocx_layout::layout_document_with_caller_fonts_and_provenance(&input)?)
+    }
+
+    /// Return an uncached layout using caller fonts over bundled fallbacks.
+    ///
+    /// Caller faces have highest priority. Missing families resolve from the
+    /// deterministic bundled inventory, never from the system-font snapshot.
+    /// The returned result owns its source map and shares its heavy page and
+    /// font payloads internally.
+    pub fn layout_with_fonts_and_bundled_fallback(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        self.layout_with_fonts_and_bundled_fallback_and_options(
+            font_files,
+            RenderOptions::default(),
+        )
+    }
+
+    /// Return a bundled-fallback caller-font layout for one revision view.
+    pub fn layout_with_fonts_and_bundled_fallback_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        let input = self.build_layout_input_with_fonts(font_files, options);
+        #[cfg(test)]
+        record_layout_invocation();
+        let mut engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let engine = match engine.as_mut() {
+            Some(engine) => engine,
+            None => engine.insert(rdocx_layout::engine::Engine::new_deterministic()?),
+        };
+        Ok(rdocx_layout::layout_document_with_reusable_engine(
+            engine, &input,
+        )?)
+    }
+
+    fn build_layout_input_with_fonts(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> rdocx_layout::LayoutInput {
+        let mut input = self.build_layout_input();
+        input.revision_view = options.revision_view;
+        input.fonts.extend(
+            font_files
+                .iter()
+                .map(|(family, data)| rdocx_layout::FontFile {
+                    family: (*family).to_owned(),
+                    data: data.to_vec(),
+                }),
+        );
+        input
     }
 
     /// Render the document to PDF bytes.
@@ -3534,7 +3700,11 @@ impl Document {
         options: RenderOptions,
     ) -> Result<Option<oxml_layout::PageFrame>> {
         let layout = self.layout_with_options(options)?;
-        Ok(layout.layout.pages.get(page_index).cloned())
+        Ok(layout
+            .layout
+            .pages
+            .get(page_index)
+            .map(|page| page.as_ref().clone()))
     }
 
     /// Build a LayoutInput from the document's current state.
@@ -3708,7 +3878,7 @@ impl Document {
                     .retain(|reference| reference.hdr_ftr_type != HdrFtrType::Even);
             }
         }
-        materialize_header_inheritance(&mut document, even_headers_enabled);
+        materialize_header_footer_inheritance(&mut document, even_headers_enabled);
 
         LayoutInput {
             revision_view: rdocx_layout::RevisionView::Accepted,
@@ -4096,6 +4266,90 @@ impl Document {
     }
 }
 
+#[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
+    })?;
+    for attempt in 0..128_u8 {
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(file_name);
+        temporary_name.push(format!(".rdocx-{}-{attempt}.tmp", std::process::id()));
+        let temporary = parent.join(temporary_name);
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = std::io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let result = result.and_then(|()| replace_file(&temporary, path));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate encrypted-save staging file",
+    ))
+}
+
+#[cfg(all(
+    feature = "agile-encryption",
+    not(target_arch = "wasm32"),
+    not(target_os = "windows")
+))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(all(
+    feature = "agile-encryption",
+    not(target_arch = "wasm32"),
+    target_os = "windows"
+))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both path buffers are NUL-terminated and remain alive for the call.
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 impl Default for Document {
     fn default() -> Self {
         Self::new()
@@ -4232,22 +4486,24 @@ fn header_type_index(hdr_type: HdrFtrType) -> usize {
     }
 }
 
-fn materialize_header_inheritance(document: &mut CT_Document, even_headers_enabled: bool) {
-    let mut effective: [Option<HdrFtrRef>; 3] = [None, None, None];
-    let inherit = |section: &mut CT_SectPr, effective: &mut [Option<HdrFtrRef>; 3]| {
+fn materialize_header_footer_inheritance(document: &mut CT_Document, even_headers_enabled: bool) {
+    let mut effective_headers: [Option<HdrFtrRef>; 3] = [None, None, None];
+    let mut effective_footers: [Option<HdrFtrRef>; 3] = [None, None, None];
+    let inherit = |references: &mut Vec<HdrFtrRef>,
+                   effective: &mut [Option<HdrFtrRef>; 3],
+                   materialize_blank_even: bool| {
         for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
             let index = header_type_index(hdr_type);
-            if let Some(reference) = section
-                .header_refs
+            if let Some(reference) = references
                 .iter()
                 .find(|reference| reference.hdr_ftr_type == hdr_type)
                 .cloned()
             {
                 effective[index] = Some(reference);
             } else if let Some(reference) = effective[index].clone() {
-                section.header_refs.push(reference);
-            } else if hdr_type == HdrFtrType::Even && even_headers_enabled {
-                section.header_refs.push(HdrFtrRef {
+                references.push(reference);
+            } else if hdr_type == HdrFtrType::Even && materialize_blank_even {
+                references.push(HdrFtrRef {
                     hdr_ftr_type: HdrFtrType::Even,
                     rel_id: String::new(),
                 });
@@ -4261,11 +4517,21 @@ fn materialize_header_inheritance(document: &mut CT_Document, even_headers_enabl
                 .as_mut()
                 .and_then(|properties| properties.sect_pr.as_mut())
         {
-            inherit(section, &mut effective);
+            inherit(
+                &mut section.header_refs,
+                &mut effective_headers,
+                even_headers_enabled,
+            );
+            inherit(&mut section.footer_refs, &mut effective_footers, false);
         }
     }
     if let Some(section) = document.body.sect_pr.as_mut() {
-        inherit(section, &mut effective);
+        inherit(
+            &mut section.header_refs,
+            &mut effective_headers,
+            even_headers_enabled,
+        );
+        inherit(&mut section.footer_refs, &mut effective_footers, false);
     }
 }
 
@@ -4730,6 +4996,91 @@ mod tests {
         chart
     }
 
+    #[cfg(feature = "agile-encryption")]
+    #[test]
+    fn native_encrypted_save_round_trips_without_live_package_mutation() {
+        let mut document = Document::new();
+        document.add_paragraph("F-170 encrypted round trip");
+        let original_parts = document.package.parts.clone();
+        let original_relationships = document.package.package_rels.to_xml().unwrap();
+
+        let error = document.to_encrypted_bytes("").unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Opc(oxml_opc::OpcError::InvalidPassword)
+        ));
+        assert_eq!(document.package.parts, original_parts);
+        assert_eq!(
+            document.package.package_rels.to_xml().unwrap(),
+            original_relationships
+        );
+
+        let encrypted = document.to_encrypted_bytes("rdocx-f170").unwrap();
+        let reopened = Document::from_encrypted_bytes(&encrypted, "rdocx-f170").unwrap();
+        assert_eq!(reopened.text(), "F-170 encrypted round trip\n");
+        assert_eq!(document.package.parts, original_parts);
+        assert_eq!(
+            document.package.package_rels.to_xml().unwrap(),
+            original_relationships
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "rdocx-f170-atomic-save-{}.docx",
+            std::process::id()
+        ));
+        fs::write(&path, b"existing destination").unwrap();
+        assert!(document.save_encrypted(&path, "").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"existing destination");
+        document.save_encrypted(&path, "rdocx-f170").unwrap();
+        let saved = fs::read(&path).unwrap();
+        assert_eq!(
+            Document::from_encrypted_bytes(&saved, "rdocx-f170")
+                .unwrap()
+                .text(),
+            "F-170 encrypted round trip\n"
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "agile-encryption")]
+    #[test]
+    #[ignore = "requires pinned Microsoft Word 16.104 and human password evidence"]
+    fn word_opens_the_written_agile_document() {
+        let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";
+        let version = Command::new("plutil")
+            .args(["-extract", "CFBundleShortVersionString", "raw", plist])
+            .output()
+            .unwrap();
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            WORD_VERSION
+        );
+        let build = Command::new("plutil")
+            .args(["-extract", "CFBundleVersion", "raw", plist])
+            .output()
+            .unwrap();
+        assert!(build.status.success());
+        assert_eq!(String::from_utf8_lossy(&build.stdout).trim(), WORD_BUILD);
+
+        let mut document = Document::new();
+        document.add_paragraph("F-170 Microsoft Word encryption oracle");
+        let path = Path::new("/private/tmp/F-170-word-16.104-encrypted.docx");
+        document.save_encrypted(path, "rdocx-f170").unwrap();
+        assert_eq!(
+            std::env::var("RDOCX_F170_WORD_CORRECT_PASSWORD").as_deref(),
+            Ok("opened"),
+            "open {} in Word {WORD_VERSION} build {WORD_BUILD} with password rdocx-f170, then rerun with RDOCX_F170_WORD_CORRECT_PASSWORD=opened",
+            path.display()
+        );
+        assert_eq!(
+            std::env::var("RDOCX_F170_WORD_WRONG_PASSWORD").as_deref(),
+            Ok("rejected"),
+            "open {} with a wrong password, then rerun with RDOCX_F170_WORD_WRONG_PASSWORD=rejected",
+            path.display()
+        );
+    }
+
     fn document_with_minimal_chart() -> Document {
         let mut document = Document::new();
         document
@@ -5081,7 +5432,7 @@ mod tests {
                     .find(|font| font.id == run.font_id)
                     .expect("caller-font glyph run should resolve its font id");
                 assert_eq!(font.family, family);
-                assert_eq!(font.data, bytes);
+                assert_eq!(font.data.as_ref(), bytes.as_slice());
                 let source = run
                     .source
                     .expect("caller-font text should retain source provenance");
@@ -5101,6 +5452,358 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn bundled_fallback_completes_an_incomplete_caller_font_set() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let mut document = Document::new();
+        document.add_paragraph("Calibri must resolve from bundled fonts");
+        document
+            .add_paragraph("")
+            .add_run("caller face must win")
+            .font(caller_family);
+
+        assert!(
+            document
+                .layout_with_fonts(&[(caller_family, &caller_bytes)])
+                .is_err(),
+            "strict caller-only layout must not borrow bundled Calibri"
+        );
+        let result = document
+            .layout_with_fonts_and_bundled_fallback(&[(caller_family, &caller_bytes)])
+            .expect("bundled fallback completes the caller font set");
+
+        let mut caller_runs = 0;
+        let mut bundled_runs = 0;
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                let oxml_layout::PositionedElement::Text(run) = element else {
+                    return;
+                };
+                let font = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("every glyph run resolves its font");
+                if font.family == caller_family {
+                    assert_eq!(font.data.as_ref(), caller_bytes.as_slice());
+                    caller_runs += 1;
+                } else if oxml_layout::bundled_fonts::bundled_font_data()
+                    .iter()
+                    .any(|(_, bytes)| *bytes == font.data.as_ref())
+                {
+                    bundled_runs += 1;
+                }
+            });
+        }
+        assert!(caller_runs > 0, "the matching caller face has priority");
+        assert!(bundled_runs > 0, "the missing family uses bundled fallback");
+        assert!(
+            document
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+            "bundled fallback stays isolated from the normal engine"
+        );
+    }
+
+    #[test]
+    fn bundled_fallback_engine_reuses_and_transfers_exact_context() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let mut source = Document::new();
+        for index in 0..140 {
+            source.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        let initial = source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("initial bundled-fallback layout");
+        source
+            .paragraph_mut(70)
+            .expect("middle paragraph")
+            .add_run(" changed");
+        let warm = source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("warm bundled-fallback layout");
+        assert!(
+            warm.layout
+                .pages
+                .iter()
+                .zip(&initial.layout.pages)
+                .any(|(current, previous)| Arc::ptr_eq(current, previous)),
+            "a bounded edit reuses at least one retained page"
+        );
+
+        let mut receiver = source.clone_for_staging();
+        assert!(receiver.transfer_reusable_bundled_fallback_layout_from(&mut source, &fonts));
+        assert!(
+            source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+        assert!(
+            receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let mut font_source = receiver.clone_for_staging();
+        let mut font_receiver = receiver.clone_for_staging();
+        font_source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime font source");
+        font_receiver
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime font receiver");
+        let mut changed_bytes = caller_bytes.clone();
+        changed_bytes.push(0);
+        assert!(
+            !font_receiver.transfer_reusable_bundled_fallback_layout_from(
+                &mut font_source,
+                &[(caller_family, &changed_bytes)],
+            )
+        );
+        assert!(
+            font_source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            font_receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let mut context_source = receiver.clone_for_staging();
+        let mut context_receiver = receiver.clone_for_staging();
+        context_receiver.set_header("different retained context");
+        context_source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime context source");
+        context_receiver
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime context receiver");
+        assert!(
+            !context_receiver
+                .transfer_reusable_bundled_fallback_layout_from(&mut context_source, &fonts)
+        );
+        assert!(
+            context_source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            context_receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn bundled_fallback_warm_layout_equals_fresh_layout() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let mut warm_document = Document::new();
+        for index in 0..140 {
+            warm_document.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        warm_document
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime warm engine");
+        warm_document
+            .paragraph_mut(70)
+            .expect("middle paragraph")
+            .add_run(" changed");
+        let fresh_document = warm_document.clone_for_staging();
+
+        let warm = warm_document
+            .layout_with_fonts_and_bundled_fallback_and_options(&fonts, RenderOptions::default())
+            .expect("warm layout");
+        let fresh = fresh_document
+            .layout_with_fonts_and_bundled_fallback_and_options(&fonts, RenderOptions::default())
+            .expect("fresh layout");
+
+        assert_eq!(warm.revision_view, fresh.revision_view);
+        assert_eq!(
+            format!("{:?}", warm.layout.pages),
+            format!("{:?}", fresh.layout.pages)
+        );
+        assert_eq!(
+            format!("{:?}", warm.layout.fonts),
+            format!("{:?}", fresh.layout.fonts)
+        );
+        assert_eq!(
+            format!("{:?}", warm.layout.diagnostics),
+            format!("{:?}", fresh.layout.diagnostics)
+        );
+        assert_eq!(
+            format!("{:?}", warm.layout.outlines),
+            format!("{:?}", fresh.layout.outlines)
+        );
+        assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm.layout),
+            oxml_pdf::render_to_pdf(&fresh.layout)
+        );
+    }
+
+    #[test]
+    fn substituted_page_reuse_keeps_pdf_and_raster_backends_identical() {
+        let mut warm_document = Document::new();
+        let mut fields = CT_P::new();
+        for instruction in ["PAGE", "NUMPAGES"] {
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(Field::new(instruction, "cached"))];
+            fields.runs.push(run);
+        }
+        warm_document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(fields));
+        for index in 0..140 {
+            warm_document.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        let fresh_document = warm_document.clone_for_staging();
+
+        warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("prime substituted pages");
+        let warm = warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("warm substituted pages");
+        let fresh = fresh_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("cold substituted pages");
+
+        assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm.layout),
+            oxml_pdf::render_to_pdf(&fresh.layout)
+        );
+        assert_eq!(
+            oxml_pdf::render_all_pages(&warm.layout, 72.0),
+            oxml_pdf::render_all_pages(&fresh.layout, 72.0)
+        );
+    }
+
+    #[test]
+    fn cached_header_footer_warm_equals_cold() {
+        let mut warm_document = Document::new();
+        warm_document.set_header("default cached header");
+        warm_document.set_footer("default cached footer");
+        warm_document.set_first_page_header("first cached header");
+        warm_document.set_first_page_footer("first cached footer");
+        warm_document
+            .set_text_watermark("DRAFT")
+            .expect("watermark is valid");
+        for index in 0..140 {
+            warm_document.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("prime deterministic header/footer engine");
+        warm_document
+            .paragraph_mut(70)
+            .expect("middle paragraph")
+            .add_run(" changed");
+        let fresh_document = warm_document.clone_for_staging();
+
+        let warm = warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("warm deterministic layout");
+        let fresh = fresh_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("cold deterministic layout");
+
+        assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm.layout),
+            oxml_pdf::render_to_pdf(&fresh.layout)
+        );
+    }
+
+    #[test]
+    fn staged_mutations_preserve_valid_bundled_fallback_work() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let mut document = Document::new();
+        document.add_paragraph("staged mutation retains reusable work");
+        document
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime bundled-fallback engine");
+        document
+            .set_text_watermark("DRAFT")
+            .expect("successful staged mutation");
+        assert!(
+            document
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
+            "successful staging retains the private engine"
+        );
+        document
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("engine remains usable after staging");
+
+        let header_part = document
+            .package
+            .get_part_rels(&document.doc_part_name)
+            .and_then(|relationships| relationships.get_by_type(rel_types::HEADER))
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target)
+            })
+            .expect("watermark header relationship");
+        document.package.set_part(&header_part, b"<".to_vec());
+        let before = document.package.get_part(&header_part).unwrap().to_vec();
+        assert!(document.set_text_watermark("FAIL").is_err());
+        assert_eq!(
+            document.package.get_part(&header_part),
+            Some(before.as_slice())
+        );
+        assert!(
+            document
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
+            "failed staging preserves the published engine"
+        );
+
+        let mut poisoned = Document::new();
+        poisoned.add_paragraph("poison recovery");
+        poisoned
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime engine before poison");
+        let poisoned = Arc::new(poisoned);
+        let poison_owner = Arc::clone(&poisoned);
+        assert!(
+            std::thread::spawn(move || {
+                let _engine = poison_owner.bundled_fallback_layout_engine.lock().unwrap();
+                panic!("poison bundled fallback engine lock");
+            })
+            .join()
+            .is_err()
+        );
+        poisoned
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("bundled-fallback layout recovers from poison");
     }
 
     #[test]
@@ -5198,6 +5901,183 @@ mod tests {
             .expect("layout recovers from poisoned engine lock");
         let second = document.layout().expect("recovered layout remains cached");
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn all_backends_accept_shared_layout_payloads_without_output_change() {
+        let mut document = Document::new();
+        document.add_paragraph("Shared layout").style("Heading1");
+        document.add_paragraph("Backend and provenance coverage");
+
+        let original = document.layout().expect("normal layout succeeds");
+        let shared = original.layout.clone();
+        assert!(
+            original
+                .layout
+                .pages
+                .iter()
+                .zip(&shared.pages)
+                .all(|(left, right)| Arc::ptr_eq(left, right))
+        );
+        assert!(
+            original
+                .layout
+                .fonts
+                .iter()
+                .zip(&shared.fonts)
+                .all(|(left, right)| Arc::ptr_eq(&left.data, &right.data))
+        );
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&original.layout),
+            oxml_pdf::render_to_pdf(&shared)
+        );
+        assert_eq!(
+            oxml_pdf::render_page_to_png(&original.layout, 0, 72.0),
+            oxml_pdf::render_page_to_png(&shared, 0, 72.0)
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                document
+                    .layout_page(0)
+                    .expect("page access")
+                    .expect("first page")
+            ),
+            format!("{:?}", shared.pages[0])
+        );
+        assert_eq!(original.layout.diagnostics, shared.diagnostics);
+        assert_eq!(
+            format!("{:?}", original.layout.outlines),
+            format!("{:?}", shared.outlines)
+        );
+
+        let (family, bytes) = caller_only_font();
+        let mut caller_document = Document::new();
+        caller_document
+            .add_paragraph("")
+            .add_run("caller-owned font")
+            .font(family);
+        let caller = caller_document
+            .layout_with_fonts(&[(family, &bytes)])
+            .expect("caller-font layout succeeds");
+        let caller_shared = caller.layout.clone();
+        assert!(
+            caller
+                .layout
+                .fonts
+                .iter()
+                .zip(&caller_shared.fonts)
+                .all(|(left, right)| Arc::ptr_eq(&left.data, &right.data))
+        );
+        let source = caller.layout.pages.iter().find_map(|page| {
+            let mut source = None;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    source = source.or(run.source);
+                }
+            });
+            source
+        });
+        assert!(source.is_some_and(|span| caller.source_node(span.node).is_some()));
+    }
+
+    #[test]
+    fn compatible_document_transfer_reuses_normal_layout_work() {
+        let mut source = Document::new();
+        source.add_paragraph("unchanged paragraph");
+        source.add_paragraph("old second paragraph");
+        let source_result = source.layout().expect("prime source engine");
+
+        let mut receiver = source.clone_for_staging();
+        let receiver_result = receiver.layout().expect("prime receiver engine");
+        assert!(receiver.transfer_reusable_layout_from(&mut source));
+        assert!(
+            source
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+        assert!(
+            receiver
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(Arc::ptr_eq(
+            &source_result,
+            &source.layout().expect("source result cache remains")
+        ));
+        assert!(Arc::ptr_eq(
+            &receiver_result,
+            &receiver.layout().expect("receiver result cache remains")
+        ));
+
+        receiver
+            .paragraph_mut(1)
+            .expect("second paragraph")
+            .add_run(" changed");
+        assert!(receiver.layout().is_ok());
+    }
+
+    #[test]
+    fn incompatible_or_failed_transfer_preserves_both_engines() {
+        let mut source = Document::new();
+        source.add_paragraph("source paragraph");
+        let mut receiver = source.clone_for_staging();
+        source.layout().expect("prime source engine");
+        receiver.layout().expect("prime receiver engine");
+
+        receiver.styles = CT_Styles::new();
+        receiver.invalidate_layout();
+        assert!(!receiver.transfer_reusable_layout_from(&mut source));
+        assert!(
+            source
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            receiver
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _engine = source.normal_layout_engine.lock().unwrap();
+            panic!("poison source engine lock");
+        }));
+        assert!(poisoned.is_err());
+        let mut compatible = source.clone_for_staging();
+        assert!(compatible.transfer_reusable_layout_from(&mut source));
+        assert!(compatible.layout().is_ok());
+    }
+
+    #[test]
+    fn transferred_warm_layout_equals_fresh_layout() {
+        let mut source = Document::new();
+        source.add_paragraph("unchanged paragraph");
+        source.add_paragraph("old second paragraph");
+        source.layout().expect("prime source engine");
+
+        let mut warm = source.clone_for_staging();
+        warm.paragraph_mut(1)
+            .expect("second paragraph")
+            .add_run(" changed");
+        let fresh = warm.clone_for_staging();
+        assert!(warm.transfer_reusable_layout_from(&mut source));
+
+        let warm_result = warm.layout().expect("transferred warm layout");
+        let fresh_result = fresh.layout().expect("fresh cold layout");
+        assert_eq!(format!("{warm_result:?}"), format!("{fresh_result:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm_result.layout),
+            oxml_pdf::render_to_pdf(&fresh_result.layout)
+        );
     }
 
     #[test]
@@ -6142,7 +7022,7 @@ mod tests {
             assert!(
                 bundled_fonts
                     .iter()
-                    .any(|(_family, data)| *data == font.data.as_slice()),
+                    .any(|(_family, data)| *data == font.data.as_ref()),
                 "resolved font '{}' did not come from the bundled font set",
                 font.family
             );

@@ -70,7 +70,7 @@ constants are kept. Added:
 
 ```rust
 // Package-level. Note the package namespace, not officeDocument.
-CORE_PROPERTIES, THUMBNAIL
+CORE_PROPERTIES, THUMBNAIL, DIGITAL_SIGNATURE_ORIGIN, DIGITAL_SIGNATURE
 
 // Shared officeDocument
 EXTENDED_PROPERTIES   // docProps/app.xml
@@ -315,6 +315,60 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+The default-off `oxml-opc/agile-encryption` feature reads and writes
+password-protected OOXML packages. Readers parse the CFB `EncryptionInfo` and
+`EncryptedPackage` streams, accept namespace aliases, and reject elements that
+violate the Agile descriptor sequence. Supported read combinations are
+AES-CBC with 128, 192, or 256-bit data and password-encryptor keys, varied
+independently, and SHA-1, SHA-256, SHA-384, or SHA-512. The parent `keyData`
+size governs the encrypted package key, while the password encryptor size
+governs its wrapping key. Descriptor sizes, salt lengths, spin counts,
+ciphertext lengths, and algorithm names are validated before expensive work
+begins.
+
+Password verification releases no package key on failure. A matching password
+decrypts the data-integrity material and authenticates the complete encrypted
+package stream, including its declared plaintext length, before any package
+bytes reach the ZIP parser. Authentication is streamed and package decryption
+uses 4096-byte Agile segments, so bounded constructors keep their ordinary ZIP
+limits without adding a whole-package ciphertext buffer. Word emits a
+hash-sized encrypted HMAC key, while the ECMA shape permits a salt-sized key,
+so both validated lengths are accepted. Integrity, truncation, or length
+failure is reported before ZIP parsing and leaves no partially opened package.
+
+The writer stages the deterministic OPC ZIP and the complete CFB envelope
+before publishing bytes. Its fixed profile is AES-256-CBC, SHA-512, 100,000
+password iterations, 4096-byte encrypted package segments, and an HMAC over
+the size-prefixed encrypted package stream. Every save draws independent
+salts, package key, verifier, and HMAC key from the operating system random
+source. `EncryptionInfo` uses schema child order. The version 3 CFB also
+contains the complete DataSpaces map, definition, and strong-encryption
+transform streams expected by Microsoft Word. Validation, random-source,
+serialization, encryption, authentication, or staging failure leaves the live
+package unchanged. The package API reserves capacity for the complete envelope
+before appending it to the caller's byte buffer. A failed reserve or staging
+step leaves existing output bytes unchanged.
+
+The default-off `oxml-opc/digital-signatures` feature discovers signature
+origins and signature parts only through normalized internal package
+relationships. It parses XML Signature elements by expanded name and accepts
+the strict RSA-SHA256, SHA-256 digest, and exclusive-canonicalization profile.
+The OPC relationship transform selects exact declared relationship IDs,
+rejects missing, duplicate, external, and absent targets, and emits canonical
+ID order. Unsupported or weak algorithms fail closed.
+
+Each report keeps cryptographic validity separate from complete declared
+coverage. Cryptographic validity authenticates `SignedInfo`, every direct
+reference, and only those manifest references reachable through an
+authenticated same-document reference graph against the embedded X.509 public
+key. Exclusive canonicalization retains processing instructions in their XML
+child position. Coverage is complete only when every non-signature part,
+content types part, and non-signature relationship is declared.
+Certificate-chain trust is not inferred and remains caller policy.
+Verification is read-only. A loaded package retains the original content-types
+bytes while its typed content types remain unchanged, so saving does not
+invalidate a signature by reserializing equivalent XML.
 
 Comment mutations validate coordinates and allocate every required id before
 changing package or document state. Saving keeps the comments and

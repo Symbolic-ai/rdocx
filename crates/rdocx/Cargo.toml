@@ -19,6 +19,8 @@ tag-name = "v{{version}}"
 [features]
 default = ["system-fonts"]
 system-fonts = ["oxml-layout/system-fonts", "rdocx-layout/system-fonts"]
+agile-encryption = ["oxml-opc/agile-encryption"]
+digital-signatures = ["oxml-opc/digital-signatures"]
 
 [dependencies]
 oxml-chart = { workspace = true }
@@ -38,4 +40,5 @@ regex = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+miniz_oxide = { workspace = true }
 rpptx = { workspace = true, features = ["default-template", "render"] }

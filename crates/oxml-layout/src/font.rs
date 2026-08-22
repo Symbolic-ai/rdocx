@@ -616,6 +616,27 @@ impl FontManager {
         bold: bool,
         italic: bool,
     ) -> Result<FontId> {
+        self.resolve_font_inner(family, bold, italic, true)
+    }
+
+    /// Resolve a font for metrics without claiming that it emitted glyphs.
+    #[doc(hidden)]
+    pub fn resolve_font_for_metrics(
+        &mut self,
+        family: Option<&str>,
+        bold: bool,
+        italic: bool,
+    ) -> Result<FontId> {
+        self.resolve_font_inner(family, bold, italic, false)
+    }
+
+    fn resolve_font_inner(
+        &mut self,
+        family: Option<&str>,
+        bold: bool,
+        italic: bool,
+        record_layout_use: bool,
+    ) -> Result<FontId> {
         let family_name = family.unwrap_or("Arial");
 
         let key = FontKey {
@@ -626,7 +647,9 @@ impl FontManager {
 
         if let Some(idx) = self.cache.get(&key).copied() {
             let id = self.fonts[idx].id;
-            self.record_layout_font(id);
+            if record_layout_use {
+                self.record_layout_font(id);
+            }
             return Ok(id);
         }
 
@@ -714,7 +737,9 @@ impl FontManager {
                 .position(|font| font.db_id == db_id && font.bold == bold && font.italic == italic)
         {
             let id = self.fonts[idx].id;
-            self.record_layout_font(id);
+            if record_layout_use {
+                self.record_layout_font(id);
+            }
             return Ok(id);
         }
 
@@ -778,7 +803,9 @@ impl FontManager {
             shaper_data,
         });
         self.remember_font_key(key, idx);
-        self.record_layout_font(font_id);
+        if record_layout_use {
+            self.record_layout_font(font_id);
+        }
 
         Ok(font_id)
     }
@@ -887,7 +914,7 @@ impl FontManager {
         Ok(crate::output::FontData {
             id: font.id,
             family: font.family.clone(),
-            data: font.data.to_vec(),
+            data: Arc::clone(&font.data),
             face_index: font.face_index,
             bold: font.bold,
             italic: font.italic,
@@ -901,7 +928,7 @@ impl FontManager {
             .map(|f| crate::output::FontData {
                 id: f.id,
                 family: f.family.clone(),
-                data: f.data.to_vec(),
+                data: Arc::clone(&f.data),
                 face_index: f.face_index,
                 bold: f.bold,
                 italic: f.italic,

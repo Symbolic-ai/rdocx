@@ -45,13 +45,14 @@ confidence-threshold = 0.9
 multiple-versions = "warn"
 wildcards = "deny"
 # Codecs a DOCX never uses. They arrived through `zip`'s default features and
-# were removed by narrowing those; denying them keeps the door shut.
+# were removed by narrowing those. Denying them keeps the door shut. The `aes`
+# crate is a named, default-off consumer of oxml-opc agile encryption and is
+# intentionally not banned with the unused ZIP codecs.
 deny = [
     { name = "zstd" },
     { name = "bzip2" },
     { name = "lzma-rust2" },
     { name = "ppmd-rust" },
-    { name = "aes" },
 ]
 
 [sources]

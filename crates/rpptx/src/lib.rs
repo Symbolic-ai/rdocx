@@ -3839,36 +3839,34 @@ fn render_compatible_media(bytes: &[u8], content_type: &str) -> bool {
             color: background,
         };
         let baseline = LayoutResult::new(
-            vec![PageFrame::new(
-                1,
-                width,
-                height,
-                vec![background_element.clone()],
-            )],
+            vec![PageFrame::new(1, width, height, vec![background_element.clone()]).into()],
             Vec::new(),
             None,
             Vec::new(),
         );
         let candidate = LayoutResult::new(
-            vec![PageFrame::new(
-                1,
-                width,
-                height,
-                vec![
-                    background_element,
-                    PositionedElement::Image {
-                        rect: Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width,
-                            height,
+            vec![
+                PageFrame::new(
+                    1,
+                    width,
+                    height,
+                    vec![
+                        background_element,
+                        PositionedElement::Image {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width,
+                                height,
+                            },
+                            data: bytes.to_vec(),
+                            content_type: content_type.to_owned(),
+                            media_id,
                         },
-                        data: bytes.to_vec(),
-                        content_type: content_type.to_owned(),
-                        media_id,
-                    },
-                ],
-            )],
+                    ],
+                )
+                .into(),
+            ],
             Vec::new(),
             None,
             Vec::new(),

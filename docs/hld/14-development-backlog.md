@@ -2358,6 +2358,186 @@ serve stale blocks, shaping keys never alias different content, process and
 engine caches stay bounded and recover from poison, `Document` remains
 `Send + Sync`, both WASM targets compile, and all 49 hashes remain unchanged.
 
+### F-X039, Share layout payloads and transfer reusable engines (M)
+
+Remove the remaining deep copies on the interactive layout boundary.
+`FontData::data` shares immutable font bytes, and laid-out pages use shared
+immutable page frames so a cached result or unchanged pagination tail can be
+retained without copying its complete payload. These are intentional low-level
+pre-1.0 type breaks. PDF, raster, page access, caller-font layout, and the
+Word-specific provenance bundle continue to consume the same data.
+
+An editor that rebuilds a `Document` for undo or redo can transfer reusable
+normal-layout work through a checked ownership API. The receiving document
+must validate the complete F-X038 context before reading any retained entry,
+and a failed or incompatible transfer cannot replace its current engine or
+publish a stale result. The design chooses the smallest explicit ownership
+surface. It does not expose unchecked cache mutation.
+
+Issue 39 supplied both measured proposals. Credit `@emptinessform` in the next
+release notes that contain this work.
+
+**Depends on**: F-X032, F-X037, F-X038.
+**Test gate**: regression. Cloning complete layout results shares font bytes and
+page frames, while PDF, raster, provenance, diagnostics, and visible output
+remain identical. A transferred engine reuses safe work for the same complete
+context, rejects or invalidates stale context, remains bounded and poison-safe,
+and leaves deterministic and caller-font paths isolated. Both WASM targets,
+package dry runs, and the hash harness pass unchanged.
+
+### F-X040, Restart pagination and cache table blocks (L)
+
+Make the reusable normal engine resume pagination from a safe checkpoint before
+the first changed block and attach an unchanged tail when the complete pager
+state and page boundary match. Checkpoints exist only where no paragraph,
+footnote continuation, float, or other carried state crosses the boundary.
+Initial reuse may fall back to a full pass for multiple sections or floating
+drawings. Environment identity includes section geometry, headers, footers,
+notes, styles, numbering, theme, fonts, media, revision view, and every other
+input that can change page output.
+
+Table blocks gain the same transactional, diagnostic-preserving, bounded cache
+discipline as safe paragraphs. Tables with numbering or note references bypass
+reuse until their traversal state can be represented exactly. Before either
+cache is trusted, fix the existing paragraph-cache case where inserting an
+earlier footnote reference changes a later marker number without invalidating
+the cached block. That correctness regression remains independent of the
+restart algorithm.
+
+Issue 39 supplied the checkpoint, tail-splice, and table-cache prototypes plus
+the footnote-marker observation. Credit `@emptinessform` in the next release
+notes that contain this work.
+
+**Depends on**: F-X038, F-X039.
+**Test gate**: regression. Warm pagination after edits at the start, middle,
+tail, and a page boundary equals a fresh engine in pages, fonts, diagnostics,
+provenance, numbering, notes, fields, and outlines while rebuilding only the
+bounded affected page range. Insertions, deletions, style and numbering edits,
+footnote-marker renumbering, multi-section fallback, floating-drawing fallback,
+failed layouts, and table cache bounds all have explicit cold-versus-warm
+evidence. The hash harness remains unchanged.
+
+### F-X041, Remove duplicated glyphs at break opportunities (M)
+
+Make one stage own Unicode line-break segmentation and shaping. The current
+Word conversion path slices shaped glyph arrays at break opportunities before
+the shared line breaker reshapes them again. Approximate glyph slicing is not
+valid for ligatures or other non-bijective shaping, and can place a boundary
+glyph in both adjacent positioned runs even when the break is not taken.
+
+Preserve exact text, spacing, source spans, hyperlinks, fields, note markers,
+and formatting while ensuring every emitted chunk is shaped from exactly its
+own text. The correction applies above PDF and raster output so third-party
+renderers consuming `PageFrame` see the same fixed runs. Issue 23 and the
+additional UAX 14 diagnosis came from `@emptinessform`, who should be credited
+in the next release notes that contain the fix.
+
+**Depends on**: F-030, F-104, F-X037.
+**Test gate**: golden. Deterministic layout of spaces, hyphens, ligatures,
+combining text, CJK, and untaken versus taken break opportunities emits each
+source scalar and shaped glyph exactly once with contiguous provenance. The
+reported `ttf-parser`, doubled-space, `financial`, and `allocated` cases are
+covered through `PageFrame` and both built-in backends. The intentional sample
+hash delta is isolated, explained, and reviewed.
+
+### F-X042, Prove headers and footers in PDF output (S)
+
+Close Issue 15 with an end-to-end public regression rather than another
+model-only assertion. Author, save, reopen, lay out, and render a document with
+default, first-page, even-page, inherited, and multi-section headers and
+footers. Verify relationship resolution, `titlePg` selection, page-frame
+placement, and final PDF text. If the fixture exposes a remaining drop, fix
+only that path. If every case already passes, retain the regression as closure
+evidence for the previously unreproduced report.
+
+**Depends on**: F-168, F-X032.
+**Test gate**: integration. A readable in-code package passes through the
+public `Document` facade and produces the expected header and footer text on
+each applicable page in both `WordLayoutResult` and deterministic PDF output.
+Blank first or even variants do not borrow defaults, inherited variants remain
+visible, unrelated package parts survive, and the hash harness is unchanged.
+
+### F-X043, Reuse bundled-fallback caller-font layouts (M)
+
+Expose a native Word layout path where caller fonts override the deterministic
+bundled set and missing families resolve only from bundled fonts. Retain one
+private reusable engine for this mode across edits and support undo or rebuild
+transfer through an exact-context checked facade. Do not expose raw engine
+take or set operations, and do not let this path observe the system-font
+snapshot. PRs 40 and 41 supplied the concrete editor use case and prototype.
+
+**Depends on**: F-X039, F-X040.
+**Test gate**: regression. An incomplete caller set resolves bundled fallback
+families while the strict caller-only path still fails, caller faces win for
+the same family, compatible checked transfer records safe hits, font or
+document context changes preserve both engines and reject reuse, staged
+mutations retain valid work, warm and cold pages, fonts, diagnostics, and
+provenance are equal, both WASM targets pass, and all hashes remain unchanged.
+
+### F-X044, Scale paragraph-cache lookup for editors (M)
+
+Remove editor-scale paragraph-cache thrash without weakening F-X040's exact
+identity or traversal invalidation. Use a compact fingerprint only as a
+prefilter before authoritative typed equality, avoid cloning the complete
+paragraph key and linearly removing a hit, and size the bounded cache from
+retained-memory evidence on the reported 700-paragraph workload. Optional
+timing instrumentation must cost nothing when disabled. PR 41 supplied the
+profile and prototype.
+
+**Depends on**: F-X040.
+**Test gate**: regression. Forced fingerprint collisions cannot alias typed
+paragraphs, unsafe traversal content disables later reads, late failure
+publishes nothing, entry and retained-byte bounds hold under eviction, a
+700-paragraph warm edit avoids cache thrash, complete warm and cold outputs are
+equal, disabled timing adds no runtime work, and the hash harness is unchanged.
+
+### F-X045, Cache headers and footers transactionally (M)
+
+Cache reusable header and footer layout blocks under the same transactional,
+diagnostic-preserving, source-rebinding, and retained-memory discipline as safe
+body blocks. Exact typed identity covers complete section geometry, referenced
+parts, media bytes, revision view, font context, and provenance. First, even,
+default, inherited, image, and watermark variants remain distinct. PR 41
+supplied the optimization prototype, whose hash-only and unbounded form is not
+accepted.
+
+**Depends on**: F-X040, F-X042.
+**Test gate**: regression. Safe header and footer blocks hit and replay exact
+diagnostics, fonts, and provenance, while part text, media, watermark, page
+height, variant, section, or context changes miss. Late failure publishes no
+entry, combined entry and retained-byte ceilings hold, warm and cold outputs
+are completely equal, and the hash harness is unchanged.
+
+### F-X046, Reuse substituted pages exactly (S)
+
+Retain bounded pristine and field-substituted page pairs so repeated PAGE,
+NUMPAGES, and PAGEREF post-processing does not reshape an unchanged page. Reuse
+requires exact total-page, bookmark-target, page-content, font, and pristine
+page identity, and retained pairs count against the existing restart budget.
+PR 41 supplied the optimization prototype.
+
+**Depends on**: F-X040.
+**Test gate**: regression. Stable PAGE, NUMPAGES, and PAGEREF pages reuse their
+substituted frames, while page-count, bookmark, content, or font changes miss.
+Field-free sharing is preserved, eviction respects entry and byte bounds,
+complete warm and cold outputs match, and the hash harness is unchanged.
+
+### F-X047, Attribute empty Word paragraphs (S)
+
+Represent an empty Word paragraph with one zero-width empty text segment using
+the resolved default font and a source span of `0..0`. This gives interactive
+callers a caret target and correct line height without emitting a visible
+glyph. Cover body, table, header, footer, footnote, and endnote stories while
+keeping provenance and non-provenance layouts structurally compatible. PR 41
+supplied the behavior prototype.
+
+**Depends on**: F-X037.
+**Test gate**: regression. Every supported empty Word story emits exactly one
+zero-width attributed segment with resolved default metrics and the correct
+source identity, non-empty paragraphs are unchanged, provenance and ordinary
+layouts remain structurally equal, both backends render no new glyph, and the
+deterministic hash harness remains unchanged.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

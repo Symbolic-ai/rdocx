@@ -64,7 +64,7 @@ pub enum ContentType {
 }
 
 /// Parsed `[Content_Types].xml`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentTypes {
     pub defaults: HashMap<String, String>,
     pub overrides: HashMap<String, String>,

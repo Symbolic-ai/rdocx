@@ -13,9 +13,11 @@ link, metadata, and outline paths. `rdocx` uses this backend directly, and
 shim. The shared contract is:
 
 ```rust
-pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
+pub struct LayoutResult { pages: Vec<Arc<PageFrame>>, fonts: Vec<FontData>,
                           metadata: Option<DocumentMetadata>, outlines: Vec<OutlineEntry>,
                           diagnostics: Vec<Diagnostic> }
+pub struct FontData { id: FontId, family: String, data: Arc<[u8]>,
+                      face_index: u32, bold: bool, italic: bool }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
 pub struct SourceNodeId(NonZeroU32)
@@ -26,9 +28,17 @@ pub struct SourceSpan { node: SourceNodeId, char_start: u32, char_end: u32 }
 is meaningful only within the result that allocated it. `char_start` and
 `char_end` are exclusive Unicode-scalar offsets, not byte, UTF-16, grapheme, or
 glyph-cluster positions. Word assigns spans before shaping. Its initial text
-segmentation and the shared line breaker both count scalars at byte split
-points, so every wrapped fragment retains an exact contiguous source range.
-Generated text uses `None`.
+projection assigns one shaped segment to each formatting and provenance span.
+The shared line breaker alone discovers UAX 14 opportunities, reshapes each
+exact byte slice, and subdivides the scalar source range, so every wrapped
+fragment retains an exact contiguous source range. Generated text uses `None`.
+
+An empty Word paragraph contributes one `TextSegment` with empty text, zero
+width, no glyph ids, and the resolved paragraph-mark font metrics. Its source
+is the paragraph node at scalar range `0..0` when provenance is requested and
+`None` otherwise. The original empty-line box remains unchanged, so the
+carrier does not move later content. PDF font collection and emission skip
+empty no-glyph runs, and raster draws no pixels for them.
 
 **A slide is a page with a fixed size.** Font subsetting, ToUnicode CMaps, JPEG
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
@@ -455,8 +465,13 @@ deterministic renderers use their own bundle. Tracked layouts remain uncached
 and use the normal engine with a distinct revision-view paragraph identity.
 Caller-supplied font layouts construct an isolated engine, remain uncached, and
 cannot observe bundled or system fonts. Caller-font access returns an owned
+bundle. The separate bundled-fallback caller-font mode retains one reusable
+deterministic-base engine. Caller faces have highest priority, missing families
+resolve from bundled faces, and system fonts remain unavailable. Its owned
+result shares immutable pages and font bytes without caching the completed
 bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
-bundle that owns the exact font data and Word source map.
+bundle that owns the exact font data and Word source map. Cloning a completed
+result shares each immutable page frame and font byte buffer.
 
 Normal `FontManager` construction clones one process-lifetime snapshot of the
 bundled and system face table. Installing, removing, or replacing a system font
@@ -472,23 +487,88 @@ and 16 MiB. Resolution, coverage misses, coverage fallbacks, and per-paragraph
 font traces also have explicit bounds. Loading a different additional font set
 rebuilds face identity and clears all dependent memo state.
 
-The Word engine caches only ordinary context-independent body paragraphs. The
-entry key compares the complete typed paragraph, content width, revision view,
-styles, theme, and additional font set. Numbering, drawings including
-`AlternateContent`, fields, hyperlinks, relationships, media, generated
-markers, and other traversal-sensitive input bypass reuse. Each entry owns its
-block, diagnostics, and exact bounded font-resolution trace. Both the published
-and transaction-pending queues are capped at 256 entries and 16 MiB using
-retained-capacity accounting for all owned block and reflow buffers. Oversized
-entries bypass retention.
+The Word engine caches only ordinary context-independent body paragraphs and
+tables made entirely from direct cache-safe paragraphs. It also caches safe
+header and footer variants. Paragraph keys compare the complete typed
+paragraph, content width, and revision view. A stable borrowed `u64` paragraph
+fingerprint prefilters lookup candidates. The complete typed equality remains
+authoritative after a fingerprint match, so collisions cannot serve the wrong
+block. Hits neither clone the owned key nor refresh its queue position. Table
+keys compare the complete typed table projection, content width, revision
+view, and whether result-local provenance is present. Header and footer keys
+compare the story kind, variant, complete section properties and geometry,
+relationship identity, complete typed part, canonical resolved part bytes, and
+whether result-local provenance is present. The retained-work context
+separately compares styles, numbering, section properties, headers, footers,
+media, charts, chart theme and colour map, core properties, hyperlinks, notes,
+theme, additional fonts, page background, and the document-wide
+wrapping-drawing state. Numbering, drawings including `AlternateContent`,
+fields, hyperlinks, relationships, media, generated markers, nested tables,
+content controls, preserved producer XML, and other traversal-sensitive input
+bypass body reuse. Encountering any such body block disables later
+retained-block reads for that layout, so inserting an earlier note or numbering
+input cannot leave a later generated marker stale. Each entry owns its block,
+diagnostics, and exact bounded font-resolution trace. Header and footer parts
+with numbering, drawings, fields, hyperlinks, revisions, content controls,
+generated markers, or other traversal-sensitive state bypass reuse. Supported
+VML watermarks remain reusable because the part, complete section geometry,
+resolved media bytes, and reusable context are all authoritative identity
+inputs.
+
+Retained block and restart state share a 4,224-entry and 64 MiB ceiling.
+Paragraph blocks receive 4,096 entries and 56 MiB, table blocks receive 32
+entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
+aligned restart page and checkpoint slots receive 32 entries and 2 MiB. The published and
+transaction-pending queues enforce the same partitions using retained-capacity
+accounting for owned keys, resolved part bytes, rows, cells, paragraphs,
+watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
+insertion order without hit-time queue maintenance. Oversized entries bypass
+retention.
 
 Cache publication is a whole-layout transaction. A late error publishes none
-of the staged entries. A hit replays diagnostics and the font trace, then
-rebinds placeholder scalar provenance to the source node allocated for the
-current `WordLayoutResult`. After success, active faces are retained in
-first-resolution order and stale faces and entries are removed. This makes warm
-and cold pages, font ids, font bytes, diagnostics, revision view, and resolved
-source provenance equal.
+of the staged paragraph, table, header, or footer entries. A hit replays
+diagnostics and the font trace without changing insertion order, then rebinds
+scalar provenance to the source node allocated for the current
+`WordLayoutResult`. After success, active faces are retained in first-resolution
+order and stale faces and entries are removed. This makes warm and cold pages,
+font ids, font bytes, diagnostics, revision view, and resolved source provenance
+equal.
+
+The engine also records restart checkpoints for one safe section containing
+only one-line or two-line context-independent paragraphs. A checkpoint exists
+only before a complete paragraph at an empty page boundary. It records the next
+block, page count, and displayed header page number. Headers, footers,
+backgrounds, notes, fields, headings, tables, drawings, multi-section content,
+split paragraphs, keep constraints, and any unrepresented state use the full
+paginator. A warm edit restarts at the last checkpoint before its first changed
+block. It stops at an unchanged suffix only when the complete retained context,
+font-resolution trace, page count, displayed header page number, and body
+suffix all match exactly. The old raw pagination tail is then reused, and final
+page frames are shared only after their canonicalized content compares equal.
+If any equality or capacity check fails, pagination continues through the
+normal full path.
+
+The same restart record retains aligned pristine and field-substituted page
+pairs. PAGE, NUMPAGES, and PAGEREF pages bypass reshaping only when exact page
+content first recovers the retained pristine `Arc`, then page index, displayed
+page number, total-page count, sorted bookmark targets, font trace, revision
+view, and every substitution input compare equal. Field-free output shares its
+pristine `Arc` directly. Field-bearing blocks still receive no pagination
+checkpoint, so this optimization cannot widen the restart-safe region. Page
+pairs and checkpoints occupy aligned slots inside the 32-entry partition, and
+all pair payloads and exact inputs count toward its 2 MiB ceiling. A mismatch
+reshapes the page. A bound failure drops the whole restart record.
+
+`Document::transfer_reusable_layout_from` builds the receiver input before it
+takes anything. It moves the source's normal engine only when that complete
+retained-work context is compatible. Failure preserves both engines. Success
+does not clear either document's completed result cache, and the next receiver
+mutation can reuse unchanged safe paragraphs from the transferred engine.
+`Document::transfer_reusable_bundled_fallback_layout_from` applies the same
+checked move to the private deterministic-base caller-font engine. The caller
+must provide the exact font slice used by the receiver. Font order and bytes,
+revision view, and every other retained-work input participate in
+compatibility, and rejection preserves both engines.
 
 The low-level Word engine keeps its existing `LayoutResult` entry points and
 discards provenance there. `layout_document_with_provenance` and

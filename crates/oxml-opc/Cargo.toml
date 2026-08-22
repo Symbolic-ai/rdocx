@@ -11,6 +11,25 @@ repository.workspace = true
 homepage.workspace = true
 publish = true
 
+[features]
+default = []
+agile-encryption = [
+    "dep:aes",
+    "dep:base64",
+    "dep:cbc",
+    "dep:cfb",
+    "dep:getrandom",
+    "dep:hmac",
+    "dep:sha1",
+    "dep:sha2",
+]
+digital-signatures = [
+    "dep:base64",
+    "dep:ring",
+    "dep:sha2",
+    "dep:x509-cert",
+]
+
 [package.metadata.release]
 shared-version = "incubating"
 tag-name = "rpptx-v{{version}}"
@@ -19,3 +38,13 @@ tag-name = "rpptx-v{{version}}"
 zip.workspace = true
 quick-xml.workspace = true
 thiserror.workspace = true
+aes = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+cbc = { workspace = true, optional = true }
+cfb = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+sha1 = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+x509-cert = { workspace = true, optional = true }

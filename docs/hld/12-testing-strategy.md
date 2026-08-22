@@ -56,6 +56,17 @@ inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
 
+The digital-signature regression gate constructs its DOCX and signature XML
+in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
+and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace
+prefixes. Focused tests verify prefix tolerance, strict algorithms, exclusive
+canonicalization, relationship selection and order, complete declared
+coverage, named part mutation, malformed or partial coverage, and read-only
+save and reopen behavior. The optional openability oracle is Microsoft Word
+16.104 build 16.104.25121423. It confirms that Word opens the generated DOCX.
+It does not establish certificate trust or replace the Rust cryptographic and
+coverage assertions.
+
 The scalar template unit gate splits one tag across five differently formatted
 runs and proves that the first matched run supplies replacement formatting
 while unmatched prefix and suffix formatting remain intact. The structural
@@ -136,6 +147,18 @@ accepted and tracked revision text through the caller-font option accessor.
 The workspace package dry-run, 10 MiB archive ceiling, and WASM target check
 cover the additive published API. All 49 hash entries remain unchanged.
 
+The bundled-fallback caller-font regression supplies an incomplete caller set
+and requires requested caller faces to retain their exact bytes while missing
+families resolve from the deterministic bundled inventory. The strict
+caller-only path must still fail on the same incomplete set. Repeated edits and
+checked transfer prove retained work remains reusable only for the exact font
+bytes and complete document context. Rejection preserves both private engines.
+Warm and fresh results compare pages, fonts, diagnostics, provenance, outlines,
+revision options, and rendered PDF bytes. Staged mutation and poisoned-lock
+cases prove publication and recovery remain safe. Both WASM targets, the
+package dry run and archive ceiling, and the unchanged 49-entry hash harness
+are required riders.
+
 The relayout-cache gate compares a warm normal-font result with a fresh cold
 engine after editing one safe body paragraph. Pages, font table order and ids,
 font bytes, diagnostics, revision view, and every resolved provenance span must
@@ -146,12 +169,71 @@ numbering, fields, hyperlinks, media, relationships, ordinary and
 failure, paragraph reorder and insertion, caller-font isolation, TTC indices,
 and a legitimate active set larger than 256 faces.
 
+The editor-scale paragraph-cache regression retains 700 distinct safe
+paragraphs, edits one paragraph, and requires 699 warm hits with only the edit
+rebuilt. The complete warm result and source map equal a fresh cold result, and
+restart pagination reports a bounded rebuilt range. A forced fingerprint
+collision still requires exact typed paragraph equality. Focused cases prove
+that note, field, and numbering prefixes disable later reads, a late failure
+publishes nothing, hits preserve insertion order, and FIFO eviction holds at
+the independently pinned 4,096-entry and 56 MiB paragraph limits. Compile-time
+checks also pin the 4,224-entry and 64 MiB combined envelope.
+
+The restart-pagination regression gate compares warm edits at the start,
+middle, tail, and a retained page boundary with a fresh deterministic engine.
+It requires complete equality of pages, fonts, diagnostics, provenance,
+numbering, notes, fields, outlines, and rendered inputs. A middle edit must
+share the unchanged page prefix and tail while reporting only its bounded
+rebuilt range. Insertions and deletions have the same complete-equality check.
+Multi-section content, tables, split paragraphs, floating drawings, note
+continuations, keep constraints, headers, footers, backgrounds, and mismatched
+boundary state must use the full paginator.
+
+The substituted-page regression gate proves that unchanged PAGE, NUMPAGES, and
+PAGEREF pages reuse their prior substituted frame only through pristine `Arc`
+identity and a complete exact substitution key. Focused mismatches cover page
+index, displayed page number, total-page count, bookmark targets, pristine
+content, font identity, and revision view. Field-bearing blocks retain zero
+pagination checkpoints. Field-free pairs share one frame, oversized pair sets
+drop the record, and warm output, PDF bytes, and raster pages equal a fresh
+deterministic engine. The unchanged hash harness covers the sample backend set.
+
+The empty-paragraph attribution regression covers body, nested table, header,
+footer, footnote, and endnote stories. It requires exactly one empty,
+zero-width segment with the paragraph source and scalar range `0..0`, while
+ordinary layout keeps the same structure without a source. Direct paragraph
+mark formatting and paragraph-style defaults select the carrier font and
+size, and the segment ascent and descent equal that font's resolved metrics. A
+compatibility case keeps non-empty text unchanged, proves ordinary and
+attributed layout structure agrees after removing source ids, and proves PDF
+and raster output is unchanged when the no-glyph carrier is removed. The
+49-entry hash harness remains unchanged.
+
+The safe-table cache gate proves an unchanged direct table hits, diagnostics
+and font traces replay, and provenance rebinds after an earlier body insertion.
+Numbering and other traversal-sensitive table content bypass the cache. A late
+font failure after staged paragraph and table work publishes neither queue.
+Focused bounds checks cover both published and pending entry and byte ceilings.
+
+The safe header and footer cache gate covers default, first, even, inherited,
+header, footer, and watermark variants. It requires exact hits to replay
+diagnostics and font traces and to rebind current Word source ids. Part text,
+resolved image bytes, watermark geometry, same-width page-height changes,
+styles, numbering, notes, theme, revision view, additional fonts, section
+properties, and provenance mode must miss. Traversal-sensitive parts bypass
+reuse. A late failure after staged header work publishes nothing. Published and
+pending queues remain within 64 entries and 4 MiB, oversized entries bypass
+retention, and warm deterministic layout and PDF bytes equal a fresh engine.
+
 Boundary tests exercise the exact shaping identity, process font discovery,
 canonical file-byte identity, lock poison recovery, bounded resolution and
 coverage state, bounded and shrunk per-paragraph font traces, and both pending
-and published paragraph queues. Structural byte tests use retained capacities
-for owned keys, blocks, glyph data, diagnostics, font traces, and reflow
-parameters including tab stops. Oversized entries must bypass retention.
+and published block queues. Structural byte tests use retained capacities for
+owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
+pages, and reflow parameters including tab stops. The combined retained state
+must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096
+entries and 56 MiB and header and footer state capped at 64 entries and 4 MiB.
+Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and unchanged 49-entry hash harness are required riders.
@@ -484,6 +566,25 @@ cover the cases that matter now.
 - Zip-slip: a part named `../../etc/passwd` and an absolute-path entry are
   normalised or rejected. The code handles it, nothing tests it, and the crate
   is about to become a public shared component.
+
+Agile encryption has a source-encoded Microsoft Word 16.104 oracle package so
+the regression gate does not depend on an opaque binary fixture. The gate opens
+that package only with its password, checks every supported AES data-key and
+password-encryptor key-size pairing independently across every supported SHA
+algorithm with deterministic synthetic packages, rejects malformed descriptors
+and wrong passwords, and proves tampering fails before ZIP parsing. A
+package-preservation round trip also checks that unrelated parts survive after
+authenticated decryption.
+
+Agile encryption writes have separate fixed-profile, round-trip, randomness,
+and failure-atomicity coverage. Tests inspect descriptor child order and every
+required CFB and DataSpaces stream, decrypt through the production reader, and
+compare every part, relationship, content type, and unmodelled XML byte.
+Injected deterministic random sources make secret separation and random-source
+failure testable without replacing the operating system source in production.
+The external gate opens one produced document in pinned Microsoft Word 16.104,
+records correct-password success and wrong-password rejection, and treats both
+outcomes as mandatory manual evidence.
 
 **`oxml-core`**
 - New unit round-trips: `Centipoints::from_pt(18.0).0 == 1800`,
