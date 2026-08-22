@@ -1,6 +1,6 @@
 # F-X044, Scale paragraph-cache lookup for editors
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: M
 **Depends on**: F-X040
@@ -65,11 +65,11 @@ Expected to be unchanged. Lookup and eviction policy cannot alter output.
 
 ## Implementation checklist
 
-- [ ] Add a borrowed fingerprint prefilter with typed equality.
-- [ ] Remove hit-time paragraph cloning and queue refresh.
-- [ ] Raise and prove the exact bounded editor-scale limits.
-- [ ] Preserve traversal invalidation and transactional publication.
-- [ ] Add collision, workload, failure, bounds, warm-cold, and hash tests.
+- [x] Add a borrowed fingerprint prefilter with typed equality.
+- [x] Remove hit-time paragraph cloning and queue refresh.
+- [x] Raise and prove the exact bounded editor-scale limits.
+- [x] Preserve traversal invalidation and transactional publication.
+- [x] Add collision, workload, failure, bounds, warm-cold, and hash tests.
 
 ## Open questions
 

@@ -169,6 +169,16 @@ numbering, fields, hyperlinks, media, relationships, ordinary and
 failure, paragraph reorder and insertion, caller-font isolation, TTC indices,
 and a legitimate active set larger than 256 faces.
 
+The editor-scale paragraph-cache regression retains 700 distinct safe
+paragraphs, edits one paragraph, and requires 699 warm hits with only the edit
+rebuilt. The complete warm result and source map equal a fresh cold result, and
+restart pagination reports a bounded rebuilt range. A forced fingerprint
+collision still requires exact typed paragraph equality. Focused cases prove
+that note, field, and numbering prefixes disable later reads, a late failure
+publishes nothing, hits preserve insertion order, and FIFO eviction holds at
+the independently pinned 4,096-entry and 56 MiB paragraph limits. Compile-time
+checks also pin the 4,160-entry and 64 MiB combined envelope.
+
 The restart-pagination regression gate compares warm edits at the start,
 middle, tail, and a retained page boundary with a fresh deterministic engine.
 It requires complete equality of pages, fonts, diagnostics, provenance,
@@ -191,8 +201,8 @@ coverage state, bounded and shrunk per-paragraph font traces, and both pending
 and published block queues. Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
-must stay within 256 entries and 16 MiB. Oversized entries must bypass
-retention.
+must stay within 4,160 entries and 64 MiB, with paragraph state capped at 4,096
+entries and 56 MiB. Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and unchanged 49-entry hash harness are required riders.

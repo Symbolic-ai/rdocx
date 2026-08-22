@@ -1,6 +1,7 @@
 //! Layout engine orchestrator: ties all phases together.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Write as _};
 use std::sync::Arc;
 
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
@@ -487,6 +488,7 @@ struct ParagraphCacheKey {
 }
 
 struct ParagraphCacheEntry {
+    fingerprint: u64,
     key: ParagraphCacheKey,
     block: ParagraphBlock,
     diagnostics: Vec<Diagnostic>,
@@ -521,14 +523,25 @@ struct RestartCache {
     bytes: usize,
 }
 
-const CACHE_MAX_ENTRIES: usize = 256;
-const CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
-const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 192;
-const PARAGRAPH_CACHE_MAX_BYTES: usize = 12 * 1024 * 1024;
+const CACHE_MAX_ENTRIES: usize = 4_160;
+const CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 4_096;
+const PARAGRAPH_CACHE_MAX_BYTES: usize = 56 * 1024 * 1024;
 const TABLE_CACHE_MAX_ENTRIES: usize = 32;
 const TABLE_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const RESTART_CACHE_MAX_ENTRIES: usize = 32;
 const RESTART_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const _: () = assert!(PARAGRAPH_CACHE_MAX_ENTRIES == 4_096);
+const _: () = assert!(PARAGRAPH_CACHE_MAX_BYTES == 56 * 1024 * 1024);
+const _: () = assert!(CACHE_MAX_ENTRIES == 4_160);
+const _: () = assert!(CACHE_MAX_BYTES == 64 * 1024 * 1024);
+const _: () = assert!(
+    PARAGRAPH_CACHE_MAX_ENTRIES + TABLE_CACHE_MAX_ENTRIES + RESTART_CACHE_MAX_ENTRIES
+        <= CACHE_MAX_ENTRIES
+);
+const _: () = assert!(
+    PARAGRAPH_CACHE_MAX_BYTES + TABLE_CACHE_MAX_BYTES + RESTART_CACHE_MAX_BYTES <= CACHE_MAX_BYTES
+);
 const CACHE_SOURCE_NODE: SourceNodeId = match SourceNodeId::new(1) {
     Some(node) => node,
     None => panic!("one is a valid source node id"),
@@ -1153,27 +1166,20 @@ impl Engine {
             );
         }
 
-        let key = ParagraphCacheKey {
-            paragraph: paragraph.clone(),
-            content_width_bits: content_width.to_bits(),
-            revision_view: input.revision_view,
-        };
+        let fingerprint = paragraph_fingerprint(paragraph);
         if self.paragraph_cache_reads_enabled
-            && let Some(index) = self
-                .paragraph_cache
-                .iter()
-                .position(|entry| entry.key == key)
+            && let Some(entry) = self.paragraph_cache.iter().find(|entry| {
+                entry.fingerprint == fingerprint
+                    && entry.key.paragraph == *paragraph
+                    && entry.key.content_width_bits == content_width.to_bits()
+                    && entry.key.revision_view == input.revision_view
+            })
         {
-            let entry = self
-                .paragraph_cache
-                .remove(index)
-                .expect("paragraph cache index exists");
             let mut block = entry.block.clone();
             rebind_paragraph_source(&mut block, source_node);
             diagnostics.extend(entry.diagnostics.iter().cloned());
             self.font_manager
                 .replay_layout_font_trace(&entry.font_trace);
-            self.paragraph_cache.push_back(entry);
             self.paragraph_cache_hits += 1;
             return Ok(block);
         }
@@ -1198,13 +1204,18 @@ impl Engine {
         let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
         if let Some(font_trace) = font_trace {
             let bytes = paragraph_cache_entry_bytes(
-                &key.paragraph,
+                paragraph,
                 &block,
                 &cached_diagnostics,
                 font_trace.len(),
             );
             self.stage_paragraph_cache_entry(ParagraphCacheEntry {
-                key,
+                fingerprint,
+                key: ParagraphCacheKey {
+                    paragraph: paragraph.clone(),
+                    content_width_bits: content_width.to_bits(),
+                    revision_view: input.revision_view,
+                },
                 block: block.clone(),
                 diagnostics: cached_diagnostics,
                 font_trace,
@@ -2117,6 +2128,31 @@ fn paragraph_cache_entry_bytes(
         .saturating_add(block.borders.as_ref().map_or(0, border_bytes))
         .saturating_add(font_trace_len * std::mem::size_of::<FontId>())
         .saturating_add(diagnostic_bytes)
+}
+
+struct StableParagraphFingerprint(u64);
+
+impl StableParagraphFingerprint {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl fmt::Write for StableParagraphFingerprint {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        for byte in value.bytes() {
+            self.0 ^= u64::from(byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Ok(())
+    }
+}
+
+fn paragraph_fingerprint(paragraph: &CT_P) -> u64 {
+    let mut fingerprint = StableParagraphFingerprint::new();
+    let written = write!(&mut fingerprint, "{paragraph:?}");
+    debug_assert!(written.is_ok());
+    fingerprint.0
 }
 
 /// Apply page background color from `w:background` element to all pages.
@@ -4645,6 +4681,140 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_fingerprint_collision_requires_typed_equality() {
+        let first = make_input_with_text("first collision candidate");
+        let second = make_input_with_text("second collision candidate");
+        let BodyContent::Paragraph(second_paragraph) = &second.document.body.content[0] else {
+            panic!("body item is a paragraph");
+        };
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&first).expect("first layout succeeds");
+
+        let forced_fingerprint = paragraph_fingerprint(second_paragraph);
+        let retained = engine
+            .paragraph_cache
+            .front_mut()
+            .expect("first paragraph is retained");
+        assert_ne!(retained.fingerprint, forced_fingerprint);
+        retained.fingerprint = forced_fingerprint;
+
+        let output = engine.layout(&second).expect("collision layout succeeds");
+        assert_eq!(output_text(&output).concat(), "second collision candidate");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 2));
+    }
+
+    #[test]
+    fn editor_scale_paragraph_cache_avoids_warm_thrash() {
+        let mut input = make_input_with_text("editor paragraph 000");
+        for index in 1..700 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("editor paragraph {index:03}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout_with_provenance(&input)
+            .expect("editor cold layout succeeds");
+        assert_eq!(engine.paragraph_cache.len(), 700);
+        assert_eq!(engine.paragraph_cache_counts(), (0, 700));
+
+        set_body_paragraph_text(&mut input, 350, "editor paragraph 350 changed");
+        let warm = engine
+            .layout_with_provenance(&input)
+            .expect("editor warm layout succeeds");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("editor cold comparison succeeds");
+
+        assert_layout_results_equal(&warm.0, &cold.0);
+        assert_eq!(warm.1, cold.1);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+        assert_eq!(engine.paragraph_cache.len(), 701);
+        assert_eq!(
+            engine
+                .paragraph_cache
+                .front()
+                .expect("insertion order has a front")
+                .key
+                .paragraph
+                .text(),
+            "editor paragraph 000"
+        );
+        let rebuilt = engine
+            .last_rebuilt_page_range
+            .clone()
+            .expect("edited layout reports a rebuilt range");
+        assert!(
+            rebuilt.end.saturating_sub(rebuilt.start) <= 2,
+            "{rebuilt:?}"
+        );
+    }
+
+    #[test]
+    fn unsafe_prefix_still_disables_later_paragraph_hits() {
+        let mut note = CT_P::new();
+        let mut note_run = CT_R::new("");
+        note_run.content = vec![RunContent::FootnoteRef { id: 1 }];
+        note.runs.push(note_run);
+
+        let mut field = CT_P::new();
+        let mut field_run = CT_R::new("");
+        field_run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
+        field.runs.push(field_run);
+
+        let mut numbered = CT_P::new();
+        numbered.add_run("numbered prefix");
+        numbered.properties.get_or_insert_default().num_id = Some(1);
+
+        for (name, unsafe_paragraph) in [("note", note), ("field", field), ("numbering", numbered)]
+        {
+            let mut input = make_input_with_text("safe cached suffix");
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.layout(&input).expect("prime safe suffix");
+            input
+                .document
+                .body
+                .content
+                .insert(0, BodyContent::Paragraph(unsafe_paragraph));
+
+            let warm = engine.layout(&input).expect("warm unsafe-prefix layout");
+            let cold = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .expect("cold unsafe-prefix layout");
+            assert_layout_results_equal(&warm, &cold);
+            assert_eq!(engine.paragraph_cache_counts(), (0, 2), "{name}");
+        }
+    }
+
+    #[test]
+    fn scaled_paragraph_cache_warm_equals_cold() {
+        let mut input = make_input_with_text("warm-cold paragraph 000");
+        for index in 1..700 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("warm-cold paragraph {index:03}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut warm_engine = Engine::new_deterministic().expect("bundled fonts load");
+        warm_engine
+            .layout_with_provenance(&input)
+            .expect("prime warm state");
+        set_body_paragraph_text(&mut input, 349, "warm-cold paragraph 349 changed");
+
+        let warm = warm_engine
+            .layout_with_provenance(&input)
+            .expect("warm edited layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("cold edited layout");
+        assert_layout_results_equal(&warm.0, &cold.0);
+        assert_eq!(warm.1, cold.1);
+        assert_eq!(format!("{:?}", warm.0), format!("{:?}", cold.0));
+    }
+
+    #[test]
     fn warm_relayout_rebinds_font_tables_and_ids_to_the_current_result() {
         let mut input = make_input_with_text("font identity changes");
         {
@@ -5477,7 +5647,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_and_warm_diagnostics_are_identical() {
+    fn paragraph_cache_failure_and_eviction_remain_bounded() {
         let mut input = make_input_with_text("");
         input.document = rdocx_oxml::CT_Document::from_xml(
             br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>cache-safe prefix</w:t></w:r></w:p><w:p><w:fldSimple w:instr="REF missing"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:body></w:document>"#,
@@ -5539,6 +5709,51 @@ mod tests {
         assert!(failing.table_cache.is_empty());
         assert_eq!(failing.paragraph_cache_counts(), (0, 1));
         assert_eq!(failing.table_cache_counts(), (0, 1));
+
+        let template_input = make_input_with_text("eviction template");
+        let mut bounded = Engine::new_deterministic().expect("bundled fonts load");
+        bounded
+            .layout(&template_input)
+            .expect("template layout succeeds");
+        let template = bounded
+            .paragraph_cache
+            .pop_front()
+            .expect("template paragraph is retained");
+        bounded.paragraph_cache_bytes = 0;
+        for index in 0..=PARAGRAPH_CACHE_MAX_ENTRIES {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("eviction paragraph {index}"));
+            let bytes = paragraph_cache_entry_bytes(
+                &paragraph,
+                &template.block,
+                &template.diagnostics,
+                template.font_trace.len(),
+            );
+            bounded.publish_paragraph_cache_entry(ParagraphCacheEntry {
+                fingerprint: paragraph_fingerprint(&paragraph),
+                key: ParagraphCacheKey {
+                    paragraph,
+                    content_width_bits: PageGeometry::default().content_width().to_bits(),
+                    revision_view: RevisionView::Accepted,
+                },
+                block: template.block.clone(),
+                diagnostics: template.diagnostics.clone(),
+                font_trace: template.font_trace.clone(),
+                bytes,
+            });
+        }
+        assert_eq!(bounded.paragraph_cache.len(), PARAGRAPH_CACHE_MAX_ENTRIES);
+        assert!(bounded.paragraph_cache_bytes <= PARAGRAPH_CACHE_MAX_BYTES);
+        assert_eq!(
+            bounded
+                .paragraph_cache
+                .front()
+                .expect("FIFO cache has a front")
+                .key
+                .paragraph
+                .text(),
+            "eviction paragraph 1"
+        );
     }
 
     #[test]
@@ -5607,6 +5822,7 @@ mod tests {
         engine.paragraph_cache.clear();
         engine.paragraph_cache_bytes = 0;
         engine.publish_paragraph_cache_entry(ParagraphCacheEntry {
+            fingerprint: paragraph_fingerprint(paragraph),
             key: ParagraphCacheKey {
                 paragraph: paragraph.clone(),
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
@@ -5708,6 +5924,7 @@ mod tests {
         engine.paragraph_cache.clear();
         engine.paragraph_cache_bytes = 0;
         engine.publish_paragraph_cache_entry(ParagraphCacheEntry {
+            fingerprint: paragraph_fingerprint(&paragraph),
             key: ParagraphCacheKey {
                 paragraph,
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
