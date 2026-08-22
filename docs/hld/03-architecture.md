@@ -103,9 +103,10 @@ code, and the alternative is a parallel segment type for one field. The pair
 problem less visibly.
 `rdocx-layout` keeps its Word-specific input and converts paragraph alignment,
 tabs, leaders, underlines, spacing, wrapping, and twips in `convert.rs`. The
-converter also preserves Word's established glyph slicing and automatic line
-height at this boundary. That seam is the reason the PDF backend transfers for
-free.
+converter preserves Word's automatic line height and emits one shaped text
+segment for each formatting and provenance span. Shared line breaking alone
+discovers UAX 14 opportunities, reshapes each exact text slice, and subdivides
+source spans. That seam is the reason the PDF backend transfers for free.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing

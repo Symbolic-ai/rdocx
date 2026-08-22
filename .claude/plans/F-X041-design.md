@@ -1,6 +1,6 @@
 # F-X041, Remove duplicated glyphs at break opportunities
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: M
 **Depends on**: F-030, F-104, F-X037
@@ -82,19 +82,30 @@ The intentional sample hash delta is isolated, explained, and reviewed.
 
 ## Hash harness
 
-Expected intentional delta: only deterministic `page1.png` entries for samples
-whose first page contains a run affected by duplicate Word pre-segmentation may
-change. XML hashes must remain unchanged. Capture and review the exact sample
-set before updating any baseline, and keep the behavior change isolated in its
-own labelled feature commit.
+Expected intentional delta:
+
+- `page1.png` changes for `contract`, `invoice`, `letter`, `quote`, and
+  `report`.
+- `pdf/pages`, `pdf/resources`, and `pdf/bytes` change for all seven samples:
+  `contract`, `feature_showcase`, `invoice`, `letter`, `proposal`, `quote`, and
+  `report`.
+- Every `word/document.xml`, `word/styles.xml`, and `word/numbering.xml` hash
+  remains unchanged.
+
+Correcting each emitted run's glyph vector changes PDF page streams and the
+embedded font subsets. Those structural PDF fingerprints can change even when
+the corrected glyphs paint the same page-one raster pixels, which is why
+`feature_showcase` and `proposal` have PDF deltas without PNG deltas. Capture
+and review this exact sample set before updating the baseline, and keep the
+behavior change isolated in its own labelled feature commit.
 
 ## Implementation checklist
 
-- [ ] Delete Word-owned UAX 14 segmentation and approximate glyph slicing.
-- [ ] Feed complete shaped formatting spans into the shared line breaker.
-- [ ] Add exact scalar, glyph, provenance, PDF, and raster regressions.
-- [ ] Quantify and review the deterministic sample hash delta.
-- [ ] Run focused Word and shared layout tests plus golden and hash gates.
+- [x] Delete Word-owned UAX 14 segmentation and approximate glyph slicing.
+- [x] Feed complete shaped formatting spans into the shared line breaker.
+- [x] Add exact scalar, glyph, provenance, PDF, and raster regressions.
+- [x] Quantify and review the deterministic sample hash delta.
+- [x] Run focused Word and shared layout tests plus golden and hash gates.
 
 ## Open questions
 

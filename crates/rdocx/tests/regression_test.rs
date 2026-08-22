@@ -4986,3 +4986,49 @@ fn control_block_replacement_keeps_whitespace_before_the_replacement() {
             .is_empty()
     );
 }
+
+#[test]
+fn fixed_break_runs_match_pdf_and_raster_backends() {
+    let mut document = Document::new();
+    document.add_paragraph(&"financial planning ttf-parser double  spaces allocated ".repeat(12));
+    let (family, bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+    let layout = document
+        .layout_with_fonts(&[(family, bytes)])
+        .expect("caller-font deterministic layout");
+    let mut fonts =
+        oxml_layout::FontManager::new_with_fonts(vec![(family.to_owned(), bytes.to_vec())]);
+    for run in layout.layout.pages.iter().flat_map(|page| {
+        page.elements.iter().filter_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.source.is_some() => Some(run),
+            _ => None,
+        })
+    }) {
+        let font_family = layout
+            .layout
+            .fonts
+            .iter()
+            .find(|font| font.id == run.font_id)
+            .expect("run font is in result")
+            .family
+            .clone();
+        let font_id = fonts
+            .resolve_font(Some(&font_family), run.bold, run.italic)
+            .expect("caller run font resolves");
+        let independently_shaped = fonts
+            .shape_text(font_id, &run.text, run.font_size)
+            .expect("emitted chunk reshapes");
+        assert_eq!(run.glyph_ids, independently_shaped.glyph_ids);
+        assert_eq!(run.advances, independently_shaped.advances);
+    }
+
+    let direct_pdf = oxml_pdf::render_to_pdf(&layout.layout);
+    let direct_png = oxml_pdf::render_page_to_png(&layout.layout, 0, 96.0)
+        .expect("raster backend renders first page");
+    assert_eq!(
+        document
+            .to_pdf_with_fonts(&[(family, bytes)])
+            .expect("PDF facade"),
+        direct_pdf
+    );
+    assert!(!direct_png.is_empty());
+}

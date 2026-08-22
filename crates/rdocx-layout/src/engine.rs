@@ -1700,7 +1700,7 @@ pub(crate) fn layout_paragraph_with_source(
                         shaped.width += extra * shaped.advances.len() as f64;
                     }
 
-                    inline_items.extend(convert::text_segments(TextSegment {
+                    inline_items.push(InlineItem::Text(TextSegment {
                         text,
                         source,
                         font_id,
@@ -1893,7 +1893,7 @@ pub(crate) fn layout_paragraph_with_source(
                                     }
                                     shaped.width += extra * shaped.advances.len() as f64;
                                 }
-                                inline_items.extend(convert::text_segments(TextSegment {
+                                inline_items.push(InlineItem::Text(TextSegment {
                                     text,
                                     source: None,
                                     font_id: segment_font_id,
@@ -3616,6 +3616,140 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn word_projection_leaves_break_segmentation_to_shared_layout() {
+        let input = make_input_with_text("financial planning");
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let block = layout_paragraph_with_source(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+            SourceNodeId::new(1),
+        )
+        .expect("paragraph lays out");
+        let text_items = block
+            .reflow
+            .expect("line-breaking inputs retained")
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                InlineItem::Text(segment) => Some(segment),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(text_items.len(), 1);
+        assert_eq!(text_items[0].text, "financial planning");
+        assert_eq!(text_items[0].source.expect("source span").char_start, 0);
+        assert_eq!(text_items[0].source.expect("source span").char_end, 18);
+    }
+
+    #[test]
+    fn break_opportunities_emit_every_scalar_and_glyph_once() {
+        let text = "financial planning ttf-parser  double  spaces e\u{301}lan allocated \u{754c} "
+            .repeat(12);
+        let input = make_input_with_text(&text);
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("deterministic layout");
+        let runs = result
+            .layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.elements)
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.source.is_some() => Some(run),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+            text
+        );
+        let mut expected_start = 0;
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        for run in runs {
+            let source = run.source.expect("filtered sourced run");
+            assert_eq!(source.char_start, expected_start);
+            assert_eq!(
+                source.char_end - source.char_start,
+                run.text.chars().count() as u32
+            );
+            expected_start = source.char_end;
+
+            let family = result
+                .layout
+                .fonts
+                .iter()
+                .find(|font| font.id == run.font_id)
+                .expect("run font is in result")
+                .family
+                .clone();
+            let font_id = fonts
+                .resolve_font(Some(&family), run.bold, run.italic)
+                .expect("bundled run font resolves");
+            let independently_shaped = fonts
+                .shape_text(font_id, &run.text, run.font_size)
+                .expect("emitted chunk reshapes");
+            assert_eq!(
+                run.glyph_ids, independently_shaped.glyph_ids,
+                "{}",
+                run.text
+            );
+            assert_eq!(run.advances, independently_shaped.advances, "{}", run.text);
+        }
+        assert_eq!(expected_start, text.chars().count() as u32);
+    }
+
+    #[test]
+    fn reported_words_do_not_duplicate_boundary_glyphs() {
+        for text in [
+            "ttf-parser follows",
+            "double  spaces follow",
+            "financial planning",
+            "allocated space",
+        ] {
+            let input = make_input_with_text(text);
+            let result = crate::layout_document_deterministic_with_provenance(&input)
+                .expect("deterministic layout");
+            let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+            for run in result.layout.pages.iter().flat_map(|page| {
+                page.elements.iter().filter_map(|element| match element {
+                    PositionedElement::Text(run) if run.source.is_some() => Some(run),
+                    _ => None,
+                })
+            }) {
+                let family = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("run font is in result")
+                    .family
+                    .clone();
+                let font_id = fonts
+                    .resolve_font(Some(&family), run.bold, run.italic)
+                    .expect("bundled run font resolves");
+                let independently_shaped = fonts
+                    .shape_text(font_id, &run.text, run.font_size)
+                    .expect("emitted chunk reshapes");
+                assert_eq!(run.glyph_ids, independently_shaped.glyph_ids, "{text}");
+                assert_eq!(run.advances, independently_shaped.advances, "{text}");
+            }
         }
     }
 

@@ -26,9 +26,10 @@ pub struct SourceSpan { node: SourceNodeId, char_start: u32, char_end: u32 }
 is meaningful only within the result that allocated it. `char_start` and
 `char_end` are exclusive Unicode-scalar offsets, not byte, UTF-16, grapheme, or
 glyph-cluster positions. Word assigns spans before shaping. Its initial text
-segmentation and the shared line breaker both count scalars at byte split
-points, so every wrapped fragment retains an exact contiguous source range.
-Generated text uses `None`.
+projection assigns one shaped segment to each formatting and provenance span.
+The shared line breaker alone discovers UAX 14 opportunities, reshapes each
+exact byte slice, and subdivides the scalar source range, so every wrapped
+fragment retains an exact contiguous source range. Generated text uses `None`.
 
 **A slide is a page with a fixed size.** Font subsetting, ToUnicode CMaps, JPEG
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser

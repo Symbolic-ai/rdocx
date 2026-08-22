@@ -4,11 +4,11 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "F-039 global CTM, reviewed four-pixel Poppler 26.01.0 antialias delta",
+  "reason": "F-X041 corrects Word break-run glyph vectors through shared exact reshaping",
   "samples": {
     "contract": {
       "height": 1650,
-      "rgba_sha256": "1459dfbc120aa609a52a346b3df4700224ff6b2eb7743b528bc1c17042f8428e",
+      "rgba_sha256": "1e41422da268855e333f73d153e8b9720d8a67567adbb07f07c1eca66a97f24d",
       "width": 1275
     },
     "feature_showcase": {
@@ -18,12 +18,12 @@
     },
     "invoice": {
       "height": 1650,
-      "rgba_sha256": "2e782d310fa4c4d4e99ebcdc0bc9a31fdd37baa7f6806c28d161dc68133a6400",
+      "rgba_sha256": "54bbd55fce156392c178a71697d0f2360c81e6877a2fd57bddcf1f1c1e2e5aa8",
       "width": 1275
     },
     "letter": {
       "height": 1650,
-      "rgba_sha256": "bfc79d32bb0f5f2b2515a0ec1d453244ed443caebb68fc2c75aa543ed6f38c73",
+      "rgba_sha256": "5e5e15d7e030b698eadb7f22fe957b4ae08bd6de13be0e8c390af382d0d1eefc",
       "width": 1275
     },
     "proposal": {
@@ -33,12 +33,12 @@
     },
     "quote": {
       "height": 1650,
-      "rgba_sha256": "db88e32c52f5a02791707780d75cb8d3652cf284ed86c9f8245a7e7ad6449c86",
+      "rgba_sha256": "4424f65d99b01c23bee9821d88bd908051635b4342328b6c7b4c79bf445f47dd",
       "width": 1275
     },
     "report": {
       "height": 1650,
-      "rgba_sha256": "f46dbf5c337f658d78b1123065749b3ad4e5e9c9a0f4659b5400a9d815f1b2b0",
+      "rgba_sha256": "379a02232203700267455977d80838bee8d75afa9c6e7782f70b42920ddd1a0a",
       "width": 1275
     }
   }
