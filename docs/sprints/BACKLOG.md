@@ -436,7 +436,7 @@ regenerated, never hand-edited.
 | F-X033 | Integrate PR 36 ordered body items          | S51 | S | done |
 | F-X034 | Reviewed release notes for every release    | S51 | S | done |
 | F-X035 | Tag rpptx-v0.4.0                            | S51 | S | done |
-| F-X036 | Tag v0.8.0                                  | S51 | S | in-progress |
+| F-X036 | Tag v0.8.0                                  | S51 | S | done |
 | F-X037 | Trace Word glyphs to source paragraphs     | S51 | M | done |
 | F-X038 | Cache relayout work across document edits  | S51 | L | done |
 <!-- AUTOGEN:backlog-MX END -->

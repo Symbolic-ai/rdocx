@@ -285,6 +285,7 @@ defended.
 | F-X038 | S51 | L | 4 | 1 | 2026-08-21 | Bounded warm relayout caches with exact cold-layout output and provenance |
 | F-X033 | S51 | S | 1 | 1 | 2026-08-21 | Ordered direct Word body items with Pedro Assumpcao's merge record preserved |
 | F-X035 | S51 | S | 1 | 1 | 2026-08-21 | Published and verified the complete 15-package rpptx 0.4.0 family |
+| F-X036 | S51 | S | 1 | 1 | 2026-08-22 | Published and verified the seven-package stable rdocx 0.8.0 family |
 
 ## Velocity
 

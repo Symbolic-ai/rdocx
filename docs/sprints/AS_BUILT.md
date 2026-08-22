@@ -7979,3 +7979,49 @@ comparison.
 **Notes for future sessions.** Stable 0.8.0 may now be prepared against the
 published 0.4.0 dependency family. It requires its own reviewed SHA and a new
 explicit `/release v0.8.0` approval before any stable tag or publication.
+
+### F-X036, Tag v0.8.0
+
+**Sprint.** S51
+**Completed.** 2026-08-22
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact seven-package stable Word family is published on
+crates.io at 0.8.0. The four workspace-version binding and support packages
+remain unpublished. GitHub release `v0.8.0` contains the reviewed changelog
+body unchanged.
+
+**Non-obvious choices.** The release used one annotated tag at reviewed SHA
+`0cc47eb8632de184ba758fe0929d9f749ab4fcb0`. Workflow run 32536705662
+published only the stable allowlist in dependency order, skipped the
+incubating allowlist, and created the GitHub release after output, metadata,
+notes, and archive verification. Independent checks downloaded all seven
+registry versions and confirmed `mantissaman` as owner. The remote tag peels
+to the reviewed SHA, and the 9,291-character published release body is
+byte-identical to a fresh notes render.
+
+**Deviations from the design plan.** The default third sprint-review pass found
+one missing Issue 37 credit in the stable notes. The remediation added the
+verified reporter attribution and mutation-sensitive coverage. An explicitly
+bounded fourth pass was clean before release approval. No product code or
+release carrier changed during that remediation.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the published stable
+family boundary, `docs/hld/10-bindings-spec.md`, the shipped native and
+low-level compatibility surface, `docs/hld/12-testing-strategy.md`, the
+published README endpoint, and `docs/hld/15-build-and-toolchain.md`, the
+verified release tag and package family.
+
+**Tests.** `test_stable_release_family_is_prepared_at_0_8_0`, the 66-test
+workflow suite, full workspace verification, all 49 unchanged hashes, the
+patched 22-package dry run, archive inventories, both WASM checks, no-default
+layout, docs, README tests, supply-chain checks, seven `cargo info` and owner
+checks, remote tag verification, and byte-exact GitHub release-note
+comparison.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Issue 37 and PR 36 have verified stable release
+comments, and Issue 37 is closed. The later Issue 39 proposals for shared
+`FontData` bytes and public engine handoff did not ship in 0.8.0. Review
+those as separate follow-up changes against the post-release code.

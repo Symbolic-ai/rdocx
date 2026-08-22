@@ -5847,13 +5847,13 @@ Pedro Assumpcao and the rdocx maintainers.
         stated_versions = re.findall(
             r"on\s+crates\.io at ([0-9]+\.[0-9]+\.[0-9]+)", claude
         )
-        self.assertEqual(stated_versions, ["0.7.0"])
+        self.assertEqual(stated_versions, [workspace_version])
         prepared_versions = re.findall(
             r"prepared coherently at workspace version "
             r"([0-9]+\.[0-9]+\.[0-9]+)",
             claude,
         )
-        self.assertEqual(prepared_versions, [workspace_version])
+        self.assertEqual(prepared_versions, [])
         for name, (_, manifest) in packages.items():
             if not name.startswith("rdocx") or name == "rdocx-py":
                 continue
@@ -5940,13 +5940,14 @@ Pedro Assumpcao and the rdocx maintainers.
                 ),
             ),
             "version": (
-                claude.replace("crates.io at 0.7.0", "crates.io at 0.2.0", 1),
+                claude.replace("crates.io at 0.8.0", "crates.io at 0.2.0", 1),
                 verify,
             ),
             "prepared-version": (
                 claude.replace(
-                    "prepared coherently at workspace version 0.8.0",
-                    "prepared coherently at workspace version 0.2.0",
+                    "across the exact seven-package stable family.",
+                    "across the exact seven-package stable family and prepared "
+                    "coherently at workspace version 0.8.0.",
                     1,
                 ),
                 verify,

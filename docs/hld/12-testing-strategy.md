@@ -641,12 +641,12 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The prepared stable 0.8.0 regression pins all eleven inherited version
+The stable 0.8.0 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the incubating family remains at 0.4.0.
-The current stable 0.7.0 release verifies every crates.io README endpoint
-returns non-empty rendered HTML. The 0.8.0 endpoint checks remain a
+The current stable 0.8.0 release verifies every crates.io README endpoint
+returns non-empty rendered HTML. Those endpoint checks remain a
 post-publication gate owned by `/release`.
 
 ## What CI runs

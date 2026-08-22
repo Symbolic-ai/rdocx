@@ -1,6 +1,6 @@
 # F-X036, Tag v0.8.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S51
 **Size**: S
 **Depends on**: F-166, F-167, F-168, F-X032, F-X033, F-X035, F-X038
@@ -140,10 +140,10 @@ release metadata only. Any output delta blocks release preparation.
 - [x] Run full verification, the 49-entry hash gate, patched 22-package dry
   run, archive inventory and size checks, both WASM checks, Python metadata
   assertions, no-default layout, docs, README tests, and supply-chain checks.
-- [ ] Run microscope and a clean sprint review at the exact prepared SHA.
-- [ ] Stop at `/release` final approval with the exact SHA, package set,
+- [x] Run microscope and a clean sprint review at the exact prepared SHA.
+- [x] Stop at `/release` final approval with the exact SHA, package set,
   rendered notes, tag, remote, and workflow reported to the user.
-- [ ] After approval, verify all seven registry entries and owners plus the
+- [x] After approval, verify all seven registry entries and owners plus the
   exact GitHub release target and note bytes before completing the story.
 
 ## Open questions

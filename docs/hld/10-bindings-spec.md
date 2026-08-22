@@ -334,8 +334,8 @@ assigns absolute schema slots to the unmodelled standard `w:hMerge`, `w:tcMar`,
 `w:tcPrChange` children. This sidecar is part of the intentional pre-1.0 0.8
 low-level Rust source break. Existing exhaustive matches and full struct
 literals must be updated or moved to the provided constructors. The workspace
-is prepared at 0.8.0 for the next stable-family release, not a 0.7 patch. The
-immutable published boundary remains 0.7.0 until separate release approval.
+and its exact seven-package stable family are published at 0.8.0, not as a 0.7
+patch. Earlier immutable registry versions remain available.
 The additive `rdocx::Document` facade and
 unchanged Python, WASM, and CLI surfaces do not inherit this low-level source
 break.
@@ -349,9 +349,8 @@ through the result-local Word source table, and ranges use Unicode scalar
 indices in the recorded revision view. The existing layout functions keep
 returning `LayoutResult`. The `rdocx::Document` facade consumes the provenance
 entry points through additive native accessors, while Python, WASM, and CLI
-surfaces remain unchanged. The exhaustive literal change is published in the
-incubating 0.4.0 family and remains part of the planned stable 0.8.0 source
-boundary.
+surfaces remain unchanged. The exhaustive literal change is published in both
+the incubating 0.4.0 family and the stable 0.8.0 family.
 
 Native callers resolve tracked changes through `accept_all`, `reject_all`, the
 exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.
