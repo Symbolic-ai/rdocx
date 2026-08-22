@@ -214,6 +214,14 @@ reports. The additive API distinguishes cryptographic verification and
 complete declared coverage from certificate-chain trust. It does not expand
 Python, WASM, or CLI surfaces and those dependency graphs remain unchanged.
 
+Native callers rebuilding one Word document from another can call
+`Document::transfer_reusable_layout_from`. The method moves the source's normal
+layout engine only when the complete private retained-work context matches. A
+rejected transfer preserves both engines, a successful transfer preserves both
+completed result caches, and no unchecked engine accessor becomes public. This
+is an additive native Rust method. Python, WASM, and CLI surfaces gain no
+transfer method.
+
 Paragraph mutation supports explicit hard breaks and hyperlinks backed by a
 document relationship. Table column mutation keeps the table width, grid
 column, and every covering cell width consistent. A cell with `gridSpan`

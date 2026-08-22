@@ -13,9 +13,11 @@ link, metadata, and outline paths. `rdocx` uses this backend directly, and
 shim. The shared contract is:
 
 ```rust
-pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
+pub struct LayoutResult { pages: Vec<Arc<PageFrame>>, fonts: Vec<FontData>,
                           metadata: Option<DocumentMetadata>, outlines: Vec<OutlineEntry>,
                           diagnostics: Vec<Diagnostic> }
+pub struct FontData { id: FontId, family: String, data: Arc<[u8]>,
+                      face_index: u32, bold: bool, italic: bool }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
 pub struct SourceNodeId(NonZeroU32)
@@ -457,7 +459,8 @@ and use the normal engine with a distinct revision-view paragraph identity.
 Caller-supplied font layouts construct an isolated engine, remain uncached, and
 cannot observe bundled or system fonts. Caller-font access returns an owned
 bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
-bundle that owns the exact font data and Word source map.
+bundle that owns the exact font data and Word source map. Cloning a completed
+result shares each immutable page frame and font byte buffer.
 
 Normal `FontManager` construction clones one process-lifetime snapshot of the
 bundled and system face table. Installing, removing, or replacing a system font
@@ -474,8 +477,11 @@ font traces also have explicit bounds. Loading a different additional font set
 rebuilds face identity and clears all dependent memo state.
 
 The Word engine caches only ordinary context-independent body paragraphs. The
-entry key compares the complete typed paragraph, content width, revision view,
-styles, theme, and additional font set. Numbering, drawings including
+entry key compares the complete typed paragraph, content width, and revision
+view. Its retained-work context separately compares styles, numbering, section
+properties, headers, footers, media, charts, chart theme and colour map, core
+properties, hyperlinks, notes, theme, additional fonts, and the document-wide
+wrapping-drawing state. Numbering, drawings including
 `AlternateContent`, fields, hyperlinks, relationships, media, generated
 markers, and other traversal-sensitive input bypass reuse. Each entry owns its
 block, diagnostics, and exact bounded font-resolution trace. Both the published
@@ -490,6 +496,12 @@ current `WordLayoutResult`. After success, active faces are retained in
 first-resolution order and stale faces and entries are removed. This makes warm
 and cold pages, font ids, font bytes, diagnostics, revision view, and resolved
 source provenance equal.
+
+`Document::transfer_reusable_layout_from` builds the receiver input before it
+takes anything. It moves the source's normal engine only when that complete
+retained-work context is compatible. Failure preserves both engines. Success
+does not clear either document's completed result cache, and the next receiver
+mutation can reuse unchanged safe paragraphs from the transferred engine.
 
 The low-level Word engine keeps its existing `LayoutResult` entry points and
 discards provenance there. `layout_document_with_provenance` and

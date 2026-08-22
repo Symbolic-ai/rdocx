@@ -1,6 +1,7 @@
 //! Layout engine orchestrator: ties all phases together.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
@@ -390,7 +391,7 @@ fn revision_is_visible(revision: &CT_Revision) -> bool {
 /// The layout engine.
 pub struct Engine {
     font_manager: FontManager,
-    paragraph_cache_context: Option<ParagraphCacheContext>,
+    paragraph_cache_context: Option<ReusableEngineContext>,
     paragraph_cache: VecDeque<ParagraphCacheEntry>,
     paragraph_cache_bytes: usize,
     paragraph_cache_hits: usize,
@@ -405,16 +406,60 @@ pub struct Engine {
 }
 
 #[derive(Clone, PartialEq)]
-struct ParagraphCacheContext {
+struct ReusableEngineContext {
+    revision_view: RevisionView,
+    has_wrapping_drawing: bool,
     styles: CT_Styles,
+    numbering: Option<rdocx_oxml::numbering::CT_Numbering>,
+    sections: Vec<CT_SectPr>,
+    headers: HashMap<String, rdocx_oxml::header_footer::CT_HdrFtr>,
+    footers: HashMap<String, rdocx_oxml::header_footer::CT_HdrFtr>,
+    images: HashMap<String, crate::input::ImageData>,
+    charts: HashMap<String, std::result::Result<Box<oxml_chart::CT_ChartSpace>, String>>,
+    chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet,
+    chart_color_map: oxml_drawing::color::ColorMap,
+    core_properties: Option<rdocx_oxml::core_properties::CoreProperties>,
+    hyperlink_urls: HashMap<String, String>,
+    footnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
+    endnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
     theme: Option<rdocx_oxml::theme::Theme>,
+    fonts: Vec<oxml_layout::FontFile>,
 }
 
-impl ParagraphCacheContext {
+impl ReusableEngineContext {
     fn for_input(input: &LayoutInput) -> Self {
+        let mut sections = input
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        sections.extend(input.document.body.sect_pr.iter().cloned());
         Self {
+            revision_view: input.revision_view,
+            has_wrapping_drawing: document_has_wrapping_drawing(input),
             styles: input.styles.clone(),
+            numbering: input.numbering.clone(),
+            sections,
+            headers: input.headers.clone(),
+            footers: input.footers.clone(),
+            images: input.images.clone(),
+            charts: input.charts.clone(),
+            chart_theme: input.chart_theme.clone(),
+            chart_color_map: input.chart_color_map.clone(),
+            core_properties: input.core_properties.clone(),
+            hyperlink_urls: input.hyperlink_urls.clone(),
+            footnotes: input.footnotes.clone(),
+            endnotes: input.endnotes.clone(),
             theme: input.theme.clone(),
+            fonts: input.fonts.clone(),
         }
     }
 }
@@ -481,6 +526,18 @@ impl Engine {
         Self::with_font_manager(FontManager::new_with_fonts(Vec::new()))
     }
 
+    /// Take a reusable engine only when its complete retained-work context
+    /// matches the proposed receiver input.
+    #[doc(hidden)]
+    pub fn take_if_compatible(source: &mut Option<Self>, input: &LayoutInput) -> Option<Self> {
+        let compatible = source.as_ref().is_some_and(|engine| {
+            engine.paragraph_cache_context.as_ref()
+                == Some(&ReusableEngineContext::for_input(input))
+                && engine.pending_paragraph_cache.is_none()
+        });
+        compatible.then(|| source.take()).flatten()
+    }
+
     /// Lay out the entire document.
     pub fn layout(&mut self, input: &LayoutInput) -> Result<LayoutResult> {
         self.layout_inner(input, None)
@@ -506,7 +563,7 @@ impl Engine {
         let fonts_changed = self.font_manager.load_additional_fonts(&input.fonts);
         self.font_manager.begin_layout();
 
-        let paragraph_context = ParagraphCacheContext::for_input(input);
+        let paragraph_context = ReusableEngineContext::for_input(input);
         if fonts_changed {
             self.paragraph_cache.clear();
             self.paragraph_cache_bytes = 0;
@@ -765,6 +822,7 @@ impl Engine {
             creator: Some("rdocx".to_string()),
         });
 
+        let pages = pages.into_iter().map(Arc::new).collect();
         let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
         result.diagnostics = diagnostics;
         Ok(result)
@@ -3932,6 +3990,151 @@ mod tests {
     }
 
     #[test]
+    fn compatible_engine_take_reuses_normal_layout_work() {
+        let mut source_input = make_input_with_text("unchanged paragraph");
+        let mut changed = CT_P::new();
+        changed.add_run("old second paragraph");
+        source_input.document.body.add_paragraph(changed);
+
+        let mut source_engine = Engine::new_deterministic().expect("bundled fonts load");
+        source_engine
+            .layout(&source_input)
+            .expect("prime reusable engine");
+        assert_eq!(source_engine.paragraph_cache_counts(), (0, 2));
+
+        let mut receiver_input = source_input.clone();
+        let BodyContent::Paragraph(second) = &mut receiver_input.document.body.content[1] else {
+            panic!("second body paragraph");
+        };
+        second.runs[0].content[0] =
+            RunContent::Text(rdocx_oxml::text::CT_Text::new("new second paragraph"));
+
+        let mut source = Some(source_engine);
+        let mut transferred = Engine::take_if_compatible(&mut source, &receiver_input)
+            .expect("matching context transfers");
+        assert!(source.is_none());
+        transferred
+            .layout(&receiver_input)
+            .expect("transferred layout succeeds");
+        assert_eq!(transferred.paragraph_cache_counts(), (1, 3));
+    }
+
+    #[test]
+    fn incompatible_or_failed_engine_take_preserves_the_source() {
+        fn assert_rejected(label: &str, mut receiver: LayoutInput) {
+            let source_input = make_input_with_text("retained paragraph");
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.layout(&source_input).expect("prime reusable engine");
+            let mut source = Some(engine);
+            assert!(
+                Engine::take_if_compatible(&mut source, &receiver).is_none(),
+                "{label} must reject transfer"
+            );
+            assert!(source.is_some());
+            receiver.document.body.content.clear();
+        }
+
+        let base = make_input_with_text("retained paragraph");
+        let mut changed = base.clone();
+        changed.revision_view = RevisionView::Tracked;
+        assert_rejected("revision view", changed);
+
+        let wrapping = make_wrapping_document(
+            WrapType::Square,
+            Some(rdocx_oxml::drawing::AnchorAlignH::Left),
+            100.0,
+            40.0,
+            5.0,
+        );
+        let mut changed = base.clone();
+        changed.document = wrapping.document;
+        assert_rejected("document wrapping state", changed);
+
+        let mut changed = base.clone();
+        changed.styles = CT_Styles::new();
+        assert_rejected("styles", changed);
+
+        let mut changed = base.clone();
+        changed.numbering = Some(rdocx_oxml::numbering::CT_Numbering::new());
+        assert_rejected("numbering", changed);
+
+        let mut changed = base.clone();
+        changed.headers.insert(
+            "rIdHeader".to_owned(),
+            rdocx_oxml::header_footer::CT_HdrFtr::new(),
+        );
+        assert_rejected("headers", changed);
+
+        let mut changed = base.clone();
+        changed.footers.insert(
+            "rIdFooter".to_owned(),
+            rdocx_oxml::header_footer::CT_HdrFtr::new(),
+        );
+        assert_rejected("footers", changed);
+
+        let mut changed = base.clone();
+        changed.images.insert(
+            "rIdImage".to_owned(),
+            crate::input::ImageData {
+                data: vec![1, 2, 3],
+                content_type: "image/png".to_owned(),
+            },
+        );
+        assert_rejected("images", changed);
+
+        let mut changed = base.clone();
+        changed
+            .charts
+            .insert("rIdChart".to_owned(), Err("missing chart".to_owned()));
+        assert_rejected("charts", changed);
+
+        let mut changed = base.clone();
+        changed.chart_theme.name = Some("Changed".to_owned());
+        assert_rejected("chart theme", changed);
+
+        let mut changed = base.clone();
+        changed.core_properties = Some(rdocx_oxml::core_properties::CoreProperties {
+            title: Some("Changed".to_owned()),
+            ..Default::default()
+        });
+        assert_rejected("core properties", changed);
+
+        let mut changed = base.clone();
+        changed
+            .hyperlink_urls
+            .insert("rIdLink".to_owned(), "https://example.com".to_owned());
+        assert_rejected("hyperlinks", changed);
+
+        let mut changed = base.clone();
+        changed.footnotes = Some(rdocx_oxml::footnotes::CT_Footnotes::new());
+        assert_rejected("footnotes", changed);
+
+        let mut changed = base.clone();
+        changed.endnotes = Some(rdocx_oxml::footnotes::CT_Footnotes::new());
+        assert_rejected("endnotes", changed);
+
+        let mut changed = base.clone();
+        changed.theme = Some(rdocx_oxml::theme::Theme::default());
+        assert_rejected("theme", changed);
+
+        let mut changed = base.clone();
+        changed.fonts.push(oxml_layout::FontFile {
+            family: "Changed".to_owned(),
+            data: vec![1, 2, 3],
+        });
+        assert_rejected("fonts", changed);
+
+        let mut changed = base;
+        changed
+            .document
+            .body
+            .sect_pr
+            .get_or_insert_with(CT_SectPr::default_letter)
+            .page_width = Some(rdocx_oxml::units::Twips(10_000));
+        assert_rejected("sections", changed);
+    }
+
+    #[test]
     fn alternate_content_drawings_bypass_paragraph_reuse() {
         let document = rdocx_oxml::CT_Document::from_xml(
             br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:r><w:t>ordinary text</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor behindDoc="0"><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="914400" cy="457200"/><a:graphic><a:graphicData><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice></mc:AlternateContent></w:r></w:p></w:body></w:document>"#,
@@ -4721,7 +4924,7 @@ mod tests {
             .expect("provenance layout")
             .into_layout_result();
         for page in &mut sourced.pages {
-            for element in &mut page.elements {
+            for element in &mut Arc::make_mut(page).elements {
                 if let PositionedElement::Text(run) = element {
                     run.source = None;
                 }
@@ -4755,7 +4958,7 @@ mod tests {
                     .layout
                     .fonts
                     .iter()
-                    .any(|font| font.data == input.fonts[0].data),
+                    .any(|font| font.data.as_ref() == input.fonts[0].data.as_slice()),
                 "the caller-provided font bytes shaped the result"
             );
             let runs = result
@@ -5854,7 +6057,7 @@ mod tests {
         let all: String = output
             .pages
             .iter()
-            .map(page_text)
+            .map(|page| page_text(page))
             .collect::<Vec<_>>()
             .join(" | ");
         assert!(

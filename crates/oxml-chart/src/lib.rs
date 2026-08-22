@@ -10987,7 +10987,7 @@ mod tests {
         );
 
         let layout = LayoutResult::new(
-            vec![PageFrame::new(1, 200.0, 140.0, geometry.elements)],
+            vec![PageFrame::new(1, 200.0, 140.0, geometry.elements).into()],
             Vec::new(),
             None,
             Vec::new(),
@@ -11192,12 +11192,7 @@ mod tests {
             let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
             let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
             let layout = LayoutResult::new(
-                vec![PageFrame::new(
-                    1,
-                    200.0,
-                    140.0,
-                    vec![PositionedElement::Group(group)],
-                )],
+                vec![PageFrame::new(1, 200.0, 140.0, vec![PositionedElement::Group(group)]).into()],
                 fonts.all_font_data(),
                 None,
                 Vec::new(),
@@ -12024,7 +12019,7 @@ mod tests {
 
         let raster = |geometry: ChartGeometry| {
             let layout = LayoutResult::new(
-                vec![PageFrame::new(1, 200.0, 140.0, geometry.elements)],
+                vec![PageFrame::new(1, 200.0, 140.0, geometry.elements).into()],
                 Vec::new(),
                 None,
                 Vec::new(),
@@ -13164,12 +13159,7 @@ mod tests {
             let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
             let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
             let layout = LayoutResult::new(
-                vec![PageFrame::new(
-                    1,
-                    200.0,
-                    140.0,
-                    vec![PositionedElement::Group(group)],
-                )],
+                vec![PageFrame::new(1, 200.0, 140.0, vec![PositionedElement::Group(group)]).into()],
                 fonts.all_font_data(),
                 None,
                 Vec::new(),

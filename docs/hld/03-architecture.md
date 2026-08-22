@@ -92,6 +92,12 @@ output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
 format.
 
+Completed layout results share each immutable page frame and each font byte
+buffer through `Arc`. Word and Presentation producers establish that ownership
+at their format boundary. PDF, raster, facade page access, diagnostics, and
+provenance consumers borrow the shared values without gaining a format-specific
+dependency.
+
 `SourceNodeId` and `SourceSpan` are the format-neutral provenance carriers at
 this boundary. A text segment and its positioned glyph run can hold one
 result-local node id plus an exclusive Unicode-scalar range. Shared line
@@ -112,6 +118,10 @@ converter preserves Word's automatic line height and emits one shaped text
 segment for each formatting and provenance span. Shared line breaking alone
 discovers UAX 14 opportunities, reshapes each exact text slice, and subdivides
 source spans. That seam is the reason the PDF backend transfers for free.
+Its reusable normal engine retains one exact private identity for every
+non-body layout input, section properties, and the document-wide wrapping
+state that can affect cached paragraph work. The native Word facade can move a
+compatible engine between two documents without exposing mutable cache state.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing

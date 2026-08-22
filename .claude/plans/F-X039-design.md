@@ -1,6 +1,6 @@
 # F-X039, Share layout payloads and transfer reusable engines
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: M
 **Depends on**: F-X032, F-X037, F-X038
@@ -95,12 +95,12 @@ Expected to be unchanged. Shared ownership changes allocation only, not output.
 
 ## Implementation checklist
 
-- [ ] Change font bytes and pages to shared immutable ownership.
-- [ ] Update every producer and consumer without adding wrapper types.
-- [ ] Define the complete private reusable-engine context identity.
-- [ ] Add checked engine take and the single native facade transfer method.
-- [ ] Add pointer-sharing, compatibility, poison, warm-cold, and backend tests.
-- [ ] Run focused layout, rendering, WASM, package, and hash checks.
+- [x] Change font bytes and pages to shared immutable ownership.
+- [x] Update every producer and consumer without adding wrapper types.
+- [x] Define the complete private reusable-engine context identity.
+- [x] Add checked engine take and the single native facade transfer method.
+- [x] Add pointer-sharing, compatibility, poison, warm-cold, and backend tests.
+- [x] Run focused layout, rendering, WASM, package, and hash checks.
 
 ## Open questions
 

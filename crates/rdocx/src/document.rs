@@ -3292,6 +3292,31 @@ impl Document {
 
     // ---- Layout and PDF conversion ----
 
+    /// Transfer compatible reusable normal-layout work from another document.
+    ///
+    /// The transfer succeeds only when every retained-work input other than
+    /// body content matches exactly. A rejected transfer leaves both engines
+    /// unchanged. Completed layout results remain owned by their documents.
+    pub fn transfer_reusable_layout_from(&mut self, source: &mut Document) -> bool {
+        let input = self.build_layout_input();
+        let transferred = {
+            let mut source_engine = source
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rdocx_layout::engine::Engine::take_if_compatible(&mut source_engine, &input)
+        };
+        let Some(transferred) = transferred else {
+            return false;
+        };
+        let mut receiver_engine = self
+            .normal_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *receiver_engine = Some(transferred);
+        true
+    }
+
     /// Return the cached normal-font layout with its Word source map.
     ///
     /// Repeated calls share the same accepted-view result until the document
@@ -3568,7 +3593,11 @@ impl Document {
         options: RenderOptions,
     ) -> Result<Option<oxml_layout::PageFrame>> {
         let layout = self.layout_with_options(options)?;
-        Ok(layout.layout.pages.get(page_index).cloned())
+        Ok(layout
+            .layout
+            .pages
+            .get(page_index)
+            .map(|page| page.as_ref().clone()))
     }
 
     /// Build a LayoutInput from the document's current state.
@@ -5115,7 +5144,7 @@ mod tests {
                     .find(|font| font.id == run.font_id)
                     .expect("caller-font glyph run should resolve its font id");
                 assert_eq!(font.family, family);
-                assert_eq!(font.data, bytes);
+                assert_eq!(font.data.as_ref(), bytes.as_slice());
                 let source = run
                     .source
                     .expect("caller-font text should retain source provenance");
@@ -5232,6 +5261,183 @@ mod tests {
             .expect("layout recovers from poisoned engine lock");
         let second = document.layout().expect("recovered layout remains cached");
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn all_backends_accept_shared_layout_payloads_without_output_change() {
+        let mut document = Document::new();
+        document.add_paragraph("Shared layout").style("Heading1");
+        document.add_paragraph("Backend and provenance coverage");
+
+        let original = document.layout().expect("normal layout succeeds");
+        let shared = original.layout.clone();
+        assert!(
+            original
+                .layout
+                .pages
+                .iter()
+                .zip(&shared.pages)
+                .all(|(left, right)| Arc::ptr_eq(left, right))
+        );
+        assert!(
+            original
+                .layout
+                .fonts
+                .iter()
+                .zip(&shared.fonts)
+                .all(|(left, right)| Arc::ptr_eq(&left.data, &right.data))
+        );
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&original.layout),
+            oxml_pdf::render_to_pdf(&shared)
+        );
+        assert_eq!(
+            oxml_pdf::render_page_to_png(&original.layout, 0, 72.0),
+            oxml_pdf::render_page_to_png(&shared, 0, 72.0)
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                document
+                    .layout_page(0)
+                    .expect("page access")
+                    .expect("first page")
+            ),
+            format!("{:?}", shared.pages[0])
+        );
+        assert_eq!(original.layout.diagnostics, shared.diagnostics);
+        assert_eq!(
+            format!("{:?}", original.layout.outlines),
+            format!("{:?}", shared.outlines)
+        );
+
+        let (family, bytes) = caller_only_font();
+        let mut caller_document = Document::new();
+        caller_document
+            .add_paragraph("")
+            .add_run("caller-owned font")
+            .font(family);
+        let caller = caller_document
+            .layout_with_fonts(&[(family, &bytes)])
+            .expect("caller-font layout succeeds");
+        let caller_shared = caller.layout.clone();
+        assert!(
+            caller
+                .layout
+                .fonts
+                .iter()
+                .zip(&caller_shared.fonts)
+                .all(|(left, right)| Arc::ptr_eq(&left.data, &right.data))
+        );
+        let source = caller.layout.pages.iter().find_map(|page| {
+            let mut source = None;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    source = source.or(run.source);
+                }
+            });
+            source
+        });
+        assert!(source.is_some_and(|span| caller.source_node(span.node).is_some()));
+    }
+
+    #[test]
+    fn compatible_document_transfer_reuses_normal_layout_work() {
+        let mut source = Document::new();
+        source.add_paragraph("unchanged paragraph");
+        source.add_paragraph("old second paragraph");
+        let source_result = source.layout().expect("prime source engine");
+
+        let mut receiver = source.clone_for_staging();
+        let receiver_result = receiver.layout().expect("prime receiver engine");
+        assert!(receiver.transfer_reusable_layout_from(&mut source));
+        assert!(
+            source
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+        assert!(
+            receiver
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(Arc::ptr_eq(
+            &source_result,
+            &source.layout().expect("source result cache remains")
+        ));
+        assert!(Arc::ptr_eq(
+            &receiver_result,
+            &receiver.layout().expect("receiver result cache remains")
+        ));
+
+        receiver
+            .paragraph_mut(1)
+            .expect("second paragraph")
+            .add_run(" changed");
+        assert!(receiver.layout().is_ok());
+    }
+
+    #[test]
+    fn incompatible_or_failed_transfer_preserves_both_engines() {
+        let mut source = Document::new();
+        source.add_paragraph("source paragraph");
+        let mut receiver = source.clone_for_staging();
+        source.layout().expect("prime source engine");
+        receiver.layout().expect("prime receiver engine");
+
+        receiver.styles = CT_Styles::new();
+        receiver.invalidate_layout();
+        assert!(!receiver.transfer_reusable_layout_from(&mut source));
+        assert!(
+            source
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            receiver
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _engine = source.normal_layout_engine.lock().unwrap();
+            panic!("poison source engine lock");
+        }));
+        assert!(poisoned.is_err());
+        let mut compatible = source.clone_for_staging();
+        assert!(compatible.transfer_reusable_layout_from(&mut source));
+        assert!(compatible.layout().is_ok());
+    }
+
+    #[test]
+    fn transferred_warm_layout_equals_fresh_layout() {
+        let mut source = Document::new();
+        source.add_paragraph("unchanged paragraph");
+        source.add_paragraph("old second paragraph");
+        source.layout().expect("prime source engine");
+
+        let mut warm = source.clone_for_staging();
+        warm.paragraph_mut(1)
+            .expect("second paragraph")
+            .add_run(" changed");
+        let fresh = warm.clone_for_staging();
+        assert!(warm.transfer_reusable_layout_from(&mut source));
+
+        let warm_result = warm.layout().expect("transferred warm layout");
+        let fresh_result = fresh.layout().expect("fresh cold layout");
+        assert_eq!(format!("{warm_result:?}"), format!("{fresh_result:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm_result.layout),
+            oxml_pdf::render_to_pdf(&fresh_result.layout)
+        );
     }
 
     #[test]
@@ -6176,7 +6382,7 @@ mod tests {
             assert!(
                 bundled_fonts
                     .iter()
-                    .any(|(_family, data)| *data == font.data.as_slice()),
+                    .any(|(_family, data)| *data == font.data.as_ref()),
                 "resolved font '{}' did not come from the bundled font set",
                 font.family
             );
