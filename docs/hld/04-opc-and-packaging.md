@@ -320,9 +320,12 @@ The default-off `oxml-opc/agile-encryption` feature reads and writes
 password-protected OOXML packages. Readers parse the CFB `EncryptionInfo` and
 `EncryptedPackage` streams, accept namespace aliases, and reject elements that
 violate the Agile descriptor sequence. Supported read combinations are
-AES-CBC with 128, 192, or 256-bit keys and SHA-1, SHA-256, SHA-384, or SHA-512.
-Descriptor sizes, salt lengths, spin counts, ciphertext lengths, and algorithm
-names are validated before expensive work begins.
+AES-CBC with 128, 192, or 256-bit data and password-encryptor keys, varied
+independently, and SHA-1, SHA-256, SHA-384, or SHA-512. The parent `keyData`
+size governs the encrypted package key, while the password encryptor size
+governs its wrapping key. Descriptor sizes, salt lengths, spin counts,
+ciphertext lengths, and algorithm names are validated before expensive work
+begins.
 
 Password verification releases no package key on failure. A matching password
 decrypts the data-integrity material and authenticates the complete encrypted
@@ -357,13 +360,15 @@ ID order. Unsupported or weak algorithms fail closed.
 
 Each report keeps cryptographic validity separate from complete declared
 coverage. Cryptographic validity authenticates `SignedInfo`, every direct
-reference, and every manifest reference against the embedded X.509 public key.
-Coverage is complete only when every non-signature part, content types part,
-and non-signature relationship is declared. Certificate-chain trust is not
-inferred and remains caller policy. Verification is read-only. A loaded
-package retains the original content-types bytes while its typed content types
-remain unchanged, so saving does not invalidate a signature by reserializing
-equivalent XML.
+reference, and only those manifest references reachable through an
+authenticated same-document reference graph against the embedded X.509 public
+key. Exclusive canonicalization retains processing instructions in their XML
+child position. Coverage is complete only when every non-signature part,
+content types part, and non-signature relationship is declared.
+Certificate-chain trust is not inferred and remains caller policy.
+Verification is read-only. A loaded package retains the original content-types
+bytes while its typed content types remain unchanged, so saving does not
+invalidate a signature by reserializing equivalent XML.
 
 Comment mutations validate coordinates and allocate every required id before
 changing package or document state. Saving keeps the comments and

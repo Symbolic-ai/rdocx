@@ -98,7 +98,7 @@ pub enum SignatureIssue {
 pub struct SignatureReport {
     pub signature_part: String,
     pub signer: Option<SignerCertificateIdentity>,
-    /// True only when `SignedInfo`, its references, and all manifest references verify.
+    /// True only when `SignedInfo`, its references, and authenticated manifest references verify.
     pub cryptographically_valid: bool,
     /// True only when every non-signature package part and relationship is covered.
     pub coverage_complete: bool,
@@ -125,6 +125,7 @@ struct XmlAttribute {
 enum XmlNode {
     Element(XmlElement),
     Text(String),
+    ProcessingInstruction { target: String, content: String },
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +268,7 @@ fn verify_signature_part(
     let mut covered_relationships = BTreeSet::new();
     let mut seen_references = HashSet::new();
     let mut all_reference_digests_valid = true;
+    let mut authenticated_roots = Vec::new();
 
     for reference_element in direct_children(signed_info, DSIG_NS, "Reference") {
         let reference = parse_reference(reference_element)?;
@@ -285,10 +287,24 @@ fn verify_signature_part(
             &mut covered_relationships,
             &mut issues,
         )?;
-        all_reference_digests_valid &= compare_digest(&reference, actual, &mut issues);
+        let digest_valid = compare_digest(&reference, actual, &mut issues);
+        all_reference_digests_valid &= digest_valid;
+        if digest_valid && let Some(target) = same_document_target(&root, &reference.uri)? {
+            authenticated_roots.push(target);
+        }
     }
 
-    for manifest in descendants(&root, DSIG_NS, "Manifest") {
+    let mut manifests = Vec::new();
+    for target in authenticated_roots {
+        collect_matching_elements(target, DSIG_NS, "Manifest", &mut manifests);
+    }
+    let mut processed_manifests = HashSet::new();
+    let mut manifest_index = 0;
+    while let Some(manifest) = manifests.get(manifest_index).copied() {
+        manifest_index += 1;
+        if !processed_manifests.insert(manifest as *const XmlElement) {
+            continue;
+        }
         for reference_element in direct_children(manifest, DSIG_NS, "Reference") {
             let reference = parse_reference(reference_element)?;
             if !seen_references.insert(reference.uri.clone()) {
@@ -306,7 +322,11 @@ fn verify_signature_part(
                 &mut covered_relationships,
                 &mut issues,
             )?;
-            all_reference_digests_valid &= compare_digest(&reference, actual, &mut issues);
+            let digest_valid = compare_digest(&reference, actual, &mut issues);
+            all_reference_digests_valid &= digest_valid;
+            if digest_valid && let Some(target) = same_document_target(&root, &reference.uri)? {
+                collect_matching_elements(target, DSIG_NS, "Manifest", &mut manifests);
+            }
         }
     }
 
@@ -394,21 +414,7 @@ fn apply_reference(
     covered_relationships: &mut BTreeSet<CoveredRelationship>,
     issues: &mut Vec<SignatureIssue>,
 ) -> Result<Option<Vec<u8>>> {
-    if let Some(id) = reference.uri.strip_prefix('#') {
-        let elements = find_all_by_id(root, id);
-        let element = match elements.as_slice() {
-            [] => {
-                return Err(invalid_signature(&format!(
-                    "missing same-document reference #{id}"
-                )));
-            }
-            [element] => *element,
-            _ => {
-                return Err(invalid_signature(&format!(
-                    "duplicate same-document Id {id}"
-                )));
-            }
-        };
+    if let Some(element) = same_document_target(root, &reference.uri)? {
         if !matches!(
             reference.transforms.as_slice(),
             [ReferenceTransform::ExclusiveCanonicalization]
@@ -458,6 +464,22 @@ fn apply_reference(
             });
             Ok(None)
         }
+    }
+}
+
+fn same_document_target<'a>(root: &'a XmlElement, uri: &str) -> Result<Option<&'a XmlElement>> {
+    let Some(id) = uri.strip_prefix('#') else {
+        return Ok(None);
+    };
+    let elements = find_all_by_id(root, id);
+    match elements.as_slice() {
+        [] => Err(invalid_signature(&format!(
+            "missing same-document reference #{id}"
+        ))),
+        [element] => Ok(Some(*element)),
+        _ => Err(invalid_signature(&format!(
+            "duplicate same-document Id {id}"
+        ))),
     }
 }
 
@@ -759,8 +781,24 @@ fn parse_xml(xml: &[u8]) -> Result<XmlElement> {
                     parent.children.push(XmlNode::Text(decoded.into_owned()));
                 }
             }
+            Ok(Event::PI(instruction)) => {
+                if let Some(parent) = stack.last_mut() {
+                    let target = reader
+                        .decoder()
+                        .decode(instruction.target())
+                        .map_err(|error| invalid_signature(&error.to_string()))?;
+                    let content = reader
+                        .decoder()
+                        .decode(instruction.content())
+                        .map_err(|error| invalid_signature(&error.to_string()))?;
+                    parent.children.push(XmlNode::ProcessingInstruction {
+                        target: normalize_xml_line_endings(&target),
+                        content: normalize_xml_line_endings(&content),
+                    });
+                }
+            }
             Ok(Event::Eof) => break,
-            Ok(Event::Decl(_) | Event::PI(_) | Event::Comment(_) | Event::DocType(_)) => {}
+            Ok(Event::Decl(_) | Event::Comment(_) | Event::DocType(_)) => {}
             Ok(Event::GeneralRef(reference)) => {
                 return Err(invalid_signature(&format!(
                     "unresolved general entity {}",
@@ -920,11 +958,43 @@ fn write_canonical(
         match child {
             XmlNode::Element(child) => write_canonical(child, &child_namespaces, output),
             XmlNode::Text(text) => escape_text(text, output),
+            XmlNode::ProcessingInstruction { target, content } => {
+                output.push_str("<?");
+                output.push_str(target);
+                escape_processing_instruction(content, output);
+                output.push_str("?>");
+            }
         }
     }
     output.push_str("</");
     output.push_str(&element.name.qname);
     output.push('>');
+}
+
+fn escape_processing_instruction(value: &str, output: &mut String) {
+    for character in value.chars() {
+        if character == '\r' {
+            output.push_str("&#xD;");
+        } else {
+            output.push(character);
+        }
+    }
+}
+
+fn normalize_xml_line_endings(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\r' {
+            if characters.peek() == Some(&'\n') {
+                characters.next();
+            }
+            normalized.push('\n');
+        } else {
+            normalized.push(character);
+        }
+    }
+    normalized
 }
 
 fn escape_attribute(value: &str, output: &mut String) {
@@ -1010,7 +1080,7 @@ fn direct_children<'a>(
 fn element_children(element: &XmlElement) -> impl Iterator<Item = &XmlElement> {
     element.children.iter().filter_map(|child| match child {
         XmlNode::Element(element) => Some(element),
-        XmlNode::Text(_) => None,
+        XmlNode::Text(_) | XmlNode::ProcessingInstruction { .. } => None,
     })
 }
 
@@ -1022,14 +1092,16 @@ fn descendant<'a>(element: &'a XmlElement, namespace: &str, local: &str) -> Opti
     })
 }
 
-fn descendants<'a>(
+fn collect_matching_elements<'a>(
     element: &'a XmlElement,
-    namespace: &'a str,
-    local: &'a str,
-) -> Vec<&'a XmlElement> {
-    let mut found = Vec::new();
-    collect_descendants(element, namespace, local, &mut found);
-    found
+    namespace: &str,
+    local: &str,
+    found: &mut Vec<&'a XmlElement>,
+) {
+    if has_name(element, namespace, local) {
+        found.push(element);
+    }
+    collect_descendants(element, namespace, local, found);
 }
 
 fn collect_descendants<'a>(
@@ -1084,6 +1156,7 @@ fn collect_text(element: &XmlElement, output: &mut String) {
         match child {
             XmlNode::Element(child) => collect_text(child, output),
             XmlNode::Text(text) => output.push_str(text),
+            XmlNode::ProcessingInstruction { .. } => {}
         }
     }
 }
@@ -1156,7 +1229,6 @@ mod tests {
                 "signature method",
             ),
             (C14N_EXCLUSIVE, "urn:test:c14n", "canonicalization"),
-            (RELATIONSHIP_TRANSFORM, "urn:test:relationship", "transform"),
         ] {
             let mut changed = signed_package("sig");
             mutate_signature_xml(&mut changed, |xml| xml.replacen(from, to, 1));
@@ -1165,6 +1237,19 @@ mod tests {
                 Err(OpcError::UnsupportedSignatureAlgorithm { kind: actual, .. }) if actual == kind
             ));
         }
+
+        let unsupported_transform = format!(
+            r#"<ds:Reference xmlns:ds="{DSIG_NS}" URI="/word/document.xml"><ds:Transforms><ds:Transform Algorithm="urn:test:relationship"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="{DIGEST_SHA256}"></ds:DigestMethod><ds:DigestValue>{}</ds:DigestValue></ds:Reference>"#,
+            BASE64.encode([0_u8; 32])
+        );
+        let reference = parse_xml(unsupported_transform.as_bytes()).unwrap();
+        assert!(matches!(
+            parse_reference(&reference),
+            Err(OpcError::UnsupportedSignatureAlgorithm {
+                kind: "transform",
+                ..
+            })
+        ));
 
         let mut ec = signed_package("sig");
         mutate_signature_xml(&mut ec, |xml| {
@@ -1177,6 +1262,56 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn referenced_object_processing_instruction_is_canonical_and_mutation_sensitive() {
+        let xml = format!(
+            r#"<ds:Signature xmlns:ds="{DSIG_NS}"><ds:Object Id="pi-object"><ds:Value>before</ds:Value><?audit alpha&beta <ok?><ds:Value>after</ds:Value></ds:Object></ds:Signature>"#
+        );
+        let root = parse_xml(xml.as_bytes()).unwrap();
+        let object = same_document_target(&root, "#pi-object").unwrap().unwrap();
+        let expected = format!(
+            r#"<ds:Object xmlns:ds="{DSIG_NS}" Id="pi-object"><ds:Value>before</ds:Value><?audit alpha&beta <ok?><ds:Value>after</ds:Value></ds:Object>"#
+        );
+        assert_eq!(canonicalize(object), expected.as_bytes());
+
+        let reference = ReferenceSpec {
+            uri: "#pi-object".to_string(),
+            digest: Sha256::digest(expected.as_bytes()).to_vec(),
+            transforms: vec![ReferenceTransform::ExclusiveCanonicalization],
+        };
+        let actual = apply_reference(
+            &OpcPackage::new(),
+            &root,
+            &reference,
+            &mut BTreeSet::new(),
+            &mut BTreeSet::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(compare_digest(&reference, actual, &mut Vec::new()));
+
+        let changed = parse_xml(xml.replace("alpha", "changed").as_bytes()).unwrap();
+        let changed_actual = apply_reference(
+            &OpcPackage::new(),
+            &changed,
+            &reference,
+            &mut BTreeSet::new(),
+            &mut BTreeSet::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let mut issues = Vec::new();
+        assert!(!compare_digest(&reference, changed_actual, &mut issues));
+        assert!(matches!(
+            issues.as_slice(),
+            [SignatureIssue::ChangedReference { uri, .. }] if uri == "#pi-object"
+        ));
+
+        let mut escaped = String::new();
+        escape_processing_instruction(" data\rmore", &mut escaped);
+        assert_eq!(escaped, " data&#xD;more");
     }
 
     #[test]
@@ -1349,7 +1484,7 @@ mod tests {
         assert!(!report.cryptographically_valid);
         assert!(report.issues.iter().any(|issue| matches!(
             issue,
-            SignatureIssue::DuplicateReference { uri } if uri == "/word/document.xml"
+            SignatureIssue::ChangedReference { uri, .. } if uri == "#idPackageObject"
         )));
 
         let mut duplicate_id = signed_package("ds");
@@ -1430,6 +1565,35 @@ mod tests {
             report.issues.as_slice(),
             [SignatureIssue::OrphanSignaturePart { .. }]
         ));
+    }
+
+    #[test]
+    fn unsigned_manifest_cannot_complete_partial_coverage() {
+        let mut package = signed_package("ds");
+        let unsigned_part = b"unsigned but digest-correct".to_vec();
+        package.set_part("/word/unsigned.xml", unsigned_part.clone());
+        let unsigned_reference = reference_xml("ds", "/word/unsigned.xml", &unsigned_part, "");
+        mutate_signature_xml(&mut package, |xml| {
+            xml.replacen(
+                "</ds:Signature>",
+                &format!(
+                    "<ds:Object><ds:Manifest>{unsigned_reference}</ds:Manifest></ds:Object></ds:Signature>"
+                ),
+                1,
+            )
+        });
+
+        let report = package.verify_signatures().unwrap().remove(0);
+        assert!(report.cryptographically_valid);
+        assert!(!report.coverage_complete);
+        assert!(
+            !report
+                .covered_parts
+                .contains(&"/word/unsigned.xml".to_string())
+        );
+        assert!(report.issues.contains(&SignatureIssue::UncoveredPart {
+            part_name: "/word/unsigned.xml".to_string(),
+        }));
     }
 
     #[test]

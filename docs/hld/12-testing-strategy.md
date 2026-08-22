@@ -569,11 +569,12 @@ cover the cases that matter now.
 
 Agile encryption has a source-encoded Microsoft Word 16.104 oracle package so
 the regression gate does not depend on an opaque binary fixture. The gate opens
-that package only with its password, checks every supported AES and SHA pairing
-with deterministic synthetic packages, rejects malformed descriptors and wrong
-passwords, and proves tampering fails before ZIP parsing. A package-preservation
-round trip also checks that unrelated parts survive after authenticated
-decryption.
+that package only with its password, checks every supported AES data-key and
+password-encryptor key-size pairing independently across every supported SHA
+algorithm with deterministic synthetic packages, rejects malformed descriptors
+and wrong passwords, and proves tampering fails before ZIP parsing. A
+package-preservation round trip also checks that unrelated parts survive after
+authenticated decryption.
 
 Agile encryption writes have separate fixed-profile, round-trip, randomness,
 and failure-atomicity coverage. Tests inspect descriptor child order and every

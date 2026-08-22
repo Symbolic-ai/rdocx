@@ -209,10 +209,6 @@ impl PasswordKeyEncryptor {
             &encrypted_verifier_hash,
             round_up(parameters.hash.output_size(), 16)?,
         )?;
-        validate_encrypted_field(
-            &encrypted_package_key,
-            round_up(parameters.key_bytes(), 16)?,
-        )?;
         Ok(Self {
             parameters,
             spin_count,
@@ -1434,14 +1430,21 @@ mod tests {
             HashAlgorithm::Sha384,
             HashAlgorithm::Sha512,
         ] {
-            for key_bits in [128, 192, 256] {
-                let package = encrypted_test_package_with(PASSWORD, key_bits, hash);
-                assert!(
-                    crate::OpcPackage::from_encrypted_reader(Cursor::new(package), PASSWORD)
-                        .is_ok(),
-                    "{} with AES-{key_bits} must decrypt",
-                    hash.name()
-                );
+            for data_key_bits in [128, 192, 256] {
+                for password_key_bits in [128, 192, 256] {
+                    let package = encrypted_test_package_with_key_sizes(
+                        PASSWORD,
+                        data_key_bits,
+                        password_key_bits,
+                        hash,
+                    );
+                    assert!(
+                        crate::OpcPackage::from_encrypted_reader(Cursor::new(package), PASSWORD)
+                            .is_ok(),
+                        "{} with AES-{data_key_bits} package key and AES-{password_key_bits} password key must decrypt",
+                        hash.name()
+                    );
+                }
             }
         }
     }
@@ -1944,27 +1947,43 @@ mod tests {
     }
 
     fn encrypted_test_package_with(password: &str, key_bits: u16, hash: HashAlgorithm) -> Vec<u8> {
-        encrypted_test_package_from_zip_with(password, &test_zip(), key_bits, hash)
+        encrypted_test_package_from_zip_with(password, &test_zip(), key_bits, key_bits, hash)
+    }
+
+    fn encrypted_test_package_with_key_sizes(
+        password: &str,
+        data_key_bits: u16,
+        password_key_bits: u16,
+        hash: HashAlgorithm,
+    ) -> Vec<u8> {
+        encrypted_test_package_from_zip_with(
+            password,
+            &test_zip(),
+            data_key_bits,
+            password_key_bits,
+            hash,
+        )
     }
 
     fn encrypted_test_package_from_zip(password: &str, zip: &[u8]) -> Vec<u8> {
-        encrypted_test_package_from_zip_with(password, zip, 256, HashAlgorithm::Sha512)
+        encrypted_test_package_from_zip_with(password, zip, 256, 256, HashAlgorithm::Sha512)
     }
 
     fn encrypted_test_package_from_zip_with(
         password: &str,
         zip: &[u8],
-        key_bits: u16,
+        data_key_bits: u16,
+        password_key_bits: u16,
         hash: HashAlgorithm,
     ) -> Vec<u8> {
         let key_data = CipherParameters {
             salt: (0_u8..16).collect(),
-            key_bits,
+            key_bits: data_key_bits,
             hash,
         };
         let password_parameters = CipherParameters {
             salt: (16_u8..32).collect(),
-            key_bits,
+            key_bits: password_key_bits,
             hash,
         };
         let package_key: Vec<u8> = (32_u8..).take(key_data.key_bytes()).collect();

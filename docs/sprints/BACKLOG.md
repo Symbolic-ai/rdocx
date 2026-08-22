@@ -37,7 +37,7 @@ regenerated, never hand-edited.
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 50 | 48 | 0 | 1  |
-| **Total** | **261** | **227** | **0** | **32** |
+| **Total** | **261** | **228** | **0** | **32** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
