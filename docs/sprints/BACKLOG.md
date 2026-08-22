@@ -32,12 +32,12 @@ regenerated, never hand-edited.
 | M14, Word collaboration layer                  | 9  | 9 | 0 | 0  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
-| M17, Security and compliance                   | 7  | 0 | 1 | 6  |
+| M17, Security and compliance                   | 7  | 0 | 2 | 5  |
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 45 | 38 | 3 | 3  |
-| **Total** | **256** | **215** | **4** | **36** |
+| **Total** | **256** | **215** | **5** | **35** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -338,7 +338,7 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-169 | Agile encryption, read                       | S52  | L | in-progress |
 | F-170 | Agile encryption, write                      | S52  | M | pending |
-| F-171 | Digital signature verification               | S52  | L | pending |
+| F-171 | Digital signature verification               | S52  | L | in-progress |
 | F-172 | Digital signature creation                   | S53  | M | pending |
 | F-173 | Tagged PDF structure tree                    | S53  | L | pending |
 | F-174 | PDF/A conformance                            | S53  | M | pending |
