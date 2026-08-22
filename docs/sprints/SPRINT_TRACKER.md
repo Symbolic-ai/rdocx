@@ -287,6 +287,18 @@ defended.
 | F-X033 | S51 | S | 1 | 1 | 2026-08-21 | Ordered direct Word body items with Pedro Assumpcao's merge record preserved |
 | F-X035 | S51 | S | 1 | 1 | 2026-08-21 | Published and verified the complete 15-package rpptx 0.4.0 family |
 | F-X036 | S51 | S | 1 | 1 | 2026-08-22 | Published and verified the seven-package stable rdocx 0.8.0 family |
+| F-169 | S52 | L | 4 | 1 | 2026-08-22 | Authenticated Agile encrypted package reading with a Word oracle |
+| F-171 | S52 | L | 4 | 1 | 2026-08-22 | Exact OPC digital signature verification and coverage reports |
+| F-X039 | S52 | M | 2 | 1 | 2026-08-22 | Shared layout payloads and checked reusable-engine transfer |
+| F-X041 | S52 | M | 2 | 1 | 2026-08-22 | Break opportunities no longer duplicate glyph vectors |
+| F-X042 | S52 | S | 1 | 1 | 2026-08-22 | Public header and footer layout proved through deterministic PDF text |
+| F-170 | S52 | M | 2 | 1 | 2026-08-22 | Word-compatible failure-atomic Agile encrypted output |
+| F-X040 | S52 | L | 4 | 1 | 2026-08-22 | Exact bounded pagination restart and transactional table cache |
+| F-X043 | S52 | M | 2 | 1 | 2026-08-22 | Reusable bundled-fallback caller-font layouts from PRs 40 and 41 |
+| F-X044 | S52 | M | 2 | 1 | 2026-08-22 | Editor-scale exact paragraph-cache lookup from PR 41 |
+| F-X045 | S52 | M | 2 | 1 | 2026-08-22 | Transactional exact bounded header and footer cache from PR 41 |
+| F-X046 | S52 | S | 1 | 1 | 2026-08-22 | Exact bounded substituted-page Arc reuse from PR 41 |
+| F-X047 | S52 | S | 1 | 1 | 2026-08-22 | Invisible attributed caret carriers for empty Word paragraphs from PR 41 |
 
 ## Velocity
 

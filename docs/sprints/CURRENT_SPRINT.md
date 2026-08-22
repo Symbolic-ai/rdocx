@@ -30,18 +30,18 @@ relayout reuse without weakening correctness.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-169 | Agile encryption, read | L | in-progress | codex |
-| F-171 | Digital signature verification | L | in-progress | codex |
-| F-X039 | Share layout payloads and transfer reusable engines | M | in-progress | codex |
-| F-X041 | Remove duplicated glyphs at break opportunities | M | in-progress | codex |
-| F-X042 | Prove headers and footers in PDF output | S | in-progress | codex |
-| F-170 | Agile encryption, write | M | in-progress | codex |
-| F-X040 | Restart pagination and cache table blocks | L | in-progress | codex |
-| F-X043 | Reuse bundled-fallback caller-font layouts | M | in-progress | codex |
-| F-X044 | Scale paragraph-cache lookup for editors | M | in-progress | codex |
-| F-X045 | Cache headers and footers transactionally | M | in-progress | codex |
-| F-X046 | Reuse substituted pages exactly | S | in-progress | codex |
-| F-X047 | Attribute empty Word paragraphs | S | in-progress | codex |
+| F-169 | Agile encryption, read | L | done | - |
+| F-171 | Digital signature verification | L | done | - |
+| F-X039 | Share layout payloads and transfer reusable engines | M | done | - |
+| F-X041 | Remove duplicated glyphs at break opportunities | M | done | - |
+| F-X042 | Prove headers and footers in PDF output | S | done | - |
+| F-170 | Agile encryption, write | M | done | - |
+| F-X040 | Restart pagination and cache table blocks | L | done | - |
+| F-X043 | Reuse bundled-fallback caller-font layouts | M | done | - |
+| F-X044 | Scale paragraph-cache lookup for editors | M | done | - |
+| F-X045 | Cache headers and footers transactionally | M | done | - |
+| F-X046 | Reuse substituted pages exactly | S | done | - |
+| F-X047 | Attribute empty Word paragraphs | S | done | - |
 
 ## Sequencing note
 
