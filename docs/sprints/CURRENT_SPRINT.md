@@ -1,98 +1,79 @@
-# Current Sprint, S52
+# Current Sprint, S53
 
 **Milestone**: M17 Security and compliance.
 
-**Goal**: open the files that currently cannot be opened at all, and close the
-new community-reported rendering and interactive-layout gaps. Add
-standards-compatible read and write support for OOXML agile encryption, verify
-digital signatures over their complete declared part sets, remove duplicated
-glyphs, prove headers and footers through PDF output, and extend bounded
-relayout reuse without weakening correctness.
+**Goal**: finish the security and compliance milestone with documents that an
+enterprise or public body can accept. Add standards-compatible package signing,
+semantic tagged PDF, PDF/A-2b and PDF/A-3b output, and destructive redaction
+that removes sensitive content from every relevant package part.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for keeping package security ownership below
-  the native Word facade and preserving the existing document model boundary.
-- `docs/hld/04-opc-and-packaging.md`, for package relationships, part naming,
-  integrity validation, and staged failure-safe package replacement.
-- `docs/hld/08-rendering-spec.md`, for shaping ownership, header and footer
-  placement, result payloads, bounded caches, and pagination state.
-- `docs/hld/10-bindings-spec.md`, for additive native Word APIs and the
-  unchanged Python, WASM, and CLI compatibility boundaries.
+- `docs/hld/03-architecture.md`, for keeping package security, document
+  semantics, PDF generation, and embedded chart workbooks in their existing
+  ownership layers.
+- `docs/hld/04-opc-and-packaging.md`, for signature relationships, canonical
+  package bytes, staged mutation, content types, and preservation of unrelated
+  package parts.
+- `docs/hld/08-rendering-spec.md`, for carrying Word semantics into marked PDF
+  content, structure trees, font resources, metadata, and backend output.
+- `docs/hld/09-charts-spec.md`, for removing redacted values from embedded
+  chart workbooks without leaving cached or modeled traces.
+- `docs/hld/10-bindings-spec.md`, for additive native signing, PDF conformance,
+  and redaction APIs with unchanged Python, WASM, and CLI boundaries unless a
+  feature design explicitly expands them.
 - `docs/hld/12-testing-strategy.md`, for readable regression fixtures,
-  round-trip evidence, external reference metadata, and full workspace gates.
-- `docs/hld/14-development-backlog.md`, for the M17 security goal and the exact
-  encryption and signature verification stories, dependencies, and gates.
-- `docs/hld/15-build-and-toolchain.md`, for dependency policy, supply-chain
-  review, feature graphs, packaging, and publication-safe verification.
+  round-trip and external-oracle evidence, raw-package scans, accessibility
+  structure checks, and full workspace gates.
+- `docs/hld/14-development-backlog.md`, for the M17 goal, the four S53 stories,
+  their dependencies, and their exact test gates.
+- `docs/hld/15-build-and-toolchain.md`, for feature isolation, dependency and
+  licence policy, WASM checks, packaging, and publication-safe verification.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-169 | Agile encryption, read | L | done | - |
-| F-171 | Digital signature verification | L | done | - |
-| F-X039 | Share layout payloads and transfer reusable engines | M | done | - |
-| F-X041 | Remove duplicated glyphs at break opportunities | M | done | - |
-| F-X042 | Prove headers and footers in PDF output | S | done | - |
-| F-170 | Agile encryption, write | M | done | - |
-| F-X040 | Restart pagination and cache table blocks | L | done | - |
-| F-X043 | Reuse bundled-fallback caller-font layouts | M | done | - |
-| F-X044 | Scale paragraph-cache lookup for editors | M | done | - |
-| F-X045 | Cache headers and footers transactionally | M | done | - |
-| F-X046 | Reuse substituted pages exactly | S | done | - |
-| F-X047 | Attribute empty Word paragraphs | S | done | - |
+| F-172 | Digital signature creation | M | pending | - |
+| F-173 | Tagged PDF structure tree | L | pending | - |
+| F-175 | Redaction | M | pending | - |
+| F-174 | PDF/A conformance | M | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-169 and F-171 are independent roots. Encryption reading starts first because
-it removes the current hard-open failure and establishes the parameter parsing,
-key derivation, and authenticated package boundary that F-170 must reuse.
-Signature verification can proceed independently against the package
-relationship graph. F-X039, F-X041, and F-X042 are independent rendering
-roots. F-170 follows F-169 so files written here use the same validated
-agile-encryption model that the reader accepts. F-X040 follows F-X039 because
-restartable pagination needs shared page ownership and the checked reusable
-engine boundary. F-X043 through F-X047 close the remaining useful behavior in
-PRs 40 and 41 without importing their unchecked engine access, hash-authority,
-or unbounded cache designs. They run serially because they share the reusable
-layout engine. M17 continues in S53 with signature creation, tagged PDF,
-PDF/A, and redaction.
+F-172 builds on the signature verification and authenticated coverage model
+completed in F-171. F-173 is an independent rendering root and establishes the
+semantic PDF structure that F-174 must retain while adding PDF/A output intent,
+metadata, and prohibited-feature checks. F-175 is also ready because F-147 and
+F-149 are complete. It may proceed independently, but its body, comments,
+revisions, properties, and chart-workbook mutation paths must remain staged and
+failure safe.
 
 ## Definition of done for this sprint
 
-- A password-protected document produced by Word opens with the correct
-  password and fails cleanly with the wrong password.
-- Wrong-password, malformed-parameter, authentication, and decryption failures
-  leave the caller and package state unchanged.
-- A document encrypted here decrypts here, and parameters fixed by the
-  specification match the reviewed Word reference bytes.
-- A validly signed document verifies every declared part, while a modified
-  document fails with the changed or uncovered part named.
-- Signature verification refuses missing, duplicate, external, or partially
-  covered package relationships rather than reporting a weaker success.
-- Shared font and page payloads avoid deep copies, and an editor can transfer
-  reusable normal-layout work without serving a stale context.
-- A warm edit rebuilds only its bounded pagination region and equals a fresh
-  layout in pages, fonts, diagnostics, provenance, numbering, notes, fields,
-  and outlines.
-- Text at spaces, hyphens, ligatures, and other Unicode break opportunities
-  emits every source scalar and shaped glyph exactly once in `PageFrame` and
-  both built-in backends.
-- Authored and reopened default, first, even, inherited, and multi-section
-  headers and footers appear on the correct pages in deterministic PDF output.
-- Encryption and verification preserve unrelated parts, content types,
-  relationships, and unmodelled XML through their declared round trips.
-- New cryptographic dependencies and feature edges satisfy the repository
-  supply-chain, default-off, WASM, packaging, and licence gates.
-- Caller-font editor layouts fall back only to bundled fonts, reuse work through
-  checked exact-context transfer, and never observe the system-font snapshot.
-- Editor-scale paragraph lookup, header and footer reuse, and substituted-page
-  reuse remain exact, transactional, and inside declared retained-memory bounds.
-- Empty Word paragraphs expose a zero-width attributed caret segment across
-  body, table, header, footer, footnote, and endnote stories without visible
-  rendering drift.
-- The full workspace gate passes with all 49 deterministic hashes unchanged
-  unless an approved design declares a reviewed delta.
+- A package signed here with a supplied key and certificate verifies through
+  the F-171 verifier and in the pinned Microsoft Word oracle.
+- Signature creation covers the complete declared package graph, uses strict
+  supported algorithms and schema order, and leaves the live package unchanged
+  on key, certificate, canonicalization, relationship, or write failure.
+- A rendered PDF emits `/StructTreeRoot`, marked content, heading levels, list
+  nesting, table headers, and alternate text that match the source semantics.
+- Tagged output preserves visible PDF and raster results unless an approved
+  design declares and reviews a deterministic baseline change.
+- PDF/A-2b and PDF/A-3b output embeds the required output intent and metadata,
+  rejects prohibited features, and passes the declared conformance checker.
+- PDF/A output retains the F-173 structure tree and continues to satisfy the
+  PDF/UA structure check required by the M17 gate.
+- Redaction removes selected text and every recoverable trace from body,
+  comments, revisions, document metadata, chart caches, and embedded chart
+  workbooks rather than covering content visually.
+- Redaction failure is atomic, unrelated parts and unmodelled XML remain
+  byte-preserved, and a raw ZIP scan cannot find the redacted value.
+- New cryptographic, PDF, or conformance dependencies satisfy supply-chain,
+  feature-isolation, default-off, WASM, package-size, and licence gates.
+- The full workspace gate passes with all deterministic hashes unchanged unless
+  an approved design declares a reviewed delta.
+- The M17 end gate passes: an encrypted document opens with its password, a
+  signed document verifies, and a rendered PDF passes a PDF/UA structure check.
