@@ -4,8 +4,9 @@
 
 **Goal**: finish the security and compliance milestone with documents that an
 enterprise or public body can accept. Add standards-compatible package signing,
-semantic tagged PDF, PDF/A-2b and PDF/A-3b output, and destructive redaction
-that removes sensitive content from every relevant package part.
+semantic tagged PDF, PDF/A-2b and PDF/A-3b output, destructive redaction, and
+the dense-form table fidelity reported in Issue 42 and PR 43. Publish the
+complete incubating and stable Rust families with reviewed contributor credit.
 
 ## Spec references
 
@@ -37,7 +38,10 @@ that removes sensitive content from every relevant package part.
 | F-172 | Digital signature creation | M | pending | - |
 | F-173 | Tagged PDF structure tree | L | pending | - |
 | F-175 | Redaction | M | pending | - |
+| F-X048 | Dense form table fidelity | L | pending | - |
 | F-174 | PDF/A conformance | M | pending | - |
+| F-X049 | Tag rpptx-v0.5.0 | S | pending | - |
+| F-X050 | Tag v0.9.0 | S | pending | - |
 
 ## Sequencing note
 
@@ -49,7 +53,12 @@ semantic PDF structure that F-174 must retain while adding PDF/A output intent,
 metadata, and prohibited-feature checks. F-175 is also ready because F-147 and
 F-149 are complete. It may proceed independently, but its body, comments,
 revisions, properties, and chart-workbook mutation paths must remain staged and
-failure safe.
+failure safe. F-X048 is an independent community-report root, but it owns a
+separate deterministic layout-baseline tranche and must preserve the exact,
+transactional cache contracts from S52. F-X049 waits for the shared package and
+PDF stories, then publishes incubating 0.5.0. F-X050 waits for every stable
+story and the published incubating graph, then publishes stable 0.9.0. Each tag
+has its own final approval boundary.
 
 ## Definition of done for this sprint
 
@@ -77,3 +86,15 @@ failure safe.
   an approved design declares a reviewed delta.
 - The M17 end gate passes: an encrypted document opens with its password, a
   signed document verifies, and a rendered PDF passes a PDF/UA structure check.
+- The Issue 42 dense-form fixture renders as one page with nested tables,
+  vertical merges, exact rows, style-derived borders and spacing, correct empty
+  paragraph metrics, and cell-anchored foreground and behind-page drawings.
+- PR 43 is closed only after the useful behavior lands through the current
+  checked engine and bounded cache contracts, with its contributor credited.
+- Reviewed `rpptx-v0.5.0` and `v0.9.0` changelog sections separate the two
+  package families and link every included external issue and pull request.
+- Every included issue and pull request receives a maintainer comment naming
+  its release, the implementation boundary, and the verified contributor
+  credit before publication.
+- Incubating 0.5.0 and stable 0.9.0 each pass their exact release gates and are
+  published only after separate immediate approvals at reviewed SHAs.

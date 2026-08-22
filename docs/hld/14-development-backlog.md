@@ -2538,6 +2538,90 @@ source identity, non-empty paragraphs are unchanged, provenance and ordinary
 layouts remain structurally equal, both backends render no new glyph, and the
 deterministic hash harness remains unchanged.
 
+### F-X048, Dense form table fidelity (L)
+
+Close Issue 42 and PR 43 on the current hardened layout engine. Dense forms
+must retain nested tables as recursively positioned table blocks, distribute
+vertical-merge content across its exact grid span, honour `trHeight` rules,
+and resolve table-style borders and paragraph properties through the applicable
+`basedOn` and conditional style layers. Table-style properties stay
+namespace-aware, schema-ordered, and byte-preserved through an unchanged
+round trip.
+
+Cell-anchored foreground drawings render in the cell coordinate space, while
+`behindDoc` drawings join the page behind layer. Explicit `nil` cell borders
+retain their normal suppressing meaning except at the exact outer-table edge
+where the pinned Word oracle proves the reported compatibility behavior. Empty
+paragraphs use paragraph-mark metrics without emitting glyphs, and the native
+paragraph facade can append a run with the mark's direct run properties.
+
+Do not merge or cherry-pick PR 43 as a stack. It contains the superseded PR 41
+engine and cache surfaces, conflicts with current main, serializes table-style
+properties outside schema order, uses local-name-only parsing for a typed
+projection, undercounts new retained cache payloads, and has no focused tests
+for the seven reported behaviors. Reimplement the useful behavior against the
+transactional caches, exact context identity, source rebinding, and retained
+memory ceilings completed in F-X040 through F-X047. Credit `@emptinessform`
+for Issue 42, PR 43, the real receipt diagnosis, and the corpus measurements.
+
+**Depends on**: F-X040, F-X045, F-X047.
+**Test gate**: golden. A readable in-code dense form covers nested tables,
+mixed grid spans, vertical merges, exact and minimum row heights, direct and
+conditional table styles, outer and interior `nil` borders, 7pt empty cells,
+and foreground and behind-cell anchors. It renders as one page in deterministic
+PDF and raster output with the reviewed Word reference geometry, while
+round-trip XML, provenance, warm-cold cache equality, transactional failure,
+retained-memory bounds, both WASM targets, and the declared isolated hash delta
+all pass.
+
+### F-X049, Tag rpptx-v0.5.0 (S)
+
+Prepare and publish the complete incubating family at 0.5.0 after the S52 and
+S53 package, layout, and PDF work is complete. The minor boundary covers Agile
+encryption, digital signatures, shared layout payloads, corrected shaping,
+semantic tagged PDF, PDF/A output, and any shared redaction support. All 15
+crates.io packages move together and `rpptx-wasm` remains unpublished.
+
+The reviewed release notes cover only the incubating family. They identify the
+issues and pull requests whose shared implementation is present, link the
+records, and credit verified reporters and contributors, including
+`@emptinessform` for PRs 40 and 41. Each included GitHub issue or pull request
+receives a maintainer comment naming the release and the final implementation
+boundary. Publication requires its own immediate approval at the reviewed SHA.
+
+**Depends on**: F-172, F-173, F-174, F-175.
+**Test gate**: release. The incubating metadata regression, full verification,
+22-package dry run, archive inventory, supply-chain gate, WASM isolation, and
+declared hash results pass. After separate final approval, all 15 crates
+resolve from crates.io at 0.5.0 and the GitHub release body is byte-identical to
+the reviewed `rpptx-v0.5.0` changelog section with verified contributor credit.
+
+### F-X050, Tag v0.9.0 (S)
+
+Prepare and publish the complete stable family at 0.9.0 after incubating 0.5.0
+is available. The minor boundary contains the S52 encryption, signature,
+layout correctness, editor reuse, and provenance work plus S53 signature
+creation, accessible PDF, redaction, and dense-form fidelity. Only the exact
+seven stable crates publish. Python, WASM, npm, PyPI, and incubating
+publication remain unauthorized.
+
+The reviewed release notes link and credit every included external report and
+pull request. At minimum this release records Issues 15, 23, 39, and 42 plus
+PRs 40, 41, and 43, with verified credit to `@mantissaman` and
+`@emptinessform`. Each record receives a maintainer comment stating whether it
+landed directly or through a hardened equivalent, naming the release, and
+thanking the contributor. PR 43 remains open until F-X048 lands and then
+closes as addressed rather than merged. Publication requires a new immediate
+approval at the exact reviewed SHA.
+
+**Depends on**: F-172, F-173, F-174, F-175, F-X048, F-X049.
+**Test gate**: release. The stable metadata regression, full verification,
+22-package dry run, archive inventory, supply-chain gate, binding and WASM
+isolation, and declared hash results pass. After separate final approval, all
+seven stable crates resolve from crates.io at 0.9.0 and the GitHub release body
+is byte-identical to the reviewed `v0.9.0` changelog section with all verified
+issue, pull-request, reporter, and contributor credit.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
