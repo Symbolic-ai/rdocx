@@ -157,12 +157,30 @@ numbering, fields, hyperlinks, media, relationships, ordinary and
 failure, paragraph reorder and insertion, caller-font isolation, TTC indices,
 and a legitimate active set larger than 256 faces.
 
+The restart-pagination regression gate compares warm edits at the start,
+middle, tail, and a retained page boundary with a fresh deterministic engine.
+It requires complete equality of pages, fonts, diagnostics, provenance,
+numbering, notes, fields, outlines, and rendered inputs. A middle edit must
+share the unchanged page prefix and tail while reporting only its bounded
+rebuilt range. Insertions and deletions have the same complete-equality check.
+Multi-section content, tables, split paragraphs, floating drawings, note
+continuations, keep constraints, headers, footers, backgrounds, and mismatched
+boundary state must use the full paginator.
+
+The safe-table cache gate proves an unchanged direct table hits, diagnostics
+and font traces replay, and provenance rebinds after an earlier body insertion.
+Numbering and other traversal-sensitive table content bypass the cache. A late
+font failure after staged paragraph and table work publishes neither queue.
+Focused bounds checks cover both published and pending entry and byte ceilings.
+
 Boundary tests exercise the exact shaping identity, process font discovery,
 canonical file-byte identity, lock poison recovery, bounded resolution and
 coverage state, bounded and shrunk per-paragraph font traces, and both pending
-and published paragraph queues. Structural byte tests use retained capacities
-for owned keys, blocks, glyph data, diagnostics, font traces, and reflow
-parameters including tab stops. Oversized entries must bypass retention.
+and published block queues. Structural byte tests use retained capacities for
+owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
+pages, and reflow parameters including tab stops. The combined retained state
+must stay within 256 entries and 16 MiB. Oversized entries must bypass
+retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and unchanged 49-entry hash harness are required riders.

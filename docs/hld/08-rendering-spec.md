@@ -476,26 +476,51 @@ and 16 MiB. Resolution, coverage misses, coverage fallbacks, and per-paragraph
 font traces also have explicit bounds. Loading a different additional font set
 rebuilds face identity and clears all dependent memo state.
 
-The Word engine caches only ordinary context-independent body paragraphs. The
-entry key compares the complete typed paragraph, content width, and revision
-view. Its retained-work context separately compares styles, numbering, section
-properties, headers, footers, media, charts, chart theme and colour map, core
-properties, hyperlinks, notes, theme, additional fonts, and the document-wide
-wrapping-drawing state. Numbering, drawings including
-`AlternateContent`, fields, hyperlinks, relationships, media, generated
-markers, and other traversal-sensitive input bypass reuse. Each entry owns its
-block, diagnostics, and exact bounded font-resolution trace. Both the published
-and transaction-pending queues are capped at 256 entries and 16 MiB using
-retained-capacity accounting for all owned block and reflow buffers. Oversized
-entries bypass retention.
+The Word engine caches only ordinary context-independent body paragraphs and
+tables made entirely from direct cache-safe paragraphs. Paragraph keys compare
+the complete typed paragraph, content width, and revision view. Table keys
+compare the complete typed table projection, content width, revision view, and
+whether result-local provenance is present. The retained-work context
+separately compares styles, numbering, section properties, headers, footers,
+media, charts, chart theme and colour map, core properties, hyperlinks, notes,
+theme, additional fonts, page background, and the document-wide
+wrapping-drawing state. Numbering, drawings including `AlternateContent`,
+fields, hyperlinks, relationships, media, generated markers, nested tables,
+content controls, preserved producer XML, and other traversal-sensitive input
+bypass reuse. Encountering any such body block disables later retained-block
+reads for that layout, so inserting an earlier note or numbering input cannot
+leave a later generated marker stale. Each entry owns its block, diagnostics,
+and exact bounded font-resolution trace.
+
+Retained block and restart state share a 256-entry and 16 MiB ceiling.
+Paragraph blocks receive 192 entries and 12 MiB, table blocks receive 32
+entries and 2 MiB, and restart checkpoints receive 32 entries and 2 MiB. The
+published and transaction-pending block queues enforce the same partitions
+using retained-capacity accounting for owned keys, rows, cells, paragraphs,
+diagnostics, font traces, and reflow buffers. Oversized entries bypass
+retention.
 
 Cache publication is a whole-layout transaction. A late error publishes none
-of the staged entries. A hit replays diagnostics and the font trace, then
-rebinds placeholder scalar provenance to the source node allocated for the
+of the staged paragraph or table entries. A hit replays diagnostics and the
+font trace, then rebinds scalar provenance to the source node allocated for the
 current `WordLayoutResult`. After success, active faces are retained in
 first-resolution order and stale faces and entries are removed. This makes warm
 and cold pages, font ids, font bytes, diagnostics, revision view, and resolved
 source provenance equal.
+
+The engine also records restart checkpoints for one safe section containing
+only one-line or two-line context-independent paragraphs. A checkpoint exists
+only before a complete paragraph at an empty page boundary. It records the next
+block, page count, and displayed header page number. Headers, footers,
+backgrounds, notes, fields, headings, tables, drawings, multi-section content,
+split paragraphs, keep constraints, and any unrepresented state use the full
+paginator. A warm edit restarts at the last checkpoint before its first changed
+block. It stops at an unchanged suffix only when the complete retained context,
+font-resolution trace, page count, displayed header page number, and body
+suffix all match exactly. The old raw pagination tail is then reused, and final
+page frames are shared only after their canonicalized content compares equal.
+If any equality or capacity check fails, pagination continues through the
+normal full path.
 
 `Document::transfer_reusable_layout_from` builds the receiver input before it
 takes anything. It moves the source's normal engine only when that complete

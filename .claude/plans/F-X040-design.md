@@ -1,6 +1,6 @@
 # F-X040, Restart pagination and cache table blocks
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: L
 **Depends on**: F-X038, F-X039
@@ -95,13 +95,13 @@ fresh layout.
 
 ## Implementation checklist
 
-- [ ] Fix footnote-marker invalidation before adding new reuse.
-- [ ] Add transactional bounded safe-table caching.
-- [ ] Capture only complete safe pagination checkpoints.
-- [ ] Restart before the first changed block and validate exact boundary state.
-- [ ] Share a tail only after complete environment and result-state equality.
-- [ ] Add edit-range, fallback, failure, bounds, and complete warm-cold tests.
-- [ ] Run focused layout, deterministic backend, and hash checks.
+- [x] Fix footnote-marker invalidation before adding new reuse.
+- [x] Add transactional bounded safe-table caching.
+- [x] Capture only complete safe pagination checkpoints.
+- [x] Restart before the first changed block and validate exact boundary state.
+- [x] Share a tail only after complete environment and result-state equality.
+- [x] Add edit-range, fallback, failure, bounds, and complete warm-cold tests.
+- [x] Run focused layout, deterministic backend, and hash checks.
 
 ## Open questions
 

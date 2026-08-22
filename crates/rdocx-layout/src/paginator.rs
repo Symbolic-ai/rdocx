@@ -121,6 +121,20 @@ pub struct Section {
     pub page_number_start: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaginationCheckpoint {
+    pub next_block_index: usize,
+    pub page_count: usize,
+    pub next_header_page_number: usize,
+}
+
+pub(crate) struct RecordedPagination {
+    pub pages: Vec<PageFrame>,
+    pub outlines: Vec<OutlineEntry>,
+    pub checkpoints: Vec<PaginationCheckpoint>,
+    pub stopped_at: Option<PaginationCheckpoint>,
+}
+
 /// Paginate across multiple sections, each with its own geometry and header/footer.
 pub fn paginate_sections(
     sections: &[Section],
@@ -187,6 +201,49 @@ pub fn paginate_sections(
     }
 
     (all_pages, all_outlines)
+}
+
+pub(crate) fn paginate_single_section_recorded(
+    section: &Section,
+    fm: &FontManager,
+    media: &MediaRegistry,
+    notes: &NoteRegistry,
+    restart: Option<PaginationCheckpoint>,
+    stop_at: Option<PaginationCheckpoint>,
+) -> RecordedPagination {
+    let checkpoint = restart.unwrap_or(PaginationCheckpoint {
+        next_block_index: 0,
+        page_count: 0,
+        next_header_page_number: section.page_number_start.unwrap_or(1),
+    });
+    let context = PassContext {
+        geometry: section.geometry,
+        header_footer: section.header_footer.as_ref(),
+        title_pg: section.title_pg,
+        fm,
+        media: media.media(),
+        notes,
+        first_page_number: checkpoint.page_count + 1,
+        first_header_page_number: checkpoint.next_header_page_number,
+    };
+    let result = paginate_pass_from(
+        &section.blocks,
+        &context,
+        &ResolvedWraps::new(),
+        checkpoint.next_block_index,
+        checkpoint.page_count == 0,
+        stop_at,
+    );
+    let mut checkpoints = result.checkpoints;
+    if checkpoint.page_count == 0 {
+        checkpoints.insert(0, checkpoint);
+    }
+    RecordedPagination {
+        pages: result.pages,
+        outlines: result.outlines,
+        checkpoints,
+        stopped_at: result.stopped_at,
+    }
 }
 
 /// Paginate a sequence of blocks into pages.
@@ -286,6 +343,8 @@ struct PassResult {
     pages: Vec<PageFrame>,
     outlines: Vec<OutlineEntry>,
     resolved: ResolvedWraps,
+    checkpoints: Vec<PaginationCheckpoint>,
+    stopped_at: Option<PaginationCheckpoint>,
 }
 
 /// Everything a pass needs that is the same for both passes.
@@ -308,6 +367,26 @@ fn paginate_pass(
     context: &PassContext,
     resolved_in: &ResolvedWraps,
 ) -> PassResult {
+    paginate_pass_from(blocks, context, resolved_in, 0, true, None)
+}
+
+fn paginate_pass_from(
+    blocks: &[LayoutBlock],
+    context: &PassContext,
+    resolved_in: &ResolvedWraps,
+    first_block_index: usize,
+    is_first_page: bool,
+    stop_at: Option<PaginationCheckpoint>,
+) -> PassResult {
+    if first_block_index >= blocks.len() && !is_first_page {
+        return PassResult {
+            pages: Vec::new(),
+            outlines: Vec::new(),
+            resolved: resolved_in.clone(),
+            checkpoints: Vec::new(),
+            stopped_at: None,
+        };
+    }
     let geometry = context.geometry;
     let mut pager = Pager::new(
         geometry,
@@ -319,12 +398,17 @@ fn paginate_pass(
         resolved_in,
         context.first_page_number,
         context.first_header_page_number,
+        is_first_page,
+        stop_at,
     );
 
-    for (block_idx, block) in blocks.iter().enumerate() {
+    for (block_idx, block) in blocks.iter().enumerate().skip(first_block_index) {
         // Check for page break before
         if block.page_break_before() && pager.has_content() {
-            pager.finish_page();
+            pager.finish_page_before(block_idx);
+            if pager.stopped_at.is_some() {
+                break;
+            }
         }
 
         match block {
@@ -339,6 +423,9 @@ fn paginate_pass(
                     });
                 }
                 paginate_paragraph(para, block_idx, blocks, &mut pager);
+                if pager.stopped_at.is_some() {
+                    break;
+                }
             }
             LayoutBlock::Table(table) => {
                 let table_x = geometry.margin_left + table.table_indent;
@@ -389,11 +476,22 @@ fn paginate_pass(
     }
 
     let resolved = std::mem::take(&mut pager.resolved_out);
-    let (pages, outlines) = pager.flush();
+    let checkpoints = std::mem::take(&mut pager.checkpoints);
+    let stopped_at = pager.stopped_at;
+    let (pages, outlines) = if stopped_at.is_some() {
+        (
+            std::mem::take(&mut pager.pages),
+            std::mem::take(&mut pager.outlines),
+        )
+    } else {
+        pager.flush()
+    };
     PassResult {
         pages,
         outlines,
         resolved,
+        checkpoints,
+        stopped_at,
     }
 }
 
@@ -445,6 +543,9 @@ struct Pager<'a> {
     resolved_in: &'a ResolvedWraps,
     /// Where this pass is placing them, for the pass that follows.
     resolved_out: ResolvedWraps,
+    checkpoints: Vec<PaginationCheckpoint>,
+    stop_at: Option<PaginationCheckpoint>,
+    stopped_at: Option<PaginationCheckpoint>,
 }
 
 impl<'a> Pager<'a> {
@@ -458,6 +559,8 @@ impl<'a> Pager<'a> {
         resolved_in: &'a ResolvedWraps,
         first_page_number: usize,
         first_header_page_number: usize,
+        is_first_page: bool,
+        stop_at: Option<PaginationCheckpoint>,
     ) -> Self {
         Pager {
             pages: Vec::new(),
@@ -471,7 +574,7 @@ impl<'a> Pager<'a> {
             header_footer,
             has_content_flag: false,
             outlines: Vec::new(),
-            is_first_page: true,
+            is_first_page,
             title_pg,
             media,
             notes,
@@ -482,6 +585,9 @@ impl<'a> Pager<'a> {
             ink_bottom: 0.0,
             resolved_in,
             resolved_out: ResolvedWraps::new(),
+            checkpoints: Vec::new(),
+            stop_at,
+            stopped_at: None,
         }
     }
 
@@ -1000,6 +1106,24 @@ impl<'a> Pager<'a> {
         self.ink_bottom = 0.0;
         self.has_content_flag = false;
         self.is_first_page = false;
+    }
+
+    fn finish_page_before(&mut self, next_block_index: usize) {
+        self.finish_page();
+        if self.pending_notes.is_empty()
+            && self.page_note_ids.is_empty()
+            && self.page_wraps.is_empty()
+            && self.resolved_out.is_empty()
+        {
+            self.checkpoints.push(PaginationCheckpoint {
+                next_block_index,
+                page_count: self.page_number - 1,
+                next_header_page_number: self.header_page_number,
+            });
+            if self.stop_at == self.checkpoints.last().copied() {
+                self.stopped_at = self.checkpoints.last().copied();
+            }
+        }
     }
 
     fn flush(mut self) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
@@ -1585,7 +1709,10 @@ fn paginate_paragraph(
     if total_needed > remaining && pager.has_content() {
         // Paragraph doesn't fit. Decide: move whole or split.
         if para.keep_lines || para.lines.len() <= 2 {
-            pager.finish_page();
+            pager.finish_page_before(block_idx);
+            if pager.stopped_at.is_some() {
+                return;
+            }
             // Re-call with fresh page
             paginate_paragraph(para, block_idx, blocks, pager);
             return;
@@ -1600,7 +1727,10 @@ fn paginate_paragraph(
 
         if para.widow_control && lines_that_fit < 2 {
             // Can't fit enough lines — move whole paragraph
-            pager.finish_page();
+            pager.finish_page_before(block_idx);
+            if pager.stopped_at.is_some() {
+                return;
+            }
             paginate_paragraph(para, block_idx, blocks, pager);
             return;
         }
@@ -1619,7 +1749,10 @@ fn paginate_paragraph(
         }
 
         // No lines fit (shouldn't happen since we checked has_content above)
-        pager.finish_page();
+        pager.finish_page_before(block_idx);
+        if pager.stopped_at.is_some() {
+            return;
+        }
         paginate_paragraph(para, block_idx, blocks, pager);
         return;
     }
@@ -1646,7 +1779,10 @@ fn paginate_paragraph(
             > pager.available_height_for(&para.lines)
             && pager.has_content()
         {
-            pager.finish_page();
+            pager.finish_page_before(block_idx);
+            if pager.stopped_at.is_some() {
+                return;
+            }
         }
     }
 
@@ -3538,6 +3674,8 @@ mod tests {
             &empty,
             1,
             1,
+            true,
+            None,
         );
 
         // With nothing resolved, the look-ahead offers the page-relative
@@ -3581,6 +3719,8 @@ mod tests {
                 &resolved,
                 1,
                 1,
+                true,
+                None,
             );
 
             // The pager is building page one. A drawing the previous pass put
