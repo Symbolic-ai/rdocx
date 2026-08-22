@@ -36,7 +36,7 @@ complete incubating and stable Rust families with reviewed contributor credit.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-172 | Digital signature creation | M | in-progress | codex |
-| F-173 | Tagged PDF structure tree | L | pending | - |
+| F-173 | Tagged PDF structure tree | L | in-progress | codex |
 | F-175 | Redaction | M | pending | - |
 | F-X048 | Dense form table fidelity | L | pending | - |
 | F-174 | PDF/A conformance | M | pending | - |
