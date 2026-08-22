@@ -1,6 +1,6 @@
 # F-X045, Cache headers and footers transactionally
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: M
 **Depends on**: F-X040, F-X042
@@ -63,11 +63,11 @@ Expected to be unchanged. Header and footer reuse must equal a fresh build.
 
 ## Implementation checklist
 
-- [ ] Define the complete typed safe header and footer identity.
-- [ ] Add diagnostic, font-trace, and source replay.
-- [ ] Stage publication under the whole-layout transaction.
-- [ ] Enforce the 64-entry and 4 MiB retained bounds.
-- [ ] Add variant, invalidation, failure, bounds, warm-cold, PDF, and hash tests.
+- [x] Define the complete typed safe header and footer identity.
+- [x] Add diagnostic, font-trace, and source replay.
+- [x] Stage publication under the whole-layout transaction.
+- [x] Enforce the 64-entry and 4 MiB retained bounds.
+- [x] Add variant, invalidation, failure, bounds, warm-cold, PDF, and hash tests.
 
 ## Open questions
 

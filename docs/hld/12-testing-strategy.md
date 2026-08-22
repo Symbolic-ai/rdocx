@@ -177,7 +177,7 @@ collision still requires exact typed paragraph equality. Focused cases prove
 that note, field, and numbering prefixes disable later reads, a late failure
 publishes nothing, hits preserve insertion order, and FIFO eviction holds at
 the independently pinned 4,096-entry and 56 MiB paragraph limits. Compile-time
-checks also pin the 4,160-entry and 64 MiB combined envelope.
+checks also pin the 4,224-entry and 64 MiB combined envelope.
 
 The restart-pagination regression gate compares warm edits at the start,
 middle, tail, and a retained page boundary with a fresh deterministic engine.
@@ -195,14 +195,25 @@ Numbering and other traversal-sensitive table content bypass the cache. A late
 font failure after staged paragraph and table work publishes neither queue.
 Focused bounds checks cover both published and pending entry and byte ceilings.
 
+The safe header and footer cache gate covers default, first, even, inherited,
+header, footer, and watermark variants. It requires exact hits to replay
+diagnostics and font traces and to rebind current Word source ids. Part text,
+resolved image bytes, watermark geometry, same-width page-height changes,
+styles, numbering, notes, theme, revision view, additional fonts, section
+properties, and provenance mode must miss. Traversal-sensitive parts bypass
+reuse. A late failure after staged header work publishes nothing. Published and
+pending queues remain within 64 entries and 4 MiB, oversized entries bypass
+retention, and warm deterministic layout and PDF bytes equal a fresh engine.
+
 Boundary tests exercise the exact shaping identity, process font discovery,
 canonical file-byte identity, lock poison recovery, bounded resolution and
 coverage state, bounded and shrunk per-paragraph font traces, and both pending
 and published block queues. Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
-must stay within 4,160 entries and 64 MiB, with paragraph state capped at 4,096
-entries and 56 MiB. Oversized entries must bypass retention.
+must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096
+entries and 56 MiB and header and footer state capped at 64 entries and 4 MiB.
+Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and unchanged 49-entry hash harness are required riders.

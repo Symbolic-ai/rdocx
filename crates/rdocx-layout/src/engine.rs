@@ -414,6 +414,17 @@ pub struct Engine {
     pending_table_cache_peak_entries: usize,
     #[cfg(test)]
     pending_table_cache_peak_bytes: usize,
+    header_footer_cache: VecDeque<HeaderFooterCacheEntry>,
+    header_footer_cache_bytes: usize,
+    header_footer_cache_hits: usize,
+    header_footer_cache_builds: usize,
+    pending_header_footer_cache: Option<VecDeque<HeaderFooterCacheEntry>>,
+    pending_header_footer_cache_bytes: usize,
+    #[cfg(test)]
+    pending_header_footer_cache_peak_entries: usize,
+    #[cfg(test)]
+    pending_header_footer_cache_peak_bytes: usize,
+    header_footer_cache_reads_enabled: bool,
     restart_cache: Option<RestartCache>,
     #[cfg(test)]
     last_rebuilt_page_range: Option<std::ops::Range<usize>>,
@@ -512,6 +523,37 @@ struct TableCacheEntry {
     bytes: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderFooterStoryKind {
+    Header,
+    Footer,
+}
+
+#[derive(Clone, PartialEq)]
+struct HeaderFooterCacheKey {
+    story: HeaderFooterStoryKind,
+    variant: HdrFtrType,
+    section: CT_SectPr,
+    relationship_id: String,
+    part: rdocx_oxml::header_footer::CT_HdrFtr,
+    resolved_part_bytes: Vec<u8>,
+    with_provenance: bool,
+}
+
+#[derive(Clone)]
+struct HeaderFooterVariantContent {
+    blocks: Vec<ParagraphBlock>,
+    watermark: Option<GroupElement>,
+}
+
+struct HeaderFooterCacheEntry {
+    key: HeaderFooterCacheKey,
+    content: HeaderFooterVariantContent,
+    diagnostics: Vec<Diagnostic>,
+    font_trace: Vec<FontId>,
+    bytes: usize,
+}
+
 struct RestartCache {
     body: Vec<String>,
     with_provenance: bool,
@@ -523,24 +565,35 @@ struct RestartCache {
     bytes: usize,
 }
 
-const CACHE_MAX_ENTRIES: usize = 4_160;
+const CACHE_MAX_ENTRIES: usize = 4_224;
 const CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 4_096;
 const PARAGRAPH_CACHE_MAX_BYTES: usize = 56 * 1024 * 1024;
 const TABLE_CACHE_MAX_ENTRIES: usize = 32;
 const TABLE_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const HEADER_FOOTER_CACHE_MAX_ENTRIES: usize = 64;
+const HEADER_FOOTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const RESTART_CACHE_MAX_ENTRIES: usize = 32;
 const RESTART_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const _: () = assert!(PARAGRAPH_CACHE_MAX_ENTRIES == 4_096);
 const _: () = assert!(PARAGRAPH_CACHE_MAX_BYTES == 56 * 1024 * 1024);
-const _: () = assert!(CACHE_MAX_ENTRIES == 4_160);
+const _: () = assert!(HEADER_FOOTER_CACHE_MAX_ENTRIES == 64);
+const _: () = assert!(HEADER_FOOTER_CACHE_MAX_BYTES == 4 * 1024 * 1024);
+const _: () = assert!(CACHE_MAX_ENTRIES == 4_224);
 const _: () = assert!(CACHE_MAX_BYTES == 64 * 1024 * 1024);
 const _: () = assert!(
-    PARAGRAPH_CACHE_MAX_ENTRIES + TABLE_CACHE_MAX_ENTRIES + RESTART_CACHE_MAX_ENTRIES
+    PARAGRAPH_CACHE_MAX_ENTRIES
+        + TABLE_CACHE_MAX_ENTRIES
+        + HEADER_FOOTER_CACHE_MAX_ENTRIES
+        + RESTART_CACHE_MAX_ENTRIES
         <= CACHE_MAX_ENTRIES
 );
 const _: () = assert!(
-    PARAGRAPH_CACHE_MAX_BYTES + TABLE_CACHE_MAX_BYTES + RESTART_CACHE_MAX_BYTES <= CACHE_MAX_BYTES
+    PARAGRAPH_CACHE_MAX_BYTES
+        + TABLE_CACHE_MAX_BYTES
+        + HEADER_FOOTER_CACHE_MAX_BYTES
+        + RESTART_CACHE_MAX_BYTES
+        <= CACHE_MAX_BYTES
 );
 const CACHE_SOURCE_NODE: SourceNodeId = match SourceNodeId::new(1) {
     Some(node) => node,
@@ -579,6 +632,17 @@ impl Engine {
             pending_table_cache_peak_entries: 0,
             #[cfg(test)]
             pending_table_cache_peak_bytes: 0,
+            header_footer_cache: VecDeque::new(),
+            header_footer_cache_bytes: 0,
+            header_footer_cache_hits: 0,
+            header_footer_cache_builds: 0,
+            pending_header_footer_cache: None,
+            pending_header_footer_cache_bytes: 0,
+            #[cfg(test)]
+            pending_header_footer_cache_peak_entries: 0,
+            #[cfg(test)]
+            pending_header_footer_cache_peak_bytes: 0,
+            header_footer_cache_reads_enabled: false,
             restart_cache: None,
             #[cfg(test)]
             last_rebuilt_page_range: None,
@@ -608,6 +672,7 @@ impl Engine {
             engine.paragraph_cache_context.as_ref()
                 == Some(&ReusableEngineContext::for_input(input))
                 && engine.pending_paragraph_cache.is_none()
+                && engine.pending_header_footer_cache.is_none()
         });
         compatible.then(|| source.take()).flatten()
     }
@@ -643,34 +708,46 @@ impl Engine {
             self.paragraph_cache_bytes = 0;
             self.table_cache.clear();
             self.table_cache_bytes = 0;
+            self.header_footer_cache.clear();
+            self.header_footer_cache_bytes = 0;
         }
         let context_matches =
             !fonts_changed && self.paragraph_cache_context.as_ref() == Some(&paragraph_context);
         self.paragraph_cache_reads_enabled = context_matches;
+        self.header_footer_cache_reads_enabled = context_matches;
         self.pending_paragraph_cache = Some(VecDeque::new());
         self.pending_paragraph_cache_bytes = 0;
         self.pending_table_cache = Some(VecDeque::new());
         self.pending_table_cache_bytes = 0;
+        self.pending_header_footer_cache = Some(VecDeque::new());
+        self.pending_header_footer_cache_bytes = 0;
         #[cfg(test)]
         {
             self.pending_paragraph_cache_peak_entries = 0;
             self.pending_paragraph_cache_peak_bytes = 0;
             self.pending_table_cache_peak_entries = 0;
             self.pending_table_cache_peak_bytes = 0;
+            self.pending_header_footer_cache_peak_entries = 0;
+            self.pending_header_footer_cache_peak_bytes = 0;
         }
 
         let result = self.layout_transaction(input, sources);
         let pending = self.pending_paragraph_cache.take().unwrap_or_default();
         let pending_tables = self.pending_table_cache.take().unwrap_or_default();
+        let pending_header_footers = self.pending_header_footer_cache.take().unwrap_or_default();
         self.pending_paragraph_cache_bytes = 0;
         self.pending_table_cache_bytes = 0;
+        self.pending_header_footer_cache_bytes = 0;
         self.paragraph_cache_reads_enabled = false;
+        self.header_footer_cache_reads_enabled = false;
         if result.is_ok() {
             if !context_matches {
                 self.paragraph_cache.clear();
                 self.paragraph_cache_bytes = 0;
                 self.table_cache.clear();
                 self.table_cache_bytes = 0;
+                self.header_footer_cache.clear();
+                self.header_footer_cache_bytes = 0;
                 self.paragraph_cache_context = Some(paragraph_context);
             }
             for entry in pending {
@@ -678,6 +755,9 @@ impl Engine {
             }
             for entry in pending_tables {
                 self.publish_table_cache_entry(entry);
+            }
+            for entry in pending_header_footers {
+                self.publish_header_footer_cache_entry(entry);
             }
         }
         let current_fonts = self
@@ -700,6 +780,17 @@ impl Engine {
                 .all(|font_id| current_fonts.contains(font_id))
         });
         self.table_cache_bytes = self.table_cache.iter().map(|entry| entry.bytes).sum();
+        self.header_footer_cache.retain(|entry| {
+            entry
+                .font_trace
+                .iter()
+                .all(|font_id| current_fonts.contains(font_id))
+        });
+        self.header_footer_cache_bytes = self
+            .header_footer_cache
+            .iter()
+            .map(|entry| entry.bytes)
+            .sum();
         self.font_manager.retain_current_fonts();
         result
     }
@@ -775,11 +866,11 @@ impl Engine {
                     if let Some(sect_pr) = para_sect_pr {
                         let geometry = sect_pr_to_geometry(&sect_pr);
                         let header_footer = layout_header_footer(
+                            self,
                             &sect_pr,
                             input,
                             styles,
                             &media,
-                            &mut self.font_manager,
                             &mut num_state,
                             &mut diagnostics,
                             sources,
@@ -820,11 +911,11 @@ impl Engine {
         // Remaining blocks belong to the final section
         let final_geometry = sect_pr_to_geometry(&final_sect_pr);
         let final_hf = layout_header_footer(
+            self,
             &final_sect_pr,
             input,
             styles,
             &media,
-            &mut self.font_manager,
             &mut num_state,
             &mut diagnostics,
             sources,
@@ -1428,6 +1519,84 @@ impl Engine {
                 .max(self.pending_table_cache_bytes);
         }
     }
+
+    #[cfg(test)]
+    fn header_footer_cache_counts(&self) -> (usize, usize) {
+        (
+            self.header_footer_cache_hits,
+            self.header_footer_cache_builds,
+        )
+    }
+
+    fn publish_header_footer_cache_entry(&mut self, entry: HeaderFooterCacheEntry) {
+        if entry.bytes > HEADER_FOOTER_CACHE_MAX_BYTES {
+            return;
+        }
+        while self.header_footer_cache.len() >= HEADER_FOOTER_CACHE_MAX_ENTRIES
+            || self.header_footer_cache_bytes.saturating_add(entry.bytes)
+                > HEADER_FOOTER_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = self.header_footer_cache.pop_front() else {
+                break;
+            };
+            self.header_footer_cache_bytes =
+                self.header_footer_cache_bytes.saturating_sub(evicted.bytes);
+        }
+        self.header_footer_cache_bytes += entry.bytes;
+        self.header_footer_cache.push_back(entry);
+        let restart_entries = self
+            .restart_cache
+            .as_ref()
+            .map_or(0, |cache| cache.checkpoints.len());
+        let restart_bytes = self.restart_cache.as_ref().map_or(0, |cache| cache.bytes);
+        debug_assert!(
+            self.paragraph_cache.len()
+                + self.table_cache.len()
+                + self.header_footer_cache.len()
+                + restart_entries
+                <= CACHE_MAX_ENTRIES
+        );
+        debug_assert!(
+            self.paragraph_cache_bytes
+                + self.table_cache_bytes
+                + self.header_footer_cache_bytes
+                + restart_bytes
+                <= CACHE_MAX_BYTES
+        );
+    }
+
+    fn stage_header_footer_cache_entry(&mut self, entry: HeaderFooterCacheEntry) {
+        if entry.bytes > HEADER_FOOTER_CACHE_MAX_BYTES {
+            return;
+        }
+        let Some(pending) = self.pending_header_footer_cache.as_mut() else {
+            return;
+        };
+        while pending.len() >= HEADER_FOOTER_CACHE_MAX_ENTRIES
+            || self
+                .pending_header_footer_cache_bytes
+                .saturating_add(entry.bytes)
+                > HEADER_FOOTER_CACHE_MAX_BYTES
+        {
+            let Some(evicted) = pending.pop_front() else {
+                break;
+            };
+            self.pending_header_footer_cache_bytes = self
+                .pending_header_footer_cache_bytes
+                .saturating_sub(evicted.bytes);
+        }
+        self.pending_header_footer_cache_bytes += entry.bytes;
+        pending.push_back(entry);
+        #[cfg(test)]
+        {
+            self.pending_header_footer_cache_peak_entries = self
+                .pending_header_footer_cache_peak_entries
+                .max(pending.len());
+            self.pending_header_footer_cache_peak_bytes = self
+                .pending_header_footer_cache_peak_bytes
+                .max(self.pending_header_footer_cache_bytes);
+        }
+    }
 }
 
 fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
@@ -1482,6 +1651,126 @@ fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
                 )
             })
     })
+}
+
+fn header_footer_part_is_cache_safe(
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    styles: &CT_Styles,
+) -> bool {
+    if !part.extra_xml.is_empty() {
+        return false;
+    }
+    let raw_watermark_count = part
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| &paragraph.runs)
+        .flat_map(|run| &run.extra_xml)
+        .filter(|raw| raw_xml_root_is_word_pict(raw, &part.extra_namespaces))
+        .count();
+    if raw_watermark_count != part.watermarks().len() {
+        return false;
+    }
+    part.paragraphs.iter().all(|paragraph| {
+        if !paragraph.extra_xml.is_empty() {
+            return false;
+        }
+        let mut projected = paragraph.clone();
+        for run in &mut projected.runs {
+            if run.extra_xml.len() != run.extra_xml_positions.len()
+                || !run
+                    .extra_xml
+                    .iter()
+                    .all(|raw| raw_xml_root_is_word_pict(raw, &part.extra_namespaces))
+            {
+                return false;
+            }
+            run.extra_xml.clear();
+            run.extra_xml_positions.clear();
+        }
+        paragraph_is_cache_safe(&projected, styles)
+    })
+}
+
+fn raw_xml_root_is_word_pict(raw: &[u8], namespaces: &[(String, String)]) -> bool {
+    let raw = raw
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .map_or(raw, |start| &raw[start..]);
+    let Some((name, attributes)) = raw.strip_prefix(b"<").and_then(|raw| {
+        let name_end = raw
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'>' | b'/'))?;
+        Some((&raw[..name_end], &raw[name_end..]))
+    }) else {
+        return false;
+    };
+    let mut components = name.rsplitn(2, |byte| *byte == b':');
+    if components.next() != Some(b"pict".as_slice()) {
+        return false;
+    }
+    let prefix = components.next();
+    let declaration = prefix.map_or_else(
+        || "xmlns".to_owned(),
+        |prefix| format!("xmlns:{}", String::from_utf8_lossy(prefix)),
+    );
+    if let Some(namespace) = raw_xml_start_attribute(attributes, declaration.as_bytes()) {
+        return namespace == rdocx_oxml::namespace::W_NS.as_bytes();
+    }
+    let Some(prefix) = prefix.and_then(|prefix| std::str::from_utf8(prefix).ok()) else {
+        return false;
+    };
+    if prefix == "w" {
+        return !namespaces.iter().any(|(name, namespace)| {
+            name != "xmlns:w" && namespace == rdocx_oxml::namespace::W_NS
+        });
+    }
+    namespaces.iter().any(|(name, namespace)| {
+        name.strip_prefix("xmlns:") == Some(prefix) && namespace == rdocx_oxml::namespace::W_NS
+    })
+}
+
+fn raw_xml_start_attribute<'a>(mut input: &'a [u8], expected: &[u8]) -> Option<&'a [u8]> {
+    loop {
+        input = input
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .map_or(input, |start| &input[start..]);
+        if input.first().is_none_or(|byte| matches!(byte, b'>' | b'/')) {
+            return None;
+        }
+        let name_end = input
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'=' | b'>' | b'/'))?;
+        let name = &input[..name_end];
+        input = &input[name_end..];
+        input = input
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .map_or(input, |start| &input[start..]);
+        if input.first() != Some(&b'=') {
+            return None;
+        }
+        input = &input[1..];
+        input = input
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .map_or(input, |start| &input[start..]);
+        let quote = *input.first()?;
+        if !matches!(quote, b'\'' | b'"') {
+            return None;
+        }
+        input = &input[1..];
+        let value_end = input.iter().position(|byte| *byte == quote)?;
+        let value = &input[..value_end];
+        input = &input[value_end + 1..];
+        if name == expected {
+            return Some(value);
+        }
+    }
+}
+
+fn header_footer_section_is_cache_safe(section: &CT_SectPr) -> bool {
+    section.change.is_none() && section.extra_xml.is_empty()
 }
 
 fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
@@ -1927,6 +2216,213 @@ fn rebind_paragraph_source(block: &mut ParagraphBlock, source_node: Option<Sourc
             }
         }
     }
+}
+
+fn rebind_header_footer_sources(
+    story_kind: HeaderFooterStoryKind,
+    relationship_id: &str,
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    blocks: &mut [ParagraphBlock],
+    sources: Option<&SourceRegistry>,
+) {
+    let story = match story_kind {
+        HeaderFooterStoryKind::Header => WordStory::Header {
+            relationship_id: relationship_id.to_owned(),
+        },
+        HeaderFooterStoryKind::Footer => WordStory::Footer {
+            relationship_id: relationship_id.to_owned(),
+        },
+    };
+    for (paragraph_index, block) in blocks.iter_mut().enumerate() {
+        debug_assert!(paragraph_index < part.paragraphs.len());
+        let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
+        rebind_paragraph_source(block, source);
+    }
+}
+
+fn header_footer_cache_entry_bytes(
+    key: &HeaderFooterCacheKey,
+    content: &HeaderFooterVariantContent,
+    diagnostics: &Vec<Diagnostic>,
+    font_trace: &Vec<FontId>,
+) -> usize {
+    let block_bytes = key
+        .part
+        .paragraphs
+        .iter()
+        .zip(&content.blocks)
+        .map(|(paragraph, block)| paragraph_cache_entry_bytes(paragraph, block, &[], 0))
+        .fold(0usize, usize::saturating_add);
+    let diagnostic_bytes = diagnostics
+        .capacity()
+        .saturating_mul(std::mem::size_of::<Diagnostic>())
+        .saturating_add(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.capacity())
+                .fold(0usize, usize::saturating_add),
+        );
+    let watermark_bytes = content.watermark.as_ref().map_or(0, |watermark| {
+        page_frame_retained_bytes(&PageFrame::new(
+            1,
+            0.0,
+            0.0,
+            vec![PositionedElement::Group(watermark.clone())],
+        ))
+    });
+    let section_capacity = key
+        .section
+        .header_refs
+        .capacity()
+        .saturating_mul(std::mem::size_of::<rdocx_oxml::header_footer::HdrFtrRef>())
+        .saturating_add(
+            key.section
+                .footer_refs
+                .capacity()
+                .saturating_mul(std::mem::size_of::<rdocx_oxml::header_footer::HdrFtrRef>()),
+        )
+        .saturating_add(key.section.columns.as_ref().map_or(0, |columns| {
+            columns
+                .columns
+                .capacity()
+                .saturating_mul(std::mem::size_of::<rdocx_oxml::document::CT_Column>())
+        }))
+        .saturating_add(
+            key.section
+                .extra_xml
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<u8>>()),
+        )
+        .saturating_add(
+            key.section
+                .header_refs
+                .iter()
+                .chain(&key.section.footer_refs)
+                .map(|reference| reference.rel_id.capacity())
+                .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(
+            key.section
+                .extra_xml
+                .iter()
+                .map(Vec::capacity)
+                .fold(0usize, usize::saturating_add),
+        );
+    let paragraph_raw_capacity = key
+        .part
+        .paragraphs
+        .iter()
+        .map(|paragraph| {
+            paragraph
+                .extra_xml
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(usize, Vec<u8>)>())
+                .saturating_add(
+                    paragraph
+                        .extra_xml
+                        .iter()
+                        .map(|(_, raw)| raw.capacity())
+                        .fold(0usize, usize::saturating_add),
+                )
+                .saturating_add(
+                    paragraph
+                        .runs
+                        .iter()
+                        .map(|run| {
+                            run.extra_xml
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<Vec<u8>>())
+                                .saturating_add(
+                                    run.extra_xml
+                                        .iter()
+                                        .map(Vec::capacity)
+                                        .fold(0usize, usize::saturating_add),
+                                )
+                                .saturating_add(
+                                    run.extra_xml_positions
+                                        .capacity()
+                                        .saturating_mul(std::mem::size_of::<usize>()),
+                                )
+                        })
+                        .fold(0usize, usize::saturating_add),
+                )
+        })
+        .fold(0usize, usize::saturating_add);
+    let watermark_capacity = key
+        .part
+        .watermarks()
+        .iter()
+        .map(|watermark| {
+            std::mem::size_of::<VmlWatermark>().saturating_add(match watermark {
+                VmlWatermark::Text {
+                    text,
+                    color,
+                    font_family,
+                    ..
+                } => text
+                    .capacity()
+                    .saturating_add(color.capacity())
+                    .saturating_add(font_family.as_ref().map_or(0, String::capacity)),
+                VmlWatermark::Image {
+                    relationship_id, ..
+                } => relationship_id.capacity(),
+            })
+        })
+        .fold(0usize, usize::saturating_add);
+    let part_capacity = key
+        .part
+        .paragraphs
+        .capacity()
+        .saturating_mul(std::mem::size_of::<CT_P>())
+        .saturating_add(
+            content
+                .blocks
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ParagraphBlock>()),
+        )
+        .saturating_add(
+            key.part
+                .extra_namespaces
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(String, String)>()),
+        )
+        .saturating_add(
+            key.part
+                .extra_xml
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<u8>>()),
+        )
+        .saturating_add(
+            key.part
+                .extra_namespaces
+                .iter()
+                .map(|(prefix, namespace)| prefix.capacity().saturating_add(namespace.capacity()))
+                .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(
+            key.part
+                .extra_xml
+                .iter()
+                .map(Vec::capacity)
+                .fold(0usize, usize::saturating_add),
+        );
+    std::mem::size_of::<HeaderFooterCacheEntry>()
+        .saturating_add(key.relationship_id.capacity())
+        .saturating_add(key.resolved_part_bytes.capacity())
+        .saturating_add(format!("{:?}", key.section).len())
+        .saturating_add(format!("{:?}", key.part).len())
+        .saturating_add(section_capacity)
+        .saturating_add(part_capacity)
+        .saturating_add(paragraph_raw_capacity)
+        .saturating_add(watermark_capacity)
+        .saturating_add(block_bytes)
+        .saturating_add(watermark_bytes)
+        .saturating_add(diagnostic_bytes)
+        .saturating_add(
+            font_trace
+                .capacity()
+                .saturating_mul(std::mem::size_of::<FontId>()),
+        )
 }
 
 fn paragraph_cache_entry_bytes(
@@ -3558,11 +4054,11 @@ fn decode_xml_attribute(value: &[u8]) -> Option<String> {
 
 /// Lay out header and footer content (both Default and First-page).
 fn layout_header_footer(
+    engine: &mut Engine,
     sect_pr: &CT_SectPr,
     input: &LayoutInput,
     styles: &CT_Styles,
     media: &MediaRegistry,
-    fm: &mut FontManager,
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
     sources: Option<&SourceRegistry>,
@@ -3592,36 +4088,25 @@ fn layout_header_footer(
             HdrFtrType::Even => (&mut even_header_blocks, &mut even_watermark),
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
-            if target_watermark.is_none()
-                && let Some(projected) = hdr.watermarks().first()
-            {
-                *target_watermark = layout_watermark(
-                    projected,
-                    &href.rel_id,
-                    input,
-                    media,
-                    fm,
-                    geometry,
-                    diagnostics,
-                )?;
-            }
-            let story = WordStory::Header {
-                relationship_id: href.rel_id.clone(),
-            };
-            for (paragraph_index, para) in hdr.paragraphs.iter().enumerate() {
-                let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
-                let block = layout_paragraph_with_source(
-                    para,
-                    width,
-                    styles,
-                    input,
-                    media,
-                    fm,
-                    num_state,
-                    diagnostics,
-                    source,
-                )?;
-                target_blocks.push(block);
+            let content = layout_header_footer_variant(
+                engine,
+                HeaderFooterStoryKind::Header,
+                href.hdr_ftr_type,
+                sect_pr,
+                &href.rel_id,
+                hdr,
+                input,
+                styles,
+                media,
+                num_state,
+                diagnostics,
+                sources,
+                width,
+                geometry,
+            )?;
+            target_blocks.extend(content.blocks);
+            if target_watermark.is_none() {
+                *target_watermark = content.watermark;
             }
             has_content = true;
         }
@@ -3634,24 +4119,23 @@ fn layout_header_footer(
             HdrFtrType::Even => &mut even_footer_blocks,
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
-            let story = WordStory::Footer {
-                relationship_id: fref.rel_id.clone(),
-            };
-            for (paragraph_index, para) in ftr.paragraphs.iter().enumerate() {
-                let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
-                let block = layout_paragraph_with_source(
-                    para,
-                    width,
-                    styles,
-                    input,
-                    media,
-                    fm,
-                    num_state,
-                    diagnostics,
-                    source,
-                )?;
-                target_blocks.push(block);
-            }
+            let content = layout_header_footer_variant(
+                engine,
+                HeaderFooterStoryKind::Footer,
+                fref.hdr_ftr_type,
+                sect_pr,
+                &fref.rel_id,
+                ftr,
+                input,
+                styles,
+                media,
+                num_state,
+                diagnostics,
+                sources,
+                width,
+                geometry,
+            )?;
+            target_blocks.extend(content.blocks);
             has_content = true;
         }
     }
@@ -3672,6 +4156,190 @@ fn layout_header_footer(
     } else {
         Ok(None)
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_header_footer_variant(
+    engine: &mut Engine,
+    story_kind: HeaderFooterStoryKind,
+    variant: HdrFtrType,
+    sect_pr: &CT_SectPr,
+    relationship_id: &str,
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    input: &LayoutInput,
+    styles: &CT_Styles,
+    media: &MediaRegistry,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
+    width: f64,
+    geometry: PageGeometry,
+) -> Result<HeaderFooterVariantContent> {
+    let cache_safe = header_footer_section_is_cache_safe(sect_pr)
+        && header_footer_part_is_cache_safe(part, styles);
+    let resolved_part_bytes = match story_kind {
+        HeaderFooterStoryKind::Header => part.to_xml_header(),
+        HeaderFooterStoryKind::Footer => part.to_xml_footer(),
+    };
+    if !cache_safe || resolved_part_bytes.is_err() {
+        return layout_header_footer_variant_uncached(
+            story_kind,
+            relationship_id,
+            part,
+            input,
+            styles,
+            media,
+            &mut engine.font_manager,
+            num_state,
+            diagnostics,
+            sources,
+            false,
+            width,
+            geometry,
+        );
+    }
+
+    let key = HeaderFooterCacheKey {
+        story: story_kind,
+        variant,
+        section: sect_pr.clone(),
+        relationship_id: relationship_id.to_owned(),
+        part: part.clone(),
+        resolved_part_bytes: resolved_part_bytes.expect("checked resolved part bytes"),
+        with_provenance: sources.is_some(),
+    };
+    let hit = engine
+        .header_footer_cache_reads_enabled
+        .then(|| {
+            engine
+                .header_footer_cache
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| {
+                    (
+                        entry.content.clone(),
+                        entry.diagnostics.clone(),
+                        entry.font_trace.clone(),
+                    )
+                })
+        })
+        .flatten();
+    if let Some((mut content, cached_diagnostics, font_trace)) = hit {
+        rebind_header_footer_sources(
+            story_kind,
+            relationship_id,
+            part,
+            &mut content.blocks,
+            sources,
+        );
+        diagnostics.extend(cached_diagnostics);
+        engine.font_manager.replay_layout_font_trace(&font_trace);
+        engine.header_footer_cache_hits += 1;
+        return Ok(content);
+    }
+
+    let diagnostics_start = diagnostics.len();
+    engine.font_manager.begin_paragraph_font_trace();
+    let content_result = layout_header_footer_variant_uncached(
+        story_kind,
+        relationship_id,
+        part,
+        input,
+        styles,
+        media,
+        &mut engine.font_manager,
+        num_state,
+        diagnostics,
+        None,
+        true,
+        width,
+        geometry,
+    );
+    let font_trace = engine.font_manager.finish_paragraph_font_trace();
+    let mut content = content_result?;
+    engine.header_footer_cache_builds += 1;
+    let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
+    if let Some(font_trace) = font_trace {
+        let bytes =
+            header_footer_cache_entry_bytes(&key, &content, &cached_diagnostics, &font_trace);
+        engine.stage_header_footer_cache_entry(HeaderFooterCacheEntry {
+            key,
+            content: content.clone(),
+            diagnostics: cached_diagnostics,
+            font_trace,
+            bytes,
+        });
+    }
+    rebind_header_footer_sources(
+        story_kind,
+        relationship_id,
+        part,
+        &mut content.blocks,
+        sources,
+    );
+    Ok(content)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_header_footer_variant_uncached(
+    story_kind: HeaderFooterStoryKind,
+    relationship_id: &str,
+    part: &rdocx_oxml::header_footer::CT_HdrFtr,
+    input: &LayoutInput,
+    styles: &CT_Styles,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
+    cache_source: bool,
+    width: f64,
+    geometry: PageGeometry,
+) -> Result<HeaderFooterVariantContent> {
+    let watermark = if story_kind == HeaderFooterStoryKind::Header {
+        match part.watermarks().first() {
+            Some(projected) => layout_watermark(
+                projected,
+                relationship_id,
+                input,
+                media,
+                fm,
+                geometry,
+                diagnostics,
+            )?,
+            None => None,
+        }
+    } else {
+        None
+    };
+    let story = match story_kind {
+        HeaderFooterStoryKind::Header => WordStory::Header {
+            relationship_id: relationship_id.to_owned(),
+        },
+        HeaderFooterStoryKind::Footer => WordStory::Footer {
+            relationship_id: relationship_id.to_owned(),
+        },
+    };
+    let mut blocks = Vec::with_capacity(part.paragraphs.len());
+    for (paragraph_index, paragraph) in part.paragraphs.iter().enumerate() {
+        let source = if cache_source {
+            Some(CACHE_SOURCE_NODE)
+        } else {
+            sources.and_then(|sources| sources.id(&story, &[paragraph_index]))
+        };
+        blocks.push(layout_paragraph_with_source(
+            paragraph,
+            width,
+            styles,
+            input,
+            media,
+            fm,
+            num_state,
+            diagnostics,
+            source,
+        )?);
+    }
+    Ok(HeaderFooterVariantContent { blocks, watermark })
 }
 
 fn layout_watermark(
@@ -4506,6 +5174,496 @@ mod tests {
             theme: None,
             fonts: Vec::new(),
         }
+    }
+
+    fn header_footer_part(text: &str) -> rdocx_oxml::header_footer::CT_HdrFtr {
+        let mut part = rdocx_oxml::header_footer::CT_HdrFtr::new();
+        let mut paragraph = CT_P::new();
+        paragraph.add_run(text);
+        part.paragraphs.push(paragraph);
+        part
+    }
+
+    fn image_watermark_header(text: &str, width_pt: f64) -> rdocx_oxml::header_footer::CT_HdrFtr {
+        rdocx_oxml::header_footer::CT_HdrFtr::from_xml(
+            format!(
+                r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:p><w:r><w:pict><v:shape style="width:{width_pt}pt;height:36pt"><v:fill opacity=".5"/><v:imagedata r:id="rIdWatermark"/></v:shape></w:pict><w:t>{text}</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .expect("watermark header parses")
+    }
+
+    fn cacheable_header_footer_input(body: &str) -> LayoutInput {
+        use rdocx_oxml::header_footer::HdrFtrRef;
+
+        let mut input = make_input_with_text(body);
+        let mut section = CT_SectPr::default_letter();
+        section.title_pg = Some(true);
+        for (variant, suffix) in [
+            (HdrFtrType::Default, "default"),
+            (HdrFtrType::First, "first"),
+            (HdrFtrType::Even, "even"),
+        ] {
+            let header_id = format!("rId-{suffix}-header");
+            let footer_id = format!("rId-{suffix}-footer");
+            section.header_refs.push(HdrFtrRef {
+                hdr_ftr_type: variant,
+                rel_id: header_id.clone(),
+            });
+            section.footer_refs.push(HdrFtrRef {
+                hdr_ftr_type: variant,
+                rel_id: footer_id.clone(),
+            });
+            let header = if variant == HdrFtrType::Default {
+                image_watermark_header(&format!("{suffix} header"), 72.0)
+            } else {
+                header_footer_part(&format!("{suffix} header"))
+            };
+            input.headers.insert(header_id, header);
+            input
+                .footers
+                .insert(footer_id, header_footer_part(&format!("{suffix} footer")));
+        }
+        input.images.insert(
+            "rId-default-header\0rIdWatermark".to_owned(),
+            ImageData {
+                data: vec![1, 2, 3, 4],
+                content_type: "image/png".to_owned(),
+            },
+        );
+        input.document.body.sect_pr = Some(section);
+        input
+    }
+
+    fn header_footer_page_text(page: &PageFrame) -> String {
+        page.elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn assert_header_footer_context_miss(
+        base: &LayoutInput,
+        name: &str,
+        mutate: impl FnOnce(&mut LayoutInput),
+    ) {
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(base).expect("prime exact identity");
+        let mut changed = base.clone();
+        mutate(&mut changed);
+        engine
+            .layout(&changed)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(engine.header_footer_cache_counts(), (0, 12), "{name}");
+    }
+
+    #[test]
+    fn safe_header_footer_variants_reuse_exactly() {
+        let mut input = cacheable_header_footer_input(&"body ".repeat(4_000));
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (cold, cold_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("cold header/footer layout");
+        assert!(cold.pages.len() > 2);
+        assert!(header_footer_page_text(&cold.pages[0]).contains("first header"));
+        assert!(header_footer_page_text(&cold.pages[0]).contains("first footer"));
+        assert!(header_footer_page_text(&cold.pages[1]).contains("even header"));
+        assert!(header_footer_page_text(&cold.pages[1]).contains("even footer"));
+        assert!(header_footer_page_text(&cold.pages[2]).contains("default header"));
+        assert!(header_footer_page_text(&cold.pages[2]).contains("default footer"));
+        assert_eq!(engine.header_footer_cache_counts(), (0, 6));
+        assert_eq!(engine.header_footer_cache.len(), 6);
+        assert!(
+            engine
+                .header_footer_cache
+                .iter()
+                .all(|entry| !entry.font_trace.is_empty())
+        );
+
+        for (index, entry) in engine.header_footer_cache.iter_mut().enumerate() {
+            entry.diagnostics = vec![Diagnostic {
+                message: format!("cached header/footer diagnostic {index}"),
+            }];
+        }
+        input.document.body.content.insert(
+            0,
+            BodyContent::Paragraph({
+                let mut paragraph = CT_P::new();
+                paragraph.add_run("inserted body source");
+                paragraph
+            }),
+        );
+        let (warm, warm_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm header/footer layout");
+        let (fresh, fresh_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh comparison layout");
+        assert_eq!(format!("{:?}", warm.pages), format!("{:?}", fresh.pages));
+        assert_eq!(format!("{:?}", warm.fonts), format!("{:?}", fresh.fonts));
+        assert_eq!(
+            format!("{:?}", warm.outlines),
+            format!("{:?}", fresh.outlines)
+        );
+        assert_eq!(warm_sources, fresh_sources);
+        assert_ne!(cold_sources, warm_sources);
+        assert_eq!(engine.header_footer_cache_counts(), (6, 6));
+        assert_eq!(warm.diagnostics.len(), 6);
+        assert!(warm.diagnostics.iter().all(|diagnostic| {
+            diagnostic
+                .message
+                .starts_with("cached header/footer diagnostic")
+        }));
+        let header_source = warm
+            .pages
+            .iter()
+            .flat_map(|page| &page.elements)
+            .filter_map(|element| match element {
+                PositionedElement::Text(text) if text.text.contains("header") => text.source,
+                _ => None,
+            })
+            .next()
+            .expect("cached header text has provenance");
+        assert!(matches!(
+            warm_sources[header_source.node.get() as usize - 1].story,
+            WordStory::Header { .. }
+        ));
+
+        // F-X042 resolves inherited references onto each section before layout.
+        // Model that exact input shape and prove both the authored first section
+        // and inherited final section reuse their variants on the next layout.
+        let mut inherited_input = cacheable_header_footer_input(&"second section ".repeat(2_000));
+        let inherited_section = inherited_input
+            .document
+            .body
+            .sect_pr
+            .clone()
+            .expect("final section");
+        let mut first_section_end = CT_P::new();
+        first_section_end.add_run("authored section with shared variants");
+        first_section_end.properties.get_or_insert_default().sect_pr = Some(inherited_section);
+        inherited_input
+            .document
+            .body
+            .content
+            .insert(0, BodyContent::Paragraph(first_section_end));
+        let mut inherited_engine = Engine::new_deterministic().expect("bundled fonts load");
+        inherited_engine
+            .layout_with_provenance(&inherited_input)
+            .expect("cold inherited layout");
+        let (inherited_warm, inherited_sources) = inherited_engine
+            .layout_with_provenance(&inherited_input)
+            .expect("warm inherited layout");
+        let (inherited_fresh, fresh_inherited_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&inherited_input)
+            .expect("fresh inherited layout");
+        assert_eq!(inherited_engine.header_footer_cache_counts(), (12, 12));
+        assert_eq!(
+            format!("{:?}", inherited_warm.pages),
+            format!("{:?}", inherited_fresh.pages)
+        );
+        assert_eq!(inherited_sources, fresh_inherited_sources);
+    }
+
+    #[test]
+    fn header_footer_media_geometry_and_context_changes_miss() {
+        use rdocx_oxml::footnotes::CT_Footnotes;
+        use rdocx_oxml::numbering::CT_Numbering;
+        use rdocx_oxml::theme::Theme;
+        use rdocx_oxml::units::Twips;
+
+        let base = cacheable_header_footer_input("body");
+        assert_header_footer_context_miss(&base, "header text", |input| {
+            input.headers.insert(
+                "rId-first-header".to_owned(),
+                header_footer_part("changed first header"),
+            );
+        });
+        assert_header_footer_context_miss(&base, "media bytes", |input| {
+            input
+                .images
+                .get_mut("rId-default-header\0rIdWatermark")
+                .expect("watermark image")
+                .data
+                .push(5);
+        });
+        assert_header_footer_context_miss(&base, "watermark", |input| {
+            input.headers.insert(
+                "rId-default-header".to_owned(),
+                image_watermark_header("default header", 73.0),
+            );
+        });
+        assert_header_footer_context_miss(&base, "same-width page height", |input| {
+            input
+                .document
+                .body
+                .sect_pr
+                .as_mut()
+                .expect("section")
+                .page_height = Some(Twips(15_841));
+        });
+        assert_header_footer_context_miss(&base, "styles", |input| {
+            input.styles = CT_Styles::new();
+        });
+        assert_header_footer_context_miss(&base, "numbering", |input| {
+            input.numbering = Some(CT_Numbering::new());
+        });
+        assert_header_footer_context_miss(&base, "notes", |input| {
+            input.footnotes = Some(CT_Footnotes::new());
+        });
+        assert_header_footer_context_miss(&base, "theme", |input| {
+            input.theme = Some(Theme::default());
+        });
+        assert_header_footer_context_miss(&base, "revision", |input| {
+            input.revision_view = RevisionView::Tracked;
+        });
+        assert_header_footer_context_miss(&base, "fonts", |input| {
+            let (family, data) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+            input.fonts.push(oxml_layout::FontFile {
+                family: family.to_owned(),
+                data: data.to_vec(),
+            });
+        });
+
+        let mut source_mode = Engine::new_deterministic().expect("bundled fonts load");
+        source_mode.layout(&base).expect("prime unsourced cache");
+        source_mode
+            .layout_with_provenance(&base)
+            .expect("sourced layout misses unsourced entries");
+        assert_eq!(source_mode.header_footer_cache_counts(), (0, 12));
+
+        let mut unsafe_input = base.clone();
+        unsafe_input
+            .headers
+            .get_mut("rId-first-header")
+            .expect("first header")
+            .paragraphs[0]
+            .properties
+            .get_or_insert_default()
+            .num_id = Some(1);
+        let mut unsafe_engine = Engine::new_deterministic().expect("bundled fonts load");
+        unsafe_engine
+            .layout(&unsafe_input)
+            .expect("unsafe part lays out");
+        assert_eq!(unsafe_engine.header_footer_cache_counts(), (0, 5));
+
+        let mut opaque_input = base.clone();
+        let opaque_run = &mut opaque_input
+            .headers
+            .get_mut("rId-first-header")
+            .expect("first header")
+            .paragraphs[0]
+            .runs[0];
+        opaque_run
+            .extra_xml
+            .push(br#"<w:object xmlns:w="urn:unrepresented"/>"#.to_vec());
+        opaque_run.extra_xml_positions.push(0);
+        let mut opaque_engine = Engine::new_deterministic().expect("bundled fonts load");
+        opaque_engine
+            .layout(&opaque_input)
+            .expect("opaque producer XML lays out without reuse");
+        assert_eq!(opaque_engine.header_footer_cache_counts(), (0, 5));
+
+        let foreign_wrapper = rdocx_oxml::header_footer::CT_HdrFtr::from_xml(
+            format!(
+                r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:producer"><w:p><w:r><x:pict><w:pict><v:shape style="width:72pt;height:36pt"><v:textpath string="DRAFT"/></v:shape></w:pict></x:pict></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .expect("foreign pict wrapper parses");
+        assert_eq!(foreign_wrapper.watermarks().len(), 1);
+        assert!(!header_footer_part_is_cache_safe(
+            &foreign_wrapper,
+            &base.styles
+        ));
+        let rebound_word_prefix = rdocx_oxml::header_footer::CT_HdrFtr::from_xml(
+            format!(
+                r#"<q:hdr xmlns:q="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:producer"><q:p><q:r><w:pict><q:pict><v:shape style="width:72pt;height:36pt"><v:textpath string="DRAFT"/></v:shape></q:pict></w:pict></q:r></q:p></q:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .expect("rebound conventional prefix parses");
+        assert_eq!(rebound_word_prefix.watermarks().len(), 1);
+        assert!(!header_footer_part_is_cache_safe(
+            &rebound_word_prefix,
+            &base.styles
+        ));
+    }
+
+    #[test]
+    fn header_footer_cache_publishes_transactionally_and_stays_bounded() {
+        use rdocx_oxml::header_footer::HdrFtrRef;
+
+        let (valid_family, valid_bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+        let (invalid_family, invalid_source) = oxml_layout::bundled_fonts::bundled_font_data()[4];
+        let mut invalid_bytes = invalid_source.to_vec();
+        let table_count = u16::from_be_bytes([invalid_bytes[4], invalid_bytes[5]]) as usize;
+        let head_offset = (0..table_count)
+            .find_map(|table| {
+                let record = 12 + table * 16;
+                (&invalid_bytes[record..record + 4] == b"head").then(|| {
+                    u32::from_be_bytes(
+                        invalid_bytes[record + 8..record + 12]
+                            .try_into()
+                            .expect("head offset"),
+                    ) as usize
+                })
+            })
+            .expect("font has head table");
+        invalid_bytes[head_offset + 18..head_offset + 20].copy_from_slice(&0u16.to_be_bytes());
+
+        let mut failing_input = make_input_with_text("section-ending prefix");
+        let mut section = CT_SectPr::default_letter();
+        section.header_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdHeader".to_owned(),
+        });
+        let BodyContent::Paragraph(prefix) = &mut failing_input.document.body.content[0] else {
+            panic!("prefix paragraph");
+        };
+        prefix.properties.get_or_insert_default().sect_pr = Some(section);
+        prefix.runs[0].properties.get_or_insert_default().font_ascii =
+            Some(valid_family.to_owned());
+        failing_input.headers.insert(
+            "rIdHeader".to_owned(),
+            header_footer_part("staged header before late failure"),
+        );
+        let mut later = CT_P::new();
+        later
+            .add_run("late font failure")
+            .properties
+            .get_or_insert_default()
+            .font_ascii = Some(invalid_family.to_owned());
+        failing_input.document.body.add_paragraph(later);
+        failing_input.fonts.push(oxml_layout::FontFile {
+            family: invalid_family.to_owned(),
+            data: invalid_bytes,
+        });
+        let mut failing = Engine::with_font_manager(FontManager::new_with_fonts(vec![(
+            valid_family.to_owned(),
+            valid_bytes.to_vec(),
+        )]));
+        assert!(failing.layout(&failing_input).is_err());
+        assert!(failing.header_footer_cache.is_empty());
+        assert_eq!(failing.header_footer_cache_bytes, 0);
+        assert_eq!(failing.header_footer_cache_counts(), (0, 1));
+
+        let mut bounded_input = make_input_with_text("bounded body");
+        let mut bounded_section = CT_SectPr::default_letter();
+        for index in 0..(HEADER_FOOTER_CACHE_MAX_ENTRIES * 2) {
+            let relationship_id = format!("rIdHeader{index:03}");
+            bounded_section.header_refs.push(HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: relationship_id.clone(),
+            });
+            bounded_input.headers.insert(
+                relationship_id,
+                header_footer_part(&format!("bounded header {index:03}")),
+            );
+        }
+        bounded_input.document.body.sect_pr = Some(bounded_section);
+        let mut bounded = Engine::new_deterministic().expect("bundled fonts load");
+        bounded
+            .layout(&bounded_input)
+            .expect("bounded pending layout succeeds");
+        assert_eq!(
+            bounded.header_footer_cache.len(),
+            HEADER_FOOTER_CACHE_MAX_ENTRIES
+        );
+        assert!(bounded.header_footer_cache_bytes <= HEADER_FOOTER_CACHE_MAX_BYTES);
+        assert!(
+            bounded.pending_header_footer_cache_peak_entries <= HEADER_FOOTER_CACHE_MAX_ENTRIES
+        );
+        assert!(bounded.pending_header_footer_cache_peak_bytes <= HEADER_FOOTER_CACHE_MAX_BYTES);
+        assert_eq!(
+            bounded.header_footer_cache_bytes,
+            bounded
+                .header_footer_cache
+                .iter()
+                .map(|entry| entry.bytes)
+                .sum::<usize>()
+        );
+        assert!(
+            bounded.paragraph_cache.len()
+                + bounded.table_cache.len()
+                + bounded.header_footer_cache.len()
+                + bounded
+                    .restart_cache
+                    .as_ref()
+                    .map_or(0, |cache| cache.checkpoints.len())
+                <= CACHE_MAX_ENTRIES
+        );
+        assert!(
+            bounded.paragraph_cache_bytes
+                + bounded.table_cache_bytes
+                + bounded.header_footer_cache_bytes
+                + bounded
+                    .restart_cache
+                    .as_ref()
+                    .map_or(0, |cache| cache.bytes)
+                <= CACHE_MAX_BYTES
+        );
+
+        let one = cacheable_header_footer_input("oversized entry body");
+        let mut oversized = Engine::new_deterministic().expect("bundled fonts load");
+        oversized.layout(&one).expect("prime oversized template");
+        let mut entry = oversized
+            .header_footer_cache
+            .pop_front()
+            .expect("header/footer template retained");
+        let mut oversized_key = oversized
+            .header_footer_cache
+            .pop_front()
+            .expect("second header/footer template retained");
+        oversized.header_footer_cache.clear();
+        oversized.header_footer_cache_bytes = 0;
+        let mut reserved_namespace = String::with_capacity(HEADER_FOOTER_CACHE_MAX_BYTES + 1);
+        reserved_namespace.push('x');
+        oversized_key
+            .key
+            .part
+            .extra_namespaces
+            .push((reserved_namespace, "urn:test".to_owned()));
+        oversized_key.bytes = header_footer_cache_entry_bytes(
+            &oversized_key.key,
+            &oversized_key.content,
+            &oversized_key.diagnostics,
+            &oversized_key.font_trace,
+        );
+        assert!(oversized_key.bytes > HEADER_FOOTER_CACHE_MAX_BYTES);
+        oversized.publish_header_footer_cache_entry(oversized_key);
+        assert!(oversized.header_footer_cache.is_empty());
+        assert_eq!(oversized.header_footer_cache_bytes, 0);
+
+        let text = entry.content.blocks[0]
+            .lines
+            .iter_mut()
+            .flat_map(|line| &mut line.items)
+            .find_map(|item| match item {
+                LineItem::Text(text) => Some(text),
+                _ => None,
+            })
+            .expect("template has text");
+        text.advances = vec![0.0; HEADER_FOOTER_CACHE_MAX_BYTES / 8 + 1];
+        entry.bytes = header_footer_cache_entry_bytes(
+            &entry.key,
+            &entry.content,
+            &entry.diagnostics,
+            &entry.font_trace,
+        );
+        assert!(entry.bytes > HEADER_FOOTER_CACHE_MAX_BYTES);
+        oversized.publish_header_footer_cache_entry(entry);
+        assert!(oversized.header_footer_cache.is_empty());
+        assert_eq!(oversized.header_footer_cache_bytes, 0);
     }
 
     #[test]

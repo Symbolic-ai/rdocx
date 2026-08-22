@@ -481,40 +481,51 @@ font traces also have explicit bounds. Loading a different additional font set
 rebuilds face identity and clears all dependent memo state.
 
 The Word engine caches only ordinary context-independent body paragraphs and
-tables made entirely from direct cache-safe paragraphs. Paragraph keys compare
-the complete typed paragraph, content width, and revision view. A stable
-borrowed `u64` paragraph fingerprint prefilters lookup candidates. The complete
-typed equality remains authoritative after a fingerprint match, so collisions
-cannot serve the wrong block. Hits neither clone the owned key nor refresh its
-queue position. Table keys compare the complete typed table projection,
-content width, revision view, and whether result-local provenance is present.
-The retained-work context separately compares styles, numbering, section
-properties, headers, footers, media, charts, chart theme and colour map, core
-properties, hyperlinks, notes, theme, additional fonts, page background, and
-the document-wide wrapping-drawing state. Numbering, drawings including
-`AlternateContent`, fields, hyperlinks, relationships, media, generated
-markers, nested tables, content controls, preserved producer XML, and other
-traversal-sensitive input bypass reuse. Encountering any such body block
-disables later retained-block reads for that layout, so inserting an earlier
-note or numbering input cannot leave a later generated marker stale. Each
-entry owns its block, diagnostics, and exact bounded font-resolution trace.
+tables made entirely from direct cache-safe paragraphs. It also caches safe
+header and footer variants. Paragraph keys compare the complete typed
+paragraph, content width, and revision view. A stable borrowed `u64` paragraph
+fingerprint prefilters lookup candidates. The complete typed equality remains
+authoritative after a fingerprint match, so collisions cannot serve the wrong
+block. Hits neither clone the owned key nor refresh its queue position. Table
+keys compare the complete typed table projection, content width, revision
+view, and whether result-local provenance is present. Header and footer keys
+compare the story kind, variant, complete section properties and geometry,
+relationship identity, complete typed part, canonical resolved part bytes, and
+whether result-local provenance is present. The retained-work context
+separately compares styles, numbering, section properties, headers, footers,
+media, charts, chart theme and colour map, core properties, hyperlinks, notes,
+theme, additional fonts, page background, and the document-wide
+wrapping-drawing state. Numbering, drawings including `AlternateContent`,
+fields, hyperlinks, relationships, media, generated markers, nested tables,
+content controls, preserved producer XML, and other traversal-sensitive input
+bypass body reuse. Encountering any such body block disables later
+retained-block reads for that layout, so inserting an earlier note or numbering
+input cannot leave a later generated marker stale. Each entry owns its block,
+diagnostics, and exact bounded font-resolution trace. Header and footer parts
+with numbering, drawings, fields, hyperlinks, revisions, content controls,
+generated markers, or other traversal-sensitive state bypass reuse. Supported
+VML watermarks remain reusable because the part, complete section geometry,
+resolved media bytes, and reusable context are all authoritative identity
+inputs.
 
-Retained block and restart state share a 4,160-entry and 64 MiB ceiling.
+Retained block and restart state share a 4,224-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 56 MiB, table blocks receive 32
-entries and 2 MiB, and restart checkpoints receive 32 entries and 2 MiB. The
-remaining 4 MiB stays inside the combined envelope for other engine state. The
-published and transaction-pending block queues enforce the same partitions
-using retained-capacity accounting for owned keys, rows, cells, paragraphs,
-diagnostics, font traces, and reflow buffers. Eviction follows insertion order
-without hit-time queue maintenance. Oversized entries bypass retention.
+entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
+restart checkpoints receive 32 entries and 2 MiB. The published and
+transaction-pending queues enforce the same partitions using retained-capacity
+accounting for owned keys, resolved part bytes, rows, cells, paragraphs,
+watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
+insertion order without hit-time queue maintenance. Oversized entries bypass
+retention.
 
 Cache publication is a whole-layout transaction. A late error publishes none
-of the staged paragraph or table entries. A hit replays diagnostics and the
-font trace without changing insertion order, then rebinds scalar provenance to
-the source node allocated for the current `WordLayoutResult`. After success,
-active faces are retained in first-resolution order and stale faces and entries
-are removed. This makes warm and cold pages, font ids, font bytes, diagnostics,
-revision view, and resolved source provenance equal.
+of the staged paragraph, table, header, or footer entries. A hit replays
+diagnostics and the font trace without changing insertion order, then rebinds
+scalar provenance to the source node allocated for the current
+`WordLayoutResult`. After success, active faces are retained in first-resolution
+order and stale faces and entries are removed. This makes warm and cold pages,
+font ids, font bytes, diagnostics, revision view, and resolved source provenance
+equal.
 
 The engine also records restart checkpoints for one safe section containing
 only one-line or two-line context-independent paragraphs. A checkpoint exists

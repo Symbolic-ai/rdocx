@@ -5663,6 +5663,42 @@ mod tests {
     }
 
     #[test]
+    fn cached_header_footer_warm_equals_cold() {
+        let mut warm_document = Document::new();
+        warm_document.set_header("default cached header");
+        warm_document.set_footer("default cached footer");
+        warm_document.set_first_page_header("first cached header");
+        warm_document.set_first_page_footer("first cached footer");
+        warm_document
+            .set_text_watermark("DRAFT")
+            .expect("watermark is valid");
+        for index in 0..140 {
+            warm_document.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("prime deterministic header/footer engine");
+        warm_document
+            .paragraph_mut(70)
+            .expect("middle paragraph")
+            .add_run(" changed");
+        let fresh_document = warm_document.clone_for_staging();
+
+        let warm = warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("warm deterministic layout");
+        let fresh = fresh_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("cold deterministic layout");
+
+        assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm.layout),
+            oxml_pdf::render_to_pdf(&fresh.layout)
+        );
+    }
+
+    #[test]
     fn staged_mutations_preserve_valid_bundled_fallback_work() {
         let (caller_family, caller_bytes) = caller_only_font();
         let fonts = [(caller_family, caller_bytes.as_slice())];
