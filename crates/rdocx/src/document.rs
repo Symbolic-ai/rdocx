@@ -5663,6 +5663,46 @@ mod tests {
     }
 
     #[test]
+    fn substituted_page_reuse_keeps_pdf_and_raster_backends_identical() {
+        let mut warm_document = Document::new();
+        let mut fields = CT_P::new();
+        for instruction in ["PAGE", "NUMPAGES"] {
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(Field::new(instruction, "cached"))];
+            fields.runs.push(run);
+        }
+        warm_document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(fields));
+        for index in 0..140 {
+            warm_document.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        let fresh_document = warm_document.clone_for_staging();
+
+        warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("prime substituted pages");
+        let warm = warm_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("warm substituted pages");
+        let fresh = fresh_document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .expect("cold substituted pages");
+
+        assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm.layout),
+            oxml_pdf::render_to_pdf(&fresh.layout)
+        );
+        assert_eq!(
+            oxml_pdf::render_all_pages(&warm.layout, 72.0),
+            oxml_pdf::render_all_pages(&fresh.layout, 72.0)
+        );
+    }
+
+    #[test]
     fn cached_header_footer_warm_equals_cold() {
         let mut warm_document = Document::new();
         warm_document.set_header("default cached header");

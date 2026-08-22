@@ -559,10 +559,21 @@ struct RestartCache {
     with_provenance: bool,
     raw_pages: Vec<Arc<PageFrame>>,
     pages: Vec<Arc<PageFrame>>,
+    substitution_inputs: Vec<Option<FieldSubstitutionInputs>>,
     outlines: Vec<oxml_layout::OutlineEntry>,
     checkpoints: Vec<paginator::PaginationCheckpoint>,
     font_trace: Vec<FontId>,
     bytes: usize,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct FieldSubstitutionInputs {
+    page_index: usize,
+    page_number: usize,
+    total_pages: usize,
+    bookmark_pages: Vec<(usize, usize)>,
+    font_identity: Vec<FontId>,
+    revision_view: RevisionView,
 }
 
 const CACHE_MAX_ENTRIES: usize = 4_224;
@@ -800,6 +811,7 @@ impl Engine {
         input: &LayoutInput,
         sources: Option<&SourceRegistry>,
     ) -> Result<LayoutResult> {
+        let retained_context_matches = self.paragraph_cache_reads_enabled;
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
         let media = MediaRegistry::new(&input.images);
@@ -957,8 +969,8 @@ impl Engine {
             .iter()
             .map(|content| format!("{content:?}"))
             .collect::<Vec<_>>();
-        let font_trace = self.font_manager.current_layout_fonts().to_vec();
-        let restart_eligible = sections.len() == 1
+        let mut font_trace = self.font_manager.current_layout_fonts().to_vec();
+        let restart_record_eligible = sections.len() == 1
             && input.document.background_xml.is_none()
             && input.footnotes.is_none()
             && input.endnotes.is_none()
@@ -967,14 +979,17 @@ impl Engine {
             && input.document.body.content.iter().all(|content| {
                 matches!(content, BodyContent::Paragraph(_) | BodyContent::Table(_))
             })
-            && sections[0].blocks.iter().all(restart_block_is_safe);
-        let reusable_restart = restart_eligible
-            && self.paragraph_cache_reads_enabled
+            && sections[0].blocks.iter().all(restart_record_block_is_safe);
+        let restart_eligible =
+            restart_record_eligible && sections[0].blocks.iter().all(restart_block_is_safe);
+        let reusable_restart_record = restart_record_eligible
+            && retained_context_matches
             && self.restart_cache.as_ref().is_some_and(|cache| {
                 cache.font_trace == font_trace
                     && cache.with_provenance == sources.is_some()
                     && (sources.is_none() || cache.body.len() == body.len())
             });
+        let reusable_restart = restart_eligible && reusable_restart_record;
         let first_changed = reusable_restart.then(|| {
             let cache = self.restart_cache.as_ref().expect("restart cache exists");
             body.iter()
@@ -1107,8 +1122,17 @@ impl Engine {
         // body page rather than sitting at the foot of their reference's page.
         paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
 
-        let mut raw_pages =
-            restart_eligible.then(|| pages.iter().cloned().map(Arc::new).collect::<Vec<_>>());
+        apply_page_background(&mut pages, input);
+
+        let mut pages = pages.into_iter().map(Arc::new).collect::<Vec<_>>();
+        if reusable_restart_record && let Some(cache) = self.restart_cache.as_ref() {
+            for (page, retained) in pages.iter_mut().zip(&cache.raw_pages) {
+                if page_frames_equal(page, retained) {
+                    *page = Arc::clone(retained);
+                }
+            }
+        }
+        let mut raw_pages = restart_record_eligible.then(|| pages.clone());
 
         // Post-pagination pass: record bookmark targets and substitute fields.
         let total_pages = pages.len();
@@ -1126,7 +1150,50 @@ impl Engine {
                 })
             })
             .collect::<HashMap<_, _>>();
-        for page in &mut pages {
+        let mut bookmark_identity = bookmark_pages
+            .iter()
+            .map(|(&target, &page_number)| (target, page_number))
+            .collect::<Vec<_>>();
+        bookmark_identity.sort_unstable();
+        let mut substitution_inputs = Vec::with_capacity(pages.len());
+        let mut reuse_result_pages = vec![false; pages.len()];
+        for (page_index, page) in pages.iter_mut().enumerate() {
+            if !page_has_substitution_state(page) {
+                reuse_result_pages[page_index] = self.restart_cache.as_ref().is_some_and(|cache| {
+                    cache.substitution_inputs.get(page_index) == Some(&None)
+                        && cache
+                            .raw_pages
+                            .get(page_index)
+                            .is_some_and(|retained| Arc::ptr_eq(page, retained))
+                });
+                substitution_inputs.push(None);
+                continue;
+            }
+            let inputs = FieldSubstitutionInputs {
+                page_index,
+                page_number: page.page_number,
+                total_pages,
+                bookmark_pages: bookmark_identity.clone(),
+                font_identity: font_trace.clone(),
+                revision_view: input.revision_view,
+            };
+            let reusable = self.restart_cache.as_ref().is_some_and(|cache| {
+                cache
+                    .substitution_inputs
+                    .get(page_index)
+                    .and_then(Option::as_ref)
+                    == Some(&inputs)
+                    && cache
+                        .raw_pages
+                        .get(page_index)
+                        .is_some_and(|retained| Arc::ptr_eq(page, retained))
+            });
+            if reusable {
+                reuse_result_pages[page_index] = true;
+                substitution_inputs.push(Some(inputs));
+                continue;
+            }
+            let page = Arc::make_mut(page);
             let page_num = page.page_number;
             substitute_fields(
                 &mut page.elements,
@@ -1135,30 +1202,9 @@ impl Engine {
                 &bookmark_pages,
                 &mut self.font_manager,
             );
+            substitution_inputs.push(Some(inputs));
         }
 
-        // Post-pagination pass: apply page background color
-        apply_page_background(&mut pages, input);
-
-        // Remap persistent manager ids to result-local ids and omit faces that
-        // are no longer present in the current layout.
-        let fonts = if self.font_manager.every_loaded_font_is_current() {
-            self.font_manager.all_font_data()
-        } else {
-            let current_fonts = self.font_manager.current_layout_fonts().to_vec();
-            canonicalize_layout_fonts(&mut pages, &self.font_manager, &current_fonts)?
-        };
-
-        // Convert core properties to document metadata
-        let metadata = input.core_properties.as_ref().map(|cp| DocumentMetadata {
-            title: cp.title.clone(),
-            author: cp.creator.clone(),
-            subject: cp.subject.clone(),
-            keywords: cp.keywords.clone(),
-            creator: Some("rdocx".to_string()),
-        });
-
-        let mut pages = pages.into_iter().map(Arc::new).collect::<Vec<_>>();
         #[cfg(test)]
         {
             self.last_rebuilt_page_range = Some(0..pages.len());
@@ -1169,9 +1215,9 @@ impl Engine {
         {
             let mut rebuilt_start = pages.len();
             let mut rebuilt_end = 0;
-            for (page_index, (page, retained)) in pages.iter_mut().zip(&cache.pages).enumerate() {
+            for (page_index, (page, retained)) in pages.iter().zip(&cache.raw_pages).enumerate() {
                 if page_frames_equal(page, retained) {
-                    *page = Arc::clone(retained);
+                    reuse_result_pages[page_index] = true;
                 } else {
                     rebuilt_start = rebuilt_start.min(page_index);
                     rebuilt_end = page_index + 1;
@@ -1195,27 +1241,64 @@ impl Engine {
                 let _ = rebuilt_range;
             }
         }
-        if restart_eligible
-            && checkpoints.len() <= RESTART_CACHE_MAX_ENTRIES
+        // Remap persistent manager ids to result-local ids and omit faces that
+        // are no longer present in the current layout.
+        let fonts = if self.font_manager.every_loaded_font_is_current() {
+            self.font_manager.all_font_data()
+        } else {
+            let current_fonts = self.font_manager.current_layout_fonts().to_vec();
+            canonicalize_layout_fonts(&mut pages, &self.font_manager, &current_fonts)?
+        };
+        if let Some(cache) = self.restart_cache.as_ref() {
+            for (page_index, reuse) in reuse_result_pages.into_iter().enumerate() {
+                if reuse && let Some(retained) = cache.pages.get(page_index) {
+                    pages[page_index] = Arc::clone(retained);
+                }
+            }
+        }
+        let mut retained_pages = restart_record_eligible.then(|| pages.clone());
+
+        // Convert core properties to document metadata
+        let metadata = input.core_properties.as_ref().map(|cp| DocumentMetadata {
+            title: cp.title.clone(),
+            author: cp.creator.clone(),
+            subject: cp.subject.clone(),
+            keywords: cp.keywords.clone(),
+            creator: Some("rdocx".to_string()),
+        });
+
+        if restart_record_eligible
+            && pages.len().max(checkpoints.len()) <= RESTART_CACHE_MAX_ENTRIES
             && let Some(raw_pages) = raw_pages.as_mut()
+            && let Some(retained_pages) = retained_pages.as_mut()
         {
             body.shrink_to_fit();
             raw_pages.shrink_to_fit();
-            pages.shrink_to_fit();
+            retained_pages.shrink_to_fit();
+            substitution_inputs.shrink_to_fit();
             outlines.shrink_to_fit();
             checkpoints.shrink_to_fit();
-            let bytes = restart_cache_bytes(&body, raw_pages, &pages, &outlines, &checkpoints);
+            font_trace.shrink_to_fit();
+            let mut candidate = RestartCache {
+                body,
+                with_provenance: sources.is_some(),
+                raw_pages: std::mem::take(raw_pages),
+                pages: std::mem::take(retained_pages),
+                substitution_inputs,
+                outlines: outlines.clone(),
+                checkpoints,
+                font_trace,
+                bytes: 0,
+            };
+            candidate.outlines.shrink_to_fit();
+            for inputs in candidate.substitution_inputs.iter_mut().flatten() {
+                inputs.bookmark_pages.shrink_to_fit();
+                inputs.font_identity.shrink_to_fit();
+            }
+            let bytes = restart_cache_bytes(&candidate);
             if bytes <= RESTART_CACHE_MAX_BYTES {
-                self.restart_cache = Some(RestartCache {
-                    body,
-                    with_provenance: sources.is_some(),
-                    raw_pages: std::mem::take(raw_pages),
-                    pages: pages.clone(),
-                    outlines: outlines.clone(),
-                    checkpoints,
-                    font_trace,
-                    bytes,
-                });
+                candidate.bytes = bytes;
+                self.restart_cache = Some(candidate);
             } else {
                 self.restart_cache = None;
             }
@@ -1478,10 +1561,7 @@ impl Engine {
         }
         self.table_cache_bytes += entry.bytes;
         self.table_cache.push_back(entry);
-        let restart_entries = self
-            .restart_cache
-            .as_ref()
-            .map_or(0, |cache| cache.checkpoints.len());
+        let restart_entries = self.restart_cache.as_ref().map_or(0, restart_cache_entries);
         let restart_bytes = self.restart_cache.as_ref().map_or(0, |cache| cache.bytes);
         debug_assert!(
             self.paragraph_cache.len() + self.table_cache.len() + restart_entries
@@ -1544,10 +1624,7 @@ impl Engine {
         }
         self.header_footer_cache_bytes += entry.bytes;
         self.header_footer_cache.push_back(entry);
-        let restart_entries = self
-            .restart_cache
-            .as_ref()
-            .map_or(0, |cache| cache.checkpoints.len());
+        let restart_entries = self.restart_cache.as_ref().map_or(0, restart_cache_entries);
         let restart_bytes = self.restart_cache.as_ref().map_or(0, |cache| cache.bytes);
         debug_assert!(
             self.paragraph_cache.len()
@@ -1994,7 +2071,7 @@ fn table_block_retained_bytes(block: &table::TableBlock) -> usize {
 }
 
 fn canonicalize_layout_fonts(
-    pages: &mut [PageFrame],
+    pages: &mut [Arc<PageFrame>],
     font_manager: &FontManager,
     current_fonts: &[FontId],
 ) -> Result<Vec<oxml_layout::FontData>> {
@@ -2051,12 +2128,28 @@ fn canonicalize_layout_fonts(
         fonts.push(font);
     }
     for page in pages {
-        rewrite(&mut page.elements, &remap);
+        rewrite(&mut Arc::make_mut(page).elements, &remap);
     }
     Ok(fonts)
 }
 
 fn restart_block_is_safe(block: &LayoutBlock) -> bool {
+    let LayoutBlock::Paragraph(paragraph) = block else {
+        return false;
+    };
+    restart_record_block_is_safe(block)
+        && paragraph.lines.iter().all(|line| {
+            line.items.iter().all(|item| match item {
+                LineItem::Text(text) | LineItem::Marker(text) => text.field_kind.is_none(),
+                LineItem::Tab {
+                    leader: Some(text), ..
+                } => text.field_kind.is_none(),
+                _ => true,
+            })
+        })
+}
+
+fn restart_record_block_is_safe(block: &LayoutBlock) -> bool {
     let LayoutBlock::Paragraph(paragraph) = block else {
         return false;
     };
@@ -2067,17 +2160,28 @@ fn restart_block_is_safe(block: &LayoutBlock) -> bool {
         && !paragraph.keep_lines
         && paragraph.lines.iter().all(|line| {
             line.items.iter().all(|item| match item {
-                LineItem::Text(text) | LineItem::Marker(text) => {
-                    text.field_kind.is_none() && text.note.is_none()
-                }
+                LineItem::Text(text) | LineItem::Marker(text) => text.note.is_none(),
                 LineItem::Tab {
                     leader: Some(text), ..
-                } => text.field_kind.is_none() && text.note.is_none(),
+                } => text.note.is_none(),
                 LineItem::Tab { leader: None, .. } => true,
                 LineItem::Image { .. } | LineItem::Group { .. } => false,
                 _ => false,
             })
         })
+}
+
+fn page_has_substitution_state(page: &PageFrame) -> bool {
+    page.elements.iter().any(|element| {
+        matches!(
+            element,
+            PositionedElement::Text(run) if run.field_kind.is_some()
+        )
+    })
+}
+
+fn restart_cache_entries(cache: &RestartCache) -> usize {
+    cache.raw_pages.len().max(cache.checkpoints.len())
 }
 
 fn page_frames_equal(left: &PageFrame, right: &PageFrame) -> bool {
@@ -2088,44 +2192,89 @@ fn page_frames_equal(left: &PageFrame, right: &PageFrame) -> bool {
         && left.background == right.background
 }
 
-fn restart_cache_bytes(
-    body: &[String],
-    raw_pages: &[Arc<PageFrame>],
-    pages: &[Arc<PageFrame>],
-    outlines: &[oxml_layout::OutlineEntry],
-    checkpoints: &[paginator::PaginationCheckpoint],
-) -> usize {
-    let body_bytes = body
-        .len()
+fn restart_cache_bytes(cache: &RestartCache) -> usize {
+    let vector_bytes = cache
+        .body
+        .capacity()
         .saturating_mul(std::mem::size_of::<String>())
         .saturating_add(
-            body.iter()
-                .map(String::capacity)
-                .fold(0usize, usize::saturating_add),
-        );
-    let page_bytes = raw_pages
-        .iter()
-        .chain(pages)
-        .map(|page| page_frame_retained_bytes(page))
-        .fold(0usize, usize::saturating_add);
-    let outline_bytes = outlines
-        .len()
-        .saturating_mul(std::mem::size_of::<oxml_layout::OutlineEntry>())
+            cache
+                .raw_pages
+                .capacity()
+                .saturating_add(cache.pages.capacity())
+                .saturating_mul(std::mem::size_of::<Arc<PageFrame>>()),
+        )
         .saturating_add(
-            outlines
-                .iter()
-                .map(|outline| outline.title.capacity())
-                .fold(0usize, usize::saturating_add),
-        );
-    std::mem::size_of::<RestartCache>()
-        .saturating_add(body_bytes)
-        .saturating_add(page_bytes)
-        .saturating_add(outline_bytes)
+            cache
+                .substitution_inputs
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Option<FieldSubstitutionInputs>>()),
+        )
         .saturating_add(
-            checkpoints
-                .len()
+            cache
+                .outlines
+                .capacity()
+                .saturating_mul(std::mem::size_of::<oxml_layout::OutlineEntry>()),
+        )
+        .saturating_add(
+            cache
+                .checkpoints
+                .capacity()
                 .saturating_mul(std::mem::size_of::<paginator::PaginationCheckpoint>()),
         )
+        .saturating_add(
+            cache
+                .font_trace
+                .capacity()
+                .saturating_mul(std::mem::size_of::<FontId>()),
+        );
+    let body_bytes = cache
+        .body
+        .iter()
+        .map(String::capacity)
+        .fold(0usize, usize::saturating_add);
+    debug_assert_eq!(cache.raw_pages.len(), cache.pages.len());
+    let page_bytes = cache
+        .raw_pages
+        .iter()
+        .zip(&cache.pages)
+        .map(|(pristine, substituted)| {
+            let substituted_bytes = if Arc::ptr_eq(pristine, substituted) {
+                0
+            } else {
+                page_frame_retained_bytes(substituted)
+            };
+            page_frame_retained_bytes(pristine).saturating_add(substituted_bytes)
+        })
+        .fold(0usize, usize::saturating_add);
+    let outline_bytes = cache
+        .outlines
+        .iter()
+        .map(|outline| outline.title.capacity())
+        .fold(0usize, usize::saturating_add);
+    let substitution_bytes = cache
+        .substitution_inputs
+        .iter()
+        .filter_map(Option::as_ref)
+        .map(|inputs| {
+            inputs
+                .bookmark_pages
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(usize, usize)>())
+                .saturating_add(
+                    inputs
+                        .font_identity
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<FontId>()),
+                )
+        })
+        .fold(0usize, usize::saturating_add);
+    std::mem::size_of::<RestartCache>()
+        .saturating_add(vector_bytes)
+        .saturating_add(body_bytes)
+        .saturating_add(page_bytes)
+        .saturating_add(substitution_bytes)
+        .saturating_add(outline_bytes)
 }
 
 fn page_frame_retained_bytes(page: &PageFrame) -> usize {
@@ -6527,6 +6676,305 @@ mod tests {
         })];
     }
 
+    fn substituted_restart_input() -> LayoutInput {
+        let mut input = restart_input();
+        let BodyContent::Paragraph(fields) = &mut input.document.body.content[0] else {
+            panic!("body entry is a paragraph");
+        };
+        for (instruction, display) in [
+            ("PAGE", "page"),
+            ("NUMPAGES", "pages"),
+            ("PAGEREF destination", "target"),
+        ] {
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(Field::new(instruction, display))];
+            fields.runs.push(run);
+        }
+        let BodyContent::Paragraph(target) = &mut input.document.body.content[100] else {
+            panic!("body entry is a paragraph");
+        };
+        assert!(target.insert_bookmark_start(0, 46, "destination"));
+        assert!(target.insert_bookmark_end(1, 46));
+        input
+    }
+
+    fn substituted_page_index(engine: &Engine) -> usize {
+        engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained")
+            .substitution_inputs
+            .iter()
+            .position(Option::is_some)
+            .expect("field page retained")
+    }
+
+    #[test]
+    fn unchanged_page_fields_reuse_substituted_frames() {
+        let input = substituted_restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let first = engine.layout(&input).expect("initial field layout");
+        let field_page = substituted_page_index(&engine);
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained");
+        assert!(
+            retained.checkpoints.is_empty(),
+            "field pages remain excluded from pagination restart"
+        );
+        assert!(!Arc::ptr_eq(
+            &retained.raw_pages[field_page],
+            &retained.pages[field_page]
+        ));
+        assert!(
+            retained
+                .raw_pages
+                .iter()
+                .zip(&retained.pages)
+                .zip(&retained.substitution_inputs)
+                .filter(|(_, inputs)| inputs.is_none())
+                .all(|((pristine, substituted), _)| Arc::ptr_eq(pristine, substituted))
+        );
+
+        let warm = engine.layout(&input).expect("warm field layout");
+        assert!(Arc::ptr_eq(
+            &first.pages[field_page],
+            &warm.pages[field_page]
+        ));
+    }
+
+    #[test]
+    fn changed_substitution_context_reshapes_pages() {
+        fn assert_retained_key_miss(
+            label: &str,
+            mutate: impl FnOnce(&mut FieldSubstitutionInputs),
+        ) {
+            let input = substituted_restart_input();
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            let first = engine.layout(&input).expect("initial field layout");
+            let field_page = substituted_page_index(&engine);
+            let retained = engine
+                .restart_cache
+                .as_mut()
+                .expect("restart record retained");
+            mutate(
+                retained.substitution_inputs[field_page]
+                    .as_mut()
+                    .expect("field inputs retained"),
+            );
+            let warm = engine.layout(&input).expect("warm field layout");
+            let cold = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .expect("cold field layout");
+            assert_layout_results_equal(&warm, &cold);
+            assert!(
+                !Arc::ptr_eq(&first.pages[field_page], &warm.pages[field_page]),
+                "{label}"
+            );
+        }
+
+        assert_retained_key_miss("page index must miss", |inputs| inputs.page_index += 1);
+        assert_retained_key_miss("displayed page number must miss", |inputs| {
+            inputs.page_number += 1;
+        });
+        assert_retained_key_miss("page count must miss", |inputs| inputs.total_pages += 1);
+        assert_retained_key_miss("bookmark targets must miss", |inputs| {
+            inputs.bookmark_pages.push((usize::MAX, usize::MAX));
+        });
+        assert_retained_key_miss("font identity must miss", |inputs| {
+            inputs.font_identity.reverse();
+            inputs.font_identity.push(FontId(u32::MAX));
+        });
+        assert_retained_key_miss("revision view must miss", |inputs| {
+            inputs.revision_view = RevisionView::Tracked;
+        });
+
+        let mut input = substituted_restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let first = engine.layout(&input).expect("initial field layout");
+        let field_page = substituted_page_index(&engine);
+        set_body_paragraph_text(&mut input, 0, "changed pristine field page");
+        let warm = engine.layout(&input).expect("changed pristine layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold changed pristine layout");
+        assert_layout_results_equal(&warm, &cold);
+        assert!(!Arc::ptr_eq(
+            &first.pages[field_page],
+            &warm.pages[field_page]
+        ));
+
+        fn set_field_page_family(input: &mut LayoutInput, family: &str) {
+            let BodyContent::Paragraph(fields) = &mut input.document.body.content[0] else {
+                panic!("body entry is a paragraph");
+            };
+            for run in &mut fields.runs {
+                run.properties = Some(rdocx_oxml::properties::CT_RPr {
+                    font_ascii: Some(family.to_owned()),
+                    font_hansi: Some(family.to_owned()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        let mut input = substituted_restart_input();
+        set_field_page_family(&mut input, "Caladea");
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("first bundled-family layout");
+        set_field_page_family(&mut input, "Carlito");
+        let transitioned = engine.layout(&input).expect("font-transition field layout");
+        let field_page = substituted_page_index(&engine);
+        let field_free_page = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained")
+            .substitution_inputs
+            .iter()
+            .position(Option::is_none)
+            .expect("field-free page retained");
+        let warm = engine.layout(&input).expect("post-transition warm layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("post-transition cold layout");
+        assert_layout_results_equal(&warm, &cold);
+        assert!(Arc::ptr_eq(
+            &transitioned.pages[field_page],
+            &warm.pages[field_page]
+        ));
+        assert!(Arc::ptr_eq(
+            &transitioned.pages[field_free_page],
+            &warm.pages[field_free_page]
+        ));
+    }
+
+    #[test]
+    fn substituted_page_reuse_is_bounded_and_complete_equal() {
+        let input = substituted_restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("initial field layout");
+        let warm = engine.layout(&input).expect("warm field layout");
+        let cold = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("cold field layout");
+        assert_layout_results_equal(&warm, &cold);
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained");
+        assert!(
+            retained.raw_pages.len().max(retained.checkpoints.len()) <= RESTART_CACHE_MAX_ENTRIES
+        );
+        assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
+
+        let mut oversized = make_input_with_text("");
+        oversized.document.body.content.clear();
+        for page in 0..=RESTART_CACHE_MAX_ENTRIES {
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                page_break_before: (page > 0).then_some(true),
+                ..Default::default()
+            });
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
+            paragraph.runs.push(run);
+            oversized.document.body.add_paragraph(paragraph);
+        }
+        let mut bounded = Engine::new_deterministic().expect("bundled fonts load");
+        let result = bounded
+            .layout(&oversized)
+            .expect("oversized layout succeeds");
+        assert_eq!(result.pages.len(), RESTART_CACHE_MAX_ENTRIES + 1);
+        assert!(
+            bounded.restart_cache.is_none(),
+            "an oversized pair set drops the optimization"
+        );
+
+        fn over_limit<T>() -> usize {
+            RESTART_CACHE_MAX_BYTES / std::mem::size_of::<T>() + 1
+        }
+        fn assert_capacity_rejected(label: &str, mutate: impl FnOnce(&mut RestartCache)) {
+            let mut candidate = RestartCache {
+                body: Vec::new(),
+                with_provenance: false,
+                raw_pages: Vec::new(),
+                pages: Vec::new(),
+                substitution_inputs: Vec::new(),
+                outlines: Vec::new(),
+                checkpoints: Vec::new(),
+                font_trace: Vec::new(),
+                bytes: 0,
+            };
+            mutate(&mut candidate);
+            assert!(
+                restart_cache_bytes(&candidate) > RESTART_CACHE_MAX_BYTES,
+                "{label}"
+            );
+        }
+
+        assert_capacity_rejected("body vector capacity is charged", |cache| {
+            cache.body = Vec::with_capacity(over_limit::<String>());
+        });
+        assert_capacity_rejected("pristine page vector capacity is charged", |cache| {
+            cache.raw_pages = Vec::with_capacity(over_limit::<Arc<PageFrame>>());
+        });
+        assert_capacity_rejected("substituted page vector capacity is charged", |cache| {
+            cache.pages = Vec::with_capacity(over_limit::<Arc<PageFrame>>());
+        });
+        assert_capacity_rejected("substitution vector capacity is charged", |cache| {
+            cache.substitution_inputs =
+                Vec::with_capacity(over_limit::<Option<FieldSubstitutionInputs>>());
+        });
+        assert_capacity_rejected("outline vector capacity is charged", |cache| {
+            cache.outlines = Vec::with_capacity(over_limit::<oxml_layout::OutlineEntry>());
+        });
+        assert_capacity_rejected("checkpoint vector capacity is charged", |cache| {
+            cache.checkpoints = Vec::with_capacity(over_limit::<paginator::PaginationCheckpoint>());
+        });
+        assert_capacity_rejected("font trace vector capacity is charged", |cache| {
+            cache.font_trace = Vec::with_capacity(over_limit::<FontId>());
+        });
+        assert_capacity_rejected("body string capacity is charged", |cache| {
+            cache
+                .body
+                .push(String::with_capacity(RESTART_CACHE_MAX_BYTES + 1));
+        });
+        assert_capacity_rejected("outline title capacity is charged", |cache| {
+            cache.outlines.push(oxml_layout::OutlineEntry {
+                title: String::with_capacity(RESTART_CACHE_MAX_BYTES + 1),
+                level: 1,
+                page_index: 0,
+                y_position: 0.0,
+            });
+        });
+        for nested in ["bookmark targets", "font identity"] {
+            assert_capacity_rejected(&format!("{nested} capacity is charged"), |cache| {
+                cache
+                    .substitution_inputs
+                    .push(Some(FieldSubstitutionInputs {
+                        page_index: 0,
+                        page_number: 1,
+                        total_pages: 1,
+                        bookmark_pages: if nested == "bookmark targets" {
+                            Vec::with_capacity(over_limit::<(usize, usize)>())
+                        } else {
+                            Vec::new()
+                        },
+                        font_identity: if nested == "font identity" {
+                            Vec::with_capacity(over_limit::<FontId>())
+                        } else {
+                            Vec::new()
+                        },
+                        revision_view: RevisionView::Accepted,
+                    }));
+            });
+        }
+    }
+
     #[test]
     fn warm_restart_rebuilds_only_the_bounded_changed_region() {
         let mut input = restart_input();
@@ -6651,7 +7099,16 @@ mod tests {
         let mut field_run = CT_R::new("");
         field_run.content = vec![RunContent::Field(rdocx_oxml::text::Field::new("PAGE", "1"))];
         paragraph.runs.push(field_run);
-        assert_fallback("field", field);
+        let mut field_engine = Engine::new_deterministic().expect("bundled fonts load");
+        field_engine.layout(&field).expect("field layout");
+        let retained = field_engine
+            .restart_cache
+            .as_ref()
+            .expect("field substitution pairs retained");
+        assert!(
+            retained.checkpoints.is_empty(),
+            "fields must not become pagination restart boundaries"
+        );
 
         let mut header_footer = restart_input();
         let mut section = CT_SectPr::default_letter();

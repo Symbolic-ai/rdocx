@@ -511,7 +511,7 @@ inputs.
 Retained block and restart state share a 4,224-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 56 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
-restart checkpoints receive 32 entries and 2 MiB. The published and
+aligned restart page and checkpoint slots receive 32 entries and 2 MiB. The published and
 transaction-pending queues enforce the same partitions using retained-capacity
 accounting for owned keys, resolved part bytes, rows, cells, paragraphs,
 watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
@@ -540,6 +540,17 @@ suffix all match exactly. The old raw pagination tail is then reused, and final
 page frames are shared only after their canonicalized content compares equal.
 If any equality or capacity check fails, pagination continues through the
 normal full path.
+
+The same restart record retains aligned pristine and field-substituted page
+pairs. PAGE, NUMPAGES, and PAGEREF pages bypass reshaping only when exact page
+content first recovers the retained pristine `Arc`, then page index, displayed
+page number, total-page count, sorted bookmark targets, font trace, revision
+view, and every substitution input compare equal. Field-free output shares its
+pristine `Arc` directly. Field-bearing blocks still receive no pagination
+checkpoint, so this optimization cannot widen the restart-safe region. Page
+pairs and checkpoints occupy aligned slots inside the 32-entry partition, and
+all pair payloads and exact inputs count toward its 2 MiB ceiling. A mismatch
+reshapes the page. A bound failure drops the whole restart record.
 
 `Document::transfer_reusable_layout_from` builds the receiver input before it
 takes anything. It moves the source's normal engine only when that complete

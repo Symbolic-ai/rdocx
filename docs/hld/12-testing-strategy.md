@@ -189,6 +189,15 @@ Multi-section content, tables, split paragraphs, floating drawings, note
 continuations, keep constraints, headers, footers, backgrounds, and mismatched
 boundary state must use the full paginator.
 
+The substituted-page regression gate proves that unchanged PAGE, NUMPAGES, and
+PAGEREF pages reuse their prior substituted frame only through pristine `Arc`
+identity and a complete exact substitution key. Focused mismatches cover page
+index, displayed page number, total-page count, bookmark targets, pristine
+content, font identity, and revision view. Field-bearing blocks retain zero
+pagination checkpoints. Field-free pairs share one frame, oversized pair sets
+drop the record, and warm output, PDF bytes, and raster pages equal a fresh
+deterministic engine. The unchanged hash harness covers the sample backend set.
+
 The safe-table cache gate proves an unchanged direct table hits, diagnostics
 and font traces replay, and provenance rebinds after an earlier body insertion.
 Numbering and other traversal-sensitive table content bypass the cache. A late

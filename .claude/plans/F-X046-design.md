@@ -1,6 +1,6 @@
 # F-X046, Reuse substituted pages exactly
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: S
 **Depends on**: F-X040
@@ -23,9 +23,11 @@ memory bound.
 Extend the existing bounded restart record with exact pristine and substituted
 page pairs. A page may bypass field reshaping only when its pristine `Arc`
 identity, page index, total-page count, bookmark targets, font identity,
-revision view, and complete substitution input match. Pages without fields
+displayed page number, revision view, and complete substitution input match. Pages without fields
 remain shared directly. Count retained pairs inside the existing 32-entry and
 2 MiB restart budget, and drop the optimization on any mismatch or eviction.
+Field-bearing blocks remain excluded from pagination restart. Their pair record
+therefore carries zero checkpoints and cannot broaden F-X040's safe boundary.
 
 ## Rejected alternatives
 
@@ -38,7 +40,7 @@ remain shared directly. Count retained pairs inside the existing 32-entry and
 | Category | Test | Asserts |
 |---|---|---|
 | regression | `unchanged_page_fields_reuse_substituted_frames` | Stable PAGE, NUMPAGES, and PAGEREF pages reuse their prior substituted `Arc`. |
-| regression | `changed_substitution_context_reshapes_pages` | Page count, bookmark target, pristine content, font, or revision changes miss. |
+| regression | `changed_substitution_context_reshapes_pages` | Page index, displayed page number, page count, bookmark target, pristine content, font, or revision changes miss. |
 | regression | `substituted_page_reuse_is_bounded_and_complete_equal` | Field-free pages stay shared, eviction respects restart limits, and warm and cold outputs match completely. |
 
 The test gate is **regression**. Deterministic PDF and raster output and the
@@ -61,10 +63,10 @@ substitution state.
 
 ## Implementation checklist
 
-- [ ] Record exact substitution inputs beside retained page pairs.
-- [ ] Reuse before shaping only under complete identity.
-- [ ] Charge retained pairs to the restart budget.
-- [ ] Add field hit, mismatch, eviction, warm-cold, backend, and hash tests.
+- [x] Record exact substitution inputs beside retained page pairs.
+- [x] Reuse before shaping only under complete identity.
+- [x] Charge retained pairs to the restart budget.
+- [x] Add field hit, mismatch, eviction, warm-cold, backend, and hash tests.
 
 ## Open questions
 
