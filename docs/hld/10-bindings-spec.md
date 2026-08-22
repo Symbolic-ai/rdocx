@@ -204,9 +204,12 @@ side-effect free.
 When native callers enable the default-off `agile-encryption` feature,
 `Document::open_encrypted`, `Document::from_encrypted_bytes`, and the bounded
 bytes variant open password-protected OOXML through the shared package layer.
-These constructors are additive and unavailable without the feature. Python,
-WASM, and CLI manifests do not enable the feature, so their API and dependency
-graphs remain unchanged.
+`Document::save_encrypted` and `Document::to_encrypted_bytes` write the shared
+fixed Agile profile after staging a cloned document and package. A failed save
+does not mutate the live document, and the file API publishes through a
+sibling temporary file. These additive native APIs are unavailable without
+the feature. Python, WASM, and CLI manifests do not enable the feature, so
+their API and dependency graphs remain unchanged.
 
 When native callers enable the default-off `digital-signatures` feature,
 `Document::verify_signatures` directly returns the shared package verification

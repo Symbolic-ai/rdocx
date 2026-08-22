@@ -85,8 +85,8 @@ on CI runners as it always would have.
 
 | Crate | Feature | Default | Notes |
 |---|---|---|---|
-| `oxml-opc` | `agile-encryption` | off | Adds native read support for password-protected OOXML packages |
-| `rdocx` | `agile-encryption` | off | Forwards encrypted native document opens to `oxml-opc` |
+| `oxml-opc` | `agile-encryption` | off | Adds native read and fixed-profile write support for password-protected OOXML packages |
+| `rdocx` | `agile-encryption` | off | Forwards encrypted native document opens and saves to `oxml-opc` |
 | `oxml-opc` | `digital-signatures` | off | Adds read-only OPC signature verification and coverage reports |
 | `rdocx` | `digital-signatures` | off | Forwards native signature verification to `oxml-opc` |
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
@@ -489,7 +489,8 @@ artifact.
 
 `deny.toml` keeps the unused ZIP codec bans (`zstd`, `bzip2`, `lzma-rust2`, and
 `ppmd-rust`) across the workspace, since `zip` is in every graph through
-`oxml-opc`. AES, CBC, CFB, HMAC, and SHA dependencies have the named
+`oxml-opc`. AES, CBC, CFB, HMAC, SHA, and operating-system randomness
+dependencies have the named
 default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
 Python, WASM, or CLI graphs.
 Ring, SHA-256, base64, and X.509 parsing have the named default-off

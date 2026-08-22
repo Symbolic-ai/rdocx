@@ -316,13 +316,13 @@ relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
 
-The default-off `oxml-opc/agile-encryption` feature adds read-only constructors
-for password-protected OOXML packages. They parse the CFB `EncryptionInfo` and
+The default-off `oxml-opc/agile-encryption` feature reads and writes
+password-protected OOXML packages. Readers parse the CFB `EncryptionInfo` and
 `EncryptedPackage` streams, accept namespace aliases, and reject elements that
-violate the Agile descriptor sequence. Supported combinations are AES-CBC with
-128, 192, or 256-bit keys and SHA-1, SHA-256, SHA-384, or SHA-512. Descriptor
-sizes, salt lengths, spin counts, ciphertext lengths, and algorithm names are
-validated before expensive work begins.
+violate the Agile descriptor sequence. Supported read combinations are
+AES-CBC with 128, 192, or 256-bit keys and SHA-1, SHA-256, SHA-384, or SHA-512.
+Descriptor sizes, salt lengths, spin counts, ciphertext lengths, and algorithm
+names are validated before expensive work begins.
 
 Password verification releases no package key on failure. A matching password
 decrypts the data-integrity material and authenticates the complete encrypted
@@ -333,6 +333,19 @@ limits without adding a whole-package ciphertext buffer. Word emits a
 hash-sized encrypted HMAC key, while the ECMA shape permits a salt-sized key,
 so both validated lengths are accepted. Integrity, truncation, or length
 failure is reported before ZIP parsing and leaves no partially opened package.
+
+The writer stages the deterministic OPC ZIP and the complete CFB envelope
+before publishing bytes. Its fixed profile is AES-256-CBC, SHA-512, 100,000
+password iterations, 4096-byte encrypted package segments, and an HMAC over
+the size-prefixed encrypted package stream. Every save draws independent
+salts, package key, verifier, and HMAC key from the operating system random
+source. `EncryptionInfo` uses schema child order. The version 3 CFB also
+contains the complete DataSpaces map, definition, and strong-encryption
+transform streams expected by Microsoft Word. Validation, random-source,
+serialization, encryption, authentication, or staging failure leaves the live
+package unchanged. The package API reserves capacity for the complete envelope
+before appending it to the caller's byte buffer. A failed reserve or staging
+step leaves existing output bytes unchanged.
 
 The default-off `oxml-opc/digital-signatures` feature discovers signature
 origins and signature parts only through normalized internal package

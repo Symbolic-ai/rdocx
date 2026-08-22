@@ -1,8 +1,8 @@
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
 use aes::{Aes128, Aes192, Aes256};
 use base64::prelude::{BASE64_STANDARD, Engine as _};
-use cbc::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::NoPadding};
+use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::NoPadding};
 use hmac::{Hmac, KeyInit, Mac};
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -24,6 +24,13 @@ const MAX_ENCRYPTION_INFO_BYTES: u64 = 1_048_576;
 const MAX_SALT_BYTES: usize = 65_536;
 const MAX_SPIN_COUNT: u32 = 10_000_000;
 const PACKAGE_SEGMENT_BYTES: usize = 4_096;
+const WRITE_KEY_BITS: u16 = 256;
+const WRITE_SALT_BYTES: usize = 16;
+const WRITE_SPIN_COUNT: u32 = 100_000;
+const WRITE_HASH: HashAlgorithm = HashAlgorithm::Sha512;
+const DATA_SPACES_STORAGE: &str = "/\u{6}DataSpaces";
+const STRONG_ENCRYPTION_DATA_SPACE: &str = "StrongEncryptionDataSpace";
+const STRONG_ENCRYPTION_TRANSFORM: &str = "StrongEncryptionTransform";
 
 const VERIFIER_INPUT_BLOCK_KEY: [u8; 8] = [0xfe, 0xa7, 0xd2, 0x76, 0x3b, 0x4b, 0x9e, 0x79];
 const VERIFIER_HASH_BLOCK_KEY: [u8; 8] = [0xd7, 0xaa, 0x0f, 0x6d, 0x30, 0x61, 0x34, 0x4e];
@@ -102,7 +109,6 @@ impl HashAlgorithm {
         }
     }
 
-    #[cfg(test)]
     fn name(self) -> &'static str {
         match self {
             Self::Sha1 => "SHA1",
@@ -344,6 +350,201 @@ impl EncryptionDescriptor {
         }
         Ok(())
     }
+
+    fn to_stream(&self) -> Result<Vec<u8>> {
+        let xml = format!(
+            concat!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+                r#"<encryption xmlns="http://schemas.microsoft.com/office/2006/encryption" xmlns:p="http://schemas.microsoft.com/office/2006/keyEncryptor/password" xmlns:c="http://schemas.microsoft.com/office/2006/keyEncryptor/certificate">"#,
+                r#"<keyData saltSize="{key_salt_size}" blockSize="16" keyBits="{key_bits}" hashSize="{hash_size}" cipherAlgorithm="AES" cipherChaining="ChainingModeCBC" hashAlgorithm="{key_hash}" saltValue="{key_salt}"/>"#,
+                r#"<dataIntegrity encryptedHmacKey="{hmac_key}" encryptedHmacValue="{hmac_value}"/>"#,
+                r#"<keyEncryptors><keyEncryptor uri="{password_uri}">"#,
+                r#"<p:encryptedKey spinCount="{spin_count}" saltSize="{password_salt_size}" blockSize="16" keyBits="{password_bits}" hashSize="{password_hash_size}" cipherAlgorithm="AES" cipherChaining="ChainingModeCBC" hashAlgorithm="{password_hash}" saltValue="{password_salt}" encryptedVerifierHashInput="{verifier_input}" encryptedVerifierHashValue="{verifier_hash}" encryptedKeyValue="{package_key}"/>"#,
+                r#"</keyEncryptor></keyEncryptors></encryption>"#,
+            ),
+            key_salt_size = self.key_data.salt.len(),
+            key_bits = self.key_data.key_bits,
+            hash_size = self.key_data.hash.output_size(),
+            key_hash = self.key_data.hash.name(),
+            key_salt = BASE64_STANDARD.encode(&self.key_data.salt),
+            hmac_key = BASE64_STANDARD.encode(&self.integrity.encrypted_hmac_key),
+            hmac_value = BASE64_STANDARD.encode(&self.integrity.encrypted_hmac_value),
+            password_uri = PASSWORD_URI,
+            spin_count = self.password.spin_count,
+            password_salt_size = self.password.parameters.salt.len(),
+            password_bits = self.password.parameters.key_bits,
+            password_hash_size = self.password.parameters.hash.output_size(),
+            password_hash = self.password.parameters.hash.name(),
+            password_salt = BASE64_STANDARD.encode(&self.password.parameters.salt),
+            verifier_input = BASE64_STANDARD.encode(&self.password.encrypted_verifier_input),
+            verifier_hash = BASE64_STANDARD.encode(&self.password.encrypted_verifier_hash),
+            package_key = BASE64_STANDARD.encode(&self.password.encrypted_package_key),
+        );
+        let mut stream = Vec::with_capacity(8 + xml.len());
+        stream.extend_from_slice(&AGILE_MAJOR_VERSION.to_le_bytes());
+        stream.extend_from_slice(&AGILE_MINOR_VERSION.to_le_bytes());
+        stream.extend_from_slice(&AGILE_RESERVED.to_le_bytes());
+        stream.extend_from_slice(xml.as_bytes());
+        if stream.len() as u64 > MAX_ENCRYPTION_INFO_BYTES {
+            return Err(OpcError::InvalidEncryptionInfo);
+        }
+        Ok(stream)
+    }
+}
+
+pub(crate) fn write_encrypted_package(
+    output: &mut Vec<u8>,
+    plaintext_zip: &[u8],
+    password: &str,
+) -> Result<()> {
+    let fill_random = |output: &mut [u8]| {
+        getrandom::fill(output).map_err(|error| {
+            OpcError::Io(std::io::Error::other(format!(
+                "operating system random source failed: {error}"
+            )))
+        })
+    };
+    #[cfg(test)]
+    let staged = encrypted_package_bytes_with_random(plaintext_zip, password, fill_random, None)?;
+    #[cfg(not(test))]
+    let staged = encrypted_package_bytes_with_random(plaintext_zip, password, fill_random)?;
+    append_staged_with_reserve(output, &staged, |output, additional| {
+        output.try_reserve(additional).map_err(|error| {
+            OpcError::Io(std::io::Error::other(format!(
+                "failed to reserve encrypted output: {error}"
+            )))
+        })
+    })
+}
+
+fn append_staged_with_reserve(
+    output: &mut Vec<u8>,
+    staged: &[u8],
+    reserve: impl FnOnce(&mut Vec<u8>, usize) -> Result<()>,
+) -> Result<()> {
+    let original_len = output.len();
+    if let Err(error) = reserve(output, staged.len()) {
+        output.truncate(original_len);
+        return Err(error);
+    }
+    if output.len() != original_len {
+        output.truncate(original_len);
+        return Err(OpcError::InvalidEncryptedPackage);
+    }
+    output.extend_from_slice(staged);
+    Ok(())
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct GeneratedSecrets {
+    package_key: Vec<u8>,
+    verifier: Vec<u8>,
+    hmac_key: Vec<u8>,
+}
+
+fn encrypted_package_bytes_with_random(
+    plaintext_zip: &[u8],
+    password: &str,
+    mut fill_random: impl FnMut(&mut [u8]) -> Result<()>,
+    #[cfg(test)] capture: Option<&mut GeneratedSecrets>,
+) -> Result<Vec<u8>> {
+    if password.is_empty() || password.chars().count() > 255 {
+        return Err(OpcError::InvalidPassword);
+    }
+    let plaintext_len =
+        u64::try_from(plaintext_zip.len()).map_err(|_| OpcError::InvalidEncryptedPackage)?;
+    let expected_ciphertext = encrypted_package_ciphertext_len(plaintext_zip.len())?;
+    let _ = expected_ciphertext
+        .checked_add(8)
+        .ok_or(OpcError::InvalidEncryptedPackage)?;
+
+    let mut key_data_salt = [0_u8; WRITE_SALT_BYTES];
+    let mut password_salt = [0_u8; WRITE_SALT_BYTES];
+    let mut package_key = [0_u8; 32];
+    let mut verifier = [0_u8; WRITE_SALT_BYTES];
+    let mut hmac_key = [0_u8; 64];
+    fill_random(&mut key_data_salt)?;
+    fill_random(&mut password_salt)?;
+    fill_random(&mut package_key)?;
+    fill_random(&mut verifier)?;
+    fill_random(&mut hmac_key)?;
+    #[cfg(test)]
+    if let Some(capture) = capture {
+        capture.package_key = package_key.to_vec();
+        capture.verifier = verifier.to_vec();
+        capture.hmac_key = hmac_key.to_vec();
+    }
+
+    let key_data = CipherParameters {
+        salt: key_data_salt.to_vec(),
+        key_bits: WRITE_KEY_BITS,
+        hash: WRITE_HASH,
+    };
+    let password_parameters = CipherParameters {
+        salt: password_salt.to_vec(),
+        key_bits: WRITE_KEY_BITS,
+        hash: WRITE_HASH,
+    };
+    let mut password_encryptor = PasswordKeyEncryptor {
+        parameters: password_parameters.clone(),
+        spin_count: WRITE_SPIN_COUNT,
+        encrypted_verifier_input: Vec::new(),
+        encrypted_verifier_hash: Vec::new(),
+        encrypted_package_key: Vec::new(),
+    };
+    let base_hash = password_hash(password, &password_encryptor)?;
+    let verifier_key =
+        derived_password_key(&base_hash, &VERIFIER_INPUT_BLOCK_KEY, &password_parameters);
+    password_encryptor.encrypted_verifier_input =
+        encrypt_aes_cbc(&verifier, &verifier_key, &password_parameters.salt)?;
+    let verifier_hash_key =
+        derived_password_key(&base_hash, &VERIFIER_HASH_BLOCK_KEY, &password_parameters);
+    password_encryptor.encrypted_verifier_hash = encrypt_aes_cbc(
+        &zero_padded(password_parameters.hash.digest(&verifier))?,
+        &verifier_hash_key,
+        &password_parameters.salt,
+    )?;
+    let package_key_key =
+        derived_password_key(&base_hash, &PACKAGE_KEY_BLOCK_KEY, &password_parameters);
+    password_encryptor.encrypted_package_key =
+        encrypt_aes_cbc(&package_key, &package_key_key, &password_parameters.salt)?;
+
+    let mut encrypted_package = Vec::with_capacity(expected_ciphertext + 8);
+    encrypted_package.extend_from_slice(&plaintext_len.to_le_bytes());
+    for (segment, chunk) in plaintext_zip.chunks(PACKAGE_SEGMENT_BYTES).enumerate() {
+        let segment = u32::try_from(segment).map_err(|_| OpcError::InvalidEncryptedPackage)?;
+        let iv = initialization_vector(&key_data.salt, Some(&segment.to_le_bytes()), key_data.hash);
+        encrypted_package.extend_from_slice(&encrypt_aes_cbc(
+            &zero_padded(chunk.to_vec())?,
+            &package_key,
+            &iv,
+        )?);
+    }
+
+    let mut mac = HmacState::new(key_data.hash, &hmac_key)?;
+    mac.update(&encrypted_package);
+    let hmac_value = mac.finalize();
+    let integrity = DataIntegrity {
+        encrypted_hmac_key: encrypt_aes_cbc(
+            &hmac_key,
+            &package_key,
+            &initialization_vector(&key_data.salt, Some(&HMAC_KEY_BLOCK_KEY), key_data.hash),
+        )?,
+        encrypted_hmac_value: encrypt_aes_cbc(
+            &zero_padded(hmac_value)?,
+            &package_key,
+            &initialization_vector(&key_data.salt, Some(&HMAC_VALUE_BLOCK_KEY), key_data.hash),
+        )?,
+    };
+    let encryption_info = EncryptionDescriptor {
+        key_data,
+        integrity,
+        password: password_encryptor,
+    }
+    .to_stream()?;
+
+    build_compound_file(&encryption_info, &encrypted_package)
 }
 
 pub(crate) fn decrypt_package<R: Read + Seek>(
@@ -609,6 +810,143 @@ fn initialization_vector(salt: &[u8], block_key: Option<&[u8]>, hash: HashAlgori
     iv
 }
 
+fn zero_padded(mut value: Vec<u8>) -> Result<Vec<u8>> {
+    value.resize(round_up(value.len(), 16)?, 0);
+    Ok(value)
+}
+
+fn encrypt_aes_cbc(plaintext: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
+    if plaintext.is_empty() || !plaintext.len().is_multiple_of(16) || iv.len() != 16 {
+        return Err(OpcError::InvalidEncryptionInfo);
+    }
+    let mut ciphertext = plaintext.to_vec();
+    cbc::Encryptor::<Aes256>::new_from_slices(key, iv)
+        .map_err(|_| OpcError::InvalidEncryptionInfo)?
+        .encrypt_padded::<NoPadding>(&mut ciphertext, plaintext.len())
+        .map_err(|_| OpcError::InvalidEncryptionInfo)?;
+    Ok(ciphertext)
+}
+
+fn build_compound_file(encryption_info: &[u8], encrypted_package: &[u8]) -> Result<Vec<u8>> {
+    let cursor = Cursor::new(Vec::new());
+    let mut compound = cfb::CompoundFile::create_with_version(cfb::Version::V3, cursor)?;
+    compound.create_storage_all(DATA_SPACES_STORAGE)?;
+    compound.create_storage_all(format!("{DATA_SPACES_STORAGE}/DataSpaceInfo"))?;
+    compound.create_storage_all(format!(
+        "{DATA_SPACES_STORAGE}/TransformInfo/{STRONG_ENCRYPTION_TRANSFORM}"
+    ))?;
+    write_compound_stream(
+        &mut compound,
+        &format!("{DATA_SPACES_STORAGE}/Version"),
+        &data_space_version_stream(),
+    )?;
+    write_compound_stream(
+        &mut compound,
+        &format!("{DATA_SPACES_STORAGE}/DataSpaceMap"),
+        &data_space_map_stream(),
+    )?;
+    write_compound_stream(
+        &mut compound,
+        &format!("{DATA_SPACES_STORAGE}/DataSpaceInfo/{STRONG_ENCRYPTION_DATA_SPACE}"),
+        &data_space_definition_stream(),
+    )?;
+    write_compound_stream(
+        &mut compound,
+        &format!("{DATA_SPACES_STORAGE}/TransformInfo/{STRONG_ENCRYPTION_TRANSFORM}/\u{6}Primary"),
+        &transform_primary_stream(),
+    )?;
+    write_compound_stream(&mut compound, "/EncryptionInfo", encryption_info)?;
+    write_compound_stream(&mut compound, "/EncryptedPackage", encrypted_package)?;
+    compound.flush()?;
+    Ok(compound.into_inner().into_inner())
+}
+
+fn write_compound_stream(
+    compound: &mut cfb::CompoundFile<Cursor<Vec<u8>>>,
+    path: &str,
+    value: &[u8],
+) -> Result<()> {
+    compound.create_stream(path)?.write_all(value)?;
+    Ok(())
+}
+
+fn data_space_version_stream() -> Vec<u8> {
+    let mut stream = Vec::new();
+    write_unicode_lp_p4(&mut stream, "Microsoft.Container.DataSpaces");
+    write_version(&mut stream);
+    write_version(&mut stream);
+    write_version(&mut stream);
+    stream
+}
+
+fn data_space_map_stream() -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&1_u32.to_le_bytes());
+    entry.extend_from_slice(&0_u32.to_le_bytes());
+    write_unicode_lp_p4(&mut entry, "EncryptedPackage");
+    write_unicode_lp_p4(&mut entry, STRONG_ENCRYPTION_DATA_SPACE);
+
+    let mut stream = Vec::with_capacity(12 + entry.len());
+    stream.extend_from_slice(&8_u32.to_le_bytes());
+    stream.extend_from_slice(&1_u32.to_le_bytes());
+    stream.extend_from_slice(
+        &u32::try_from(entry.len() + 4)
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
+    stream.extend_from_slice(&entry);
+    stream
+}
+
+fn data_space_definition_stream() -> Vec<u8> {
+    let mut stream = Vec::new();
+    stream.extend_from_slice(&8_u32.to_le_bytes());
+    stream.extend_from_slice(&1_u32.to_le_bytes());
+    write_unicode_lp_p4(&mut stream, STRONG_ENCRYPTION_TRANSFORM);
+    stream
+}
+
+fn transform_primary_stream() -> Vec<u8> {
+    const TRANSFORM_ID: &str = "{FF9A3F03-56EF-4613-BDD5-5A41C1D07246}";
+    const TRANSFORM_NAME: &str = "Microsoft.Container.EncryptionTransform";
+
+    let mut stream = Vec::new();
+    let transform_length = 12 + TRANSFORM_ID.encode_utf16().count() * 2;
+    stream.extend_from_slice(
+        &u32::try_from(transform_length)
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
+    stream.extend_from_slice(&1_u32.to_le_bytes());
+    write_unicode_lp_p4(&mut stream, TRANSFORM_ID);
+    write_unicode_lp_p4(&mut stream, TRANSFORM_NAME);
+    write_version(&mut stream);
+    write_version(&mut stream);
+    write_version(&mut stream);
+    stream.extend_from_slice(&0_u32.to_le_bytes());
+    stream.extend_from_slice(&0_u32.to_le_bytes());
+    stream.extend_from_slice(&0_u32.to_le_bytes());
+    stream.extend_from_slice(&4_u32.to_le_bytes());
+    stream
+}
+
+fn write_unicode_lp_p4(output: &mut Vec<u8>, value: &str) {
+    let encoded: Vec<u16> = value.encode_utf16().collect();
+    let byte_len = encoded.len().saturating_mul(2);
+    output.extend_from_slice(&u32::try_from(byte_len).unwrap_or(u32::MAX).to_le_bytes());
+    for unit in encoded {
+        output.extend_from_slice(&unit.to_le_bytes());
+    }
+    while !output.len().is_multiple_of(4) {
+        output.push(0);
+    }
+}
+
+fn write_version(output: &mut Vec<u8>) {
+    output.extend_from_slice(&1_u16.to_le_bytes());
+    output.extend_from_slice(&0_u16.to_le_bytes());
+}
+
 fn decrypt_aes_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
     if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) || iv.len() != 16 {
         return Err(OpcError::InvalidEncryptionInfo);
@@ -752,6 +1090,297 @@ mod tests {
 </Relationships>"#;
     const UNMODELLED_XML: &[u8] =
         br#"<x:root xmlns:x="https://example.com/opaque"><x:child flag="keep">raw</x:child></x:root>"#;
+
+    #[test]
+    fn agile_writer_emits_word_profile_parameters() {
+        let package =
+            encrypted_package_bytes_with_random(&test_zip(), PASSWORD, seeded_random(1), None)
+                .unwrap();
+        let mut compound = cfb::CompoundFile::open(Cursor::new(package)).unwrap();
+        assert_eq!(compound.version(), cfb::Version::V3);
+        for path in [
+            "/EncryptionInfo",
+            "/EncryptedPackage",
+            "/\u{6}DataSpaces/Version",
+            "/\u{6}DataSpaces/DataSpaceMap",
+            "/\u{6}DataSpaces/DataSpaceInfo/StrongEncryptionDataSpace",
+            "/\u{6}DataSpaces/TransformInfo/StrongEncryptionTransform/\u{6}Primary",
+        ] {
+            assert!(compound.is_stream(path), "missing CFB stream {path:?}");
+        }
+        let mut info = Vec::new();
+        compound
+            .open_stream("/EncryptionInfo")
+            .unwrap()
+            .read_to_end(&mut info)
+            .unwrap();
+        let descriptor = EncryptionDescriptor::parse(&info).unwrap();
+        assert_eq!(descriptor.key_data.key_bits, 256);
+        assert_eq!(descriptor.key_data.hash, HashAlgorithm::Sha512);
+        assert_eq!(descriptor.key_data.salt.len(), 16);
+        assert_eq!(descriptor.password.parameters.key_bits, 256);
+        assert_eq!(descriptor.password.parameters.hash, HashAlgorithm::Sha512);
+        assert_eq!(descriptor.password.parameters.salt.len(), 16);
+        assert_eq!(descriptor.password.spin_count, 100_000);
+        let xml = std::str::from_utf8(&info[8..]).unwrap();
+        assert!(xml.contains("cipherAlgorithm=\"AES\""));
+        assert!(xml.contains("cipherChaining=\"ChainingModeCBC\""));
+        assert!(xml.contains("hashAlgorithm=\"SHA512\""));
+        let key_data = xml.find("<keyData").unwrap();
+        let integrity = xml.find("<dataIntegrity").unwrap();
+        let encryptors = xml.find("<keyEncryptors").unwrap();
+        assert!(key_data < integrity && integrity < encryptors);
+
+        let version = read_stream(&mut compound, "/\u{6}DataSpaces/Version");
+        let mut version = DataSpaceReader::new(&version);
+        assert_eq!(version.unicode(), "Microsoft.Container.DataSpaces");
+        assert_eq!(version.version(), (1, 0));
+        assert_eq!(version.version(), (1, 0));
+        assert_eq!(version.version(), (1, 0));
+        version.assert_finished();
+
+        let map = read_stream(&mut compound, "/\u{6}DataSpaces/DataSpaceMap");
+        let map_len = map.len();
+        let mut map = DataSpaceReader::new(&map);
+        assert_eq!(map.u32(), 8);
+        assert_eq!(map.u32(), 1);
+        assert_eq!(usize::try_from(map.u32()).unwrap(), map_len - 8);
+        assert_eq!(map.u32(), 1);
+        assert_eq!(map.u32(), 0);
+        assert_eq!(map.unicode(), "EncryptedPackage");
+        assert_eq!(map.unicode(), "StrongEncryptionDataSpace");
+        map.assert_finished();
+
+        let definition = read_stream(
+            &mut compound,
+            "/\u{6}DataSpaces/DataSpaceInfo/StrongEncryptionDataSpace",
+        );
+        let mut definition = DataSpaceReader::new(&definition);
+        assert_eq!(definition.u32(), 8);
+        assert_eq!(definition.u32(), 1);
+        assert_eq!(definition.unicode(), "StrongEncryptionTransform");
+        definition.assert_finished();
+
+        let primary = read_stream(
+            &mut compound,
+            "/\u{6}DataSpaces/TransformInfo/StrongEncryptionTransform/\u{6}Primary",
+        );
+        let mut primary = DataSpaceReader::new(&primary);
+        assert_eq!(primary.u32(), 88);
+        assert_eq!(primary.u32(), 1);
+        assert_eq!(primary.unicode(), "{FF9A3F03-56EF-4613-BDD5-5A41C1D07246}");
+        assert_eq!(primary.unicode(), "Microsoft.Container.EncryptionTransform");
+        assert_eq!(primary.version(), (1, 0));
+        assert_eq!(primary.version(), (1, 0));
+        assert_eq!(primary.version(), (1, 0));
+        assert_eq!(primary.u32(), 0);
+        assert_eq!(primary.u32(), 0);
+        assert_eq!(primary.u32(), 0);
+        assert_eq!(primary.u32(), 4);
+        primary.assert_finished();
+    }
+
+    #[test]
+    fn encrypted_document_decrypts_without_package_loss() {
+        let source = crate::OpcPackage::from_reader(Cursor::new(test_zip())).unwrap();
+        let mut encrypted = Vec::new();
+        source.write_encrypted_to(&mut encrypted, PASSWORD).unwrap();
+        let reopened =
+            crate::OpcPackage::from_encrypted_reader(Cursor::new(encrypted), PASSWORD).unwrap();
+        assert_eq!(reopened.parts, source.parts);
+        assert_eq!(
+            reopened.package_rels.to_xml().unwrap(),
+            source.package_rels.to_xml().unwrap()
+        );
+        assert_eq!(reopened.part_rels.len(), source.part_rels.len());
+        for (part, relationships) in &source.part_rels {
+            assert_eq!(
+                reopened.part_rels[part].to_xml().unwrap(),
+                relationships.to_xml().unwrap()
+            );
+        }
+        assert_eq!(
+            reopened.content_types.to_xml().unwrap(),
+            source.content_types.to_xml().unwrap()
+        );
+    }
+
+    #[test]
+    fn two_encryptions_of_one_package_use_distinct_secrets() {
+        let mut first_secrets = GeneratedSecrets::default();
+        let first = encrypted_package_bytes_with_random(
+            &test_zip(),
+            PASSWORD,
+            seeded_random(7),
+            Some(&mut first_secrets),
+        )
+        .unwrap();
+        let mut second_secrets = GeneratedSecrets::default();
+        let second = encrypted_package_bytes_with_random(
+            &test_zip(),
+            PASSWORD,
+            seeded_random(91),
+            Some(&mut second_secrets),
+        )
+        .unwrap();
+        assert_ne!(first, second);
+        assert_ne!(first_secrets.package_key, second_secrets.package_key);
+        assert_ne!(first_secrets.verifier, second_secrets.verifier);
+        assert_ne!(first_secrets.hmac_key, second_secrets.hmac_key);
+        let (first_descriptor, first_ciphertext) = descriptor_and_ciphertext(&first);
+        let (second_descriptor, second_ciphertext) = descriptor_and_ciphertext(&second);
+        assert_ne!(
+            first_descriptor.key_data.salt,
+            second_descriptor.key_data.salt
+        );
+        assert_ne!(
+            first_descriptor.password.parameters.salt,
+            second_descriptor.password.parameters.salt
+        );
+        assert_ne!(
+            first_descriptor.password.encrypted_package_key,
+            second_descriptor.password.encrypted_package_key
+        );
+        assert_ne!(
+            first_descriptor.password.encrypted_verifier_input,
+            second_descriptor.password.encrypted_verifier_input
+        );
+        assert_ne!(first_ciphertext, second_ciphertext);
+        assert_eq!(
+            decrypt_package(Cursor::new(first), PASSWORD, PackageReadLimits::UNBOUNDED).unwrap(),
+            test_zip()
+        );
+        assert_eq!(
+            decrypt_package(Cursor::new(second), PASSWORD, PackageReadLimits::UNBOUNDED).unwrap(),
+            test_zip()
+        );
+    }
+
+    #[test]
+    fn failed_encryption_leaves_document_and_package_unchanged() {
+        let source = crate::OpcPackage::from_reader(Cursor::new(test_zip())).unwrap();
+        let mut before = Cursor::new(Vec::new());
+        source.write_to(&mut before).unwrap();
+
+        let mut empty_password_output = Vec::new();
+        let error = source
+            .write_encrypted_to(&mut empty_password_output, "")
+            .unwrap_err();
+        assert!(matches!(error, OpcError::InvalidPassword));
+        assert!(empty_password_output.is_empty());
+
+        let rng_error = encrypted_package_bytes_with_random(
+            &test_zip(),
+            PASSWORD,
+            |_| Err(OpcError::Io(std::io::Error::other("injected RNG failure"))),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(rng_error, OpcError::Io(_)));
+        assert!(encrypted_package_ciphertext_len(usize::MAX).is_err());
+
+        let mut reserved_output = b"existing output".to_vec();
+        let reserved_before = reserved_output.clone();
+        let reserve_error = append_staged_with_reserve(
+            &mut reserved_output,
+            b"staged encrypted bytes",
+            |output, _additional| {
+                output.extend_from_slice(b"partial prefix");
+                Err(OpcError::Io(std::io::Error::other(
+                    "injected reserve failure",
+                )))
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(reserve_error, OpcError::Io(_)));
+        assert_eq!(reserved_output, reserved_before);
+        let mut after = Cursor::new(Vec::new());
+        source.write_to(&mut after).unwrap();
+        assert_eq!(after.into_inner(), before.into_inner());
+    }
+
+    fn seeded_random(seed: u8) -> impl FnMut(&mut [u8]) -> Result<()> {
+        let mut next = seed;
+        move |output| {
+            for byte in output {
+                *byte = next;
+                next = next.wrapping_add(17);
+            }
+            Ok(())
+        }
+    }
+
+    fn read_stream<F: Read + Seek>(compound: &mut cfb::CompoundFile<F>, path: &str) -> Vec<u8> {
+        let mut value = Vec::new();
+        compound
+            .open_stream(path)
+            .unwrap()
+            .read_to_end(&mut value)
+            .unwrap();
+        value
+    }
+
+    struct DataSpaceReader<'a> {
+        bytes: &'a [u8],
+        position: usize,
+    }
+
+    impl<'a> DataSpaceReader<'a> {
+        fn new(bytes: &'a [u8]) -> Self {
+            Self { bytes, position: 0 }
+        }
+
+        fn u16(&mut self) -> u16 {
+            let value = u16::from_le_bytes(
+                self.bytes[self.position..self.position + 2]
+                    .try_into()
+                    .unwrap(),
+            );
+            self.position += 2;
+            value
+        }
+
+        fn u32(&mut self) -> u32 {
+            let value = u32::from_le_bytes(
+                self.bytes[self.position..self.position + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            self.position += 4;
+            value
+        }
+
+        fn unicode(&mut self) -> String {
+            let byte_len = usize::try_from(self.u32()).unwrap();
+            assert!(byte_len.is_multiple_of(2));
+            let end = self.position + byte_len;
+            let value = self.bytes[self.position..end]
+                .chunks_exact(2)
+                .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
+                .collect::<Vec<_>>();
+            self.position = end;
+            while !self.position.is_multiple_of(4) {
+                assert_eq!(self.bytes[self.position], 0);
+                self.position += 1;
+            }
+            String::from_utf16(&value).unwrap()
+        }
+
+        fn version(&mut self) -> (u16, u16) {
+            (self.u16(), self.u16())
+        }
+
+        fn assert_finished(&self) {
+            assert_eq!(self.position, self.bytes.len());
+        }
+    }
+
+    fn descriptor_and_ciphertext(package: &[u8]) -> (EncryptionDescriptor, Vec<u8>) {
+        let mut compound = cfb::CompoundFile::open(Cursor::new(package)).unwrap();
+        let info = read_stream(&mut compound, "/EncryptionInfo");
+        let ciphertext = read_stream(&mut compound, "/EncryptedPackage");
+        (EncryptionDescriptor::parse(&info).unwrap(), ciphertext)
+    }
 
     #[test]
     fn agile_parameters_reject_unknown_or_inconsistent_algorithms() {

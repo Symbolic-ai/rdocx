@@ -764,6 +764,26 @@ impl Document {
         Ok(buf.into_inner())
     }
 
+    /// Save a password-protected document using the fixed Agile write profile.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn save_encrypted<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<()> {
+        let bytes = self.to_encrypted_bytes(password)?;
+        write_encrypted_file(path.as_ref(), &bytes)?;
+        Ok(())
+    }
+
+    /// Save a password-protected document to a byte vector.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let mut encrypted = Vec::new();
+        candidate
+            .package
+            .write_encrypted_to(&mut encrypted, password)?;
+        Ok(encrypted)
+    }
+
     /// Write the in-memory document/styles back into the OPC package parts.
     fn flush_to_package(&mut self) -> Result<()> {
         // Serialize document.xml
@@ -4159,6 +4179,90 @@ impl Document {
     }
 }
 
+#[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
+    })?;
+    for attempt in 0..128_u8 {
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(file_name);
+        temporary_name.push(format!(".rdocx-{}-{attempt}.tmp", std::process::id()));
+        let temporary = parent.join(temporary_name);
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = std::io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let result = result.and_then(|()| replace_file(&temporary, path));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate encrypted-save staging file",
+    ))
+}
+
+#[cfg(all(
+    feature = "agile-encryption",
+    not(target_arch = "wasm32"),
+    not(target_os = "windows")
+))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(all(
+    feature = "agile-encryption",
+    not(target_arch = "wasm32"),
+    target_os = "windows"
+))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both path buffers are NUL-terminated and remain alive for the call.
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 impl Default for Document {
     fn default() -> Self {
         Self::new()
@@ -4791,6 +4895,91 @@ mod tests {
         chart.chart.auto_title_deleted = true;
         chart.chart.plot_area = CT_PlotArea::new(vec![plot], axes).expect("valid plot area");
         chart
+    }
+
+    #[cfg(feature = "agile-encryption")]
+    #[test]
+    fn native_encrypted_save_round_trips_without_live_package_mutation() {
+        let mut document = Document::new();
+        document.add_paragraph("F-170 encrypted round trip");
+        let original_parts = document.package.parts.clone();
+        let original_relationships = document.package.package_rels.to_xml().unwrap();
+
+        let error = document.to_encrypted_bytes("").unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Opc(oxml_opc::OpcError::InvalidPassword)
+        ));
+        assert_eq!(document.package.parts, original_parts);
+        assert_eq!(
+            document.package.package_rels.to_xml().unwrap(),
+            original_relationships
+        );
+
+        let encrypted = document.to_encrypted_bytes("rdocx-f170").unwrap();
+        let reopened = Document::from_encrypted_bytes(&encrypted, "rdocx-f170").unwrap();
+        assert_eq!(reopened.text(), "F-170 encrypted round trip\n");
+        assert_eq!(document.package.parts, original_parts);
+        assert_eq!(
+            document.package.package_rels.to_xml().unwrap(),
+            original_relationships
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "rdocx-f170-atomic-save-{}.docx",
+            std::process::id()
+        ));
+        fs::write(&path, b"existing destination").unwrap();
+        assert!(document.save_encrypted(&path, "").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"existing destination");
+        document.save_encrypted(&path, "rdocx-f170").unwrap();
+        let saved = fs::read(&path).unwrap();
+        assert_eq!(
+            Document::from_encrypted_bytes(&saved, "rdocx-f170")
+                .unwrap()
+                .text(),
+            "F-170 encrypted round trip\n"
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "agile-encryption")]
+    #[test]
+    #[ignore = "requires pinned Microsoft Word 16.104 and human password evidence"]
+    fn word_opens_the_written_agile_document() {
+        let plist = "/Applications/Microsoft Word.app/Contents/Info.plist";
+        let version = Command::new("plutil")
+            .args(["-extract", "CFBundleShortVersionString", "raw", plist])
+            .output()
+            .unwrap();
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            WORD_VERSION
+        );
+        let build = Command::new("plutil")
+            .args(["-extract", "CFBundleVersion", "raw", plist])
+            .output()
+            .unwrap();
+        assert!(build.status.success());
+        assert_eq!(String::from_utf8_lossy(&build.stdout).trim(), WORD_BUILD);
+
+        let mut document = Document::new();
+        document.add_paragraph("F-170 Microsoft Word encryption oracle");
+        let path = Path::new("/private/tmp/F-170-word-16.104-encrypted.docx");
+        document.save_encrypted(path, "rdocx-f170").unwrap();
+        assert_eq!(
+            std::env::var("RDOCX_F170_WORD_CORRECT_PASSWORD").as_deref(),
+            Ok("opened"),
+            "open {} in Word {WORD_VERSION} build {WORD_BUILD} with password rdocx-f170, then rerun with RDOCX_F170_WORD_CORRECT_PASSWORD=opened",
+            path.display()
+        );
+        assert_eq!(
+            std::env::var("RDOCX_F170_WORD_WRONG_PASSWORD").as_deref(),
+            Ok("rejected"),
+            "open {} with a wrong password, then rerun with RDOCX_F170_WORD_WRONG_PASSWORD=rejected",
+            path.display()
+        );
     }
 
     fn document_with_minimal_chart() -> Document {

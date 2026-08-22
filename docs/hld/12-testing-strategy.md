@@ -522,6 +522,16 @@ passwords, and proves tampering fails before ZIP parsing. A package-preservation
 round trip also checks that unrelated parts survive after authenticated
 decryption.
 
+Agile encryption writes have separate fixed-profile, round-trip, randomness,
+and failure-atomicity coverage. Tests inspect descriptor child order and every
+required CFB and DataSpaces stream, decrypt through the production reader, and
+compare every part, relationship, content type, and unmodelled XML byte.
+Injected deterministic random sources make secret separation and random-source
+failure testable without replacing the operating system source in production.
+The external gate opens one produced document in pinned Microsoft Word 16.104,
+records correct-password success and wrong-password rejection, and treats both
+outcomes as mandatory manual evidence.
+
 **`oxml-core`**
 - New unit round-trips: `Centipoints::from_pt(18.0).0 == 1800`,
   `Angle::from_degrees(90.0).0 == 5_400_000`,

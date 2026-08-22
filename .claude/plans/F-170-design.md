@@ -1,6 +1,6 @@
 # F-170, Agile encryption, write
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: M
 **Depends on**: F-169
@@ -37,11 +37,13 @@ HMAC. Serialize the ordinary OPC ZIP into a staging buffer, encrypt it in
 `EncryptionInfo`, `EncryptedPackage`, and `DataSpaces` streams only after every
 input and output size has been checked.
 
-Expose `OpcPackage::write_encrypted_to(writer, password)` and native
-`Document::save_encrypted` and `Document::to_encrypted_bytes`. These methods
-reuse the F-169 `agile-encryption` feature. Ordinary deterministic ZIP saving
-is unchanged. Encryption itself is intentionally nondeterministic because
-fresh salts and keys are a security requirement.
+Expose `OpcPackage::write_encrypted_to(output, password)` with a caller-owned
+byte buffer, plus native `Document::save_encrypted` and
+`Document::to_encrypted_bytes`. Reserving the complete encrypted envelope
+before appending keeps the caller's existing buffer unchanged on allocation
+failure. These methods reuse the F-169 `agile-encryption` feature. Ordinary
+deterministic ZIP saving is unchanged. Encryption itself is intentionally
+nondeterministic because fresh salts and keys are a security requirement.
 
 ## Rejected alternatives
 
@@ -59,7 +61,7 @@ fresh salts and keys are a security requirement.
 | unit | `agile_writer_emits_word_profile_parameters` | The descriptor uses AES-256-CBC, SHA-512, 100,000 spins, valid sizes, fixed schema order, and fresh randomness. |
 | round-trip | `encrypted_document_decrypts_without_package_loss` | A document encrypted here decrypts through F-169 and retains every part, relationship, content type, and unmodelled XML byte. |
 | round-trip | `two_encryptions_of_one_package_use_distinct_secrets` | Repeated encryption produces different salts, package keys, verifiers, and ciphertext while decrypting to the same ZIP. |
-| regression | `failed_encryption_leaves_document_and_package_unchanged` | Empty passwords, oversized inputs, RNG failure injection, and writer failure publish no partial result or live mutation. |
+| regression | `failed_encryption_leaves_document_and_package_unchanged` | Empty passwords, oversized inputs, RNG failure injection, and output-reserve failure publish no partial result or live mutation. |
 | differential | `word_opens_the_written_agile_document` | The reviewed output opens in the pinned local Microsoft Word build with the correct password and fails with the wrong one. |
 
 The test gate is **round-trip**. A document encrypted here decrypts here, and
@@ -93,12 +95,12 @@ Expected to be unchanged. Existing plain package output remains byte-identical.
 
 ## Implementation checklist
 
-- [ ] Reuse F-169 parameter validation and key derivation.
-- [ ] Add the fixed secure write profile and injectable test randomness.
-- [ ] Encrypt staged deterministic ZIP bytes and emit a complete CFB envelope.
-- [ ] Add `OpcPackage` and native `Document` write methods.
-- [ ] Add round-trip, randomness, failure-atomicity, and Word-open tests.
-- [ ] Run focused encryption, package, WASM, supply-chain, packaging, and
+- [x] Reuse F-169 parameter validation and key derivation.
+- [x] Add the fixed secure write profile and injectable test randomness.
+- [x] Encrypt staged deterministic ZIP bytes and emit a complete CFB envelope.
+- [x] Add `OpcPackage` and native `Document` write methods.
+- [x] Add round-trip, randomness, failure-atomicity, and Word-open tests.
+- [x] Run focused encryption, package, WASM, supply-chain, packaging, and
       harness checks.
 
 ## Open questions

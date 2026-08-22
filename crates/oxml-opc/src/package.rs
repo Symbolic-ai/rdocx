@@ -276,6 +276,17 @@ impl OpcPackage {
         Ok(())
     }
 
+    /// Append a password-protected CFB envelope around the deterministic OPC ZIP.
+    ///
+    /// The output buffer is unchanged if package serialization, encryption, or
+    /// allocation fails.
+    #[cfg(feature = "agile-encryption")]
+    pub fn write_encrypted_to(&self, output: &mut Vec<u8>, password: &str) -> Result<()> {
+        let mut plaintext = std::io::Cursor::new(Vec::new());
+        self.write_to(&mut plaintext)?;
+        crate::encryption::write_encrypted_package(output, &plaintext.into_inner(), password)
+    }
+
     /// Get raw bytes of a part by its URI.
     pub fn get_part(&self, part_name: &str) -> Option<&[u8]> {
         self.parts.get(part_name).map(|v| v.as_slice())
