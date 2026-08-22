@@ -147,6 +147,18 @@ accepted and tracked revision text through the caller-font option accessor.
 The workspace package dry-run, 10 MiB archive ceiling, and WASM target check
 cover the additive published API. All 49 hash entries remain unchanged.
 
+The bundled-fallback caller-font regression supplies an incomplete caller set
+and requires requested caller faces to retain their exact bytes while missing
+families resolve from the deterministic bundled inventory. The strict
+caller-only path must still fail on the same incomplete set. Repeated edits and
+checked transfer prove retained work remains reusable only for the exact font
+bytes and complete document context. Rejection preserves both private engines.
+Warm and fresh results compare pages, fonts, diagnostics, provenance, outlines,
+revision options, and rendered PDF bytes. Staged mutation and poisoned-lock
+cases prove publication and recovery remain safe. Both WASM targets, the
+package dry run and archive ceiling, and the unchanged 49-entry hash harness
+are required riders.
+
 The relayout-cache gate compares a warm normal-font result with a fresh cold
 engine after editing one safe body paragraph. Pages, font table order and ids,
 font bytes, diagnostics, revision view, and every resolved provenance span must

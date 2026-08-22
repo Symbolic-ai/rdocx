@@ -115,6 +115,8 @@ pub struct Document {
     normal_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
     /// Bundled-font-only layout used by deterministic rendering.
     deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
+    /// Reusable bundled-font engine with caller faces at highest priority.
+    bundled_fallback_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
 }
 
 enum ChartPackageSource<'a> {
@@ -445,6 +447,7 @@ impl Document {
             layout_cache: Mutex::new(None),
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
+            bundled_fallback_layout_engine: Mutex::new(None),
         }
     }
 
@@ -476,6 +479,7 @@ impl Document {
             layout_cache: Mutex::new(None),
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
+            bundled_fallback_layout_engine: Mutex::new(None),
         }
     }
 
@@ -484,6 +488,10 @@ impl Document {
         std::mem::swap(
             &mut self.normal_layout_engine,
             &mut candidate.normal_layout_engine,
+        );
+        std::mem::swap(
+            &mut self.bundled_fallback_layout_engine,
+            &mut candidate.bundled_fallback_layout_engine,
         );
         *self = candidate;
     }
@@ -659,6 +667,7 @@ impl Document {
             layout_cache: Mutex::new(None),
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
+            bundled_fallback_layout_engine: Mutex::new(None),
         })
     }
 
@@ -3337,6 +3346,35 @@ impl Document {
         true
     }
 
+    /// Transfer compatible bundled-fallback layout work from another document.
+    ///
+    /// The exact caller-font slice is part of the compatibility check. A
+    /// rejected transfer leaves both private engines unchanged. This method
+    /// never exposes the engine or permits system-font discovery.
+    pub fn transfer_reusable_bundled_fallback_layout_from(
+        &mut self,
+        source: &mut Document,
+        font_files: &[(&str, &[u8])],
+    ) -> bool {
+        let input = self.build_layout_input_with_fonts(font_files, RenderOptions::default());
+        let transferred = {
+            let mut source_engine = source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rdocx_layout::engine::Engine::take_if_compatible(&mut source_engine, &input)
+        };
+        let Some(transferred) = transferred else {
+            return false;
+        };
+        let mut receiver_engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *receiver_engine = Some(transferred);
+        true
+    }
+
     /// Return the cached normal-font layout with its Word source map.
     ///
     /// Repeated calls share the same accepted-view result until the document
@@ -3374,17 +3412,66 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<rdocx_layout::WordLayoutResult> {
-        let mut input = self.build_layout_input();
-        input.revision_view = options.revision_view;
-        for (family, data) in font_files {
-            input.fonts.push(rdocx_layout::FontFile {
-                family: family.to_string(),
-                data: data.to_vec(),
-            });
-        }
+        let input = self.build_layout_input_with_fonts(font_files, options);
         #[cfg(test)]
         record_layout_invocation();
         Ok(rdocx_layout::layout_document_with_caller_fonts_and_provenance(&input)?)
+    }
+
+    /// Return an uncached layout using caller fonts over bundled fallbacks.
+    ///
+    /// Caller faces have highest priority. Missing families resolve from the
+    /// deterministic bundled inventory, never from the system-font snapshot.
+    /// The returned result owns its source map and shares its heavy page and
+    /// font payloads internally.
+    pub fn layout_with_fonts_and_bundled_fallback(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        self.layout_with_fonts_and_bundled_fallback_and_options(
+            font_files,
+            RenderOptions::default(),
+        )
+    }
+
+    /// Return a bundled-fallback caller-font layout for one revision view.
+    pub fn layout_with_fonts_and_bundled_fallback_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        let input = self.build_layout_input_with_fonts(font_files, options);
+        #[cfg(test)]
+        record_layout_invocation();
+        let mut engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let engine = match engine.as_mut() {
+            Some(engine) => engine,
+            None => engine.insert(rdocx_layout::engine::Engine::new_deterministic()?),
+        };
+        Ok(rdocx_layout::layout_document_with_reusable_engine(
+            engine, &input,
+        )?)
+    }
+
+    fn build_layout_input_with_fonts(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> rdocx_layout::LayoutInput {
+        let mut input = self.build_layout_input();
+        input.revision_view = options.revision_view;
+        input.fonts.extend(
+            font_files
+                .iter()
+                .map(|(family, data)| rdocx_layout::FontFile {
+                    family: (*family).to_owned(),
+                    data: data.to_vec(),
+                }),
+        );
+        input
     }
 
     /// Render the document to PDF bytes.
@@ -5365,6 +5452,282 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn bundled_fallback_completes_an_incomplete_caller_font_set() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let mut document = Document::new();
+        document.add_paragraph("Calibri must resolve from bundled fonts");
+        document
+            .add_paragraph("")
+            .add_run("caller face must win")
+            .font(caller_family);
+
+        assert!(
+            document
+                .layout_with_fonts(&[(caller_family, &caller_bytes)])
+                .is_err(),
+            "strict caller-only layout must not borrow bundled Calibri"
+        );
+        let result = document
+            .layout_with_fonts_and_bundled_fallback(&[(caller_family, &caller_bytes)])
+            .expect("bundled fallback completes the caller font set");
+
+        let mut caller_runs = 0;
+        let mut bundled_runs = 0;
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                let oxml_layout::PositionedElement::Text(run) = element else {
+                    return;
+                };
+                let font = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("every glyph run resolves its font");
+                if font.family == caller_family {
+                    assert_eq!(font.data.as_ref(), caller_bytes.as_slice());
+                    caller_runs += 1;
+                } else if oxml_layout::bundled_fonts::bundled_font_data()
+                    .iter()
+                    .any(|(_, bytes)| *bytes == font.data.as_ref())
+                {
+                    bundled_runs += 1;
+                }
+            });
+        }
+        assert!(caller_runs > 0, "the matching caller face has priority");
+        assert!(bundled_runs > 0, "the missing family uses bundled fallback");
+        assert!(
+            document
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+            "bundled fallback stays isolated from the normal engine"
+        );
+    }
+
+    #[test]
+    fn bundled_fallback_engine_reuses_and_transfers_exact_context() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let mut source = Document::new();
+        for index in 0..140 {
+            source.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        let initial = source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("initial bundled-fallback layout");
+        source
+            .paragraph_mut(70)
+            .expect("middle paragraph")
+            .add_run(" changed");
+        let warm = source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("warm bundled-fallback layout");
+        assert!(
+            warm.layout
+                .pages
+                .iter()
+                .zip(&initial.layout.pages)
+                .any(|(current, previous)| Arc::ptr_eq(current, previous)),
+            "a bounded edit reuses at least one retained page"
+        );
+
+        let mut receiver = source.clone_for_staging();
+        assert!(receiver.transfer_reusable_bundled_fallback_layout_from(&mut source, &fonts));
+        assert!(
+            source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+        assert!(
+            receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let mut font_source = receiver.clone_for_staging();
+        let mut font_receiver = receiver.clone_for_staging();
+        font_source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime font source");
+        font_receiver
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime font receiver");
+        let mut changed_bytes = caller_bytes.clone();
+        changed_bytes.push(0);
+        assert!(
+            !font_receiver.transfer_reusable_bundled_fallback_layout_from(
+                &mut font_source,
+                &[(caller_family, &changed_bytes)],
+            )
+        );
+        assert!(
+            font_source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            font_receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let mut context_source = receiver.clone_for_staging();
+        let mut context_receiver = receiver.clone_for_staging();
+        context_receiver.set_header("different retained context");
+        context_source
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime context source");
+        context_receiver
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime context receiver");
+        assert!(
+            !context_receiver
+                .transfer_reusable_bundled_fallback_layout_from(&mut context_source, &fonts)
+        );
+        assert!(
+            context_source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            context_receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn bundled_fallback_warm_layout_equals_fresh_layout() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let mut warm_document = Document::new();
+        for index in 0..140 {
+            warm_document.add_paragraph(&format!("paragraph {index:03} stable line"));
+        }
+        warm_document
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime warm engine");
+        warm_document
+            .paragraph_mut(70)
+            .expect("middle paragraph")
+            .add_run(" changed");
+        let fresh_document = warm_document.clone_for_staging();
+
+        let warm = warm_document
+            .layout_with_fonts_and_bundled_fallback_and_options(&fonts, RenderOptions::default())
+            .expect("warm layout");
+        let fresh = fresh_document
+            .layout_with_fonts_and_bundled_fallback_and_options(&fonts, RenderOptions::default())
+            .expect("fresh layout");
+
+        assert_eq!(warm.revision_view, fresh.revision_view);
+        assert_eq!(
+            format!("{:?}", warm.layout.pages),
+            format!("{:?}", fresh.layout.pages)
+        );
+        assert_eq!(
+            format!("{:?}", warm.layout.fonts),
+            format!("{:?}", fresh.layout.fonts)
+        );
+        assert_eq!(
+            format!("{:?}", warm.layout.diagnostics),
+            format!("{:?}", fresh.layout.diagnostics)
+        );
+        assert_eq!(
+            format!("{:?}", warm.layout.outlines),
+            format!("{:?}", fresh.layout.outlines)
+        );
+        assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm.layout),
+            oxml_pdf::render_to_pdf(&fresh.layout)
+        );
+    }
+
+    #[test]
+    fn staged_mutations_preserve_valid_bundled_fallback_work() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let mut document = Document::new();
+        document.add_paragraph("staged mutation retains reusable work");
+        document
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime bundled-fallback engine");
+        document
+            .set_text_watermark("DRAFT")
+            .expect("successful staged mutation");
+        assert!(
+            document
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
+            "successful staging retains the private engine"
+        );
+        document
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("engine remains usable after staging");
+
+        let header_part = document
+            .package
+            .get_part_rels(&document.doc_part_name)
+            .and_then(|relationships| relationships.get_by_type(rel_types::HEADER))
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target)
+            })
+            .expect("watermark header relationship");
+        document.package.set_part(&header_part, b"<".to_vec());
+        let before = document.package.get_part(&header_part).unwrap().to_vec();
+        assert!(document.set_text_watermark("FAIL").is_err());
+        assert_eq!(
+            document.package.get_part(&header_part),
+            Some(before.as_slice())
+        );
+        assert!(
+            document
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
+            "failed staging preserves the published engine"
+        );
+
+        let mut poisoned = Document::new();
+        poisoned.add_paragraph("poison recovery");
+        poisoned
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("prime engine before poison");
+        let poisoned = Arc::new(poisoned);
+        let poison_owner = Arc::clone(&poisoned);
+        assert!(
+            std::thread::spawn(move || {
+                let _engine = poison_owner.bundled_fallback_layout_engine.lock().unwrap();
+                panic!("poison bundled fallback engine lock");
+            })
+            .join()
+            .is_err()
+        );
+        poisoned
+            .layout_with_fonts_and_bundled_fallback(&fonts)
+            .expect("bundled-fallback layout recovers from poison");
     }
 
     #[test]

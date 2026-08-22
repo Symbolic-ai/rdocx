@@ -458,6 +458,10 @@ deterministic renderers use their own bundle. Tracked layouts remain uncached
 and use the normal engine with a distinct revision-view paragraph identity.
 Caller-supplied font layouts construct an isolated engine, remain uncached, and
 cannot observe bundled or system fonts. Caller-font access returns an owned
+bundle. The separate bundled-fallback caller-font mode retains one reusable
+deterministic-base engine. Caller faces have highest priority, missing families
+resolve from bundled faces, and system fonts remain unavailable. Its owned
+result shares immutable pages and font bytes without caching the completed
 bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
 bundle that owns the exact font data and Word source map. Cloning a completed
 result shares each immutable page frame and font byte buffer.
@@ -527,6 +531,11 @@ takes anything. It moves the source's normal engine only when that complete
 retained-work context is compatible. Failure preserves both engines. Success
 does not clear either document's completed result cache, and the next receiver
 mutation can reuse unchanged safe paragraphs from the transferred engine.
+`Document::transfer_reusable_bundled_fallback_layout_from` applies the same
+checked move to the private deterministic-base caller-font engine. The caller
+must provide the exact font slice used by the receiver. Font order and bytes,
+revision view, and every other retained-work input participate in
+compatibility, and rejection preserves both engines.
 
 The low-level Word engine keeps its existing `LayoutResult` entry points and
 discards provenance there. `layout_document_with_provenance` and

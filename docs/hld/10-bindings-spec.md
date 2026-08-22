@@ -414,9 +414,15 @@ stay uncached and use a distinct revision-view paragraph identity.
 `Document::layout_with_fonts_and_options` return owned uncached bundles whose
 font mapping contains the exact caller-provided bytes selected for shaping.
 They construct a caller-only engine and cannot observe the normal process font
-snapshot. Deterministic calls remain isolated on the bundled-font-only path.
-The built-in PDF, raster, and page accessors consume these same paths. This is
-an additive pre-1.0 native Rust surface and does not add binding methods.
+snapshot. `Document::layout_with_fonts_and_bundled_fallback` and its
+option-taking counterpart return the same owned result shape while retaining a
+private reusable deterministic-base engine. Caller faces override bundled
+faces, missing families resolve from the bundled inventory, and system fonts
+remain unavailable. The exact-font checked transfer method moves compatible
+private work between documents without exposing `Engine`. Deterministic calls
+remain isolated on the bundled-font-only path. The built-in PDF, raster, and
+page accessors consume their existing paths. These additions are pre-1.0 native
+Rust APIs and do not add Python, WASM, or CLI methods.
 
 Native Word callers author watermarks with `Document::set_text_watermark` and
 `Document::set_image_watermark`. Text uses fixed Word-like defaults of 468 by

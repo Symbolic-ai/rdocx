@@ -122,6 +122,11 @@ Its reusable normal engine retains one exact private identity for every
 non-body layout input, section properties, and the document-wide wrapping
 state that can affect cached paragraph work. The native Word facade can move a
 compatible engine between two documents without exposing mutable cache state.
+The facade owns a separate deterministic-base engine for layouts where caller
+fonts override the bundled inventory. Missing families resolve from bundled
+faces without consulting system fonts. Checked transfer includes the exact
+caller-font bytes in the complete retained-work context and keeps the engine
+private.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing

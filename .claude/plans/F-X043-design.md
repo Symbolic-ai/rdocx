@@ -1,6 +1,6 @@
 # F-X043, Reuse bundled-fallback caller-font layouts
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: M
 **Depends on**: F-X039, F-X040
@@ -23,9 +23,12 @@ and 41 demonstrate the concrete consumer and an unsafe raw-engine handoff.
 ## Approach
 
 Add `Document::layout_with_fonts_and_bundled_fallback` and its options-taking
-twin. They return a shared `WordLayoutResult`, use one private deterministic
-reusable engine, and load caller faces at highest priority over bundled faces.
-They never consult the system-font snapshot. Add a checked transfer method that
+twin. They return an owned `WordLayoutResult` whose heavy page and font
+payloads remain shared through F-X039. This matches the sibling caller-font
+methods and avoids a completed-result cache that editor mutations would only
+invalidate. The methods use one private deterministic reusable engine and load
+caller faces at highest priority over bundled faces. They never consult the
+system-font snapshot. Add a checked transfer method that
 takes mutable source and receiver documents plus the exact caller-font slice,
 builds the receiver input, and delegates compatibility to
 `Engine::take_if_compatible`. Preserve this private engine through staged
@@ -79,11 +82,11 @@ not change.
 
 ## Implementation checklist
 
-- [ ] Add the two bundled-fallback facade methods.
-- [ ] Retain one private deterministic-base engine across edits.
-- [ ] Add exact-font-set checked transfer without exposing `Engine`.
-- [ ] Preserve staged mutation and poison recovery behavior.
-- [ ] Add isolation, transfer, warm-cold, WASM, package, and hash evidence.
+- [x] Add the two bundled-fallback facade methods.
+- [x] Retain one private deterministic-base engine across edits.
+- [x] Add exact-font-set checked transfer without exposing `Engine`.
+- [x] Preserve staged mutation and poison recovery behavior.
+- [x] Add isolation, transfer, warm-cold, WASM, package, and hash evidence.
 
 ## Open questions
 
