@@ -1,6 +1,6 @@
 # F-169, Agile encryption, read
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: L
 **Depends on**: none
@@ -113,13 +113,13 @@ unchanged.
 
 ## Implementation checklist
 
-- [ ] Add the approved default-off dependency and feature graph.
-- [ ] Parse and validate the CFB streams and agile encryption descriptor.
-- [ ] Derive and verify the password key without exposing unauthenticated data.
-- [ ] Decrypt and authenticate the package into a bounded temporary buffer.
-- [ ] Add the `OpcPackage` and native `Document` constructors.
-- [ ] Add in-source Word reference, malformed-input, and preservation tests.
-- [ ] Run focused crypto, package, no-default, WASM, supply-chain, package, and
+- [x] Add the approved default-off dependency and feature graph.
+- [x] Parse and validate the CFB streams and agile encryption descriptor.
+- [x] Derive and verify the password key without exposing unauthenticated data.
+- [x] Decrypt and authenticate the package into a bounded temporary buffer.
+- [x] Add the `OpcPackage` and native `Document` constructors.
+- [x] Add in-source Word reference, malformed-input, and preservation tests.
+- [x] Run focused crypto, package, no-default, WASM, supply-chain, package, and
       harness checks.
 
 ## Open questions

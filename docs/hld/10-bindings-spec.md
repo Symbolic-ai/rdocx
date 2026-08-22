@@ -201,6 +201,13 @@ mutation for a larger value. `Document::set_list_level` can redefine an
 existing level without rebuilding the document. A rejected redefinition is
 side-effect free.
 
+When native callers enable the default-off `agile-encryption` feature,
+`Document::open_encrypted`, `Document::from_encrypted_bytes`, and the bounded
+bytes variant open password-protected OOXML through the shared package layer.
+These constructors are additive and unavailable without the feature. Python,
+WASM, and CLI manifests do not enable the feature, so their API and dependency
+graphs remain unchanged.
+
 Paragraph mutation supports explicit hard breaks and hyperlinks backed by a
 document relationship. Table column mutation keeps the table width, grid
 column, and every covering cell width consistent. A cell with `gridSpan`

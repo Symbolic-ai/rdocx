@@ -74,6 +74,23 @@ impl OpcPackage {
         Self::from_reader_with_limits(reader, PackageReadLimits::UNBOUNDED)
     }
 
+    /// Open an agile-encrypted OPC package with no archive-expansion limit.
+    #[cfg(feature = "agile-encryption")]
+    pub fn from_encrypted_reader<R: Read + Seek>(reader: R, password: &str) -> Result<Self> {
+        Self::from_encrypted_reader_with_limits(reader, password, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Authenticate and open an agile-encrypted OPC package with expansion limits.
+    #[cfg(feature = "agile-encryption")]
+    pub fn from_encrypted_reader_with_limits<R: Read + Seek>(
+        reader: R,
+        password: &str,
+        limits: PackageReadLimits,
+    ) -> Result<Self> {
+        let plaintext = crate::encryption::decrypt_package(reader, password, limits)?;
+        Self::from_reader_with_limits(std::io::Cursor::new(plaintext), limits)
+    }
+
     /// Open an OPC package while bounding archive expansion.
     pub fn from_reader_with_limits<R: Read + Seek>(
         mut reader: R,

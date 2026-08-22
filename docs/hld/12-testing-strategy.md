@@ -485,6 +485,14 @@ cover the cases that matter now.
   normalised or rejected. The code handles it, nothing tests it, and the crate
   is about to become a public shared component.
 
+Agile encryption has a source-encoded Microsoft Word 16.104 oracle package so
+the regression gate does not depend on an opaque binary fixture. The gate opens
+that package only with its password, checks every supported AES and SHA pairing
+with deterministic synthetic packages, rejects malformed descriptors and wrong
+passwords, and proves tampering fails before ZIP parsing. A package-preservation
+round trip also checks that unrelated parts survive after authenticated
+decryption.
+
 **`oxml-core`**
 - New unit round-trips: `Centipoints::from_pt(18.0).0 == 1800`,
   `Angle::from_degrees(90.0).0 == 5_400_000`,

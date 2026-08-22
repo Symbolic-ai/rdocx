@@ -316,6 +316,24 @@ relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
 
+The default-off `oxml-opc/agile-encryption` feature adds read-only constructors
+for password-protected OOXML packages. They parse the CFB `EncryptionInfo` and
+`EncryptedPackage` streams, accept namespace aliases, and reject elements that
+violate the Agile descriptor sequence. Supported combinations are AES-CBC with
+128, 192, or 256-bit keys and SHA-1, SHA-256, SHA-384, or SHA-512. Descriptor
+sizes, salt lengths, spin counts, ciphertext lengths, and algorithm names are
+validated before expensive work begins.
+
+Password verification releases no package key on failure. A matching password
+decrypts the data-integrity material and authenticates the complete encrypted
+package stream, including its declared plaintext length, before any package
+bytes reach the ZIP parser. Authentication is streamed and package decryption
+uses 4096-byte Agile segments, so bounded constructors keep their ordinary ZIP
+limits without adding a whole-package ciphertext buffer. Word emits a
+hash-sized encrypted HMAC key, while the ECMA shape permits a salt-sized key,
+so both validated lengths are accepted. Integrity, truncation, or length
+failure is reported before ZIP parsing and leaves no partially opened package.
+
 Comment mutations validate coordinates and allocate every required id before
 changing package or document state. Saving keeps the comments and
 comments-extended relationship graph reachable from the main document, with

@@ -494,9 +494,35 @@ impl Document {
         Self::from_package(package)
     }
 
+    /// Open a password-protected agile-encrypted document from a file path.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn open_encrypted<P: AsRef<Path>>(path: P, password: &str) -> Result<Self> {
+        let file = std::fs::File::open(path)?;
+        let package = OpcPackage::from_encrypted_reader(file, password)?;
+        Self::from_package(package)
+    }
+
     /// Open a document from bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         Self::from_bytes_with_limits(bytes, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open a password-protected agile-encrypted document from bytes.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn from_encrypted_bytes(bytes: &[u8], password: &str) -> Result<Self> {
+        Self::from_encrypted_bytes_with_limits(bytes, password, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Open an agile-encrypted document while bounding OPC archive expansion.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn from_encrypted_bytes_with_limits(
+        bytes: &[u8],
+        password: &str,
+        limits: PackageReadLimits,
+    ) -> Result<Self> {
+        let cursor = std::io::Cursor::new(bytes);
+        let package = OpcPackage::from_encrypted_reader_with_limits(cursor, password, limits)?;
+        Self::from_package(package)
     }
 
     /// Open a document from bytes while bounding OPC archive expansion.

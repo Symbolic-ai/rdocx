@@ -7,6 +7,8 @@
 //! - Navigating parts by URI and resolving relationships
 
 pub mod content_types;
+#[cfg(feature = "agile-encryption")]
+mod encryption;
 mod error;
 mod package;
 pub mod relationship;

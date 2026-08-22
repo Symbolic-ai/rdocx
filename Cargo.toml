@@ -80,15 +80,24 @@ rdocx-py = { path = "crates/rdocx-py", version = "0.8.0" }
 # External dependencies
 #
 # Feature sets are deliberately minimal: a DOCX is a ZIP that only ever uses
-# the Stored and Deflate methods, so the aes-crypto/bzip2/lzma/ppmd/zstd/xz
-# codecs and the `time` timestamp support are all dead weight — and they drag
-# in getrandom -> wasm-bindgen/js-sys. Likewise fontdb's `memmap` feature is
-# off: fonts are read into memory anyway, and it avoids memmap2 entirely.
+# the Stored and Deflate methods, so the zip aes-crypto/bzip2/lzma/ppmd/zstd/xz
+# codecs and the `time` timestamp support are all dead weight, and they drag in
+# getrandom -> wasm-bindgen/js-sys. Agile encryption uses the separate,
+# default-off RustCrypto and CFB dependencies below. Likewise fontdb's `memmap`
+# feature is off because fonts are read into memory anyway, and it avoids
+# memmap2 entirely.
 zip = { version = "8.1", default-features = false, features = [
     "deflate-flate2-zlib-rs",
 ] }
 quick-xml = "0.41"
 thiserror = "2"
+aes = "0.9.2"
+base64 = "0.23.1"
+cbc = { version = "0.2.1", features = ["alloc", "block-padding"] }
+cfb = "0.14.0"
+hmac = "0.13.0"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
 fontdb = { version = "0.23", default-features = false, features = [
     "std",
     "fs",

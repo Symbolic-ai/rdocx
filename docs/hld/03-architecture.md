@@ -72,7 +72,9 @@ the side that owns its target type.
 **`oxml-opc` does not depend on `oxml-core`.** It has its own small local-name
 handling. Staying independent means it is publishable first and consumable
 alone. `rdocx-wasm` consumes the complete `rdocx` facade rather than using this
-lower-level seam as a second document model.
+lower-level seam as a second document model. Its default-off
+`agile-encryption` edge stays inside the package boundary and adds CFB plus
+cryptographic primitives only when a named native consumer enables it.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It

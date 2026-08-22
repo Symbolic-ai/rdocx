@@ -85,6 +85,8 @@ on CI runners as it always would have.
 
 | Crate | Feature | Default | Notes |
 |---|---|---|---|
+| `oxml-opc` | `agile-encryption` | off | Adds native read support for password-protected OOXML packages |
+| `rdocx` | `agile-encryption` | off | Forwards encrypted native document opens to `oxml-opc` |
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
@@ -103,7 +105,8 @@ not. Its generated `toPdf` method calls the normal `Document::to_pdf` facade,
 which therefore uses document-embedded and bundled fonts without host font
 discovery in that graph. Native `rpptx`, `rpptx-render`, and the presentation
 Python binding retain system fonts through the same explicit forwarding
-pattern. Bundled font bytes remain available in both modes.
+pattern. Bundled font bytes remain available in both modes. The Python, WASM,
+and CLI manifests do not opt in to `agile-encryption`.
 
 ## Packaging
 
@@ -475,9 +478,11 @@ artifact.
 
 ## Dependency policy
 
-`deny.toml` is well-documented and stays as it is. The codec bans (`zstd`,
-`bzip2`, `lzma-rust2`, `ppmd-rust`, `aes`) apply to the whole workspace, since
-`zip` is in every graph through `oxml-opc`.
+`deny.toml` keeps the unused ZIP codec bans (`zstd`, `bzip2`, `lzma-rust2`, and
+`ppmd-rust`) across the workspace, since `zip` is in every graph through
+`oxml-opc`. AES, CBC, CFB, HMAC, and SHA dependencies have the named
+default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
+Python, WASM, or CLI graphs.
 
 The single advisory exception, an unmaintained transitive font dependency,
 carries its exit route in a comment. Keep that discipline: an ignore without a
