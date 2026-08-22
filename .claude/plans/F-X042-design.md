@@ -1,6 +1,6 @@
 # F-X042, Prove headers and footers in PDF output
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S52
 **Size**: S
 **Depends on**: F-168, F-X032
@@ -84,13 +84,13 @@ reveals an in-scope production drop.
 
 ## Implementation checklist
 
-- [ ] Add the case to the existing `rdocx` integration binary.
-- [ ] Construct all header and footer variants and unrelated package state in
+- [x] Add the case to the existing `rdocx` integration binary.
+- [x] Construct all header and footer variants and unrelated package state in
       readable source.
-- [ ] Save, reopen, layout, and render through public facade methods.
-- [ ] Assert exact page-frame and PDF text selection and placement.
-- [ ] Fix only an exposed production drop, if any, and revise HLD impact first.
-- [ ] Run focused integration, deterministic PDF, and hash checks.
+- [x] Save, reopen, layout, and render through public facade methods.
+- [x] Assert exact page-frame and PDF text selection and placement.
+- [x] Fix only an exposed production drop, if any, and revise HLD impact first.
+- [x] Run focused integration, deterministic PDF, and hash checks.
 
 ## Open questions
 

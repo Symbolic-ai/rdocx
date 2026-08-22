@@ -3791,7 +3791,7 @@ impl Document {
                     .retain(|reference| reference.hdr_ftr_type != HdrFtrType::Even);
             }
         }
-        materialize_header_inheritance(&mut document, even_headers_enabled);
+        materialize_header_footer_inheritance(&mut document, even_headers_enabled);
 
         LayoutInput {
             revision_view: rdocx_layout::RevisionView::Accepted,
@@ -4399,22 +4399,24 @@ fn header_type_index(hdr_type: HdrFtrType) -> usize {
     }
 }
 
-fn materialize_header_inheritance(document: &mut CT_Document, even_headers_enabled: bool) {
-    let mut effective: [Option<HdrFtrRef>; 3] = [None, None, None];
-    let inherit = |section: &mut CT_SectPr, effective: &mut [Option<HdrFtrRef>; 3]| {
+fn materialize_header_footer_inheritance(document: &mut CT_Document, even_headers_enabled: bool) {
+    let mut effective_headers: [Option<HdrFtrRef>; 3] = [None, None, None];
+    let mut effective_footers: [Option<HdrFtrRef>; 3] = [None, None, None];
+    let inherit = |references: &mut Vec<HdrFtrRef>,
+                   effective: &mut [Option<HdrFtrRef>; 3],
+                   materialize_blank_even: bool| {
         for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
             let index = header_type_index(hdr_type);
-            if let Some(reference) = section
-                .header_refs
+            if let Some(reference) = references
                 .iter()
                 .find(|reference| reference.hdr_ftr_type == hdr_type)
                 .cloned()
             {
                 effective[index] = Some(reference);
             } else if let Some(reference) = effective[index].clone() {
-                section.header_refs.push(reference);
-            } else if hdr_type == HdrFtrType::Even && even_headers_enabled {
-                section.header_refs.push(HdrFtrRef {
+                references.push(reference);
+            } else if hdr_type == HdrFtrType::Even && materialize_blank_even {
+                references.push(HdrFtrRef {
                     hdr_ftr_type: HdrFtrType::Even,
                     rel_id: String::new(),
                 });
@@ -4428,11 +4430,21 @@ fn materialize_header_inheritance(document: &mut CT_Document, even_headers_enabl
                 .as_mut()
                 .and_then(|properties| properties.sect_pr.as_mut())
         {
-            inherit(section, &mut effective);
+            inherit(
+                &mut section.header_refs,
+                &mut effective_headers,
+                even_headers_enabled,
+            );
+            inherit(&mut section.footer_refs, &mut effective_footers, false);
         }
     }
     if let Some(section) = document.body.sect_pr.as_mut() {
-        inherit(section, &mut effective);
+        inherit(
+            &mut section.header_refs,
+            &mut effective_headers,
+            even_headers_enabled,
+        );
+        inherit(&mut section.footer_refs, &mut effective_footers, false);
     }
 }
 

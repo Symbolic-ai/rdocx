@@ -2552,3 +2552,622 @@ fn immutable_run_accessors_are_total() {
     assert_eq!(paragraph.run(1).unwrap().text(), " run");
     assert!(paragraph.run(2).is_none());
 }
+
+mod header_footer_pdf {
+    use std::collections::{BTreeMap, HashMap};
+
+    use super::*;
+    use oxml_layout::{PageFrame, PositionedElement, walk};
+    use rdocx_oxml::header_footer::HdrFtrType;
+
+    const DEFAULT_HEADER: &str = "DEFAULTHEADER";
+    const DEFAULT_FOOTER: &str = "DEFAULTFOOTER";
+    const FIRST_HEADER: &str = "FIRSTHEADER";
+    const FIRST_FOOTER: &str = "FIRSTFOOTER";
+    const EVEN_HEADER: &str = "EVENHEADER";
+    const EVEN_FOOTER: &str = "EVENFOOTER";
+    const STORY_MARKERS: [&str; 6] = [
+        DEFAULT_HEADER,
+        DEFAULT_FOOTER,
+        FIRST_HEADER,
+        FIRST_FOOTER,
+        EVEN_HEADER,
+        EVEN_FOOTER,
+    ];
+    const PRODUCER_PART: &[u8] = b"producer-private-bytes\x00\xff";
+    const PRODUCER_REL_TYPE: &str = "urn:producer:relationships/private-state";
+    const PRODUCER_XML: &[u8] = b"<x:opaque x:flag=\"keep\"><x:child/></x:opaque>";
+
+    struct Fixture {
+        document: Document,
+        saved: Vec<u8>,
+    }
+
+    struct PdfObject {
+        body: Vec<u8>,
+        stream: Option<Vec<u8>>,
+    }
+
+    fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    fn parse_decimal(bytes: &[u8], start: usize) -> (usize, usize) {
+        let mut end = start;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        assert!(end > start, "expected decimal at byte {start}");
+        let value = std::str::from_utf8(&bytes[start..end])
+            .unwrap()
+            .parse()
+            .unwrap();
+        (value, end)
+    }
+
+    fn reference_after(bytes: &[u8], key: &[u8]) -> u32 {
+        let start = find_bytes(bytes, key)
+            .unwrap_or_else(|| panic!("missing PDF key {}", String::from_utf8_lossy(key)))
+            + key.len();
+        let mut number_start = start;
+        while number_start < bytes.len() && bytes[number_start].is_ascii_whitespace() {
+            number_start += 1;
+        }
+        let (number, end) = parse_decimal(bytes, number_start);
+        assert!(bytes[end..].starts_with(b" 0 R"));
+        number as u32
+    }
+
+    fn references(bytes: &[u8]) -> Vec<u32> {
+        let mut refs = Vec::new();
+        let mut cursor = 0;
+        while cursor < bytes.len() {
+            let Some(relative) = find_bytes(&bytes[cursor..], b" 0 R") else {
+                break;
+            };
+            let marker = cursor + relative;
+            let mut start = marker;
+            while start > 0 && bytes[start - 1].is_ascii_digit() {
+                start -= 1;
+            }
+            if start < marker {
+                refs.push(parse_decimal(bytes, start).0 as u32);
+            }
+            cursor = marker + 4;
+        }
+        refs
+    }
+
+    fn pdf_objects(pdf: &[u8]) -> BTreeMap<u32, PdfObject> {
+        let mut objects = BTreeMap::new();
+        let mut cursor = 0;
+        while let Some(relative_marker) = find_bytes(&pdf[cursor..], b" 0 obj") {
+            let marker = cursor + relative_marker;
+            let mut number_start = marker;
+            while number_start > 0 && pdf[number_start - 1].is_ascii_digit() {
+                number_start -= 1;
+            }
+            let number = parse_decimal(pdf, number_start).0 as u32;
+            let content_start = marker + b" 0 obj".len();
+            let endobj = content_start
+                + find_bytes(&pdf[content_start..], b"endobj").expect("PDF object terminator");
+            let stream_marker = find_bytes(&pdf[content_start..endobj], b"\nstream\n")
+                .map(|relative| content_start + relative);
+
+            let (body, stream, object_end) = if let Some(stream_marker) = stream_marker {
+                let body = pdf[content_start..stream_marker].to_vec();
+                let length_start =
+                    find_bytes(&body, b"/Length ").expect("PDF stream length") + b"/Length ".len();
+                let length = parse_decimal(&body, length_start).0;
+                let data_start = stream_marker + b"\nstream\n".len();
+                let data_end = data_start + length;
+                assert!(pdf[data_end..].starts_with(b"\nendstream"));
+                let object_end = data_end
+                    + find_bytes(&pdf[data_end..], b"endobj").expect("stream object terminator")
+                    + b"endobj".len();
+                (body, Some(pdf[data_start..data_end].to_vec()), object_end)
+            } else {
+                (
+                    pdf[content_start..endobj].to_vec(),
+                    None,
+                    endobj + b"endobj".len(),
+                )
+            };
+
+            assert!(objects.insert(number, PdfObject { body, stream }).is_none());
+            cursor = object_end;
+        }
+        assert!(
+            !objects.is_empty(),
+            "deterministic renderer returned no PDF objects"
+        );
+        objects
+    }
+
+    fn decoded_stream(object: &PdfObject) -> Vec<u8> {
+        let stream = object.stream.as_ref().expect("expected a PDF stream");
+        if find_bytes(&object.body, b"/Filter /FlateDecode").is_some() {
+            miniz_oxide::inflate::decompress_to_vec_zlib(stream)
+                .expect("deterministic PDF stream should inflate")
+        } else {
+            stream.clone()
+        }
+    }
+
+    fn parse_hex(value: &[u8]) -> Vec<u8> {
+        assert!(value.len().is_multiple_of(2));
+        value
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect()
+    }
+
+    fn pdf_literal(line: &[u8], open: usize) -> (Vec<u8>, usize) {
+        let mut bytes = Vec::new();
+        let mut cursor = open + 1;
+        while cursor < line.len() {
+            match line[cursor] {
+                b')' => return (bytes, cursor + 1),
+                b'\\' => {
+                    cursor += 1;
+                    assert!(cursor < line.len(), "truncated PDF string escape");
+                    let escaped = line[cursor];
+                    if escaped.is_ascii_digit() && escaped < b'8' {
+                        let mut value = 0u16;
+                        let mut digits = 0;
+                        while cursor < line.len()
+                            && digits < 3
+                            && line[cursor].is_ascii_digit()
+                            && line[cursor] < b'8'
+                        {
+                            value = value * 8 + u16::from(line[cursor] - b'0');
+                            cursor += 1;
+                            digits += 1;
+                        }
+                        bytes.push(value as u8);
+                        continue;
+                    }
+                    bytes.push(match escaped {
+                        b'n' => b'\n',
+                        b'r' => b'\r',
+                        b't' => b'\t',
+                        b'b' => 8,
+                        b'f' => 12,
+                        other => other,
+                    });
+                    cursor += 1;
+                }
+                byte => {
+                    bytes.push(byte);
+                    cursor += 1;
+                }
+            }
+        }
+        panic!("unterminated PDF literal string")
+    }
+
+    fn cmap(object: &PdfObject) -> BTreeMap<u16, String> {
+        let bytes = decoded_stream(object);
+        let mut mappings = BTreeMap::new();
+        let mut in_bfchar = false;
+        for line in bytes.split(|byte| *byte == b'\n') {
+            if find_bytes(line, b"beginbfchar").is_some() {
+                in_bfchar = true;
+                continue;
+            }
+            if find_bytes(line, b"endbfchar").is_some() {
+                in_bfchar = false;
+                continue;
+            }
+            if !in_bfchar {
+                continue;
+            }
+            let fields = line
+                .split(|byte| byte.is_ascii_whitespace())
+                .collect::<Vec<_>>();
+            if fields.len() != 2 {
+                continue;
+            }
+            let glyph_bytes = parse_hex(&fields[0][1..fields[0].len() - 1]);
+            let unicode_bytes = parse_hex(&fields[1][1..fields[1].len() - 1]);
+            let glyph = u16::from_be_bytes([glyph_bytes[0], glyph_bytes[1]]);
+            let utf16 = unicode_bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>();
+            let text = char::decode_utf16(utf16)
+                .collect::<Result<String, _>>()
+                .expect("valid ToUnicode mapping");
+            mappings.insert(glyph, text);
+        }
+        assert!(!mappings.is_empty(), "missing ToUnicode mappings");
+        mappings
+    }
+
+    fn font_references(page: &[u8]) -> HashMap<String, u32> {
+        let start = find_bytes(page, b"/Font <<").expect("page font resources") + b"/Font <<".len();
+        let end = start + find_bytes(&page[start..], b">>").expect("page font dictionary");
+        let resources = &page[start..end];
+        let mut fonts = HashMap::new();
+        let mut cursor = 0;
+        while let Some(relative) = find_bytes(&resources[cursor..], b"/F") {
+            let name_start = cursor + relative + 1;
+            let mut name_end = name_start + 1;
+            while name_end < resources.len() && resources[name_end].is_ascii_digit() {
+                name_end += 1;
+            }
+            if name_end == name_start + 1 {
+                cursor = name_end;
+                continue;
+            }
+            let name = std::str::from_utf8(&resources[name_start..name_end])
+                .unwrap()
+                .to_owned();
+            let mut ref_start = name_end;
+            while ref_start < resources.len() && resources[ref_start].is_ascii_whitespace() {
+                ref_start += 1;
+            }
+            fonts.insert(name, parse_decimal(resources, ref_start).0 as u32);
+            cursor = name_end;
+        }
+        assert!(!fonts.is_empty(), "page has no font resources");
+        fonts
+    }
+
+    fn content_text(content: &[u8], cmaps: &HashMap<String, BTreeMap<u16, String>>) -> String {
+        let mut current_font = None;
+        let mut text = String::new();
+        for line in content.split(|byte| *byte == b'\n') {
+            let line = line
+                .iter()
+                .copied()
+                .skip_while(|byte| byte.is_ascii_whitespace())
+                .collect::<Vec<_>>();
+            if line.ends_with(b" Tf") && line.starts_with(b"/F") {
+                let end = line
+                    .iter()
+                    .position(|byte| byte.is_ascii_whitespace())
+                    .expect("font operand");
+                current_font = Some(String::from_utf8(line[1..end].to_vec()).unwrap());
+                continue;
+            }
+            if !line.ends_with(b" TJ") {
+                continue;
+            }
+            let font = current_font.as_ref().expect("TJ without selected font");
+            let mapping = cmaps.get(font).expect("ToUnicode map for selected font");
+            let mut cursor = 0;
+            while cursor < line.len() {
+                let hex = line[cursor..].iter().position(|byte| *byte == b'<');
+                let literal = line[cursor..].iter().position(|byte| *byte == b'(');
+                let (glyph_bytes, next) = match (hex, literal) {
+                    (None, None) => break,
+                    (Some(hex), Some(literal)) if literal < hex => {
+                        pdf_literal(&line, cursor + literal)
+                    }
+                    (_, Some(literal)) if hex.is_none() => pdf_literal(&line, cursor + literal),
+                    (Some(hex), _) => {
+                        let open = cursor + hex;
+                        let close = open
+                            + line[open..]
+                                .iter()
+                                .position(|byte| *byte == b'>')
+                                .expect("hex glyph string");
+                        (parse_hex(&line[open + 1..close]), close + 1)
+                    }
+                    _ => unreachable!(),
+                };
+                for pair in glyph_bytes.chunks_exact(2) {
+                    let glyph = u16::from_be_bytes([pair[0], pair[1]]);
+                    text.push_str(mapping.get(&glyph).expect("mapped PDF glyph"));
+                }
+                cursor = next;
+            }
+        }
+        text
+    }
+
+    fn pdf_page_text(pdf: &[u8]) -> Vec<String> {
+        let objects = pdf_objects(pdf);
+        let pages_object = objects
+            .values()
+            .find(|object| {
+                find_bytes(&object.body, b"/Type /Pages").is_some()
+                    && find_bytes(&object.body, b"/Kids [").is_some()
+            })
+            .expect("PDF page tree");
+        let kids_start = find_bytes(&pages_object.body, b"/Kids [").unwrap() + b"/Kids [".len();
+        let kids_end = kids_start
+            + find_bytes(&pages_object.body[kids_start..], b"]").expect("page tree kids");
+        let page_refs = references(&pages_object.body[kids_start..kids_end]);
+        let first_page = &objects[&page_refs[0]].body;
+        let font_refs = font_references(first_page);
+        let cmaps = font_refs
+            .into_iter()
+            .map(|(name, font_ref)| {
+                let cmap_ref = reference_after(&objects[&font_ref].body, b"/ToUnicode");
+                (name, cmap(&objects[&cmap_ref]))
+            })
+            .collect::<HashMap<_, _>>();
+
+        page_refs
+            .into_iter()
+            .map(|page_ref| {
+                let content_ref = reference_after(&objects[&page_ref].body, b"/Contents");
+                content_text(&decoded_stream(&objects[&content_ref]), &cmaps)
+            })
+            .collect()
+    }
+
+    fn header_footer_xml(root: &str, text: &str) -> Vec<u8> {
+        format!(
+            r#"<w:{root} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:{root}>"#
+        )
+        .into_bytes()
+    }
+
+    fn relationship_id(package: &OpcPackage, rel_type: &str, part_name: &str) -> String {
+        package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == rel_type
+                    && OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target)
+                        == part_name
+            })
+            .unwrap_or_else(|| panic!("missing relationship for {part_name}"))
+            .id
+            .clone()
+    }
+
+    fn section_references(package: &OpcPackage) -> String {
+        let default_header = relationship_id(package, rel_types::HEADER, "/word/header1.xml");
+        let first_header = relationship_id(package, rel_types::HEADER, "/word/headerFirst1.xml");
+        let even_header = relationship_id(package, rel_types::HEADER, "/word/headerEven1.xml");
+        let default_footer = relationship_id(package, rel_types::FOOTER, "/word/footer1.xml");
+        let first_footer = relationship_id(package, rel_types::FOOTER, "/word/footerFirst1.xml");
+        let even_footer = relationship_id(package, rel_types::FOOTER, "/word/footerEven1.xml");
+        format!(
+            r#"<w:headerReference w:type="default" r:id="{default_header}"/><w:headerReference w:type="first" r:id="{first_header}"/><w:headerReference w:type="even" r:id="{even_header}"/><w:footerReference w:type="default" r:id="{default_footer}"/><w:footerReference w:type="first" r:id="{first_footer}"/><w:footerReference w:type="even" r:id="{even_footer}"/>"#
+        )
+    }
+
+    fn page_paragraph(text: &str, page_break_before: bool, section: Option<&str>) -> String {
+        let page_break = if page_break_before {
+            "<w:pageBreakBefore/>"
+        } else {
+            ""
+        };
+        let section = section.unwrap_or("");
+        format!("<w:p><w:pPr>{page_break}{section}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>")
+    }
+
+    fn enable_even_headers(package: &mut OpcPackage) {
+        package.set_part(
+            "/word/settings.xml",
+            br#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:evenAndOddHeaders/></w:settings>"#.to_vec(),
+        );
+        package.content_types.add_override(
+            "/word/settings.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+        );
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        if relationships.get_by_type(rel_types::SETTINGS).is_none() {
+            relationships.add(rel_types::SETTINGS, "settings.xml");
+        }
+    }
+
+    fn save_and_reopen(package: OpcPackage) -> Fixture {
+        let mut staged = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut staged).unwrap();
+        let mut document = Document::from_bytes(staged.get_ref()).unwrap();
+        let saved = document.to_bytes().unwrap();
+        let document = Document::from_bytes(&saved).unwrap();
+        Fixture { document, saved }
+    }
+
+    fn full_fixture() -> Fixture {
+        let mut authored = Document::new();
+        authored.set_header(DEFAULT_HEADER);
+        authored.set_footer(DEFAULT_FOOTER);
+        authored.set_first_page_header(FIRST_HEADER);
+        authored.set_first_page_footer(FIRST_FOOTER);
+        authored.set_raw_header_with_images(
+            header_footer_xml("hdr", EVEN_HEADER),
+            &[],
+            HdrFtrType::Even,
+        );
+        authored.set_raw_footer_with_images(
+            header_footer_xml("ftr", EVEN_FOOTER),
+            &[],
+            HdrFtrType::Even,
+        );
+        authored.add_paragraph("authoring seed");
+
+        let bytes = authored.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        enable_even_headers(&mut package);
+        let references = section_references(&package);
+        let first_section = format!(
+            r#"<w:sectPr>{references}<w:type w:val="nextPage"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/><w:titlePg/></w:sectPr>"#
+        );
+        let final_section = r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/><w:titlePg/></w:sectPr>"#;
+        let document_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:producer"><w:body>{}{}{}{}{}{}{}{}</w:body></w:document>"#,
+            page_paragraph("SECTIONONEFIRSTBODY", false, None),
+            page_paragraph("SECTIONONEEVENBODY", true, None),
+            page_paragraph("SECTIONONEDEFAULTBODY", true, Some(&first_section)),
+            page_paragraph("SECTIONTWOFIRSTBODY", false, None),
+            PRODUCER_XML
+                .iter()
+                .map(|byte| *byte as char)
+                .collect::<String>(),
+            page_paragraph("SECTIONTWODEFAULTBODY", true, None),
+            page_paragraph("SECTIONTWOEVENBODY", true, None),
+            final_section,
+        );
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        package.set_part("/custom/producer.bin", PRODUCER_PART.to_vec());
+        package
+            .content_types
+            .add_override("/custom/producer.bin", "application/x-producer-private");
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(PRODUCER_REL_TYPE, "../custom/producer.bin");
+        save_and_reopen(package)
+    }
+
+    fn blank_fixture() -> Fixture {
+        let mut authored = Document::new();
+        authored.set_header(DEFAULT_HEADER);
+        authored.set_footer(DEFAULT_FOOTER);
+        authored.set_first_page_header("");
+        authored.set_first_page_footer("");
+        authored.set_raw_header_with_images(header_footer_xml("hdr", ""), &[], HdrFtrType::Even);
+        authored.set_raw_footer_with_images(header_footer_xml("ftr", ""), &[], HdrFtrType::Even);
+
+        let bytes = authored.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        enable_even_headers(&mut package);
+        let references = section_references(&package);
+        let final_section = format!(
+            r#"<w:sectPr>{references}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/><w:titlePg/></w:sectPr>"#
+        );
+        let document_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{}{}{}</w:body></w:document>"#,
+            page_paragraph("BLANKFIRSTBODY", false, None),
+            page_paragraph("BLANKEVENBODY", true, None),
+            final_section,
+        );
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        save_and_reopen(package)
+    }
+
+    fn page_text(page: &PageFrame) -> String {
+        let mut text = String::new();
+        walk(&page.elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element {
+                text.push_str(&run.text);
+            }
+        });
+        text
+    }
+
+    fn marker_y(page: &PageFrame, marker: &str) -> f64 {
+        let mut ys = Vec::new();
+        walk(&page.elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element
+                && run.text == marker
+            {
+                ys.push(run.origin.y);
+            }
+        });
+        assert_eq!(ys.len(), 1, "expected one positioned {marker}");
+        ys[0]
+    }
+
+    fn assert_story_selection(text: &str, header: &str, body: &str, footer: &str) {
+        assert!(text.contains(header), "missing {header} in {text:?}");
+        assert!(text.contains(body), "missing {body} in {text:?}");
+        assert!(text.contains(footer), "missing {footer} in {text:?}");
+        for marker in STORY_MARKERS {
+            assert_eq!(
+                text.matches(marker).count(),
+                usize::from(marker == header || marker == footer),
+                "unexpected {marker} in {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authored_reopened_headers_and_footers_reach_pdf() {
+        let fixture = full_fixture();
+        let layout = fixture.document.layout().unwrap();
+        let expected = [
+            (FIRST_HEADER, "SECTIONONEFIRSTBODY", FIRST_FOOTER),
+            (EVEN_HEADER, "SECTIONONEEVENBODY", EVEN_FOOTER),
+            (DEFAULT_HEADER, "SECTIONONEDEFAULTBODY", DEFAULT_FOOTER),
+            (FIRST_HEADER, "SECTIONTWOFIRSTBODY", FIRST_FOOTER),
+            (DEFAULT_HEADER, "SECTIONTWODEFAULTBODY", DEFAULT_FOOTER),
+            (EVEN_HEADER, "SECTIONTWOEVENBODY", EVEN_FOOTER),
+        ];
+        assert_eq!(
+            layout.layout.pages.len(),
+            expected.len(),
+            "page text: {:?}",
+            layout
+                .layout
+                .pages
+                .iter()
+                .map(|page| page_text(page))
+                .collect::<Vec<_>>()
+        );
+        for (page, (header, body, footer)) in layout.layout.pages.iter().zip(expected) {
+            assert_story_selection(&page_text(page), header, body, footer);
+            assert!(marker_y(page, header) < marker_y(page, body));
+            assert!(marker_y(page, body) < marker_y(page, footer));
+        }
+
+        let pdf_text = pdf_page_text(&fixture.document.to_pdf_deterministic().unwrap());
+        assert_eq!(pdf_text.len(), expected.len());
+        for (text, (header, body, footer)) in pdf_text.iter().zip(expected) {
+            assert_story_selection(text, header, body, footer);
+        }
+    }
+
+    #[test]
+    fn blank_first_and_even_variants_do_not_borrow_defaults() {
+        let fixture = blank_fixture();
+        let layout = fixture.document.layout().unwrap();
+        assert_eq!(
+            layout.layout.pages.len(),
+            2,
+            "page text: {:?}",
+            layout
+                .layout
+                .pages
+                .iter()
+                .map(|page| page_text(page))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(page_text(&layout.layout.pages[0]), "BLANKFIRSTBODY");
+        assert_eq!(page_text(&layout.layout.pages[1]), "BLANKEVENBODY");
+
+        let pdf_text = pdf_page_text(&fixture.document.to_pdf_deterministic().unwrap());
+        assert_eq!(pdf_text, ["BLANKFIRSTBODY", "BLANKEVENBODY"]);
+    }
+
+    #[test]
+    fn header_footer_pdf_fixture_preserves_unrelated_package_state() {
+        let fixture = full_fixture();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(fixture.saved)).unwrap();
+        assert_eq!(
+            package.get_part("/custom/producer.bin").unwrap(),
+            PRODUCER_PART
+        );
+        assert_eq!(
+            package.content_types.overrides.get("/custom/producer.bin"),
+            Some(&"application/x-producer-private".to_owned())
+        );
+        let relationship = package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == PRODUCER_REL_TYPE)
+            .expect("preserved producer relationship");
+        assert_eq!(relationship.target, "../custom/producer.bin");
+        assert_eq!(relationship.target_mode, None);
+        let document_xml = package.get_part("/word/document.xml").unwrap();
+        assert!(
+            document_xml
+                .windows(PRODUCER_XML.len())
+                .any(|window| window == PRODUCER_XML),
+            "unmodelled producer subtree was not preserved byte for byte"
+        );
+    }
+}
