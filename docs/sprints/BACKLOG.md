@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 45 | 38 | 3 | 3  |
-| **Total** | **256** | **215** | **5** | **35** |
+| X, Cross-cutting (opportunistic)            | 45 | 38 | 4 | 2  |
+| **Total** | **256** | **215** | **6** | **34** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -439,7 +439,7 @@ regenerated, never hand-edited.
 | F-X036 | Tag v0.8.0                                  | S51 | S | done |
 | F-X037 | Trace Word glyphs to source paragraphs     | S51 | M | done |
 | F-X038 | Cache relayout work across document edits  | S51 | L | done |
-| F-X039 | Share layout payloads and transfer reusable engines | S52 | M | pending |
+| F-X039 | Share layout payloads and transfer reusable engines | S52 | M | in-progress |
 | F-X040 | Restart pagination and cache table blocks  | S52 | L | pending |
 | F-X041 | Remove duplicated glyphs at break opportunities | S52 | M | in-progress |
 | F-X042 | Prove headers and footers in PDF output    | S52 | S | in-progress |
