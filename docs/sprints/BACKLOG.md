@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 50 | 38 | 7 | 4  |
-| **Total** | **261** | **215** | **10** | **35** |
+| X, Cross-cutting (opportunistic)            | 50 | 38 | 8 | 3  |
+| **Total** | **261** | **215** | **11** | **34** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -445,7 +445,7 @@ regenerated, never hand-edited.
 | F-X042 | Prove headers and footers in PDF output    | S52 | S | in-progress |
 | F-X043 | Reuse bundled-fallback caller-font layouts | S52 | M | in-progress |
 | F-X044 | Scale paragraph-cache lookup for editors   | S52 | M | in-progress |
-| F-X045 | Cache headers and footers transactionally  | S52 | M | pending |
+| F-X045 | Cache headers and footers transactionally  | S52 | M | in-progress |
 | F-X046 | Reuse substituted pages exactly            | S52 | S | pending |
 | F-X047 | Attribute empty Word paragraphs            | S52 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
