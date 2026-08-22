@@ -35,7 +35,7 @@ relayout reuse without weakening correctness.
 | F-X039 | Share layout payloads and transfer reusable engines | M | in-progress | codex |
 | F-X041 | Remove duplicated glyphs at break opportunities | M | in-progress | codex |
 | F-X042 | Prove headers and footers in PDF output | S | in-progress | codex |
-| F-170 | Agile encryption, write | M | pending | - |
+| F-170 | Agile encryption, write | M | in-progress | codex |
 | F-X040 | Restart pagination and cache table blocks | L | pending | - |
 
 ## Sequencing note
