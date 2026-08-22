@@ -899,14 +899,21 @@ regressions.
 | F-X040 | Restart pagination and cache table blocks | L |
 | F-X041 | Remove duplicated glyphs at break opportunities | M |
 | F-X042 | Prove headers and footers in PDF output | S |
+| F-X043 | Reuse bundled-fallback caller-font layouts | M |
+| F-X044 | Scale paragraph-cache lookup for editors | M |
+| F-X045 | Cache headers and footers transactionally | M |
+| F-X046 | Reuse substituted pages exactly | S |
+| F-X047 | Attribute empty Word paragraphs | S |
 
 Reading comes first and matters most. A password-protected document is a hard
 stop for a user today, where an unsigned one is only a missing assurance.
 F-X039 establishes shared ownership and a checked editor handoff before F-X040
 retains pagination tails. F-X041 fixes Issue 23 at the common layout layer, and
-F-X042 closes Issue 15 with a public DOCX-to-PDF gate. The four cross-cutting
-stories carry the detailed follow-ups from Issue 39 without weakening the
-security deliverables.
+F-X042 closes Issue 15 with a public DOCX-to-PDF gate. F-X043 through F-X047
+close PRs 40 and 41 after retaining their useful editor behavior behind exact
+context identity, transactional publication, and bounded memory. The sprint
+does not import unchecked engine setters, hash-authoritative reuse, or
+unbounded caches from the draft branches.
 
 #### Sprint S53, Signatures and accessible PDF
 

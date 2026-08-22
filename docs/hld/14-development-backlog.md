@@ -2457,6 +2457,87 @@ each applicable page in both `WordLayoutResult` and deterministic PDF output.
 Blank first or even variants do not borrow defaults, inherited variants remain
 visible, unrelated package parts survive, and the hash harness is unchanged.
 
+### F-X043, Reuse bundled-fallback caller-font layouts (M)
+
+Expose a native Word layout path where caller fonts override the deterministic
+bundled set and missing families resolve only from bundled fonts. Retain one
+private reusable engine for this mode across edits and support undo or rebuild
+transfer through an exact-context checked facade. Do not expose raw engine
+take or set operations, and do not let this path observe the system-font
+snapshot. PRs 40 and 41 supplied the concrete editor use case and prototype.
+
+**Depends on**: F-X039, F-X040.
+**Test gate**: regression. An incomplete caller set resolves bundled fallback
+families while the strict caller-only path still fails, caller faces win for
+the same family, compatible checked transfer records safe hits, font or
+document context changes preserve both engines and reject reuse, staged
+mutations retain valid work, warm and cold pages, fonts, diagnostics, and
+provenance are equal, both WASM targets pass, and all hashes remain unchanged.
+
+### F-X044, Scale paragraph-cache lookup for editors (M)
+
+Remove editor-scale paragraph-cache thrash without weakening F-X040's exact
+identity or traversal invalidation. Use a compact fingerprint only as a
+prefilter before authoritative typed equality, avoid cloning the complete
+paragraph key and linearly removing a hit, and size the bounded cache from
+retained-memory evidence on the reported 700-paragraph workload. Optional
+timing instrumentation must cost nothing when disabled. PR 41 supplied the
+profile and prototype.
+
+**Depends on**: F-X040.
+**Test gate**: regression. Forced fingerprint collisions cannot alias typed
+paragraphs, unsafe traversal content disables later reads, late failure
+publishes nothing, entry and retained-byte bounds hold under eviction, a
+700-paragraph warm edit avoids cache thrash, complete warm and cold outputs are
+equal, disabled timing adds no runtime work, and the hash harness is unchanged.
+
+### F-X045, Cache headers and footers transactionally (M)
+
+Cache reusable header and footer layout blocks under the same transactional,
+diagnostic-preserving, source-rebinding, and retained-memory discipline as safe
+body blocks. Exact typed identity covers complete section geometry, referenced
+parts, media bytes, revision view, font context, and provenance. First, even,
+default, inherited, image, and watermark variants remain distinct. PR 41
+supplied the optimization prototype, whose hash-only and unbounded form is not
+accepted.
+
+**Depends on**: F-X040, F-X042.
+**Test gate**: regression. Safe header and footer blocks hit and replay exact
+diagnostics, fonts, and provenance, while part text, media, watermark, page
+height, variant, section, or context changes miss. Late failure publishes no
+entry, combined entry and retained-byte ceilings hold, warm and cold outputs
+are completely equal, and the hash harness is unchanged.
+
+### F-X046, Reuse substituted pages exactly (S)
+
+Retain bounded pristine and field-substituted page pairs so repeated PAGE,
+NUMPAGES, and PAGEREF post-processing does not reshape an unchanged page. Reuse
+requires exact total-page, bookmark-target, page-content, font, and pristine
+page identity, and retained pairs count against the existing restart budget.
+PR 41 supplied the optimization prototype.
+
+**Depends on**: F-X040.
+**Test gate**: regression. Stable PAGE, NUMPAGES, and PAGEREF pages reuse their
+substituted frames, while page-count, bookmark, content, or font changes miss.
+Field-free sharing is preserved, eviction respects entry and byte bounds,
+complete warm and cold outputs match, and the hash harness is unchanged.
+
+### F-X047, Attribute empty Word paragraphs (S)
+
+Represent an empty Word paragraph with one zero-width empty text segment using
+the resolved default font and a source span of `0..0`. This gives interactive
+callers a caret target and correct line height without emitting a visible
+glyph. Cover body, table, header, footer, footnote, and endnote stories while
+keeping provenance and non-provenance layouts structurally compatible. PR 41
+supplied the behavior prototype.
+
+**Depends on**: F-X037.
+**Test gate**: regression. Every supported empty Word story emits exactly one
+zero-width attributed segment with resolved default metrics and the correct
+source identity, non-empty paragraphs are unchanged, provenance and ordinary
+layouts remain structurally equal, both backends render no new glyph, and the
+deterministic hash harness remains unchanged.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

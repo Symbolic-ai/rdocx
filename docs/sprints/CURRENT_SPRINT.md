@@ -37,6 +37,11 @@ relayout reuse without weakening correctness.
 | F-X042 | Prove headers and footers in PDF output | S | in-progress | codex |
 | F-170 | Agile encryption, write | M | in-progress | codex |
 | F-X040 | Restart pagination and cache table blocks | L | in-progress | codex |
+| F-X043 | Reuse bundled-fallback caller-font layouts | M | pending | - |
+| F-X044 | Scale paragraph-cache lookup for editors | M | pending | - |
+| F-X045 | Cache headers and footers transactionally | M | pending | - |
+| F-X046 | Reuse substituted pages exactly | S | pending | - |
+| F-X047 | Attribute empty Word paragraphs | S | pending | - |
 
 ## Sequencing note
 
@@ -50,7 +55,10 @@ relationship graph. F-X039, F-X041, and F-X042 are independent rendering
 roots. F-170 follows F-169 so files written here use the same validated
 agile-encryption model that the reader accepts. F-X040 follows F-X039 because
 restartable pagination needs shared page ownership and the checked reusable
-engine boundary. M17 continues in S53 with signature creation, tagged PDF,
+engine boundary. F-X043 through F-X047 close the remaining useful behavior in
+PRs 40 and 41 without importing their unchecked engine access, hash-authority,
+or unbounded cache designs. They run serially because they share the reusable
+layout engine. M17 continues in S53 with signature creation, tagged PDF,
 PDF/A, and redaction.
 
 ## Definition of done for this sprint
@@ -79,5 +87,12 @@ PDF/A, and redaction.
   relationships, and unmodelled XML through their declared round trips.
 - New cryptographic dependencies and feature edges satisfy the repository
   supply-chain, default-off, WASM, packaging, and licence gates.
+- Caller-font editor layouts fall back only to bundled fonts, reuse work through
+  checked exact-context transfer, and never observe the system-font snapshot.
+- Editor-scale paragraph lookup, header and footer reuse, and substituted-page
+  reuse remain exact, transactional, and inside declared retained-memory bounds.
+- Empty Word paragraphs expose a zero-width attributed caret segment across
+  body, table, header, footer, footnote, and endnote stories without visible
+  rendering drift.
 - The full workspace gate passes with all 49 deterministic hashes unchanged
   unless an approved design declares a reviewed delta.
