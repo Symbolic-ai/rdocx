@@ -36,7 +36,7 @@ relayout reuse without weakening correctness.
 | F-X041 | Remove duplicated glyphs at break opportunities | M | in-progress | codex |
 | F-X042 | Prove headers and footers in PDF output | S | in-progress | codex |
 | F-170 | Agile encryption, write | M | in-progress | codex |
-| F-X040 | Restart pagination and cache table blocks | L | pending | - |
+| F-X040 | Restart pagination and cache table blocks | L | in-progress | codex |
 
 ## Sequencing note
 
