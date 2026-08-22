@@ -4538,14 +4538,19 @@ class SprintWorkflowTests(unittest.TestCase):
             preflight,
         )
         self.assertIn("committed `CHANGELOG.md`", preflight)
+        self.assertIn("contribution inventory", preflight)
         self.assertIn("notes source as\n`CHANGELOG.md`", approval)
         self.assertIn("Include the rendered notes", approval)
+        self.assertIn("included issue and pull-request URLs", approval)
+        self.assertIn("comment that will be posted to each record", approval)
         self.assertIn("compare it byte\n   for byte", publication)
         self.assertIn(
             "python3 scripts/sprint_workflow.py release-notes\n"
             "   <requested-tag> --render",
             publication,
         )
+        self.assertIn("notify every issue", publication)
+        self.assertIn("Record every resulting\n   comment URL", publication)
 
     def test_release_notes_are_checked_before_approval_and_after_publication(
         self,
@@ -4577,6 +4582,17 @@ class SprintWorkflowTests(unittest.TestCase):
             "missing-published-body-comparison": release.replace(
                 "compare it byte\n   for byte", "inspect it", 1
             ),
+            "missing-contribution-inventory": release.replace(
+                "contribution inventory", "contributor summary", 1
+            ),
+            "missing-record-notification": release.replace(
+                "notify every issue", "summarize every issue", 1
+            ),
+            "missing-comment-evidence": release.replace(
+                "Record every resulting\n   comment URL",
+                "Record a notification summary",
+                1,
+            ),
         }
         for name, mutated in mutations.items():
             self.assertNotEqual(mutated, release, name)
@@ -4600,6 +4616,9 @@ class SprintWorkflowTests(unittest.TestCase):
             "AS_BUILT.md",
             "reviewed commits",
             "merged pull requests",
+            "contribution inventory",
+            "direct Markdown link",
+            "notification list",
             "contributor",
             "compatibility",
         ):

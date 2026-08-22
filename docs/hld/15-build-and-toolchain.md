@@ -308,6 +308,17 @@ evidence, then updates the exact changelog section for review with the code.
 separate final approval. After publication it requires the GitHub release body
 to equal the same rendered bytes.
 
+The ceremony also builds one selected-family inventory of every included
+GitHub issue and pull request. The reviewed notes link each record directly and
+credit its authenticated external reporter or contributor with the specific
+outcome that landed, including hardened equivalents of unmerged reference
+implementations. Before approval, `/release` reports the complete inventory and
+the planned record-specific comments. After successful registry publication
+and exact release-body verification, it posts those comments with the final tag
+and GitHub release link, then retains their URLs in the release evidence. A
+missing link, credit, inventory entry, or notification blocks completion of the
+release F-ID.
+
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the
 22-package union and its exact local patch set, archives below 10 MiB with

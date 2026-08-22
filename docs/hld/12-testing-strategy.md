@@ -45,6 +45,14 @@ path, preserve the rendered artifact until a fresh byte comparison immediately
 before GitHub release creation, and bind the release command to the same
 preflight and post-publication body check.
 
+Release review also reconciles one selected-family contribution inventory
+against the rendered notes. Every included GitHub issue and pull request must
+survive as a direct link, every authenticated external contributor must receive
+specific credit, and cross-family records must remain excluded. Workflow
+mutation tests pin the inventory, approval-report, and post-publication
+notification requirements. After the release body verifies byte for byte, the
+release records the comment URL posted to each included issue and pull request.
+
 The Word field regression matrix records Microsoft Word 16.104 build
 16.104.25121423 with an en-US locale, Gregorian calendar, period decimal
 separator, comma grouping separator, and UTC clock context. Its readable
