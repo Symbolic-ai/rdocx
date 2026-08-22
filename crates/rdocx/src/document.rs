@@ -13,13 +13,16 @@ use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, PackageReadLimits};
 use oxml_sml::Workbook;
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
-use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
+use rdocx_oxml::header_footer::{
+    CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
+};
 use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
@@ -33,6 +36,7 @@ use oxml_core::custom_properties::CustomProperties;
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
+use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::revision::RevisionRef;
@@ -44,6 +48,18 @@ use crate::table::{Table, TableRef};
 pub struct RenderOptions {
     /// The tracked-revision view to render.
     pub revision_view: rdocx_layout::RevisionView,
+}
+
+/// One direct child of a document body, in source order.
+pub enum BodyItemRef<'a> {
+    /// A body paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A body table.
+    Table(TableRef<'a>),
+    /// A body-level content control.
+    ContentControl(ContentControlRef<'a>),
+    /// A preserved body child that rdocx does not model.
+    UnsupportedXml(&'a [u8]),
 }
 
 /// A Word document (.docx file).
@@ -75,8 +91,12 @@ pub struct Document {
     settings_part_name: Option<String>,
     /// Collision-free allocator for image media parts.
     image_namer: MediaNamer,
-    /// Footnotes: loaded from word/footnotes.xml on open, written back on save.
+    /// Typed footnotes loaded through the main document relationship.
     pub(crate) footnotes: rdocx_oxml::footnotes::CT_Footnotes,
+    /// Existing footnotes relationship target. No conventional target is assumed on read.
+    pub(crate) footnotes_part_name: Option<String>,
+    /// Whether a facade mutation requires complete typed footnote serialization.
+    pub(crate) footnotes_dirty: bool,
     /// Typed comments loaded through the main document relationship.
     pub(crate) comments: Option<rdocx_oxml::comments::CT_Comments>,
     /// Existing comments relationship target. No target is invented on read.
@@ -90,9 +110,11 @@ pub struct Document {
     /// Whether this facade created the comments-extended part and may remove it when empty.
     pub(crate) comments_extended_owned: bool,
     /// Normal layout, including system font discovery, computed on first use.
-    layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
+    layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
+    /// Reusable normal-font engine retained across document edits.
+    normal_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
     /// Bundled-font-only layout used by deterministic rendering.
-    deterministic_layout_cache: Mutex<Option<Arc<oxml_layout::LayoutResult>>>,
+    deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
 }
 
 enum ChartPackageSource<'a> {
@@ -412,6 +434,8 @@ impl Document {
             settings_part_name: None,
             image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
+            footnotes_part_name: None,
+            footnotes_dirty: false,
             comments: None,
             comments_part_name: None,
             comments_extended: None,
@@ -419,8 +443,49 @@ impl Document {
             comments_owned: false,
             comments_extended_owned: false,
             layout_cache: Mutex::new(None),
+            normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         }
+    }
+
+    /// Clone all package and typed state while discarding derived layout caches.
+    pub(crate) fn clone_for_staging(&self) -> Self {
+        Self {
+            package: self.package.clone(),
+            document: self.document.clone(),
+            styles: self.styles.clone(),
+            numbering: self.numbering.clone(),
+            core_properties: self.core_properties.clone(),
+            custom_properties: self.custom_properties.clone(),
+            core_properties_part_name: self.core_properties_part_name.clone(),
+            doc_part_name: self.doc_part_name.clone(),
+            styles_part_name: self.styles_part_name.clone(),
+            numbering_part_name: self.numbering_part_name.clone(),
+            settings: self.settings.clone(),
+            settings_part_name: self.settings_part_name.clone(),
+            image_namer: self.image_namer.clone(),
+            footnotes: self.footnotes.clone(),
+            footnotes_part_name: self.footnotes_part_name.clone(),
+            footnotes_dirty: self.footnotes_dirty,
+            comments: self.comments.clone(),
+            comments_part_name: self.comments_part_name.clone(),
+            comments_extended: self.comments_extended.clone(),
+            comments_extended_part_name: self.comments_extended_part_name.clone(),
+            comments_owned: self.comments_owned,
+            comments_extended_owned: self.comments_extended_owned,
+            layout_cache: Mutex::new(None),
+            normal_layout_engine: Mutex::new(None),
+            deterministic_layout_cache: Mutex::new(None),
+        }
+    }
+
+    /// Commit staged package state without discarding reusable layout work.
+    fn commit_staged_mutation(&mut self, mut candidate: Self) {
+        std::mem::swap(
+            &mut self.normal_layout_engine,
+            &mut candidate.normal_layout_engine,
+        );
+        *self = candidate;
     }
 
     /// Open a document from a file path.
@@ -508,11 +573,10 @@ impl Document {
             package.parts.keys().map(String::as_str),
         );
 
-        let footnotes = package
-            .get_part_rels(&doc_part_name)
-            .and_then(|rels| rels.get_by_type(rel_types::FOOTNOTES))
-            .map(|rel| OpcPackage::resolve_rel_target(&doc_part_name, &rel.target))
-            .and_then(|part| package.get_part(&part))
+        let footnotes_part_name = resolve_part(rel_types::FOOTNOTES);
+        let footnotes = footnotes_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
             .and_then(|xml| rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml).ok())
             .unwrap_or_default();
 
@@ -550,6 +614,8 @@ impl Document {
             settings_part_name,
             image_namer,
             footnotes,
+            footnotes_part_name,
+            footnotes_dirty: false,
             comments,
             comments_part_name,
             comments_extended,
@@ -557,6 +623,7 @@ impl Document {
             comments_owned: false,
             comments_extended_owned: false,
             layout_cache: Mutex::new(None),
+            normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
         })
     }
@@ -574,7 +641,7 @@ impl Document {
     }
 
     /// Return the normal-font layout, computing it once after each mutation.
-    fn cached_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
+    fn cached_layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         let mut cache = self
             .layout_cache
             .lock()
@@ -586,13 +653,20 @@ impl Document {
         let input = self.build_layout_input();
         #[cfg(test)]
         record_layout_invocation();
-        let layout = Arc::new(rdocx_layout::layout_document(&input)?);
+        let mut engine = self
+            .normal_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let engine = engine.get_or_insert_with(rdocx_layout::engine::Engine::new);
+        let layout = Arc::new(rdocx_layout::layout_document_with_reusable_engine(
+            engine, &input,
+        )?);
         *cache = Some(Arc::clone(&layout));
         Ok(layout)
     }
 
     /// Return the bundled-font-only layout, computing it once after mutation.
-    fn cached_deterministic_layout(&self) -> Result<Arc<oxml_layout::LayoutResult>> {
+    fn cached_deterministic_layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         let mut cache = self
             .deterministic_layout_cache
             .lock()
@@ -604,16 +678,18 @@ impl Document {
         let input = self.build_layout_input();
         #[cfg(test)]
         record_layout_invocation();
-        let layout = Arc::new(rdocx_layout::layout_document_deterministic(&input)?);
+        let layout = Arc::new(rdocx_layout::layout_document_deterministic_with_provenance(
+            &input,
+        )?);
         *cache = Some(Arc::clone(&layout));
         Ok(layout)
     }
 
-    fn layout_with_options(
+    fn layout_for_options(
         &self,
         options: RenderOptions,
         deterministic: bool,
-    ) -> Result<Arc<oxml_layout::LayoutResult>> {
+    ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         if options.revision_view == rdocx_layout::RevisionView::Accepted {
             return if deterministic {
                 self.cached_deterministic_layout()
@@ -627,9 +703,14 @@ impl Document {
         #[cfg(test)]
         record_layout_invocation();
         let layout = if deterministic {
-            rdocx_layout::layout_document_deterministic(&input)?
+            rdocx_layout::layout_document_deterministic_with_provenance(&input)?
         } else {
-            rdocx_layout::layout_document(&input)?
+            let mut engine = self
+                .normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let engine = engine.get_or_insert_with(rdocx_layout::engine::Engine::new);
+            rdocx_layout::layout_document_with_reusable_engine(engine, &input)?
         };
         Ok(Arc::new(layout))
     }
@@ -682,12 +763,16 @@ impl Document {
             self.package.set_part(part_name, settings.to_xml()?);
         }
 
-        // Serialize footnotes.xml when any footnotes exist
-        if !self.footnotes.footnotes.is_empty() {
+        // Preserve parsed footnote bytes until a facade mutation makes the typed view dirty.
+        if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
             let fx = self.footnotes.to_xml_footnotes()?;
-            self.package.set_part("/word/footnotes.xml", fx);
+            let footnotes_part = self
+                .footnotes_part_name
+                .clone()
+                .unwrap_or_else(|| "/word/footnotes.xml".to_owned());
+            self.package.set_part(&footnotes_part, fx);
             self.package.content_types.add_override(
-                "/word/footnotes.xml",
+                &footnotes_part,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
             );
             let rels = self
@@ -862,6 +947,24 @@ impl Document {
 
     // ---- Paragraph access ----
 
+    /// Iterate over direct body items in source order.
+    ///
+    /// Unlike [`Self::paragraphs`] and [`Self::tables`], this retains the
+    /// interleaving of paragraphs, tables, content controls, and preserved
+    /// unmodelled XML.
+    pub fn body_items(&self) -> impl Iterator<Item = BodyItemRef<'_>> {
+        self.document.body.content.iter().map(|item| match item {
+            BodyContent::Paragraph(paragraph) => {
+                BodyItemRef::Paragraph(ParagraphRef { inner: paragraph })
+            }
+            BodyContent::Table(table) => BodyItemRef::Table(TableRef { inner: table }),
+            BodyContent::ContentControl(control) => {
+                BodyItemRef::ContentControl(ContentControlRef { inner: control })
+            }
+            BodyContent::RawXml(raw) => BodyItemRef::UnsupportedXml(raw),
+        })
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -906,6 +1009,7 @@ impl Document {
     /// `Paragraph::add_footnote_ref` to reference it from the body.
     pub fn add_footnote(&mut self, text: &str) -> i32 {
         self.invalidate_layout();
+        self.footnotes_dirty = true;
         use rdocx_oxml::footnotes::CT_Footnote;
         use rdocx_oxml::text::CT_P;
         let id = self
@@ -1505,6 +1609,194 @@ impl Document {
             true,
             HdrFtrType::Default,
         );
+    }
+
+    /// Set a Word-compatible text watermark in every active header variant.
+    pub fn set_text_watermark(&mut self, text: &str) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.apply_watermark(|_, _| VmlWatermark::Text {
+            text: text.to_owned(),
+            width_pt: 468.0,
+            height_pt: 117.0,
+            rotation_degrees: 315.0,
+            color: "D9D9D9".to_owned(),
+            font_family: Some("Calibri".to_owned()),
+            opacity: 0.5,
+        })?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Set an image watermark in every active header variant.
+    pub fn set_image_watermark(
+        &mut self,
+        image_data: &[u8],
+        image_filename: &str,
+        width: Length,
+        height: Length,
+    ) -> Result<()> {
+        if width.to_emu() <= 0 || height.to_emu() <= 0 {
+            return Err(Error::Other(
+                "watermark image width and height must be positive".to_owned(),
+            ));
+        }
+
+        let mut candidate = self.clone_for_staging();
+        let image_target = candidate.store_image_part(image_data, image_filename);
+        let image_part_name =
+            OpcPackage::resolve_rel_target(&candidate.doc_part_name, &image_target);
+        candidate.apply_watermark(|package, part_name| {
+            let target = relative_target(part_name, &image_part_name);
+            let relationship_id = package
+                .get_or_create_part_rels(part_name)
+                .add(rel_types::IMAGE, &target);
+            VmlWatermark::Image {
+                relationship_id,
+                width_pt: width.to_pt(),
+                height_pt: height.to_pt(),
+                rotation_degrees: 0.0,
+                opacity: 0.5,
+            }
+        })?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    fn apply_watermark(
+        &mut self,
+        mut watermark_for_part: impl FnMut(&mut OpcPackage, &str) -> VmlWatermark,
+    ) -> Result<()> {
+        self.ensure_watermark_header_inheritance()?;
+        let header_ids = self
+            .header_footer_rel_ids()
+            .into_iter()
+            .filter_map(|(relationship_id, is_header)| is_header.then_some(relationship_id))
+            .collect::<Vec<_>>();
+
+        for relationship_id in header_ids {
+            let target = self
+                .package
+                .get_part_rels(&self.doc_part_name)
+                .and_then(|relationships| relationships.get_by_id(&relationship_id))
+                .map(|relationship| relationship.target.clone())
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "active header relationship {relationship_id} is missing"
+                    ))
+                })?;
+            let part_name = OpcPackage::resolve_rel_target(&self.doc_part_name, &target);
+            let xml = self
+                .package
+                .get_part(&part_name)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| {
+                    Error::Other(format!("active header part {part_name} is missing"))
+                })?;
+            let watermark = watermark_for_part(&mut self.package, &part_name);
+            let updated = replace_authored_watermark(&xml, &watermark)?;
+            self.package.set_part(&part_name, updated);
+        }
+        self.invalidate_layout();
+        Ok(())
+    }
+
+    fn ensure_watermark_header_inheritance(&mut self) -> Result<()> {
+        self.section_properties_mut();
+        let even_enabled = self.even_headers_enabled();
+        let insertions = {
+            let mut effective = [false; 3];
+            let mut insertions = Vec::new();
+            let mut inspect = |location: Option<usize>, section: &CT_SectPr| {
+                for reference in &section.header_refs {
+                    effective[header_type_index(reference.hdr_ftr_type)] = true;
+                }
+                for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+                    let active = match hdr_type {
+                        HdrFtrType::Default => true,
+                        HdrFtrType::First => section.title_pg.unwrap_or(false),
+                        HdrFtrType::Even => even_enabled,
+                    };
+                    let index = header_type_index(hdr_type);
+                    if active && !effective[index] {
+                        insertions.push((location, hdr_type));
+                        effective[index] = true;
+                    }
+                }
+            };
+            for (index, content) in self.document.body.content.iter().enumerate() {
+                if let BodyContent::Paragraph(paragraph) = content
+                    && let Some(section) = paragraph
+                        .properties
+                        .as_ref()
+                        .and_then(|properties| properties.sect_pr.as_ref())
+                {
+                    inspect(Some(index), section);
+                }
+            }
+            if let Some(section) = self.document.body.sect_pr.as_ref() {
+                inspect(None, section);
+            }
+            insertions
+        };
+
+        for (location, hdr_type) in insertions {
+            let relationship_id = self.create_watermark_header_relationship(hdr_type)?;
+            let reference = HdrFtrRef {
+                hdr_ftr_type: hdr_type,
+                rel_id: relationship_id,
+            };
+            match location {
+                Some(index) => {
+                    let BodyContent::Paragraph(paragraph) = &mut self.document.body.content[index]
+                    else {
+                        unreachable!("recorded section owner changed")
+                    };
+                    paragraph
+                        .properties
+                        .as_mut()
+                        .and_then(|properties| properties.sect_pr.as_mut())
+                        .expect("recorded section disappeared")
+                        .header_refs
+                        .push(reference);
+                }
+                None => self
+                    .document
+                    .body
+                    .sect_pr
+                    .as_mut()
+                    .expect("final section disappeared")
+                    .header_refs
+                    .push(reference),
+            }
+        }
+        Ok(())
+    }
+
+    fn create_watermark_header_relationship(&mut self, hdr_type: HdrFtrType) -> Result<String> {
+        let label = match hdr_type {
+            HdrFtrType::Default => "Default",
+            HdrFtrType::First => "First",
+            HdrFtrType::Even => "Even",
+        };
+        let mut index = 1usize;
+        let part_name = loop {
+            let candidate = format!("/word/headerWatermark{label}{index}.xml");
+            if self.package.get_part(&candidate).is_none() {
+                break candidate;
+            }
+            index += 1;
+        };
+        let empty_header = CT_HdrFtr::new().to_xml_header()?;
+        self.package.set_part(&part_name, empty_header);
+        self.package.content_types.add_override(
+            &part_name,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        let target = relative_target(&self.doc_part_name, &part_name);
+        Ok(self
+            .package
+            .get_or_create_part_rels(&self.doc_part_name)
+            .add(rel_types::HEADER, &target))
     }
 
     /// Set the default footer to an inline image.
@@ -2577,33 +2869,6 @@ impl Document {
         crate::template::render(self, data)
     }
 
-    pub(crate) fn clone_for_template(&self) -> Self {
-        Self {
-            package: self.package.clone(),
-            document: self.document.clone(),
-            styles: self.styles.clone(),
-            numbering: self.numbering.clone(),
-            core_properties: self.core_properties.clone(),
-            custom_properties: self.custom_properties.clone(),
-            core_properties_part_name: self.core_properties_part_name.clone(),
-            doc_part_name: self.doc_part_name.clone(),
-            styles_part_name: self.styles_part_name.clone(),
-            numbering_part_name: self.numbering_part_name.clone(),
-            settings: self.settings.clone(),
-            settings_part_name: self.settings_part_name.clone(),
-            image_namer: self.image_namer.clone(),
-            footnotes: self.footnotes.clone(),
-            comments: self.comments.clone(),
-            comments_part_name: self.comments_part_name.clone(),
-            comments_extended: self.comments_extended.clone(),
-            comments_extended_part_name: self.comments_extended_part_name.clone(),
-            comments_owned: self.comments_owned,
-            comments_extended_owned: self.comments_extended_owned,
-            layout_cache: Mutex::new(None),
-            deterministic_layout_cache: Mutex::new(None),
-        }
-    }
-
     pub(crate) fn template_numbering_reference_exists(&self, num_id: u32, level: u32) -> bool {
         self.numbering
             .as_ref()
@@ -2753,6 +3018,44 @@ impl Document {
         }
 
         rel_ids
+    }
+
+    fn header_footer_rel_ids_for_layout(&self) -> HashSet<String> {
+        let even_headers_enabled = self.even_headers_enabled();
+        let mut rel_ids = HashSet::new();
+        let sections = self
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    None
+                }
+            })
+            .chain(self.document.body.sect_pr.iter());
+        for section in sections {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if reference.hdr_ftr_type != HdrFtrType::Even || even_headers_enabled {
+                    rel_ids.insert(reference.rel_id.clone());
+                }
+            }
+        }
+        rel_ids
+    }
+
+    fn even_headers_enabled(&self) -> bool {
+        let Some(settings) = self.settings.as_ref() else {
+            return false;
+        };
+        settings
+            .to_xml()
+            .ok()
+            .is_some_and(|xml| settings_enable_even_headers(&xml))
     }
 
     // ---- Regex replacement ----
@@ -2953,7 +3256,57 @@ impl Document {
         count
     }
 
-    // ---- PDF conversion ----
+    // ---- Layout and PDF conversion ----
+
+    /// Return the cached normal-font layout with its Word source map.
+    ///
+    /// Repeated calls share the same accepted-view result until the document
+    /// is mutated.
+    pub fn layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_with_options(RenderOptions::default())
+    }
+
+    /// Return a normal-font layout with the selected revision view.
+    ///
+    /// Accepted-view calls share the normal layout cache. Tracked-view calls
+    /// remain uncached because they do not replace the accepted-view cache.
+    pub fn layout_with_options(
+        &self,
+        options: RenderOptions,
+    ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_for_options(options, false)
+    }
+
+    /// Return an uncached layout using user-provided font files.
+    ///
+    /// User-provided fonts take highest priority in font resolution. The
+    /// returned owned result retains the exact font bytes and Word source map
+    /// used by layout.
+    pub fn layout_with_fonts(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        self.layout_with_fonts_and_options(font_files, RenderOptions::default())
+    }
+
+    /// Return an uncached caller-font layout with the selected revision view.
+    pub fn layout_with_fonts_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        let mut input = self.build_layout_input();
+        input.revision_view = options.revision_view;
+        for (family, data) in font_files {
+            input.fonts.push(rdocx_layout::FontFile {
+                family: family.to_string(),
+                data: data.to_vec(),
+            });
+        }
+        #[cfg(test)]
+        record_layout_invocation();
+        Ok(rdocx_layout::layout_document_with_caller_fonts_and_provenance(&input)?)
+    }
 
     /// Render the document to PDF bytes.
     ///
@@ -2970,8 +3323,8 @@ impl Document {
 
     /// Render the document to PDF bytes with the selected revision view.
     pub fn to_pdf_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_to_pdf(&layout.layout))
     }
 
     /// Render the document to PDF bytes using bundled fonts without system
@@ -2985,8 +3338,8 @@ impl Document {
 
     /// Render the selected revision view to deterministic PDF bytes.
     pub fn to_pdf_deterministic_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
-        let layout = self.layout_with_options(options, true)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = self.layout_for_options(options, true)?;
+        Ok(oxml_pdf::render_to_pdf(&layout.layout))
     }
 
     /// Render the document to PDF bytes with user-provided font files.
@@ -3011,18 +3364,8 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<Vec<u8>> {
-        let mut input = self.build_layout_input();
-        input.revision_view = options.revision_view;
-        for (family, data) in font_files {
-            input.fonts.push(rdocx_layout::FontFile {
-                family: family.to_string(),
-                data: data.to_vec(),
-            });
-        }
-        #[cfg(test)]
-        record_layout_invocation();
-        let layout = rdocx_layout::layout_document(&input)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = self.layout_with_fonts_and_options(font_files, options)?;
+        Ok(oxml_pdf::render_to_pdf(&layout.layout))
     }
 
     /// Save the document as a PDF file.
@@ -3121,8 +3464,12 @@ impl Document {
         dpi: f64,
         options: RenderOptions,
     ) -> Result<Option<Vec<u8>>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_page_to_png(
+            &layout.layout,
+            page_index,
+            dpi,
+        ))
     }
 
     /// Render a single page to PNG using bundled fonts without system font
@@ -3150,8 +3497,12 @@ impl Document {
         dpi: f64,
         options: RenderOptions,
     ) -> Result<Option<Vec<u8>>> {
-        let layout = self.layout_with_options(options, true)?;
-        Ok(oxml_pdf::render_page_to_png(&layout, page_index, dpi))
+        let layout = self.layout_for_options(options, true)?;
+        Ok(oxml_pdf::render_page_to_png(
+            &layout.layout,
+            page_index,
+            dpi,
+        ))
     }
 
     /// Render all pages of the document to PNG bytes.
@@ -3165,8 +3516,8 @@ impl Document {
         dpi: f64,
         options: RenderOptions,
     ) -> Result<Vec<Vec<u8>>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(oxml_pdf::render_all_pages(&layout, dpi))
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_all_pages(&layout.layout, dpi))
     }
 
     /// Return a cloned positioned page from the cached normal-font layout.
@@ -3182,8 +3533,8 @@ impl Document {
         page_index: usize,
         options: RenderOptions,
     ) -> Result<Option<oxml_layout::PageFrame>> {
-        let layout = self.layout_with_options(options, false)?;
-        Ok(layout.pages.get(page_index).cloned())
+        let layout = self.layout_with_options(options)?;
+        Ok(layout.layout.pages.get(page_index).cloned())
     }
 
     /// Build a LayoutInput from the document's current state.
@@ -3200,6 +3551,8 @@ impl Document {
         let mut footnotes = None;
         let mut endnotes = None;
         let mut theme_part_name = None;
+        let active_header_footer_ids = self.header_footer_rel_ids_for_layout();
+        let even_headers_enabled = self.even_headers_enabled();
 
         // Extract embedded fonts from the DOCX package
         let fonts = self.extract_embedded_fonts();
@@ -3208,6 +3561,9 @@ impl Document {
             for rel in &rels.items {
                 match rel.rel_type.as_str() {
                     t if t == rel_types::HEADER => {
+                        if !active_header_footer_ids.contains(&rel.id) {
+                            continue;
+                        }
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name)
@@ -3215,8 +3571,35 @@ impl Document {
                         {
                             headers.insert(rel.id.clone(), hf);
                         }
+                        if let Some(header_relationships) = self.package.get_part_rels(&part_name) {
+                            for image_relationship in
+                                header_relationships.items.iter().filter(|item| {
+                                    item.rel_type == rel_types::IMAGE
+                                        && item.target_mode.as_deref() != Some("External")
+                                })
+                            {
+                                let image_part = OpcPackage::resolve_rel_target(
+                                    &part_name,
+                                    &image_relationship.target,
+                                );
+                                if let Some(data) = self.package.get_part(&image_part) {
+                                    images.insert(
+                                        format!("{}\0{}", rel.id, image_relationship.id),
+                                        ImageData {
+                                            data: data.to_vec(),
+                                            content_type: oxml_media::resolve(data, &image_part)
+                                                .content_type()
+                                                .to_owned(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
                     }
                     t if t == rel_types::FOOTER => {
+                        if !active_header_footer_ids.contains(&rel.id) {
+                            continue;
+                        }
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name)
@@ -3299,9 +3682,37 @@ impl Document {
             .unwrap_or_else(oxml_drawing::theme::CT_OfficeStyleSheet::office_default);
         let theme = theme_xml.and_then(|data| rdocx_oxml::theme::Theme::from_xml(data).ok());
 
+        let mut document = self.document.clone();
+        if !even_headers_enabled {
+            for content in &mut document.body.content {
+                if let BodyContent::Paragraph(paragraph) = content
+                    && let Some(section) = paragraph
+                        .properties
+                        .as_mut()
+                        .and_then(|properties| properties.sect_pr.as_mut())
+                {
+                    section
+                        .header_refs
+                        .retain(|reference| reference.hdr_ftr_type != HdrFtrType::Even);
+                    section
+                        .footer_refs
+                        .retain(|reference| reference.hdr_ftr_type != HdrFtrType::Even);
+                }
+            }
+            if let Some(section) = document.body.sect_pr.as_mut() {
+                section
+                    .header_refs
+                    .retain(|reference| reference.hdr_ftr_type != HdrFtrType::Even);
+                section
+                    .footer_refs
+                    .retain(|reference| reference.hdr_ftr_type != HdrFtrType::Even);
+            }
+        }
+        materialize_header_inheritance(&mut document, even_headers_enabled);
+
         LayoutInput {
             revision_view: rdocx_layout::RevisionView::Accepted,
-            document: self.document.clone(),
+            document,
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             headers,
@@ -3779,6 +4190,108 @@ fn chart_namespace_matches(namespace: &ResolveResult<'_>) -> bool {
     }
 }
 
+fn settings_enable_even_headers(xml: &[u8]) -> bool {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
+            return false;
+        };
+        match event {
+            Event::Start(ref element) => {
+                if depth == 1
+                    && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+                    && matches_local_name(element.name().as_ref(), b"evenAndOddHeaders")
+                {
+                    return word_on_off_value(&reader, element);
+                }
+                depth += 1;
+            }
+            Event::Empty(ref element)
+                if depth == 1
+                    && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+                    && matches_local_name(element.name().as_ref(), b"evenAndOddHeaders") =>
+            {
+                return word_on_off_value(&reader, element);
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn header_type_index(hdr_type: HdrFtrType) -> usize {
+    match hdr_type {
+        HdrFtrType::Default => 0,
+        HdrFtrType::First => 1,
+        HdrFtrType::Even => 2,
+    }
+}
+
+fn materialize_header_inheritance(document: &mut CT_Document, even_headers_enabled: bool) {
+    let mut effective: [Option<HdrFtrRef>; 3] = [None, None, None];
+    let inherit = |section: &mut CT_SectPr, effective: &mut [Option<HdrFtrRef>; 3]| {
+        for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            let index = header_type_index(hdr_type);
+            if let Some(reference) = section
+                .header_refs
+                .iter()
+                .find(|reference| reference.hdr_ftr_type == hdr_type)
+                .cloned()
+            {
+                effective[index] = Some(reference);
+            } else if let Some(reference) = effective[index].clone() {
+                section.header_refs.push(reference);
+            } else if hdr_type == HdrFtrType::Even && even_headers_enabled {
+                section.header_refs.push(HdrFtrRef {
+                    hdr_ftr_type: HdrFtrType::Even,
+                    rel_id: String::new(),
+                });
+            }
+        }
+    };
+    for content in &mut document.body.content {
+        if let BodyContent::Paragraph(paragraph) = content
+            && let Some(section) = paragraph
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.sect_pr.as_mut())
+        {
+            inherit(section, &mut effective);
+        }
+    }
+    if let Some(section) = document.body.sect_pr.as_mut() {
+        inherit(section, &mut effective);
+    }
+}
+
+fn word_on_off_value(
+    reader: &NsReader<&[u8]>,
+    element: &quick_xml::events::BytesStart<'_>,
+) -> bool {
+    element
+        .attributes()
+        .flatten()
+        .find_map(|attribute| {
+            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+            if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes())
+                && local.as_ref() == b"val"
+            {
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                    .ok()
+                    .map(|value| !matches!(value.as_ref(), "0" | "false" | "off"))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(true)
+}
+
 /// Express `target_part` relative to the directory holding `source_part`.
 ///
 /// Falls back to the absolute part name when the two live in different
@@ -4240,6 +4753,97 @@ mod tests {
         LAYOUT_INVOCATIONS.get()
     }
 
+    fn caller_only_font() -> (&'static str, Vec<u8>) {
+        const FAMILY: &str = "Callira";
+        const SOURCE: &[u8] =
+            include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").as_slice();
+
+        fn replace_all_same_length(data: &mut [u8], from: &[u8], to: &[u8]) -> usize {
+            assert_eq!(from.len(), to.len());
+            let mut replaced = 0;
+            let mut offset = 0;
+            while let Some(index) = data[offset..]
+                .windows(from.len())
+                .position(|window| window == from)
+            {
+                let start = offset + index;
+                data[start..start + from.len()].copy_from_slice(to);
+                offset = start + from.len();
+                replaced += 1;
+            }
+            replaced
+        }
+
+        let mut bytes = SOURCE.to_vec();
+        let ascii = replace_all_same_length(&mut bytes, b"Carlito", FAMILY.as_bytes());
+        let source_utf16 = "Carlito"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let family_utf16 = FAMILY
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let utf16 = replace_all_same_length(&mut bytes, &source_utf16, &family_utf16);
+        assert!(ascii > 0 && utf16 > 0, "font family records were renamed");
+        assert!(
+            oxml_layout::bundled_fonts::bundled_font_data()
+                .iter()
+                .all(|(family, bundled)| *family != FAMILY && *bundled != bytes),
+            "the caller-only font must not match bundled family names or bytes"
+        );
+        (FAMILY, bytes)
+    }
+
+    #[test]
+    fn body_items_preserve_paragraph_table_control_and_raw_order() {
+        let mut doc = Document::new();
+        doc.add_paragraph("first");
+        doc.add_table(1, 1);
+        doc.document
+            .body
+            .content
+            .push(BodyContent::RawXml(b"<w:custom/>".to_vec()));
+
+        let mut reader = quick_xml::Reader::from_reader(
+            br#"<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtContent><w:p><w:r><w:t>inside</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+                .as_slice(),
+        );
+        let mut buffer = Vec::new();
+        let control = match reader.read_event_into(&mut buffer).unwrap() {
+            Event::Start(start) => CT_Sdt::from_xml(&mut reader, &start).unwrap(),
+            event => panic!("expected content control start, got {event:?}"),
+        };
+        doc.document
+            .body
+            .content
+            .push(BodyContent::ContentControl(control));
+        doc.add_paragraph("last");
+
+        let items = doc
+            .body_items()
+            .map(|item| match item {
+                BodyItemRef::Paragraph(paragraph) => format!("paragraph:{}", paragraph.text()),
+                BodyItemRef::Table(_) => "table".to_owned(),
+                BodyItemRef::ContentControl(control) => format!("control:{}", control.text()),
+                BodyItemRef::UnsupportedXml(raw) => {
+                    format!("raw:{}", std::str::from_utf8(raw).unwrap())
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            items,
+            [
+                "paragraph:first",
+                "table",
+                "raw:<w:custom/>",
+                "control:inside",
+                "paragraph:last",
+            ]
+        );
+    }
+
     #[test]
     fn rendering_all_pages_performs_one_layout() {
         let mut doc = Document::new();
@@ -4403,9 +5007,197 @@ mod tests {
     }
 
     #[test]
+    fn full_layout_exposes_resolvable_font_data_and_reuses_the_cache() {
+        let mut doc = Document::new();
+        doc.add_paragraph("complete layout result");
+
+        reset_layout_invocations();
+        let first = doc.layout().expect("normal layout should succeed");
+        let second = doc
+            .layout_with_options(RenderOptions::default())
+            .expect("accepted layout should succeed");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(layout_invocations(), 1);
+
+        let mut sourced_runs = 0;
+        for page in &first.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    assert!(first.layout.fonts.iter().any(|font| font.id == run.font_id));
+                    if let Some(source) = run.source {
+                        assert!(first.source_node(source.node).is_some());
+                        sourced_runs += 1;
+                    }
+                }
+            });
+        }
+        assert!(sourced_runs > 0);
+
+        assert!(
+            !doc.to_pdf()
+                .expect("PDF should use cached layout")
+                .is_empty()
+        );
+        assert_eq!(layout_invocations(), 1);
+    }
+
+    #[test]
+    fn layout_with_fonts_returns_the_caller_font_mapping_without_caching() {
+        let mut doc = Document::new();
+        let (family, bytes) = caller_only_font();
+        doc.add_paragraph("")
+            .add_run("caller font result")
+            .font(family);
+
+        reset_layout_invocations();
+        let first = doc
+            .layout_with_fonts(&[(family, &bytes)])
+            .expect("caller-font layout should succeed");
+        let second = doc
+            .layout_with_fonts_and_options(&[(family, &bytes)], RenderOptions::default())
+            .expect("caller-font options layout should succeed");
+        assert_eq!(layout_invocations(), 2);
+
+        for result in [&first, &second] {
+            let mut positioned_runs = Vec::new();
+            for page in &result.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let oxml_layout::PositionedElement::Text(run) = element
+                        && run.source.is_some()
+                    {
+                        positioned_runs.push(run.clone());
+                    }
+                });
+            }
+            assert!(
+                !positioned_runs.is_empty(),
+                "caller-font text was positioned"
+            );
+            for run in positioned_runs {
+                let font = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("caller-font glyph run should resolve its font id");
+                assert_eq!(font.family, family);
+                assert_eq!(font.data, bytes);
+                let source = run
+                    .source
+                    .expect("caller-font text should retain source provenance");
+                assert!(result.source_node(source.node).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn caller_font_layout_does_not_fall_through_to_system_or_bundled_fonts() {
+        let mut doc = Document::new();
+        doc.add_paragraph("caller isolation requires an explicit font universe");
+        assert!(doc.layout_with_fonts(&[]).is_err());
+        assert!(
+            doc.normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn layout_options_keep_tracked_and_accepted_cache_ownership_separate() {
+        let mut doc = Document::new();
+        doc.add_paragraph("revision cache separation");
+        let tracked = RenderOptions {
+            revision_view: rdocx_layout::RevisionView::Tracked,
+        };
+
+        reset_layout_invocations();
+        let accepted_first = doc.layout().expect("accepted layout should succeed");
+        assert_eq!(layout_invocations(), 1);
+
+        let tracked_first = doc
+            .layout_with_options(tracked)
+            .expect("tracked layout should succeed");
+        let tracked_second = doc
+            .layout_with_options(tracked)
+            .expect("second tracked layout should succeed");
+        assert!(!Arc::ptr_eq(&tracked_first, &tracked_second));
+        assert_eq!(layout_invocations(), 3);
+        assert!(
+            doc.normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let accepted_second = doc.layout().expect("accepted cache should succeed");
+        assert!(Arc::ptr_eq(&accepted_first, &accepted_second));
+        assert_eq!(layout_invocations(), 3);
+        assert_eq!(
+            tracked_first.revision_view,
+            rdocx_layout::RevisionView::Tracked
+        );
+        assert_eq!(
+            accepted_first.revision_view,
+            rdocx_layout::RevisionView::Accepted
+        );
+    }
+
+    #[test]
+    fn tracked_normal_layouts_retain_the_document_engine_without_caching_results() {
+        let mut doc = Document::new();
+        doc.add_paragraph("tracked engine reuse");
+        let tracked = RenderOptions {
+            revision_view: rdocx_layout::RevisionView::Tracked,
+        };
+
+        let first = doc
+            .layout_with_options(tracked)
+            .expect("first tracked layout");
+        let second = doc
+            .layout_with_options(tracked)
+            .expect("second tracked layout");
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(
+            doc.normal_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            doc.layout_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn document_remains_send_and_sync() {
         fn assert_send_and_sync<T: Send + Sync>() {}
         assert_send_and_sync::<Document>();
+    }
+
+    #[test]
+    fn relayout_caches_are_bounded_and_recover_from_poison() {
+        let mut document = Document::new();
+        document.add_paragraph("layout after engine lock poison");
+        let document = Arc::new(document);
+        let poison = Arc::clone(&document);
+        assert!(
+            std::thread::spawn(move || {
+                let _engine = poison.normal_layout_engine.lock().unwrap();
+                panic!("poison normal layout engine lock for recovery coverage");
+            })
+            .join()
+            .is_err()
+        );
+
+        let first = document
+            .layout()
+            .expect("layout recovers from poisoned engine lock");
+        let second = document.layout().expect("recovered layout remains cached");
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]
@@ -7325,6 +8117,709 @@ mod hyperlink_span_tests {
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].text, "two");
         assert_eq!(links[1].text, "");
+    }
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::*;
+
+    const PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    fn text_vml_header(text: &str, color: &str) -> Vec<u8> {
+        format!(
+            r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml"><w:p><w:r><w:pict><v:shape style="width:468pt;height:117pt;rotation:315" fillcolor="{color}"><v:fill opacity=".5"/><v:textpath string="{text}" style="font-family:&quot;Calibri&quot;"/></v:shape></w:pict></w:r></w:p></w:hdr>"#,
+            rdocx_oxml::namespace::W_NS
+        )
+        .into_bytes()
+    }
+
+    fn page_text(layout: &oxml_layout::LayoutResult, index: usize) -> String {
+        layout.pages[index]
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .concat()
+    }
+
+    fn enable_even_headers(document: &mut Document) {
+        set_even_headers_value(document, None);
+    }
+
+    fn set_even_headers_value(document: &mut Document, value: Option<&str>) {
+        let part_name = "/word/settings.xml";
+        let setting = value.map_or_else(
+            || "<w:evenAndOddHeaders/>".to_owned(),
+            |value| format!(r#"<w:evenAndOddHeaders w:val="{value}"/>"#),
+        );
+        let xml = format!(
+            r#"<w:settings xmlns:w="{}">{setting}</w:settings>"#,
+            rdocx_oxml::namespace::W_NS
+        )
+        .into_bytes();
+        document.settings = Some(CT_Settings::from_xml(&xml).unwrap());
+        document.settings_part_name = Some(part_name.to_owned());
+        document.package.set_part(part_name, xml);
+        document.ensure_part_relationship(
+            part_name,
+            rel_types::SETTINGS,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+        );
+    }
+
+    fn assert_watermark_mutation_preserves_reusable_engine(
+        mut document: Document,
+        mutate: impl FnOnce(&mut Document),
+    ) {
+        let layout_state = |document: &Document| {
+            (
+                document
+                    .layout_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some(),
+                document
+                    .normal_layout_engine
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some(),
+                document
+                    .deterministic_layout_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some(),
+            )
+        };
+        document.add_paragraph("unchanged cacheable body paragraph");
+
+        LAYOUT_INVOCATIONS.set(0);
+        let accepted_before = document.layout().expect("populate normal layout cache");
+        document
+            .to_pdf_deterministic()
+            .expect("populate deterministic layout cache");
+        assert_eq!(LAYOUT_INVOCATIONS.get(), 2);
+        assert_eq!(layout_state(&document), (true, true, true));
+
+        mutate(&mut document);
+
+        assert_eq!(
+            layout_state(&document),
+            (false, true, false),
+            "completed results are invalidated while reusable work survives"
+        );
+
+        let accepted_after = document
+            .layout()
+            .expect("relayout after watermark mutation");
+        document
+            .to_pdf_deterministic()
+            .expect("deterministic relayout after watermark mutation");
+        assert!(!Arc::ptr_eq(&accepted_before, &accepted_after));
+        assert_eq!(LAYOUT_INVOCATIONS.get(), 4);
+    }
+
+    #[test]
+    fn watermark_mutations_preserve_reusable_engine_and_invalidate_completed_layouts() {
+        assert_watermark_mutation_preserves_reusable_engine(Document::new(), |document| {
+            document.set_text_watermark("DRAFT").unwrap();
+        });
+        assert_watermark_mutation_preserves_reusable_engine(Document::new(), |document| {
+            document
+                .set_image_watermark(PNG, "watermark.png", Length::pt(72.0), Length::pt(36.0))
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn text_and_image_watermarks_round_trip_through_header_relationships() {
+        let mut text = Document::new();
+        text.set_header("default header");
+        text.set_first_page_header("first header");
+        text.set_raw_header_with_images(
+            format!(
+                r#"<w:hdr xmlns:w="{}"><w:p><w:r><w:t>even header</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+            &[],
+            HdrFtrType::Even,
+        );
+        enable_even_headers(&mut text);
+        text.set_text_watermark("DRAFT").unwrap();
+        text.set_text_watermark("FINAL").unwrap();
+        let reopened = Document::from_bytes(&text.to_bytes().unwrap()).unwrap();
+        let input = reopened.build_layout_input();
+        assert_eq!(input.headers.len(), 3);
+        assert!(input.headers.values().all(|header| {
+            matches!(
+                header.watermarks(),
+                [rdocx_oxml::header_footer::VmlWatermark::Text { text, .. }]
+                    if text == "FINAL"
+            )
+        }));
+
+        let mut image = Document::new();
+        image
+            .set_image_watermark(PNG, "watermark.png", Length::pt(72.0), Length::pt(36.0))
+            .unwrap();
+        let reopened = Document::from_bytes(&image.to_bytes().unwrap()).unwrap();
+        assert!(!reopened.build_layout_input().headers.is_empty());
+
+        let mut invalid = Document::new();
+        invalid.set_header("unchanged");
+        let before = invalid.to_bytes().unwrap();
+        assert!(
+            invalid
+                .set_image_watermark(PNG, "bad.png", Length::emu(0), Length::pt(36.0))
+                .is_err()
+        );
+        assert_eq!(invalid.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn header_image_relationship_ids_are_scoped_per_part() {
+        let mut document = Document::new();
+        let image_watermark = |text: &str| {
+            format!(
+                r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:p><w:r><w:pict><v:shape style="width:72pt;height:36pt"><v:fill opacity=".5"/><v:imagedata r:id="rId1"/></v:shape></w:pict><w:t>{text}</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes()
+        };
+        let mut alternate = PNG.to_vec();
+        let last = alternate.len() - 1;
+        alternate[last] ^= 1;
+        document.set_raw_header_with_images(
+            image_watermark("default"),
+            &[("rId1", PNG, "default.png")],
+            HdrFtrType::Default,
+        );
+        document.set_raw_header_with_images(
+            image_watermark("first"),
+            &[("rId1", &alternate, "first.png")],
+            HdrFtrType::First,
+        );
+        let input = document.build_layout_input();
+        let scoped = input
+            .images
+            .iter()
+            .filter(|(id, _)| id.ends_with("\0rId1"))
+            .map(|(_, image)| image.data.as_slice())
+            .collect::<Vec<_>>();
+        assert_eq!(scoped.len(), 2);
+        assert!(scoped.contains(&PNG));
+        assert!(scoped.contains(&alternate.as_slice()));
+    }
+
+    #[test]
+    fn watermark_covers_title_page_fallback_and_every_section() {
+        let mut document = Document::new();
+        document.add_paragraph("first section");
+        let BodyContent::Paragraph(first) = document.document.body.content.last_mut().unwrap()
+        else {
+            panic!("expected first section paragraph");
+        };
+        first.properties = Some(CT_PPr {
+            sect_pr: Some(CT_SectPr::default_letter()),
+            ..Default::default()
+        });
+        document.add_paragraph("final section");
+        document.set_different_first_page(true);
+
+        document.set_text_watermark("DRAFT").unwrap();
+        let sections = document
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                _ => None,
+            })
+            .chain(document.document.body.sect_pr.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(sections.len(), 2);
+        assert!(
+            sections[0]
+                .header_refs
+                .iter()
+                .any(|reference| reference.hdr_ftr_type == HdrFtrType::Default)
+        );
+        assert!(
+            !sections[1]
+                .header_refs
+                .iter()
+                .any(|reference| reference.hdr_ftr_type == HdrFtrType::Default)
+        );
+        assert!(
+            sections[1]
+                .header_refs
+                .iter()
+                .any(|reference| reference.hdr_ftr_type == HdrFtrType::First)
+        );
+
+        let layout = document
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert_eq!(layout.pages.len(), 2);
+        assert!(layout.pages.iter().all(|page| {
+            matches!(
+                page.elements.first(),
+                Some(oxml_layout::PositionedElement::Group(_))
+            )
+        }));
+    }
+
+    #[test]
+    fn saved_watermark_materializes_first_and_even_fallback_headers() {
+        let mut document = Document::new();
+        document.set_different_first_page(true);
+        enable_even_headers(&mut document);
+        document.set_text_watermark("DRAFT").unwrap();
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let section = reopened.section_properties().unwrap();
+        for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            let reference = section
+                .header_refs
+                .iter()
+                .find(|reference| reference.hdr_ftr_type == hdr_type)
+                .unwrap_or_else(|| panic!("missing saved {hdr_type:?} header"));
+            let header = reopened.load_header_footer(&reference.rel_id).unwrap();
+            assert!(matches!(
+                header.watermarks(),
+                [rdocx_oxml::header_footer::VmlWatermark::Text { text, .. }]
+                    if text == "DRAFT"
+            ));
+        }
+    }
+
+    #[test]
+    fn inherited_ordinary_header_remains_inherited_after_watermarking() {
+        let mut document = Document::new();
+        document.set_header("Company header");
+        document.add_paragraph("first section");
+        let company = document
+            .section_properties_mut()
+            .header_refs
+            .pop()
+            .expect("company header reference");
+        let BodyContent::Paragraph(first) = document.document.body.content.last_mut().unwrap()
+        else {
+            panic!("expected first section paragraph");
+        };
+        first.properties = Some(CT_PPr {
+            sect_pr: Some(CT_SectPr {
+                header_refs: vec![company],
+                ..CT_SectPr::default_letter()
+            }),
+            ..Default::default()
+        });
+        document.add_paragraph("second section");
+
+        document.set_text_watermark("DRAFT").unwrap();
+        assert!(
+            document
+                .section_properties()
+                .unwrap()
+                .header_refs
+                .is_empty()
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            reopened
+                .section_properties()
+                .unwrap()
+                .header_refs
+                .is_empty()
+        );
+        let layout = reopened
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert_eq!(layout.pages.len(), 2);
+        assert!(page_text(&layout, 1).contains("Company header"));
+        assert!(matches!(
+            layout.pages[1].elements.first(),
+            Some(oxml_layout::PositionedElement::Group(_))
+        ));
+    }
+
+    #[test]
+    fn section_page_number_restart_controls_even_header_parity() {
+        let mut document = Document::new();
+        document.add_paragraph("first section");
+        let BodyContent::Paragraph(first) = document.document.body.content.last_mut().unwrap()
+        else {
+            panic!("expected first section paragraph");
+        };
+        first.properties = Some(CT_PPr {
+            sect_pr: Some(CT_SectPr::default_letter()),
+            ..Default::default()
+        });
+        document.add_paragraph("second section");
+        document.set_header("default header");
+        document.set_raw_header_with_images(
+            format!(
+                r#"<w:hdr xmlns:w="{}"><w:p><w:r><w:t>even header</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+            &[],
+            HdrFtrType::Even,
+        );
+        enable_even_headers(&mut document);
+        document
+            .section_properties_mut()
+            .extra_xml
+            .push(br#"<w:pgNumType w:start="1"/>"#.to_vec());
+        document.set_text_watermark("DRAFT").unwrap();
+
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let layout = reopened
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert_eq!(layout.pages.len(), 2);
+        assert!(page_text(&layout, 1).contains("default header"));
+        assert!(!page_text(&layout, 1).contains("even header"));
+    }
+
+    #[test]
+    fn blank_first_and_even_variants_do_not_borrow_default_content() {
+        let mut first = Document::new();
+        first.set_raw_header_with_images(
+            format!(
+                r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml"><w:p><w:r><w:pict><v:shape style="width:468pt;height:117pt;rotation:315" fillcolor="D9D9D9"><v:fill opacity=".5"/><v:textpath string="DRAFT"/></v:shape></w:pict><w:t>company header</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+            &[],
+            HdrFtrType::Default,
+        );
+        first.set_footer("company footer");
+        first.set_first_page_header("");
+        first.set_first_page_footer("");
+        first.add_paragraph("body");
+        let first_layout = first
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert!(
+            !first_layout.pages[0]
+                .elements
+                .iter()
+                .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
+        );
+        assert!(!page_text(&first_layout, 0).contains("company header"));
+        assert!(!page_text(&first_layout, 0).contains("company footer"));
+
+        let mut even = Document::new();
+        even.set_header("company header");
+        even.set_footer("company footer");
+        even.set_raw_footer_with_images(
+            format!(r#"<w:ftr xmlns:w="{}"/>"#, rdocx_oxml::namespace::W_NS).into_bytes(),
+            &[],
+            HdrFtrType::Even,
+        );
+        enable_even_headers(&mut even);
+        even.set_text_watermark("DRAFT").unwrap();
+        even.add_paragraph(&"body ".repeat(4_000));
+        let even_layout = even
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert!(matches!(
+            even_layout.pages[1].elements.first(),
+            Some(oxml_layout::PositionedElement::Group(_))
+        ));
+        assert!(!page_text(&even_layout, 1).contains("company header"));
+        assert!(!page_text(&even_layout, 1).contains("company footer"));
+    }
+
+    #[test]
+    fn image_watermark_target_is_relative_to_a_custom_header_part() {
+        let mut document = Document::new();
+        let header_part = "/custom/headers/header.xml";
+        document.package.set_part(
+            header_part,
+            format!(
+                r#"<w:hdr xmlns:w="{}"><w:p/></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+        );
+        document.package.content_types.add_override(
+            header_part,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        let target = relative_target(&document.doc_part_name, header_part);
+        let rel_id = document
+            .package
+            .get_or_create_part_rels(&document.doc_part_name)
+            .add(rel_types::HEADER, &target);
+        document.section_properties_mut().header_refs = vec![HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id,
+        }];
+
+        document
+            .set_image_watermark(PNG, "custom.png", Length::pt(72.0), Length::pt(36.0))
+            .unwrap();
+        let image_relationship = document
+            .package
+            .get_part_rels(header_part)
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::IMAGE)
+            .unwrap();
+        let image_part = OpcPackage::resolve_rel_target(header_part, &image_relationship.target);
+        assert_eq!(document.package.get_part(&image_part), Some(PNG));
+    }
+
+    #[test]
+    fn named_vml_colour_renders_its_defined_rgb_value() {
+        let mut document = Document::new();
+        document.set_raw_header_with_images(
+            text_vml_header("DRAFT", "silver"),
+            &[],
+            HdrFtrType::Default,
+        );
+        document.add_paragraph("body");
+        let layout = document
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
+            panic!("expected watermark group");
+        };
+        let oxml_layout::PositionedElement::Text(run) = &group.children[0] else {
+            panic!("expected watermark text");
+        };
+        assert_eq!(
+            run.color,
+            oxml_layout::Color {
+                r: 192.0 / 255.0,
+                g: 192.0 / 255.0,
+                b: 192.0 / 255.0,
+                a: 1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_multibyte_vml_colour_is_suppressed_without_panicking() {
+        let mut document = Document::new();
+        document.set_raw_header_with_images(
+            text_vml_header("DRAFT", "€€"),
+            &[],
+            HdrFtrType::Default,
+        );
+        document.add_paragraph("body");
+        let layout = document
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert!(
+            !layout.pages[0]
+                .elements
+                .iter()
+                .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
+        );
+        assert!(
+            layout
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("colour")
+                    && diagnostic.message.contains("unsupported"))
+        );
+    }
+
+    #[test]
+    fn even_header_selection_follows_the_document_setting() {
+        let render = |setting: Option<Option<&str>>| {
+            let mut document = Document::new();
+            document.set_header("default header");
+            document.set_raw_header_with_images(
+                format!(
+                    r#"<w:hdr xmlns:w="{}"><w:p><w:r><w:t>even header</w:t></w:r></w:p></w:hdr>"#,
+                    rdocx_oxml::namespace::W_NS
+                )
+                .into_bytes(),
+                &[],
+                HdrFtrType::Even,
+            );
+            if let Some(value) = setting {
+                set_even_headers_value(&mut document, value);
+            }
+            document.add_paragraph(&"body ".repeat(4_000));
+            document
+                .layout_for_options(RenderOptions::default(), true)
+                .unwrap()
+                .layout
+                .clone()
+        };
+        let disabled = render(None);
+        let entity_false = render(Some(Some("&#48;")));
+        let enabled = render(Some(None));
+        assert!(page_text(&disabled, 1).contains("default header"));
+        assert!(!page_text(&disabled, 1).contains("even header"));
+        assert!(page_text(&entity_false, 1).contains("default header"));
+        assert!(!page_text(&entity_false, 1).contains("even header"));
+        assert!(page_text(&enabled, 1).contains("even header"));
+    }
+
+    #[test]
+    fn unresolved_image_watermark_is_suppressed_with_a_diagnostic() {
+        let mut document = Document::new();
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:p><w:r><w:pict><v:shape style="width:72pt;height:36pt"><v:imagedata r:id="rIdMissing"/></v:shape></w:pict></w:r></w:p></w:hdr>"#,
+            rdocx_oxml::namespace::W_NS
+        );
+        document.set_raw_header_with_images(xml.into_bytes(), &[], HdrFtrType::Default);
+        document.add_paragraph("body");
+        let layout = document
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert!(
+            !layout.pages[0]
+                .elements
+                .iter()
+                .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
+        );
+        assert!(layout.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("rIdMissing") && diagnostic.message.contains("not resolved")
+        }));
+    }
+
+    #[test]
+    fn watermark_is_centered_in_the_margin_rectangle() {
+        let mut document = Document::new();
+        document.set_margins(
+            Length::pt(36.0),
+            Length::pt(144.0),
+            Length::pt(108.0),
+            Length::pt(72.0),
+        );
+        document.set_text_watermark("DRAFT").unwrap();
+        document.add_paragraph("body");
+        let layout = document
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
+            panic!("expected watermark group");
+        };
+        let center = group.transform.apply(oxml_layout::Point {
+            x: 468.0 / 2.0,
+            y: 117.0 / 2.0,
+        });
+        assert!((center.x - (72.0 + (612.0 - 72.0 - 144.0) / 2.0)).abs() < 1.0e-9);
+        assert!((center.y - (36.0 + (792.0 - 36.0 - 108.0) / 2.0)).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn watermark_group_precedes_body_elements_on_every_page() {
+        let mut document = Document::new();
+        document.set_header("default header");
+        document.set_first_page_header("first header");
+        document.set_raw_header_with_images(
+            format!(
+                r#"<w:hdr xmlns:w="{}"><w:p><w:r><w:t>even header</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+            &[],
+            HdrFtrType::Even,
+        );
+        enable_even_headers(&mut document);
+        document.set_text_watermark("DRAFT").unwrap();
+        document.add_paragraph(&"body ".repeat(4_000));
+        let layout = document
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        assert!(layout.pages.len() > 2);
+        assert!(layout.pages.iter().all(|page| {
+            matches!(
+                page.elements.first(),
+                Some(oxml_layout::PositionedElement::Group(_))
+            )
+        }));
+        assert!(
+            page_text(&layout, 0).contains("first header"),
+            "{:?}",
+            page_text(&layout, 0)
+        );
+        assert!(
+            page_text(&layout, 1).contains("even header"),
+            "{:?}",
+            page_text(&layout, 1)
+        );
+        assert!(
+            page_text(&layout, 2).contains("default header"),
+            "{:?}",
+            page_text(&layout, 2)
+        );
+    }
+
+    #[test]
+    fn watermark_renders_behind_body_text_on_every_page() {
+        let mut document = Document::new();
+        document.set_text_watermark("DRAFT").unwrap();
+        document.add_paragraph(&"body ".repeat(4_000));
+        let layout = document
+            .layout_for_options(RenderOptions::default(), true)
+            .unwrap()
+            .layout
+            .clone();
+        let pngs = oxml_pdf::render_all_pages(&layout, 72.0);
+        assert!(pngs.len() > 1);
+        assert!(pngs.iter().all(|png| png.starts_with(b"\x89PNG\r\n\x1a\n")));
+        let digests = pngs
+            .iter()
+            .map(|png| {
+                png.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                    (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            digests,
+            [
+                740_018_920_125_384_146,
+                740_018_920_125_384_146,
+                740_018_920_125_384_146,
+                740_018_920_125_384_146,
+                1_020_215_290_976_271_429,
+            ]
+        );
     }
 }
 

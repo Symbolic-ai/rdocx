@@ -174,6 +174,10 @@ fn date_scope(start: &str, end: &str) -> Result<RevisionScope<'static>> {
     Ok(RevisionScope::DateRange { start, end })
 }
 
+pub(crate) fn validate_revision_timestamp(value: &str) -> Result<()> {
+    Instant::parse(value).map(|_| ())
+}
+
 impl RevisionScope<'_> {
     fn matches(&self, metadata: &RevisionMetadata) -> bool {
         match self {
@@ -434,6 +438,30 @@ impl<'a> XmlTree<'a> {
             );
         }
 
+        let resolves_paragraph_property_change = element.word
+            && element.local == "pPr"
+            && !self.selected_property_changes(index, state)?.is_empty();
+        let removes_empty_property_shell = element.word
+            && matches!(element.local.as_str(), "pPr" | "rPr" | "trPr" | "numPr")
+            && (resolves_paragraph_property_change
+                || self.subtree_contains_selected_contextual_marker(index, state));
+        let inner = self.render_inner_with_namespaces(
+            index,
+            state,
+            convert_deleted_text,
+            promoted_namespaces,
+        )?;
+        if element.word && element.local == "tbl" && self.owned_rows_all_remove(index, state) {
+            return Ok(Vec::new());
+        }
+        if removes_empty_property_shell
+            && inner.iter().all(u8::is_ascii_whitespace)
+            && !self.element_has_attributes(index)?
+            && element.namespace_declarations.is_empty()
+        {
+            return Ok(Vec::new());
+        }
+
         let mut output = Vec::with_capacity(element.end - element.start);
         let open = inject_namespace_declarations(
             &self.source[element.start..element.open_end],
@@ -445,12 +473,7 @@ impl<'a> XmlTree<'a> {
         } else {
             output.extend_from_slice(&open);
         }
-        output.extend_from_slice(&self.render_inner_with_namespaces(
-            index,
-            state,
-            convert_deleted_text,
-            promoted_namespaces,
-        )?);
+        output.extend_from_slice(&inner);
         let close = &self.source[element.close_start..element.end];
         if convert_deleted_text && element.word && element.local == "delText" {
             output.extend_from_slice(&rename_element(close, &element.name, "t"));
@@ -495,6 +518,11 @@ impl<'a> XmlTree<'a> {
                     if !self.paragraph_mark_removes(next, state) {
                         break;
                     }
+                }
+                for pair in paragraphs.windows(2) {
+                    output.extend_from_slice(
+                        &self.source[self.elements[pair[0]].end..self.elements[pair[1]].start],
+                    );
                 }
                 output.extend_from_slice(&self.render_merged_paragraphs(&paragraphs, state)?);
                 cursor = self.elements[*paragraphs.last().expect("paragraph chain exists")].end;
@@ -556,7 +584,31 @@ impl<'a> XmlTree<'a> {
             .collect::<HashSet<_>>();
         let retained =
             self.render_retained_owner_children(owner, &selected, state, promoted_namespaces)?;
+        let prior_element = &self.elements[prior];
+        if prior_element.word
+            && prior_element.local == "pPr"
+            && retained.is_empty()
+            && !self.element_has_attributes(prior)?
+            && (prior_element.empty
+                || self.source[prior_element.open_end..prior_element.close_start]
+                    .iter()
+                    .all(u8::is_ascii_whitespace))
+        {
+            return Ok(Vec::new());
+        }
         append_children_to_element(&prior_xml, &retained)
+    }
+
+    fn element_has_attributes(&self, index: usize) -> Result<bool> {
+        let element = &self.elements[index];
+        let mut reader = Reader::from_reader(&self.source[element.start..element.open_end]);
+        let mut buffer = Vec::new();
+        match reader.read_event_into(&mut buffer).map_err(xml_error)? {
+            Event::Start(start) | Event::Empty(start) => Ok(start.attributes().next().is_some()),
+            _ => Err(Error::Other(
+                "property owner XML has no start element".to_owned(),
+            )),
+        }
     }
 
     fn render_rejected_numbering_owner(
@@ -617,6 +669,59 @@ impl<'a> XmlTree<'a> {
         self.elements[index].children.iter().any(|child| {
             self.elements[*child].revision.is_some() || self.subtree_contains_revision(*child)
         })
+    }
+
+    fn subtree_contains_selected_contextual_marker(
+        &self,
+        index: usize,
+        state: &RenderState<'_>,
+    ) -> bool {
+        self.elements[index].children.iter().any(|child| {
+            self.elements[*child]
+                .revision
+                .as_ref()
+                .is_some_and(|metadata| {
+                    matches!(
+                        metadata.kind,
+                        RevisionKind::Insertion | RevisionKind::Deletion
+                    ) && state.scope.matches(metadata)
+                })
+                || self.subtree_contains_selected_contextual_marker(*child, state)
+        })
+    }
+
+    fn owned_rows_all_remove(&self, index: usize, state: &RenderState<'_>) -> bool {
+        let mut rows = Vec::new();
+        for child in &self.elements[index].children {
+            self.collect_owned_rows(*child, &mut rows);
+        }
+        !rows.is_empty()
+            && rows.iter().all(|row| {
+                self.selected_owner_markers(*row, state)
+                    .iter()
+                    .any(|marker| {
+                        let kind = self.elements[*marker]
+                            .revision
+                            .as_ref()
+                            .expect("row marker is a revision")
+                            .kind;
+                        removes_content(state.resolution, kind)
+                    })
+            })
+    }
+
+    fn collect_owned_rows(&self, index: usize, rows: &mut Vec<usize>) {
+        let element = &self.elements[index];
+        if element.word && element.local == "tbl" {
+            return;
+        }
+        if element.word && element.local == "tr" {
+            rows.push(index);
+            return;
+        }
+        for child in &element.children {
+            self.collect_owned_rows(*child, rows);
+        }
     }
 
     fn prior_property(&self, change: usize, kind: RevisionKind) -> Result<usize> {

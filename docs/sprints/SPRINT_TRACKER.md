@@ -65,6 +65,7 @@ defended.
 | S48 | M14 | 2 | 2 | 0 | 4 | 2 | Completed M14 with accepted and tracked revision rendering, deterministic change decorations, and typed document-protection intent. The mixed collaboration gate read and wrote revisions, comments, content controls, and bookmarks in one preserved package. The full close gate passed with all 49 hashes unchanged, and no package was published |
 | S49 | M16 | 4 | 4 | 0 | 12 | 4 | Established one recursive field grammar, deterministic evaluation against pinned Word results, atomic cache-update policies, and namespace-aware reader preservation. The full close gate passed with all 49 hashes unchanged, every package archive remained below 10 MiB, and the sprint review was clean on pass 1. M16 continues in S50 with template syntax, loops, conditionals, and repeating structures |
 | S50 | M16 | 3 | 3 | 0 | 10 | 3 | Added atomic JSON template rendering across run boundaries, nested loops and conditionals, multi-row table repetition, and continuous list numbering. The full close gate passed with all 49 hashes unchanged, all 22 package archives below 10 MiB, and the sprint review clean on pass 3 after four blocking interactions were remediated. M16 continues in S51 with mail merge, comparison, and watermarks |
+| S51 | M16, X | 10 | 10 | 0 | 18 | 2 | Completed M16 with mail merge, comparison, watermarks, complete layout provenance, bounded relayout caches, and ordered body access from PR 36. Published the complete rpptx 0.4.0 and stable rdocx 0.8.0 families with reviewed release notes and contributor credit. The full close gate passed with all 49 hashes unchanged and no carries |
 
 ## Completed features
 
@@ -276,6 +277,16 @@ defended.
 | F-163 | S50 | L | 4 | 1 | 2026-08-21 | Atomic scalar template rendering across Word run boundaries |
 | F-164 | S50 | L | 4 | 1 | 2026-08-21 | Nested loops and conditionals over body entries and table rows |
 | F-165 | S50 | M | 2 | 1 | 2026-08-21 | Multi-row repetition with preserved table and numbering semantics |
+| F-166 | S51 | M | 2 | 1 | 2026-08-21 | Atomic separate and sectioned mail merge with missing fields empty |
+| F-167 | S51 | L | 4 | 1 | 2026-08-21 | Deterministic tracked comparison with exact accept and reject results |
+| F-168 | S51 | S | 1 | 1 | 2026-08-21 | Preserved VML text and image watermarks behind every applicable page |
+| F-X037 | S51 | M | 2 | 1 | 2026-08-21 | Exact Word story and Unicode scalar provenance for positioned glyph runs |
+| F-X032 | S51 | S | 1 | 1 | 2026-08-21 | Complete cached and caller-font Word layout bundles for external renderers |
+| F-X034 | S51 | S | 1 | 1 | 2026-08-21 | Reviewed changelog notes enforced before publication and published unchanged |
+| F-X038 | S51 | L | 4 | 1 | 2026-08-21 | Bounded warm relayout caches with exact cold-layout output and provenance |
+| F-X033 | S51 | S | 1 | 1 | 2026-08-21 | Ordered direct Word body items with Pedro Assumpcao's merge record preserved |
+| F-X035 | S51 | S | 1 | 1 | 2026-08-21 | Published and verified the complete 15-package rpptx 0.4.0 family |
+| F-X036 | S51 | S | 1 | 1 | 2026-08-22 | Published and verified the seven-package stable rdocx 0.8.0 family |
 
 ## Velocity
 
@@ -341,6 +352,7 @@ five working days.
 | S48 | 2 | 2 | 5.00 |
 | S49 | 4 | 4 | 5.00 |
 | S50 | 3 | 3 | 5.00 |
+| S51 | 10 | 2 | 25.00 |
 
 ## Escalation record
 
@@ -394,3 +406,4 @@ was done about it. Empty is the expected state.
 | 2026-08-17 | Sprint estimate variance exceeded 30 percent | S48 | Record 2 actual days against 4 estimated. The two stories used isolated workers, while the integrated review concentrated the milestone interaction proof into one mixed-package gate. Retain the dependency-defined S49 boundary |
 | 2026-08-20 | Sprint estimate variance exceeded 30 percent | S49 | Record 4 actual days against 12 estimated. The three dependent field stories reused one recursive source-preserving model, while the independent reader correction and bounded review loop concentrated preservation investigation into the same integrated gate. Retain the dependency-defined S50 boundary |
 | 2026-08-21 | Sprint estimate variance exceeded 30 percent | S50 | Record 3 actual days against 10 estimated. The strict feature chain reused one template evaluator across all three stories, while the bounded sprint review concentrated four interaction corrections into the same row and scope ownership path. Retain the dependency-defined S51 boundary |
+| 2026-08-22 | Sprint estimate variance exceeded 30 percent | S51 | Record 2 actual days against 18 estimated. Nine isolated workers, reviewed community contributions, and two established release workflows allowed independent implementation and publication work to overlap safely. The resulting 25.00 stories per week is not a sustainable forecast, so retain dependency-defined future sprint boundaries |

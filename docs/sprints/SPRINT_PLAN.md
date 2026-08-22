@@ -759,7 +759,7 @@ spreadsheets. Nothing later is a prerequisite for anything earlier.
 |---|---|---|---|
 | S45 to S46 | M15, then M14 opens | 4 plus 5 | 12 plus 15 |
 | S47 to S48 | M14 completes | 4 | 13 |
-| S49 to S51 | M16, document automation | 9 | 31 |
+| S49 to S51 | M16, document automation | 15 | 39 |
 | S52 to S53 | M17, security and compliance | 7 | 23 |
 | S54 to S56 | M18, format breadth | 8 | 26 |
 | S57 to S60 | M19, spreadsheets | 12 | 44 |
@@ -856,20 +856,33 @@ why bookmarks landed early.
 F-163 leads because the tag-split-across-runs problem is the one every naive
 implementation gets wrong, and the two after it inherit whatever it decides.
 
-#### Sprint S51, Merge, compare and watermarks
+#### Sprint S51, Automation milestone and community release
 
-**Goal**: close M16 with the three capabilities that need everything before
-them.
+**Goal**: close M16, add the requested native reader and editor surfaces,
+establish a custom reviewed release-notes ceremony, and publish the coherent
+incubating and stable trains.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-166 | Mail merge | M |
 | F-167 | Document comparison | L |
 | F-168 | Watermarks | S |
+| F-X032 | Expose complete Word layout results | S |
+| F-X033 | Integrate PR 36 ordered body items | S |
+| F-X034 | Reviewed release notes for every release | S |
+| F-X035 | Tag rpptx-v0.4.0 | S |
+| F-X036 | Tag v0.8.0 | S |
+| F-X037 | Trace Word glyphs to source paragraphs | M |
+| F-X038 | Cache relayout work across document edits | L |
 
 F-167 is the flagship of every commercial library in this category. It is scoped
 to body text, tables and list structure, with formatting-only differences
-recorded as a diagnostic, which is what keeps it one story.
+recorded as a diagnostic, which is what keeps it one story. The community API
+surface combines complete layouts, source provenance, bounded relayout caches,
+and direct ordered body items. The incubating release precedes stable 0.8.0
+because `oxml-chart`, the low-level provenance types, and shared font-cache
+work must exist on crates.io before the stable dependency graph can publish.
+Both release tags retain separate final approval boundaries.
 
 #### Sprint S52, Encryption
 

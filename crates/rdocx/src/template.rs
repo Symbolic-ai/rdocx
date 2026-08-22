@@ -136,9 +136,9 @@ struct TableRowItem {
 }
 
 pub(crate) fn render(document: &mut Document, data: &Value) -> Result<usize> {
-    let original_sources = document.clone_for_template().template_sources()?;
+    let original_sources = document.clone_for_staging().template_sources()?;
     let mut sentinels = SentinelPool::new(&original_sources);
-    let mut candidate = document.clone_for_template();
+    let mut candidate = document.clone_for_staging();
     validate_repeated_numbering(&candidate)?;
     let (body_count, structural_change) = render_body(&mut candidate, data, &mut sentinels)?;
 

@@ -1617,9 +1617,9 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.7.0" "rdocx_wasm"',
+            '"0.8.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
-            '"0.3.0" "rpptx_wasm"',
+            '"0.4.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
             "--ignore-scripts --no-audit --no-fund --package-lock=false "
             '"$tarball_root/$tarball"',
@@ -3735,6 +3735,67 @@ class SprintWorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(actual_publish_commands, expected_publish_commands)
 
+    def assert_release_notes_publish_contract(self, publish: str) -> None:
+        publish_job = self.yaml_block(publish, "  publish:")
+        prepublish = self.yaml_step(publish_job, "Verify reviewed release notes")
+        validation_command = (
+            "run: python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --check'
+        )
+        self.assertEqual(
+            self.yaml_direct_lines(prepublish, 8),
+            (validation_command,),
+        )
+        self.assert_no_success_short_circuit(self.operative_lines(prepublish))
+        for publish_command in (
+            "cargo publish -p rdocx-opc",
+            "cargo publish -p oxml-core",
+        ):
+            self.assertLess(
+                publish_job.index(prepublish),
+                publish_job.index(publish_command),
+                publish_command,
+            )
+
+        release = self.yaml_block(publish, "  release:")
+        steps = self.yaml_steps(release)
+        self.assertEqual(
+            tuple(
+                self.yaml_step_identity(step, index)
+                for index, step in enumerate(steps, 1)
+            ),
+            ("step:1", "Create GitHub Release from reviewed notes"),
+        )
+        create = self.yaml_step(release, "Create GitHub Release from reviewed notes")
+        self.assertEqual(
+            self.yaml_direct_lines(create, 8),
+            ("run: |", "env:"),
+        )
+        self.assertIn(
+            "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+            self.yaml_direct_lines(create, 10),
+        )
+        commands = (
+            "python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --check',
+            "python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render > '
+            '"$RUNNER_TEMP/release-notes.md"',
+            "python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render | cmp - '
+            '"$RUNNER_TEMP/release-notes.md"',
+            'gh release create "${{ github.ref_name }}" --notes-file '
+            '"$RUNNER_TEMP/release-notes.md"',
+        )
+        self.assertEqual(self.yaml_run_lines(create), commands)
+        self.assertEqual(create.count("python3 scripts/sprint_workflow.py"), 3)
+        self.assertEqual(create.count('"${{ github.ref_name }}" --check'), 1)
+        self.assertEqual(create.count("--render"), 2)
+        self.assertEqual(create.count("cmp -"), 1)
+        self.assertEqual(create.count("--notes-file"), 1)
+        self.assertNotIn("--generate-notes", publish)
+        self.assert_no_success_short_circuit(self.operative_lines(create))
+
     def test_preset_geometry_provenance_is_recorded(self) -> None:
         rendering = (workflow.REPO / "docs/hld/08-rendering-spec.md").read_text(
             encoding="utf-8"
@@ -3838,8 +3899,66 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], {"workspace": True})
         self.assertFalse(wasm["package"]["publish"])
 
-    def test_stable_release_family_is_prepared_at_0_7_0(self) -> None:
-        expected_version = "0.7.0"
+    def assert_stable_collaboration_release_notes_contract(
+        self, changelog: str
+    ) -> None:
+        notes = workflow.render_release_notes(changelog, "v0.8.0")
+        added = notes.split("### Added\n\n", 1)[1].split("\n### Fixed", 1)[0]
+        for claim in (
+            "comments and threaded conversations",
+            "content controls to namespace-aware custom XML",
+            "bookmarks and resolve `REF` and `PAGEREF` cross-references",
+            "Inspect tracked revisions",
+            "accept or reject all or a filtered selection",
+            "Render accepted or tracked revision views",
+            "document-protection intent",
+        ):
+            self.assertIn(claim, added, claim)
+
+        contributors = notes.split("### Contributors\n\n", 1)[1]
+        for credit in (
+            "@emptinessform",
+            "Issue 37 complete-layout report",
+            "Issue 39 relayout measurements",
+        ):
+            self.assertIn(credit, contributors, credit)
+
+    def test_v0_8_0_notes_cover_native_collaboration_tranche(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assert_stable_collaboration_release_notes_contract(changelog)
+
+    def test_v0_8_0_notes_reject_an_omitted_collaboration_capability(
+        self,
+    ) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        for claim in (
+            "comments and threaded conversations",
+            "content controls to namespace-aware custom XML",
+            "bookmarks and resolve `REF` and `PAGEREF` cross-references",
+            "Inspect tracked revisions",
+            "accept or reject all or a filtered selection",
+            "Render accepted or tracked revision views",
+            "document-protection intent",
+        ):
+            mutated = changelog.replace(claim, "native collaboration capability", 1)
+            self.assertNotEqual(mutated, changelog, claim)
+            with self.subTest(claim=claim), self.assertRaises(AssertionError):
+                self.assert_stable_collaboration_release_notes_contract(mutated)
+
+    def test_v0_8_0_notes_reject_an_omitted_issue_reporter_credit(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        for credit in (
+            "@emptinessform",
+            "Issue 37 complete-layout report",
+            "Issue 39 relayout measurements",
+        ):
+            mutated = changelog.replace(credit, "external report", 1)
+            self.assertNotEqual(mutated, changelog, credit)
+            with self.subTest(credit=credit), self.assertRaises(AssertionError):
+                self.assert_stable_collaboration_release_notes_contract(mutated)
+
+    def test_stable_release_family_is_prepared_at_0_8_0(self) -> None:
+        expected_version = "0.8.0"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -3944,7 +4063,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             ci.count(
                 'verify_package "$package_root/rdocx-wasm" '
-                '"@tensorbee/rdocx-wasm" "0.7.0" "rdocx_wasm"'
+                f'"@tensorbee/rdocx-wasm" "{expected_version}" "rdocx_wasm"'
             ),
             1,
         )
@@ -3963,18 +4082,25 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.6"', 'version = "0.6"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.6'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.6"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.6"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.6"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.6"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.6"',),
+            "README.md": ('rdocx = "0.8.0"', 'version = "0.8.0"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.8.0'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.8.0"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.8.0"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.8.0"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.8.0"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.8.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
             for requirement in requirements:
                 self.assertIn(requirement, text, path)
+
+        readme_gate = (workflow.REPO / "scripts/readme_doctests.py").read_text(
+            encoding="utf-8"
+        )
+        for path, requirements in readme_requirements.items():
+            for requirement in requirements:
+                self.assertEqual(readme_gate.count(requirement), 1, path)
 
         for name in incubating_members:
             manifest = tomllib.loads(
@@ -3982,7 +4108,7 @@ class SprintWorkflowTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(manifest["package"]["version"], "0.3.0", name)
+            self.assertEqual(manifest["package"]["version"], "0.4.0", name)
             self.assertIs(
                 manifest["package"].get("publish", True),
                 name != "rpptx-wasm",
@@ -4070,7 +4196,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_3_0(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_4_0(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -4089,9 +4215,9 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx-cli",
         )
         preparation_packages = (*incubating_packages, "rpptx-wasm")
-        expected_version = "0.3.0"
+        expected_version = "0.4.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.7.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.8.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -4124,26 +4250,81 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(lock_versions["rpptx-wasm"], expected_version)
 
         readme_requirements = {
-            "crates/oxml-core/README.md": ('oxml-core = "0.3.0"',),
-            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.3.0"',),
-            "crates/oxml-layout/README.md": ('version = "0.3.0"',),
-            "crates/oxml-media/README.md": ('oxml-media = "0.3.0"',),
-            "crates/oxml-opc/README.md": ('oxml-opc = "0.3.0"',),
+            "crates/oxml-core/README.md": ('oxml-core = "0.4.0"',),
+            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.4.0"',),
+            "crates/oxml-layout/README.md": ('version = "0.4.0"',),
+            "crates/oxml-media/README.md": ('oxml-media = "0.4.0"',),
+            "crates/oxml-opc/README.md": ('oxml-opc = "0.4.0"',),
             "crates/oxml-pdf/README.md": (
-                'oxml-pdf = "0.3.0"',
-                'oxml-layout = "0.3.0"',
+                'oxml-pdf = "0.4.0"',
+                'oxml-layout = "0.4.0"',
             ),
-            "crates/oxml-chart/README.md": ('oxml-chart = "0.3.0"',),
-            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.3.0"',),
-            "crates/rpptx-cli/README.md": ("--version '^0.3.0'",),
-            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.3.0"',),
-            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.3.0"',),
-            "crates/rpptx-render/README.md": ('rpptx-render = "0.3.0"',),
+            "crates/oxml-chart/README.md": ('oxml-chart = "0.4.0"',),
+            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.4.0"',),
+            "crates/rpptx-cli/README.md": ("--version '^0.4.0'",),
+            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.4.0"',),
+            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.4.0"',),
+            "crates/rpptx-render/README.md": ('rpptx-render = "0.4.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
             for requirement in requirements:
                 self.assertIn(requirement, text, path)
+
+        source_requirements = {
+            "crates/oxml-chart/src/lib.rs": (
+                'manifest.contains("version = \\"0.4.0\\"")',
+            ),
+            "crates/oxml-drawing/src/lib.rs": (
+                'manifest.contains("version = \\"0.4.0\\"")',
+            ),
+            "crates/rdocx-wasm/src/lib.rs": (
+                'oxml-layout = { path = \\"crates/oxml-layout\\", '
+                'version = \\"0.4.0\\", default-features = false }',
+            ),
+            "crates/rpptx-oxml/tests/integration.rs": (
+                'manifest.contains("version = \\"0.4.0\\"")',
+            ),
+            "crates/rpptx-render/src/lib.rs": (
+                'manifest.contains("version = \\"0.4.0\\"")',
+            ),
+            "crates/rpptx-wasm/src/lib.rs": (
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.4.0\\", '
+                'default-features = false }',
+            ),
+            "crates/rpptx/tests/integration.rs": (
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.4.0\\", '
+                'default-features = false }',
+                'manifest.contains("version = \\"0.4.0\\"")',
+            ),
+        }
+        for path, requirements in source_requirements.items():
+            text = (workflow.REPO / path).read_text(encoding="utf-8")
+            for requirement in requirements:
+                self.assertIn(requirement, text, path)
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            ci.count(
+                'verify_package "$package_root/rpptx-wasm" '
+                '"@tensorbee/rpptx-wasm" "0.4.0" "rpptx_wasm"'
+            ),
+            1,
+        )
+
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_publish_workflow_contract(publish)
+        self.assertEqual(
+            publish.count(
+                "scripts.test_sprint_workflow.SprintWorkflowTests."
+                "test_incubating_release_family_is_prepared_at_0_4_0"
+            ),
+            1,
+        )
 
     def assert_release_preparation_metadata_contract(
         self, manifest_overrides: dict[str, str] | None = None
@@ -4218,7 +4399,7 @@ class SprintWorkflowTests(unittest.TestCase):
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
-        self.assertEqual(wasm_package["version"], "0.3.0")
+        self.assertEqual(wasm_package["version"], "0.4.0")
         self.assertTrue(wasm_package.get("description", "").strip())
         self.assertFalse(wasm_package["publish"])
         self.assertEqual(
@@ -4237,7 +4418,7 @@ class SprintWorkflowTests(unittest.TestCase):
             for package in lock["package"]
             if package["name"] == "rpptx-wasm"
         )
-        self.assertEqual(wasm_lock_versions, ("0.3.0",))
+        self.assertEqual(wasm_lock_versions, ("0.4.0",))
 
     def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
         self.assert_release_preparation_metadata_contract()
@@ -4272,7 +4453,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 1,
             ),
             "workspace-version": manifest.replace(
-                'version = "0.3.0"',
+                'version = "0.4.0"',
                 "version.workspace = true",
                 1,
             ),
@@ -4313,6 +4494,7 @@ class SprintWorkflowTests(unittest.TestCase):
             normalized_release,
         )
         self.assertIn("go or no-go immediately", normalized_release)
+        self.assertIn("The 22 patches keep packaged", normalized_release)
         self.assertIn(
             "The `oxml-layout` archive must contain its complete bundled TTF "
             "and legal-file inventory. The `rdocx-layout` archive must not "
@@ -4332,6 +4514,634 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("Leave it\n`reviewed`", run_sprint)
         self.assertIn("/release", close_sprint)
         self.assertIn("deferred to /release", complete_feature)
+
+        mutated = release.replace(
+            "The 22 patches keep packaged", "The 21 patches keep packaged", 1
+        )
+        self.assertNotEqual(mutated, release)
+        with self.assertRaises(AssertionError):
+            self.assertIn("The 22 patches keep packaged", " ".join(mutated.split()))
+
+    def assert_release_command_notes_contract(self, release: str) -> None:
+        preflight = release[release.index("## Preconditions") : release.index("## Final approval")]
+        approval = release[release.index("## Final approval") : release.index("## Release")]
+        publication = release[release.index("## Release") : release.index("## Finalise the release F-ID")]
+
+        self.assertIn(
+            "python3 scripts/sprint_workflow.py release-notes <requested-tag>\n"
+            "   --check",
+            preflight,
+        )
+        self.assertIn(
+            "python3 scripts/sprint_workflow.py release-notes\n"
+            "   <requested-tag> --render",
+            preflight,
+        )
+        self.assertIn("committed `CHANGELOG.md`", preflight)
+        self.assertIn("notes source as\n`CHANGELOG.md`", approval)
+        self.assertIn("Include the rendered notes", approval)
+        self.assertIn("compare it byte\n   for byte", publication)
+        self.assertIn(
+            "python3 scripts/sprint_workflow.py release-notes\n"
+            "   <requested-tag> --render",
+            publication,
+        )
+
+    def test_release_notes_are_checked_before_approval_and_after_publication(
+        self,
+    ) -> None:
+        release = (workflow.REPO / ".claude/commands/release.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_release_command_notes_contract(release)
+
+        mutations = {
+            "missing-check": release.replace(
+                "python3 scripts/sprint_workflow.py release-notes "
+                "<requested-tag>\n   --check",
+                "release-notes omitted",
+                1,
+            ),
+            "wrong-validator-executable": release.replace(
+                "python3 scripts/sprint_workflow.py release-notes "
+                "<requested-tag>\n   --check",
+                "echo release-notes <requested-tag>\n   --check",
+                1,
+            ),
+            "missing-render-review": release.replace(
+                "Include the rendered notes", "Summarise the notes", 1
+            ),
+            "missing-source": release.replace(
+                "notes source as\n`CHANGELOG.md`", "notes source elsewhere", 1
+            ),
+            "missing-published-body-comparison": release.replace(
+                "compare it byte\n   for byte", "inspect it", 1
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, release, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_release_command_notes_contract(mutated)
+
+    def test_release_notes_command_is_a_generated_agent_ceremony(self) -> None:
+        command_path = workflow.REPO / ".claude/commands/release-notes.md"
+        skill_path = workflow.REPO / ".agents/skills/release-notes/SKILL.md"
+        interface_path = (
+            workflow.REPO / ".agents/skills/release-notes/agents/openai.yaml"
+        )
+        command = command_path.read_text(encoding="utf-8")
+        skill = skill_path.read_text(encoding="utf-8")
+        interface = interface_path.read_text(encoding="utf-8")
+        digest = hashlib.sha256(command_path.read_bytes()).hexdigest()
+        normalized = " ".join(command.split())
+
+        for evidence in (
+            "design plan",
+            "AS_BUILT.md",
+            "reviewed commits",
+            "merged pull requests",
+            "contributor",
+            "compatibility",
+        ):
+            self.assertIn(evidence, normalized)
+        self.assertIn("# /release-notes {vX.Y.Z | rpptx-vX.Y.Z}", command)
+        self.assertIn("Canonical source: `.claude/commands/release-notes.md`.", skill)
+        self.assertIn(f"Source SHA-256: `{digest}`.", skill)
+        self.assertIn("allow_implicit_invocation: false", interface)
+
+    def test_release_notes_require_complete_reviewed_changelog_sections(self) -> None:
+        complete = """# Changelog
+
+## v0.8.0
+
+### Highlights
+
+Stable layout access is now available.
+
+### Added
+
+Document layout accessors.
+
+### Fixed
+
+Source positions survive layout.
+
+### Compatibility
+
+Review the layout source changes before upgrading.
+
+### Contributors
+
+Pedro Assumpcao and the rdocx maintainers.
+
+## rpptx-v0.4.0
+
+### Highlights
+
+The incubating family is now publishable.
+
+### Added
+
+The complete PowerPoint package family.
+
+### Fixed
+
+Publication metadata for the incubating crates.
+
+### Compatibility
+
+This family remains incubating.
+
+### Contributors
+
+The rdocx maintainers.
+"""
+
+        stable = workflow.render_release_notes(complete, "v0.8.0")
+        incubating = workflow.render_release_notes(complete, "rpptx-v0.4.0")
+        expected_stable = """### Highlights
+
+Stable layout access is now available.
+
+### Added
+
+Document layout accessors.
+
+### Fixed
+
+Source positions survive layout.
+
+### Compatibility
+
+Review the layout source changes before upgrading.
+
+### Contributors
+
+Pedro Assumpcao and the rdocx maintainers.
+"""
+        self.assertEqual(stable, expected_stable)
+        self.assertNotIn("## v0.8.0", stable)
+        self.assertNotIn("rpptx-v0.4.0", stable)
+        self.assertIn("The incubating family is now publishable.", incubating)
+
+        raw_html_with_markdown = (
+            "<div hidden>Ignored raw HTML text.</div>\n\n"
+            "Stable layout access is now available."
+        )
+        valid_html = complete.replace(
+            "Stable layout access is now available.",
+            raw_html_with_markdown,
+            1,
+        )
+        self.assertEqual(
+            workflow.render_release_notes(valid_html, "v0.8.0"),
+            expected_stable.replace(
+                "Stable layout access is now available.",
+                raw_html_with_markdown,
+                1,
+            ),
+        )
+
+        section_text = {
+            "Highlights": "Stable layout access is now available.",
+            "Added": "Document layout accessors.",
+            "Fixed": "Source positions survive layout.",
+            "Compatibility": (
+                "Review the layout source changes before upgrading."
+            ),
+            "Contributors": "Pedro Assumpcao and the rdocx maintainers.",
+        }
+        empty_html_forms = {
+            "empty-container": "<div></div>",
+            "adjacent-empty-forms": (
+                "<span></span><br><release-note></release-note><!-- hidden -->"
+                "<?empty?><!EMPTY><![CDATA[hidden cdata text]]>"
+                "&nbsp;&#32;&#x20;&ZeroWidthSpace;"
+            ),
+            "non-visible-containers": (
+                "<script>hidden script text</script>"
+                "<style>hidden style text</style>"
+                "<template>hidden template text</template>"
+                "<head>hidden head text</head>"
+                "<title>hidden title text</title>"
+            ),
+            "ordinary-container-content": (
+                "<div>Visible-looking raw HTML text</div>"
+            ),
+            "hidden-attribute": "<div hidden>Invisible release notes</div>",
+            "hidden-css": (
+                '<section style="display: none">Invisible release notes</section>'
+            ),
+            "iframe-fallback": "<iframe>Fallback release notes</iframe>",
+            "noscript-content": "<noscript>Fallback release notes</noscript>",
+            "custom-container": (
+                "<release-note>Raw custom-element text</release-note>"
+            ),
+        }
+        for heading, original in section_text.items():
+            for form, empty_text in empty_html_forms.items():
+                mutated = complete.replace(
+                    f"### {heading}\n\n{original}",
+                    f"### {heading}\n\n{empty_text}",
+                    1,
+                )
+                self.assertNotEqual(mutated, complete)
+                with self.subTest(empty_heading=heading, empty_form=form):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"section `### {re.escape(heading)}` is empty",
+                    ):
+                        workflow.render_release_notes(mutated, "v0.8.0")
+
+        empty_markdown_forms = {
+            "empty-inline-link": "[](https://example.com/release-notes)",
+            "reference-definition": (
+                "[release-notes]: https://example.com/release-notes"
+            ),
+            "multiline-reference-definition": (
+                "[release-notes]:\n"
+                "  <https://example.com/release-notes>\n"
+                '  "hidden reference title"'
+            ),
+            "empty-fence-with-info": "```python\n\n```",
+            "adjacent-empty-forms": (
+                "[](https://example.com)![](release.png)[][release-notes]<>\n"
+                "[release-notes]: https://example.com/release-notes"
+            ),
+            "empty-list-item": "1. [](https://example.com/release-notes)",
+            "escaped-asterisk": r"\*",
+            "escaped-backslash": r"\\",
+            "escaped-open-bracket": r"\[",
+            "escaped-exclamation": r"\!",
+            "escape-guard-collision": "\u2060\\*\u2060",
+        }
+        for heading, original in section_text.items():
+            for form, empty_text in empty_markdown_forms.items():
+                mutated = complete.replace(
+                    f"### {heading}\n\n{original}",
+                    f"### {heading}\n\n{empty_text}",
+                    1,
+                )
+                self.assertNotEqual(mutated, complete)
+                with self.subTest(empty_markdown_heading=heading, empty_form=form):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"section `### {re.escape(heading)}` is empty",
+                    ):
+                        workflow.render_release_notes(mutated, "v0.8.0")
+
+        invisible_code_payloads = {
+            "zero-width-space": "\u200b",
+            "word-joiner": "\u2060",
+            "directional-marks": "\u200e\u200f",
+            "directional-isolates": "\u2066\u2069",
+            "unicode-spacing": "\u00a0\u202f",
+            "soft-hyphen-and-bom": "\u00ad\ufeff",
+            "combining-and-variation": "\u0301\ufe0f",
+        }
+        for heading, original in section_text.items():
+            for payload_name, payload in invisible_code_payloads.items():
+                for code_form, empty_text in (
+                    ("inline", f"`{payload}`"),
+                    ("fenced", f"```text\n{payload}\n```"),
+                ):
+                    mutated = complete.replace(
+                        f"### {heading}\n\n{original}",
+                        f"### {heading}\n\n{empty_text}",
+                        1,
+                    )
+                    self.assertNotEqual(mutated, complete)
+                    with self.subTest(
+                        invisible_code_heading=heading,
+                        payload=payload_name,
+                        code_form=code_form,
+                    ):
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            rf"section `### {re.escape(heading)}` is empty",
+                        ):
+                            workflow.render_release_notes(mutated, "v0.8.0")
+
+        meaningful_markdown_forms = {
+            "link-label": (
+                "[Stable layout access](https://example.com/release-notes)"
+            ),
+            "fenced-code": "```html\n<div></div>\n```",
+            "inline-code": "`<release-note></release-note>`",
+            "inline-symbol": "`✨`",
+            "fenced-symbol": "```text\n✨\n```",
+            "symbol-with-formatting": "`\u200b✨\u2060`",
+            "autolink": "<https://example.com/release-notes>",
+            "image-label": "![Stable layout diagram](release.png)",
+            "escaped-element": r"\<w:document\>",
+            "escaped-custom-element": (
+                r"\<release-note\>Visible release words\</release-note\>"
+            ),
+            "escaped-comment": r"\<!-- Visible release words --\>",
+            "escaped-processing-instruction": r"\<?release-notes?\>",
+            "escaped-declaration": r"\<!RELEASE-NOTES\>",
+            "escaped-cdata": r"\<![CDATA[Visible release words]]\>",
+            "escaped-entity": r"\&nbsp;",
+            "escaped-brackets": r"\[release\]",
+            "escaped-punctuation-before-letters": r"\*release",
+            "escaped-punctuation-after-letters": r"release\!",
+            "backslash-before-letter": r"\release",
+        }
+        for form, meaningful_text in meaningful_markdown_forms.items():
+            valid_markdown = complete.replace(
+                "Stable layout access is now available.",
+                meaningful_text,
+                1,
+            )
+            with self.subTest(meaningful_markdown=form):
+                self.assertEqual(
+                    workflow.render_release_notes(valid_markdown, "v0.8.0"),
+                    expected_stable.replace(
+                        "Stable layout access is now available.",
+                        meaningful_text,
+                        1,
+                    ),
+                )
+
+        commented_duplicate = complete.replace(
+            "### Added\n\nDocument layout accessors.",
+            "<!--\n### Added\n\nHidden comment text.\n-->\n\n"
+            "### Added\n\nDocument layout accessors.",
+            1,
+        )
+        self.assertIn(
+            "Document layout accessors.",
+            workflow.render_release_notes(commented_duplicate, "v0.8.0"),
+        )
+        fenced_duplicate = complete.replace(
+            "### Added\n\nDocument layout accessors.",
+            "````markdown\n```\n### Added\n\nHidden code text.\n````\n\n"
+            "### Added\n\nDocument layout accessors.",
+            1,
+        )
+        self.assertIn(
+            "Document layout accessors.",
+            workflow.render_release_notes(fenced_duplicate, "v0.8.0"),
+        )
+
+        for tag in ("script", "pre", "style", "textarea"):
+            opener = f'<{tag.upper()} data-release="hidden">'
+            raw_block = (
+                f"{opener}\n### Added\n\nHidden raw HTML text.\n</{tag}>\n\n"
+            )
+            raw_duplicate = complete.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            expected = stable.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            with self.subTest(raw_html_duplicate=tag):
+                self.assertEqual(
+                    workflow.render_release_notes(raw_duplicate, "v0.8.0"),
+                    expected,
+                )
+
+            hidden = f"# Changelog\n\n{opener}\n{complete}\n</{tag}>\n"
+            with self.subTest(raw_html_hidden=tag), self.assertRaises(ValueError):
+                workflow.render_release_notes(hidden, "v0.8.0")
+
+        compact = "\n".join(line for line in complete.splitlines() if line.strip())
+        bounded_raw_blocks = (
+            ("container", '<DIV data-release="hidden">', "</DIV>"),
+            ("custom-tag", '<release-note data-hidden="true">', "</release-note>"),
+            ("processing-instruction", "<?release-notes", "?>"),
+            ("declaration", "<!HIDDEN", ">"),
+            ("cdata", "<![CDATA[", "]]>")
+        )
+        for name, opener, closer in bounded_raw_blocks:
+            raw_block = (
+                f"{opener}\n### Added\nHidden raw block text.\n{closer}\n\n"
+            )
+            raw_duplicate = complete.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            expected = stable.replace(
+                "### Added\n\nDocument layout accessors.",
+                raw_block + "### Added\n\nDocument layout accessors.",
+                1,
+            )
+            with self.subTest(bounded_raw_duplicate=name):
+                self.assertEqual(
+                    workflow.render_release_notes(raw_duplicate, "v0.8.0"),
+                    expected,
+                )
+
+            hidden = f"# Changelog\n\n{opener}\n{compact}\n{closer}\n"
+            with self.subTest(bounded_raw_hidden=name), self.assertRaises(ValueError):
+                workflow.render_release_notes(hidden, "v0.8.0")
+
+        with self.assertRaises(ValueError):
+            workflow.render_release_notes(f"<!--\n{complete}\n-->\n", "v0.8.0")
+        for marker in ("````", "```````", "~~~~", "~~~~~~~"):
+            inner = marker[0] * 3
+            fenced = f"# Changelog\n\n{marker}markdown\n{inner}\n{complete}\n{marker}\n"
+            with self.subTest(fence=marker), self.assertRaises(ValueError):
+                workflow.render_release_notes(fenced, "v0.8.0")
+
+        mutations = {
+            "missing-section": complete.replace("### Fixed", "### Repairs", 1),
+            "duplicate-section": complete.replace(
+                "### Compatibility",
+                "### Added\n\nDuplicate entry.\n\n### Compatibility",
+                1,
+            ),
+            "empty-section": complete.replace(
+                "### Contributors\n\nPedro Assumpcao and the rdocx maintainers.",
+                "### Contributors\n",
+                1,
+            ),
+            "placeholder": complete.replace(
+                "Stable layout access is now available.", "TBD", 1
+            ),
+            "duplicate-tag": complete.replace(
+                "## rpptx-v0.4.0", "## v0.8.0\n\nDuplicate.\n\n## rpptx-v0.4.0", 1
+            ),
+            "duplicate-tag-with-trailing-space": complete.replace(
+                "## rpptx-v0.4.0",
+                "## v0.8.0   \n\nDuplicate.\n\n## rpptx-v0.4.0",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                workflow.render_release_notes(mutated, "v0.8.0")
+
+        for invalid in (
+            "0.8.0",
+            "release-v0.8.0",
+            "v0.8",
+            "rpptx-v0.4.0-rc1",
+            "v01.2.3",
+            "v1.02.3",
+            "rpptx-v1.2.03",
+        ):
+            with self.subTest(tag=invalid), self.assertRaises(ValueError):
+                workflow.render_release_notes(complete, invalid)
+
+    def test_release_notes_cli_check_and_render_do_not_mutate_the_source(self) -> None:
+        sections = "".join(
+            f"### {heading}\n\nReviewed {heading.lower()} evidence.\n\n"
+            for heading in workflow.RELEASE_NOTE_HEADINGS
+        )
+        changelog = f"# Changelog\n\n## v1.2.3\n\n{sections}"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "CHANGELOG.md"
+            path.write_text(changelog, encoding="utf-8")
+            before = path.read_bytes()
+            with patch.object(workflow, "CHANGELOG", path):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    result = workflow.cmd_release_notes(
+                        argparse.Namespace(tag="v1.2.3", check=True, render=False)
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(output.getvalue(), "release-notes v1.2.3: ok\n")
+
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    result = workflow.cmd_release_notes(
+                        argparse.Namespace(tag="v1.2.3", check=False, render=True)
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(output.getvalue(), sections.rstrip() + "\n")
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_publish_workflow_uses_only_rendered_reviewed_release_notes(self) -> None:
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_release_notes_publish_contract(publish)
+
+        create_step = self.yaml_step(
+            self.yaml_block(publish, "  release:"),
+            "Create GitHub Release from reviewed notes",
+        )
+        publish_job = self.yaml_block(publish, "  publish:")
+        prepublish_step = self.yaml_step(
+            publish_job,
+            "Verify reviewed release notes",
+        )
+        stable_publish_step = self.yaml_step(
+            publish_job,
+            "Publish stable allowlist",
+        )
+        incubating_publish_step = self.yaml_step(
+            publish_job,
+            "Publish incubating allowlist",
+        )
+        prepublish_after_stable = publish.replace(prepublish_step, "", 1).replace(
+            stable_publish_step,
+            stable_publish_step + prepublish_step,
+            1,
+        )
+        prepublish_after_incubating = publish.replace(
+            prepublish_step,
+            "",
+            1,
+        ).replace(
+            incubating_publish_step,
+            incubating_publish_step + prepublish_step,
+            1,
+        )
+        render_line = (
+            "          python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render > '
+            '"$RUNNER_TEMP/release-notes.md"\n'
+        )
+        compare_line = (
+            "          python3 scripts/sprint_workflow.py release-notes "
+            '"${{ github.ref_name }}" --render | cmp - '
+            '"$RUNNER_TEMP/release-notes.md"\n'
+        )
+        release_line = (
+            '          gh release create "${{ github.ref_name }}" --notes-file '
+            '"$RUNNER_TEMP/release-notes.md"\n'
+        )
+        mutations = {
+            "missing-prepublish-validation": publish.replace(
+                prepublish_step,
+                "",
+                1,
+            ),
+            "prepublish-validation-after-stable-publish": prepublish_after_stable,
+            "prepublish-validation-after-incubating-publish": (
+                prepublish_after_incubating
+            ),
+            "wrong-prepublish-validator-executable": publish.replace(
+                prepublish_step,
+                prepublish_step.replace(
+                    "python3 scripts/sprint_workflow.py",
+                    "echo",
+                    1,
+                ),
+                1,
+            ),
+            "conditional-prepublish-validation": publish.replace(
+                prepublish_step,
+                prepublish_step.replace(
+                    "        run:",
+                    "        if: startsWith(github.ref_name, 'v')\n        run:",
+                    1,
+                ),
+                1,
+            ),
+            "ignored-prepublish-validation-failure": publish.replace(
+                prepublish_step,
+                prepublish_step.replace(
+                    "        run:",
+                    "        continue-on-error: true\n        run:",
+                    1,
+                ),
+                1,
+            ),
+            "generated-notes": publish.replace(
+                '--notes-file "$RUNNER_TEMP/release-notes.md"',
+                "--generate-notes",
+                1,
+            ),
+            "missing-extraction": publish.replace(render_line, "", 1),
+            "different-notes-file": publish.replace(
+                '--notes-file "$RUNNER_TEMP/release-notes.md"',
+                '--notes-file "$RUNNER_TEMP/other.md"',
+                1,
+            ),
+            "release-before-byte-comparison": publish.replace(
+                compare_line + release_line,
+                release_line + compare_line,
+                1,
+            ),
+            "overwrite-rendered-artifact": publish.replace(
+                release_line,
+                '          printf \'tampered\' > "$RUNNER_TEMP/release-notes.md"\n'
+                + release_line,
+                1,
+            ),
+            "wrong-validator-executable": publish.replace(
+                "          python3 scripts/sprint_workflow.py release-notes",
+                "          echo release-notes",
+                1,
+            ),
+            "unreviewed-step-before-validator": publish.replace(
+                create_step,
+                "      - name: Replace validator\n"
+                "        run: cp other.py scripts/sprint_workflow.py\n"
+                + create_step,
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, publish, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_release_notes_publish_contract(mutated)
 
     def assert_verify_runs_the_release_regressions(self, verify: str) -> None:
         """The local gate must run the module holding the release preflights.
@@ -4454,7 +5264,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_7_0",
+                "test_stable_release_family_is_prepared_at_0_8_0",
                 1,
             ),
             "job-condition": ci.replace(
@@ -4497,6 +5307,25 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertNotEqual(removed, verify)
         with self.assertRaises(AssertionError):
             self.assert_verify_runs_the_release_regressions(removed)
+
+    def assert_verify_checks_both_wasm_targets(self, verify: str) -> None:
+        normalized = " ".join(verify.split())
+        self.assertIn(
+            "cargo check --target wasm32-unknown-unknown -p rdocx-wasm "
+            "-p rpptx-wasm",
+            normalized,
+        )
+
+    def test_verify_checks_both_wasm_targets(self) -> None:
+        verify = (workflow.REPO / ".claude/commands/verify.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_verify_checks_both_wasm_targets(verify)
+
+        mutated = verify.replace(" -p rpptx-wasm", "", 1)
+        self.assertNotEqual(mutated, verify)
+        with self.assertRaises(AssertionError):
+            self.assert_verify_checks_both_wasm_targets(mutated)
 
     def test_every_test_publish_yml_names_resolves_to_a_real_test(self) -> None:
         # publish.yml invokes preflights by their full dotted path. A rename
@@ -4564,7 +5393,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("crates/oxml-chart", root["members"])
         self.assertEqual(
             root["dependencies"]["oxml-chart"],
-            {"path": "crates/oxml-chart", "version": "0.3.0"},
+            {"path": "crates/oxml-chart", "version": "0.4.0"},
         )
 
         shim = tomllib.loads(
@@ -4671,11 +5500,11 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_7_0"
+            "test_stable_release_family_is_prepared_at_0_8_0"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_3_0"
+            "test_incubating_release_family_is_prepared_at_0_4_0"
         )
         metadata_command = (
             "python3 -m unittest "
@@ -5019,6 +5848,12 @@ class SprintWorkflowTests(unittest.TestCase):
             r"on\s+crates\.io at ([0-9]+\.[0-9]+\.[0-9]+)", claude
         )
         self.assertEqual(stated_versions, [workspace_version])
+        prepared_versions = re.findall(
+            r"prepared coherently at workspace version "
+            r"([0-9]+\.[0-9]+\.[0-9]+)",
+            claude,
+        )
+        self.assertEqual(prepared_versions, [])
         for name, (_, manifest) in packages.items():
             if not name.startswith("rdocx") or name == "rdocx-py":
                 continue
@@ -5105,7 +5940,16 @@ class SprintWorkflowTests(unittest.TestCase):
                 ),
             ),
             "version": (
-                claude.replace("crates.io at 0.7.0", "crates.io at 0.2.0", 1),
+                claude.replace("crates.io at 0.8.0", "crates.io at 0.2.0", 1),
+                verify,
+            ),
+            "prepared-version": (
+                claude.replace(
+                    "across the exact seven-package stable family.",
+                    "across the exact seven-package stable family and prepared "
+                    "coherently at workspace version 0.8.0.",
+                    1,
+                ),
                 verify,
             ),
             "feature": (

@@ -4,7 +4,7 @@
 
 use crate::error::Result;
 use crate::font::FontManager;
-use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId};
+use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId, SourceSpan};
 
 /// A tab stop positioned in typographic points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -124,6 +124,8 @@ pub struct NoteRef {
 #[derive(Debug, Clone)]
 pub struct TextSegment {
     pub text: String,
+    /// Exact source range for this segment, when directly attributable.
+    pub source: Option<SourceSpan>,
     pub font_id: FontId,
     pub font_size: f64,
     pub glyph_ids: Vec<u16>,
@@ -573,8 +575,19 @@ fn split_text_subsegment(
     }
     shaped.width += spacing * shaped.advances.len() as f64;
 
+    let source = seg.source.map(|source| {
+        let start = seg.text[..byte_start].chars().count() as u32;
+        let end = seg.text[..byte_end].chars().count() as u32;
+        SourceSpan {
+            node: source.node,
+            char_start: source.char_start + start,
+            char_end: source.char_start + end,
+        }
+    });
+
     Ok(InlineItem::Text(TextSegment {
         text: sub_text,
+        source,
         font_id: seg.font_id,
         font_size: seg.font_size,
         glyph_ids: shaped.glyph_ids,
@@ -777,6 +790,7 @@ fn shape_leader(
 
     Some(TextSegment {
         text: leader_text,
+        source: None,
         font_id,
         font_size,
         glyph_ids,
@@ -922,6 +936,7 @@ mod tests {
     fn make_text_segment(text: &str, width: f64) -> TextSegment {
         TextSegment {
             text: text.to_string(),
+            source: None,
             font_id: FontId(0),
             font_size: 12.0,
             glyph_ids: vec![],
@@ -960,6 +975,7 @@ mod tests {
         shaped.width += spacing * shaped.advances.len() as f64;
         TextSegment {
             text: text.to_owned(),
+            source: None,
             font_id,
             font_size: 30.0,
             glyph_ids: shaped.glyph_ids,
@@ -1055,6 +1071,44 @@ mod tests {
             }
         }
         assert_eq!(rendered_text, text);
+    }
+
+    #[test]
+    fn line_splitting_preserves_contiguous_unicode_source_ranges() {
+        let mut fm = deterministic_font_manager();
+        let node = crate::SourceNodeId::new(7).expect("a non-zero source id");
+        let mut segment = shaped_text_segment(&mut fm, "ab 🚀界 cd", 0.0);
+        segment.source = Some(crate::SourceSpan {
+            node,
+            char_start: 11,
+            char_end: 19,
+        });
+
+        let lines = break_into_lines(
+            &[InlineItem::Text(segment)],
+            &LineBreakParams {
+                available_width: 55.0,
+                ..LineBreakParams::default()
+            },
+            &fm,
+        )
+        .expect("split mixed Unicode text");
+        let sourced = lines
+            .iter()
+            .flat_map(|line| &line.items)
+            .filter_map(|item| match item {
+                LineItem::Text(segment) => segment.source,
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(sourced.len() > 1, "the fixture must cross a line boundary");
+        assert_eq!(sourced.first().expect("first range").char_start, 11);
+        assert_eq!(sourced.last().expect("last range").char_end, 19);
+        for pair in sourced.windows(2) {
+            assert_eq!(pair[0].node, node);
+            assert_eq!(pair[0].char_end, pair[1].char_start);
+        }
     }
 
     #[test]

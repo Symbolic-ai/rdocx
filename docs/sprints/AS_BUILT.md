@@ -7633,3 +7633,395 @@ rejection of an invalid repeated numbering reference.
 **Notes for future sessions.** Repeated list items preserve their source
 `numId` and level. A missing definition is a render error rather than a reason
 to create or renumber package state.
+
+### F-166, Mail merge
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Document` now produces one complete document per flat
+record or one document with a section per record. Merge fields use a private
+missing-as-empty policy, while the ordinary field evaluator keeps its cached
+fallback behavior. All record candidates are staged before output is exposed.
+
+**Non-obvious choices.** Section assembly retains final section properties and
+remaps bookmark, content-control, drawing, and reference identities across
+records. Record-varying non-body stories are rejected rather than silently
+reusing one record. Footnote updates patch the relationship-resolved source
+part while preserving unrelated raw XML.
+
+**Deviations from the design plan.** None. Microscope remediation expanded the
+identity and story scanners to namespace-aware preserved XML and unified the
+staging clone used by template and merge operations.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, mail-merge ownership,
+`docs/hld/04-opc-and-packaging.md`, staged package and section assembly,
+`docs/hld/10-bindings-spec.md`, native merge APIs, and
+`docs/hld/12-testing-strategy.md`, merge fixtures and atomicity.
+
+**Tests.** `a_fixture_record_set_produces_separate_and_sectioned_documents`,
+plus missing-field, boundary, non-body story, identity remapping, footnote raw
+preservation, and source-atomicity regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Combined-section mode is deliberately bounded
+to record-varying main-body content. A future story that varies headers,
+footers, or notes per record must clone their parts and relationships rather
+than weakening this rejection.
+
+### F-167, Document comparison
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::compare` creates tracked insertions, deletions,
+and property changes through deterministic hierarchical alignment of body
+paragraphs, tables, rows, cells, runs, and existing content-control shells.
+Accepting the result reproduces the edited document and rejecting it reproduces
+the original. Formatting-only changes also produce diagnostics.
+
+**Non-obvious choices.** Comparison uses the existing revision grammar and
+accept or reject resolver as postcondition oracles. It preserves paragraph,
+table, cell, field, control, and unsupported raw XML ownership rather than
+canonicalising the whole document. Unsupported shell changes fail atomically.
+
+**Deviations from the design plan.** None. Five microscope remediation rounds
+strengthened raw whitespace, field ownership, revision marker placement,
+numbering owner cleanup, nested control and row ownership, and attributed
+producer property restoration.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, comparison ownership,
+`docs/hld/04-opc-and-packaging.md`, preservation and atomic failure,
+`docs/hld/10-bindings-spec.md`, native comparison API, and
+`docs/hld/12-testing-strategy.md`, exact accept and reject gates.
+
+**Tests.** The regression gate compares body text, lists, tables, nested
+tables, and content controls, then proves both accept and reject postconditions.
+Focused regressions cover repeated rows, raw fields and controls, numbering
+addition and removal, namespace ownership, and formatting diagnostics.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Header, footer, note, comment, text-box, and
+character-granularity comparison remain future scope. Exactness is defined by
+the typed and preserved body representation rather than rendered appearance.
+
+### F-168, Watermarks
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Native text and image watermark setters author
+header-scoped VML, round-trip recognized shapes without rewriting unrelated
+header XML, and render deterministic rotated watermark groups behind body text
+on every applicable page and section.
+
+**Non-obvious choices.** Opened VML remains raw serialization authority while a
+conservative typed projection drives layout. Generated first, even, and default
+header variants match Word fallback behavior. Image relationships stay local
+to their header and use the collision-safe media registry.
+
+**Deviations from the design plan.** None. Microscope remediation added native
+section fallbacks, inherited-header preservation, page-number restart parity,
+canonical VML shape types, namespace-safe scans, named-color handling, and
+margin-relative placement.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, watermark ownership,
+`docs/hld/04-opc-and-packaging.md`, VML and header media relationships,
+`docs/hld/08-rendering-spec.md`, per-page behind-text lowering,
+`docs/hld/10-bindings-spec.md`, native setters, and
+`docs/hld/12-testing-strategy.md`, deterministic golden evidence.
+
+**Tests.** `watermark_renders_behind_body_text_on_every_page`, with exact
+five-page PNG digests, plus VML preservation, fixed-prefix writing, header
+inheritance, first and even variants, media collisions, section parity, and
+atomic setter regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Only recognized API-owned text and image VML
+shapes are replaced or rendered. Other `w:pict` content remains opaque and
+byte-preserved.
+
+### F-X037, Trace Word glyphs to source paragraphs
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `SourceNodeId` and exclusive Unicode-scalar `SourceSpan`
+metadata now flow through shaping and both line-splitting stages. New Word
+layout entry points return `WordLayoutResult`, whose result-local side table
+resolves glyph runs to body, nested-table, header, footer, footnote, and
+endnote paragraph paths.
+
+**Non-obvious choices.** Generated markers, evaluated fields, note labels, and
+non-bijective text transformations remain truthfully unattributed. Existing
+low-level layout functions still return `LayoutResult` and discard provenance.
+Field scalar offsets and displayed projection now share one ownership function.
+
+**Deviations from the design plan.** None. Microscope review found and fixed an
+ambiguous repeated-text field offset by making `Field::projected_text` the one
+source of truth for both run text and source starts.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, provenance ownership,
+`docs/hld/08-rendering-spec.md`, shaping and revision projections,
+`docs/hld/10-bindings-spec.md`, low-level source boundary,
+`docs/hld/12-testing-strategy.md`, exact path and range gates, and
+`docs/hld/14-development-backlog.md`, the issue 38 contract.
+
+**Tests.** `every_sourced_glyph_run_resolves_to_its_exact_word_text`, plus
+Unicode split, repeated story, revision view, generated text, caller-font,
+deterministic, field ownership, and legacy result parity regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Source ids are one-based and local to one
+result. F-X038 must rebind cached scalar ranges to current ids rather than
+retaining a prior layout's identity.
+
+### F-X032, Expose complete Word layout results
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Four native `Document` accessors now expose complete
+`WordLayoutResult` bundles. Accepted normal-font layouts share the existing
+`Arc` cache, tracked options remain uncached, and caller-font layouts return
+owned bundles with the exact font bytes and Word source map used by shaping.
+
+**Non-obvious choices.** Cached results use `Arc` so external renderers do not
+duplicate positioned pages, fonts, or provenance maps. Caller-provided font
+sets remain uncached because borrowed font inputs have no stable cache key.
+Existing PDF, raster, page, and caller-font PDF paths consume the same bundle
+paths as the new public accessors.
+
+**Deviations from the design plan.** None. Microscope review strengthened the
+tests with a distinct in-memory font family, an already-populated accepted
+cache, and a non-default tracked revision view.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, facade ownership,
+`docs/hld/08-rendering-spec.md`, layout result and cache behavior,
+`docs/hld/10-bindings-spec.md`, native public accessors,
+`docs/hld/12-testing-strategy.md`, public traversal and cache-isolation gates,
+and `docs/hld/14-development-backlog.md`, the issue 37 contract.
+
+**Tests.** `full_layout_exposes_resolvable_font_data_and_reuses_the_cache`,
+plus caller-font byte ownership, accepted and tracked cache isolation, public
+downstream traversal, WASM compilation, package dry-run, and archive-size
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-X038 may reuse shaping and safe paragraph
+work, but it must preserve the accepted cache identity contract and rebuild
+result-local provenance ids for every returned layout.
+
+### F-X034, Reviewed release notes for every release
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** A canonical `/release-notes TAG` ceremony now derives one
+reviewed GitHub release body from `CHANGELOG.md`. It requires meaningful
+Highlights, Added, Fixed, Compatibility, and Contributors sections for either
+release family. Publication validates the notes before crates.io commands and
+creates the GitHub release from the exact reviewed bytes.
+
+**Non-obvious choices.** The validator parses visible Markdown structure
+conservatively. Headings hidden in comments, fences, or raw HTML do not count,
+and syntax-only links, references, code markers, HTML, or invisible Unicode do
+not satisfy a required section. Rendering preserves the accepted source body
+byte for byte. The generated Codex adapter points to the canonical command.
+
+**Deviations from the design plan.** None. Eleven microscope passes tightened
+CommonMark boundaries, semantic emptiness, canonical SemVer, pre-publication
+ordering, exact executable checks, and artifact immutability.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, mutation-sensitive
+workflow evidence, `docs/hld/14-development-backlog.md`, the permanent notes
+ceremony, and `docs/hld/15-build-and-toolchain.md`, pre-publication validation
+and exact GitHub body publication.
+
+**Tests.** `test_release_notes_require_complete_reviewed_changelog_sections`
+and four adjacent release-workflow tests, plus the 62-test workflow suite,
+generated-skill validation, publication-order mutation tests, and the full
+integrated verification gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Every future release story must run the notes
+ceremony, review its rendered body, and verify the published body byte for byte.
+The ceremony never replaces the separate final release approval.
+
+### F-X038, Cache relayout work across document edits
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Normal layouts now reuse a process-lifetime system-font
+snapshot, bounded file-byte and exact-key shaping caches, one lazy synchronized
+`Document` engine, and a bounded cache for context-independent body paragraphs.
+Warm layouts remain byte-equivalent to cold layouts while rebuilding only
+changed safe paragraphs.
+
+**Non-obvious choices.** Deterministic and caller-font paths remain isolated.
+Paragraph entries publish only after the whole layout succeeds, replay exact
+font-resolution traces and diagnostics, and rebind scalar ranges to the current
+result-local source ids. Context-sensitive paragraphs bypass reuse. Every
+persistent and transaction-local cache has an entry or retained-byte ceiling,
+including reflow buffers and active font faces.
+
+**Deviations from the design plan.** None. Four microscope passes strengthened
+font-table identity, late-failure rollback, caller and tracked isolation,
+AlternateContent safety, TTC sharing, poison reuse, active-face correctness,
+transaction staging, trace capacity release, and exact retained-memory
+accounting.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, persistent engine
+ownership, `docs/hld/08-rendering-spec.md`, safe paragraph reuse and provenance,
+`docs/hld/10-bindings-spec.md`, unchanged public facade behavior,
+`docs/hld/12-testing-strategy.md`, warm and cold equality gates,
+`docs/hld/14-development-backlog.md`, the issue 39 contract, and
+`docs/hld/15-build-and-toolchain.md`, process-lifetime font discovery.
+
+**Tests.** `warm_relayout_matches_cold_and_rebuilds_only_changed_safe_paragraphs`,
+plus exact font order, 257 active families, TTC byte sharing, context mutation,
+late failure, diagnostics, current provenance, poison recovery, transaction and
+retained-byte bounds, no-default, WASM, package, and threading regressions.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Normal system-font discovery is a
+process-lifetime snapshot, so installing or replacing host fonts requires a
+process restart. Release notes for 0.4.0 and 0.8.0 must credit
+`@emptinessform` for the issue 39 measurements and cache proposal.
+
+### F-X033, Integrate PR 36 ordered body items
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Pedro Assumpcao's additive `Document::body_items` reader
+now exposes direct Word body paragraphs, tables, body content controls, and
+preserved unsupported XML in source order. The contribution landed through
+GitHub PR 36 with its original commit and merge record intact.
+
+**Non-obvious choices.** Existing `paragraphs()` and `tables()` accessors stay
+recursive, while `body_items()` is deliberately direct. Self-closing Word
+paragraphs and tables normalize to typed empty values, and a self-closing
+section-properties child remains schema-final state rather than an unsupported
+body item. Every foreign or unsupported empty child remains raw XML.
+
+**Deviations from the design plan.** The plan was revised after microscope
+review exposed the self-closing parser boundary. Three passes added expanded
+name checks and unconditional raw fallback without broadening the public API.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, direct body ownership,
+`docs/hld/10-bindings-spec.md`, the native-only reader,
+`docs/hld/12-testing-strategy.md`, public opened-package evidence, and
+`docs/hld/14-development-backlog.md`, the PR 36 integration contract.
+
+**Tests.** `public_body_items_preserve_opened_document_order`,
+`body_items_preserve_paragraph_table_control_and_raw_order`, and
+`self_closing_modeled_body_children_are_typed_by_namespace`, plus fresh
+current-base GitHub CI run 32516942671, full workspace verification, package
+dry-run, and archive inventory.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Direct body order is now public, but nested
+content-control and table traversal remains owned by the existing recursive
+accessors. Preserve contributor credit through the PR 36 merge record.
+
+### F-X035, Tag rpptx-v0.4.0
+
+**Sprint.** S51
+**Completed.** 2026-08-21
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete 15-package shared OOXML and PowerPoint family
+is published on crates.io at 0.4.0. This is the first release of `oxml-chart`.
+The local `rpptx-wasm` package moved with the family but remains unpublished.
+GitHub release `rpptx-v0.4.0` contains the reviewed changelog body unchanged.
+
+**Non-obvious choices.** The release used one annotated tag at reviewed SHA
+`9dee4335c531ca24abbdc995294edbb48c00183f`. Workflow run 32527109236 skipped
+the stable allowlist, published the incubating crates in dependency order, and
+created the GitHub release only after archive and release-note validation.
+Independent checks downloaded every selected registry version and confirmed
+`mantissaman` as owner. The remote tag peels to the reviewed SHA, and the
+published release body is byte-identical to a fresh notes render.
+
+**Deviations from the design plan.** None. The separately approved release
+completed every deferred publication checklist item.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`, the published
+incubating source boundary, and `docs/hld/15-build-and-toolchain.md`, the
+published package family and reviewed tag.
+
+**Tests.** `test_incubating_release_family_is_prepared_at_0_4_0`, the 63-test
+workflow suite, full workspace verification, patched 22-package dry run,
+archive inventories, both WASM checks, `cargo info` and owner checks for all 15
+published crates, remote tag verification, and byte-exact GitHub release-note
+comparison.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Stable 0.8.0 may now be prepared against the
+published 0.4.0 dependency family. It requires its own reviewed SHA and a new
+explicit `/release v0.8.0` approval before any stable tag or publication.
+
+### F-X036, Tag v0.8.0
+
+**Sprint.** S51
+**Completed.** 2026-08-22
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact seven-package stable Word family is published on
+crates.io at 0.8.0. The four workspace-version binding and support packages
+remain unpublished. GitHub release `v0.8.0` contains the reviewed changelog
+body unchanged.
+
+**Non-obvious choices.** The release used one annotated tag at reviewed SHA
+`0cc47eb8632de184ba758fe0929d9f749ab4fcb0`. Workflow run 32536705662
+published only the stable allowlist in dependency order, skipped the
+incubating allowlist, and created the GitHub release after output, metadata,
+notes, and archive verification. Independent checks downloaded all seven
+registry versions and confirmed `mantissaman` as owner. The remote tag peels
+to the reviewed SHA, and the 9,291-character published release body is
+byte-identical to a fresh notes render.
+
+**Deviations from the design plan.** The default third sprint-review pass found
+one missing Issue 37 credit in the stable notes. The remediation added the
+verified reporter attribution and mutation-sensitive coverage. An explicitly
+bounded fourth pass was clean before release approval. No product code or
+release carrier changed during that remediation.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, the published stable
+family boundary, `docs/hld/10-bindings-spec.md`, the shipped native and
+low-level compatibility surface, `docs/hld/12-testing-strategy.md`, the
+published README endpoint, and `docs/hld/15-build-and-toolchain.md`, the
+verified release tag and package family.
+
+**Tests.** `test_stable_release_family_is_prepared_at_0_8_0`, the 66-test
+workflow suite, full workspace verification, all 49 unchanged hashes, the
+patched 22-package dry run, archive inventories, both WASM checks, no-default
+layout, docs, README tests, supply-chain checks, seven `cargo info` and owner
+checks, remote tag verification, and byte-exact GitHub release-note
+comparison.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Issue 37 and PR 36 have verified stable release
+comments, and Issue 37 is closed. The later Issue 39 proposals for shared
+`FontData` bytes and public engine handoff did not ship in 0.8.0. Review
+those as separate follow-up changes against the post-release code.

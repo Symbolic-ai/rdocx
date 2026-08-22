@@ -2190,6 +2190,174 @@ reviewed sprint SHA.
 required `ci-gate` while the filtered expensive jobs stay skipped, and a
 selected failing job makes the required gate fail.
 
+### F-X032, Expose complete Word layout results (S)
+
+Expose the cached normal-font `WordLayoutResult` and an uncached caller-font
+`WordLayoutResult` from `Document` so third-party renderers can consume
+positioned pages together with the exact `FontData` and Word source map used by
+layout. `layout` and `layout_with_options` return the shared accepted cache as
+`Arc<WordLayoutResult>`, while tracked options remain uncached.
+`layout_with_fonts` and `layout_with_fonts_and_options` return owned uncached
+results. PDF, raster, and page access borrow the neutral layout from those same
+bundles. No new layout engine or font-set cache is introduced.
+
+**Depends on**: F-009, F-151, F-X037.
+**Test gate**: regression. Every emitted glyph-run font id resolves to returned
+font data, repeated default calls share the accepted layout cache,
+caller-only family names and bytes appear in the owned result, and tracked
+layout neither populates nor replaces the accepted cache. Public caller-font
+options must expose different accepted and tracked revision projections.
+
+### F-X033, Integrate PR 36 ordered body items (S)
+
+Integrate Pedro Assumpcao's PR 36 through the active sprint branch while
+retaining the contributor commit and GitHub pull-request record. The additive
+native `Document::body_items` reader returns direct document-body children in
+source order as paragraph, table, body-level content-control, or preserved
+unsupported XML views. Existing recursive paragraph and table accessors retain
+their current semantics. Self-closing modeled Word body children normalize to
+the same typed ownership as paired elements, while foreign and unsupported
+empty children remain raw. Python, WASM, and CLI surfaces remain unchanged.
+
+The submitted checks ran against an older base. Retarget the pull request to
+the integrated sprint branch, run current-base GitHub CI, and merge it with a
+GitHub merge commit. Maintainer hardening and documentation remain separate
+from the contributor commit.
+
+**Depends on**: F-X038.
+**Test gate**: integration. An in-code document with interleaved body
+paragraphs, tables, content controls, and unmodelled XML opens through the
+public facade and `body_items` reports every direct child once in exact source
+order. Current-base GitHub CI, the submitted focused test, the full package
+gate, and the unchanged hash harness also pass.
+
+### F-X034, Reviewed release notes for every release (S)
+
+Every release tag carries reviewed, human-written release notes rather than
+only GitHub's generated commit summary. A canonical `/release-notes TAG`
+ceremony reads the release plan, completed delivery records, relevant commits,
+and contributor history, then prepares the versioned `CHANGELOG.md` section
+with highlights, user-visible additions and fixes, compatibility or migration
+guidance, and contributor credit. Its generated agent skill keeps the ceremony
+identical across tools. The deterministic workflow CLI checks one exact SemVer
+tag section with the complete ordered heading set and renders only its reviewed
+body without changing the changelog. Missing, duplicate, semantically empty,
+or placeholder sections fail. Raw HTML alone is not meaningful release text.
+The publish workflow validates the same source before crates.io publication,
+renders it once into runner-temporary storage, byte-compares a fresh render
+immediately before GitHub release creation, and passes only that artifact to
+`gh release create`.
+
+**Depends on**: F-X025.
+**Test gate**: regression. The custom command prepares complete notes from the
+reviewed release record, its generated skill is in sync, release-note
+extraction returns the exact versioned changelog section for both tag families,
+missing or incomplete notes fail, validation precedes every crates.io publish
+command, and GitHub can consume only the byte-identical reviewed artifact.
+
+### F-X035, Tag rpptx-v0.4.0 (S)
+
+Prepare and publish the complete incubating family at 0.4.0. This is the first
+incubating release containing `oxml-chart`, which is required by the current
+stable `rdocx` graph and was not published at 0.3.0. All 15 crates.io packages
+move together, `rpptx-wasm` remains unpublished, and the reviewed release notes
+name the chart addition, compatibility position, and contributors.
+
+**Depends on**: F-X034, F-X037, F-X038.
+**Test gate**: release. The incubating metadata regression, full verification,
+22-package dry run, archive inventory, supply-chain gate, and unchanged hash
+harness pass. After separate final approval, all 15 crates resolve from
+crates.io at 0.4.0 and the GitHub release uses the reviewed notes at the exact
+sprint SHA.
+
+### F-X036, Tag v0.8.0 (S)
+
+Prepare and publish the complete stable family at 0.8.0 after the incubating
+0.4.0 dependency graph is available. The minor boundary covers the intentional
+pre-1.0 low-level revision and field model changes plus the additive document
+automation, complete-layout, and ordered-body facade APIs. Only the exact seven
+stable crates publish. Python, WASM, npm, PyPI, and incubating publication stay
+unauthorised. The reviewed release notes describe the new APIs, fixes,
+compatibility boundary, and contributor credit.
+
+**Depends on**: F-166, F-167, F-168, F-X032, F-X033, F-X035, F-X038.
+**Test gate**: release. The stable metadata regression, full verification,
+22-package dry run, archive inventory, supply-chain gate, and unchanged hash
+harness pass. After separate final approval, all seven stable crates resolve
+from crates.io at 0.8.0 and the GitHub release uses the reviewed notes at the
+exact sprint SHA while PR 36 credit remains visible.
+
+### F-X037, Trace Word glyphs to source paragraphs (M)
+
+Carry format-neutral source spans through shaping, both line-splitting stages,
+pagination, and positioned glyph output. `rdocx-layout` returns a typed
+`WordLayoutResult` whose result-local side table resolves each source node to a
+document, table, nested-table, header, footer, footnote, or endnote paragraph
+path. Character ranges use Unicode scalar indices in the selected revision
+projection. Generated markers, dynamically evaluated fields, and text whose
+display transformation cannot preserve an exact source slice remain
+unattributed rather than reporting a false location.
+
+The existing `layout_document` functions retain their `LayoutResult` return
+type and discard provenance. `layout_document_with_provenance` and
+`layout_document_deterministic_with_provenance` return the Word-specific
+bundle. The field model exposes its parsed-complex projection ownership through
+`Field::projected_text`, so identical cached and literal text cannot shift a
+later range. F-X032 exposes the bundle through cached and caller-font facade
+paths, so external renderers receive pages, fonts, and source resolution
+together.
+
+This is an intentional low-level pre-1.0 source break for exhaustive
+`TextSegment` and `GlyphRun` literals and belongs in the planned 0.4.0 and
+0.8.0 release notes. It does not add rendering support for content that the
+current layout engine skips.
+
+**Depends on**: F-009, F-151.
+**Test gate**: regression. Every attributed glyph run resolves to one exact
+Word paragraph path and Unicode-scalar range whose projected text equals the
+run text across ASCII, CJK, wrapping, tables, nested tables, headers, footers,
+footnotes, endnotes, and both revision views. Both splitting stages preserve
+contiguous ranges. Generated markers, evaluated fields, and non-bijective text
+transformations remain unattributed. Caller-font and cached layouts carry the
+same complete source map, packaged crates remain below 10 MiB, WASM checks
+pass, and all 49 hash entries remain unchanged. The repeated-text field
+regression proves that parsed complex fields advance projection offsets and
+new simple fields do not.
+
+### F-X038, Cache relayout work across document edits (L)
+
+The normal-font path reuses the expensive work an interactive editor repeats
+after every document mutation. Bundled plus system fonts are discovered once
+per process. File-backed face bytes are shared by canonical file identity.
+Shaping uses complete exact keys, and each document retains one synchronized
+normal engine with a bounded paragraph cache. Deterministic and caller-provided
+fonts remain isolated from the system snapshot.
+
+Only context-independent body paragraphs reuse blocks. The complete context and
+key compare styles, theme, embedded fonts, width, revision view, and typed
+paragraph content. Numbering, drawings, fields, hyperlinks, media,
+relationships, and other traversal-sensitive content bypass reuse. Diagnostics
+and exact bounded font traces travel with each block. Whole-layout publication
+is transactional, and cached scalar ranges are rebound to the current F-X037
+result-local source nodes. Process, shaping, coverage, trace, pending, and
+published caches have explicit entry and true retained-byte bounds. Poisoned
+process locks recover without disabling later layout.
+
+Issue 39 supplied the profiling, cache decomposition, and prototype. Credit
+`@emptinessform` in both release families. The reported 1,144 ms to 101 ms
+improvement is evidence, not a machine-independent CI threshold. Normal system
+font discovery is a process-lifetime snapshot, so installing or replacing
+system fonts requires a process restart. Deterministic and caller-font behavior
+does not change.
+
+**Depends on**: F-X037, F-X032.
+**Test gate**: regression. A warm normal-font relayout equals a cold result in
+pages, fonts, diagnostics, revision view, and resolved source provenance while
+rebuilding only the changed safe paragraph. Complete context changes cannot
+serve stale blocks, shaping keys never alias different content, process and
+engine caches stay bounded and recover from poison, `Document` remains
+`Send + Sync`, both WASM targets compile, and all 49 hashes remain unchanged.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

@@ -37,8 +37,10 @@ impl FontManager {
 ```
 
 The constructor starts with a fresh font database and loads only the checked-in
-bundled font bytes. It never calls system-font discovery. Document-embedded
-fonts remain explicit layout inputs, so they are deterministic too.
+bundled font bytes. It never calls system-font discovery or clones the normal
+process snapshot. Document-embedded fonts remain explicit layout inputs, so
+they are deterministic too. Caller-font construction starts from an empty
+database and likewise cannot observe bundled or system fonts.
 
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
@@ -50,7 +52,20 @@ input without changing the normal PDF API. Existing constructors and rendering
 methods still load system fonts for library users.
 
 The hash harness, golden-PNG gate and SSIM harness use the deterministic path.
-The normal rendering API does not change its font-discovery behaviour.
+The normal rendering API still discovers system fonts, but now captures the
+bundled plus system face table once per process. Installing, removing, or
+replacing system fonts requires a process restart. File-backed font bytes use a
+separate bounded process cache keyed by canonical file identity, so faces at
+different TTC indices share one byte buffer. Both process caches are compiled
+only with `system-fonts`, and poisoned file-cache locks recover by rebuilding
+the requested entry.
+
+Reusable managers bound shaping to 2,048 entries and 16 MiB, file bytes to 256
+entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
+entry ceilings. The reusable Word engine bounds both pending and published
+paragraph entries at 256 entries and 16 MiB with retained-capacity accounting.
+These caches add no feature flag or dependency and remain available in the
+default-off graphs without enabling host discovery.
 
 `rpptx-render::layout_presentation_deterministic` applies the same rule to a
 whole presentation. It shares page lowering with
@@ -159,19 +174,20 @@ The exact incubating crates.io allowlist now contains 15 implemented shared
 and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The original
-14-package set is published through 0.3.0. `oxml-chart` joins the next approved
-incubating release after its version preparation. Manifest eligibility and
-allowlist membership do not authorize publication without a separately
-approved `/release` invocation at the exact reviewed SHA.
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
+at 0.4.0 from the annotated `rpptx-v0.4.0` tag at reviewed SHA
+`9dee4335c531ca24abbdc995294edbb48c00183f`. This is the first published
+version of `oxml-chart`. Manifest eligibility and allowlist membership do not
+authorize a later publication without a separately approved `/release`
+invocation at the exact reviewed SHA.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.7.0, nine internal pins, eleven
+stable regression requires prepared workspace 0.8.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.3.0 versions, pins,
+set. The incubating regression requires the exact 0.4.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -189,6 +205,16 @@ and checkout plus a locked cargo-release 1.1.3 installation precede the exact
 whole-module command. This keeps both release family preflights and future
 release-contract regressions in the ordinary CI gate with the external command
 their stable-family checks require.
+
+Every stable or incubating tag also requires one reviewed `CHANGELOG.md`
+section whose second-level heading is the exact tag. The required ordered
+subsections are Highlights, Added, Fixed, Compatibility, and Contributors.
+The deterministic workflow CLI checks that contract and renders only the
+reviewed body. Both modes are read-only. `publish.yml` runs the check before
+either crates.io allowlist, stores one render in runner-temporary storage, and
+byte-compares a fresh render with that artifact immediately before passing it
+to `gh release create --notes-file`. Generated GitHub notes are not a release
+source.
 
 The workflow then runs
 `cargo publish --workspace --dry-run` with an exact local source patch for each
@@ -235,21 +261,20 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group is at 0.7.0, and its two
-Python project versions and rdocx WASM contract literals are also 0.7.0. The
-exact seven-package stable family is published at 0.7.0 from the annotated
-`v0.7.0` tag whose target is the reviewed sprint SHA. Earlier immutable
-registry releases remain available. No binding, WASM, Python, npm, or
-incubating package gained publication authority from the stable release.
-The 16 implemented `oxml-*` and `rpptx*` package manifests are prepared at
-explicit version 0.3.0, use the named `incubating` group, and carry the
-`rpptx-v{{version}}` template. That preparation group is the exact 15-package
-crates.io family listed above plus unpublished `rpptx-wasm`. The crates.io
-allowlist remains exactly 15 packages. The original 14 are published at 0.3.0
-from the annotated `rpptx-v0.3.0` tag at the reviewed sprint SHA. `oxml-chart`
-remains unpublished until the next incubating version preparation and release.
-Earlier immutable registry releases remain available, and `rpptx-wasm`
-remains unpublished.
+`v{{version}}` tag template. That shared-version group is at 0.8.0,
+and its two Python project versions and rdocx WASM contract literals are also
+0.8.0. The exact seven-package stable family is published from the annotated
+`v0.8.0` tag at reviewed SHA
+`0cc47eb8632de184ba758fe0929d9f749ab4fcb0`. Earlier immutable registry
+releases remain available. No binding, WASM, Python, npm, or incubating package
+gained publication authority from the stable release.
+The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
+0.4.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+exact 15-package crates.io family listed above is published from the annotated
+`rpptx-v0.4.0` tag at reviewed SHA
+`9dee4335c531ca24abbdc995294edbb48c00183f`. The preparation group also contains
+unpublished `rpptx-wasm`, while the crates.io allowlist remains exactly 15
+packages. Earlier immutable registry releases remain available.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -262,6 +287,14 @@ one namespace. The stable path validates the workspace version, its internal
 pins, and the exact seven-package stable set. The incubating path validates the
 common explicit version, workspace pins, and the exact 15-package incubating
 set.
+
+`/release-notes TAG` is the deliberate preparation ceremony for the same two
+namespaces. It derives human-written highlights, additions, fixes,
+compatibility guidance, and contributor credit from reviewed repository
+evidence, then updates the exact changelog section for review with the code.
+`/release` renders and inspects that section at the reviewed SHA before its
+separate final approval. After publication it requires the GitHub release body
+to equal the same rendered bytes.
 
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the

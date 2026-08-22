@@ -25,6 +25,26 @@ a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
 `saving_is_reproducible`.
 
+The ordered-body integration gate opens an in-code package through the public
+Word facade and compares the exact direct sequence of paragraphs, a table, a
+body content control, preserved producer XML, and a final paragraph. It also
+proves that recursive paragraph and table accessors retain their existing
+results. The adjacent low-level regression uses default and aliased Word
+namespaces for self-closing paragraphs, tables, and final section properties,
+while foreign same-local-name empty children remain byte-preserved raw XML.
+
+The release-notes regression gate validates both release tag families through
+the same deterministic parser used by publication. It requires one exact
+version section, the complete ordered heading set, meaningful rendered
+Markdown in every section, and no placeholder tokens. Raw HTML cannot satisfy
+semantic emptiness, while escaped element-like Markdown, visible link labels,
+and real code content remain valid. Check and render modes leave the changelog
+unchanged, and rendering returns the reviewed body byte for byte. Workflow
+mutation matrices also require this validator before either crates.io publish
+path, preserve the rendered artifact until a fresh byte comparison immediately
+before GitHub release creation, and bind the release command to the same
+preflight and post-publication body check.
+
 The Word field regression matrix records Microsoft Word 16.104 build
 16.104.25121423 with an en-US locale, Gregorian calendar, period decimal
 separator, comma grouping separator, and UTC clock context. Its readable
@@ -55,6 +75,86 @@ numbering regression proves that mixed list and ordinary paragraphs retain one
 `numId` and level without changing the numbering part. The paired round-trip
 test compares row, cell, table, numbering, and raw XML state after reopen and
 checks the raw children at their schema boundaries.
+
+The flat mail-merge regression gate builds one readable record set in code and
+compares exact separate and sectioned outputs in record order. It proves that
+an absent record value becomes empty only under merge policy. Focused
+regressions retain ordinary field fallback, switches, atomic failure, empty and
+single-record boundaries, section-property order, tables, lists, and producer
+XML after reopen. Scanner regressions cover simple and complex non-body fields,
+nested header references, relationship-resolved footnotes, preserved raw body
+references, entity-escaped bookmark names, collision-safe identity allocation,
+and foreign same-local-name attributes. The methods are opt-in and no sample
+invokes them, so the 49-entry hash harness must remain unchanged.
+
+The document-comparison regression gate compares paragraphs, tables, cells,
+nested tables, lists, and modeled content inside existing content-control
+shells. Accepting the generated revisions must reproduce the edited normalized
+modeled body exactly, while rejection must reproduce the original and leave no
+residual tracked containers. Focused coverage locks down deterministic repeated
+content alignment, escaped metadata and collision-free ids, schema placement
+for run, paragraph, row, and numbering markers, formatting-only diagnostics,
+atomic failure, and empty property-owner cleanup. The paired round-trip test
+proves that unmodeled XML and namespace declarations retain their exact bytes
+through comparison, save, and reopen. No sample invokes comparison, so the
+49-entry hash harness remains unchanged.
+
+The watermark golden gate builds a five-page document in code, renders with
+bundled fonts, and compares the exact PNG-byte digest for every page. It also
+requires the selected watermark group to precede ordinary header and body
+elements. Focused tests cover aliased VML projection, raw header preservation,
+canonical generated child order, package-visible first and even variants,
+same-type section inheritance, displayed page-number parity, header-scoped
+image relationships, forced media-id collisions, blank selected variants,
+entity-decoded settings, unsupported colour and media diagnostics, atomic
+rejection, and margin-relative centering. No sample authors a watermark, so the
+49-entry hash harness remains unchanged.
+
+The Word glyph-provenance regression resolves every attributed run through its
+result-local `WordSourcePath` and requires the selected paragraph's exact
+Unicode-scalar slice to equal the displayed run. Its in-code fixture covers
+ASCII, emoji, CJK, wrapping, body paragraphs, nested tables,
+headers, footers, footnotes, endnotes, and accepted and tracked revision views.
+Focused tests split sourced text in both Word and shared line stages, distinguish
+duplicate paragraphs from repeated story layout, and keep generated or
+non-bijective text unattributed. A repeated-text field regression places a
+parsed complex cache beside literal text and a public simple field, proving
+that actual projection ownership determines later scalar offsets. Compatibility
+tests compare the existing low-level layout results after stripping provenance.
+Both WASM targets and the package dry-run cover the intentional exhaustive
+public literal change. All 49 hash entries remain unchanged.
+
+The native full-layout regression resolves every positioned glyph-run font id
+through the returned `WordLayoutResult`, resolves every attributed source id
+through the same bundle, and proves PDF reuses the accepted layout `Arc`. A
+caller-font fixture rewrites the family records of an in-memory TTF so neither
+its name nor bytes can be supplied by bundled fonts, then requires every
+sourced run to resolve to that exact owned font. The cache boundary populates
+accepted layout before tracked calls and proves they neither replace its `Arc`
+nor add an accepted invocation. Public integration coverage renders different
+accepted and tracked revision text through the caller-font option accessor.
+The workspace package dry-run, 10 MiB archive ceiling, and WASM target check
+cover the additive published API. All 49 hash entries remain unchanged.
+
+The relayout-cache gate compares a warm normal-font result with a fresh cold
+engine after editing one safe body paragraph. Pages, font table order and ids,
+font bytes, diagnostics, revision view, and every resolved provenance span must
+match exactly, while only the changed safe paragraph rebuilds. Focused cases
+cover actual mutation invalidation, style and theme context changes, unsafe
+numbering, fields, hyperlinks, media, relationships, ordinary and
+`AlternateContent` drawings, nonempty diagnostic replay, late transactional
+failure, paragraph reorder and insertion, caller-font isolation, TTC indices,
+and a legitimate active set larger than 256 faces.
+
+Boundary tests exercise the exact shaping identity, process font discovery,
+canonical file-byte identity, lock poison recovery, bounded resolution and
+coverage state, bounded and shrunk per-paragraph font traces, and both pending
+and published paragraph queues. Structural byte tests use retained capacities
+for owned keys, blocks, glyph data, diagnostics, font traces, and reflow
+parameters including tab stops. Oversized entries must bypass retention.
+Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
+no-default feature test, both WASM checks, committed-graph package dry-runs,
+archive-size ceiling, and unchanged 49-entry hash harness are required riders.
 
 ## The hash harness
 
@@ -541,8 +641,13 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The current stable 0.7.0 release also verifies every crates.io README endpoint
-returns non-empty rendered HTML after publication.
+The stable 0.8.0 regression pins all eleven inherited version
+carriers, both Python project versions, both rdocx WASM dependency assertions,
+the stable CI package literal, the seven publishable crates, and every stable
+README requirement. It also proves the incubating family remains at 0.4.0.
+The current stable 0.8.0 release verifies every crates.io README endpoint
+returns non-empty rendered HTML. Those endpoint checks remain a
+post-publication gate owned by `/release`.
 
 ## What CI runs
 
@@ -590,7 +695,9 @@ unresolved-symbol link failure that is easy to misdiagnose.
 The dedicated release regression job runs the complete standard-library test
 module after checkout. It is unconditional and failure-propagating, so stale
 stable or incubating version carriers fail on pull requests before a release
-tag can reach the publication workflow.
+tag can reach the publication workflow. The same module holds the reviewed
+release-notes parser, command, publication-order, exact-body, and generated
+skill contracts.
 
 Every Poppler-dependent CI job builds the reviewed 26.01.0 command-line oracle
 from the official source archive. `scripts/install_pinned_poppler.py` enforces

@@ -191,6 +191,7 @@ fn shape_run(
 
     Ok(TextSegment {
         text: rendered_text,
+        source: None,
         font_id,
         font_size,
         glyph_ids: shaped.glyph_ids,
@@ -815,6 +816,7 @@ fn emit_segment(
         glyph_ids: segment.glyph_ids.clone(),
         advances,
         text: segment.text.clone(),
+        source: None,
         color: segment.color,
         bold: segment.bold,
         italic: segment.italic,
@@ -1847,6 +1849,7 @@ mod tests {
     fn horizontal_alignment_and_distribution_use_the_available_line_width() {
         let segment = TextSegment {
             text: "ab".to_owned(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1, 2],

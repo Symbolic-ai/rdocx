@@ -133,6 +133,24 @@ metadata remain opaque and byte-identical. A document without a settings
 relationship does not gain a settings part, relationship, or content-type
 override during an ordinary save.
 
+Watermark authoring follows the document-to-header graph rather than assuming
+conventional header names. The facade materializes a missing default, first, or
+enabled even header only at the first section that needs that same-type variant.
+Later omitted references keep Word's same-type inheritance and do not receive a
+blank override. Each image relationship belongs to its owning header part, and
+its target is relative to that part even when a producer uses a custom header
+path. Settings values controlling even headers are namespace checked and XML
+decoded before selection.
+
+An authored watermark owns only a VML shape whose expanded name is `v:shape`
+and whose unqualified id is `rdocx-watermark`. Replacement patches that exact
+byte range in the original header, leaves tables, controls, root attributes,
+namespace declarations, unrelated VML, and other producer bytes in place, and
+keeps every emitted shape-type reference resolvable. Text and image operations
+stage all header, relationship, media, and content-type changes on a cloned
+package. A missing part, invalid dimension, parse error, or serialization error
+leaves the live document and package unchanged.
+
 Threaded comments add a document relationship using the Microsoft
 `commentsExtended` relationship type. The facade retains its resolved target
 and writes the comments-extended content type at that exact part. New comment
@@ -313,6 +331,17 @@ namespace, parse, or serialization failure leaves the package part bytes and
 live document unchanged. The ordinary deterministic save path writes the
 validated result later and preserves every unrelated part and relationship.
 
+Document comparison uses the same package boundary. It clones the complete
+typed document and package state, aligns only modeled main-body content, and
+serializes generated revisions with the canonical `w`, `xml`, and `mc`
+prefixes in schema order. Reparse remains prefix tolerant. Revision metadata
+is XML escaped, while unmodeled body, paragraph, table, cell, and
+content-control XML keeps its stored byte order. The staged candidate is
+accepted and rejected independently to prove both structural postconditions.
+Any metadata, alignment, unsupported-shell, parse, serialization, or
+postcondition failure leaves the original package, typed state, and caches
+unchanged.
+
 Template rendering follows the same staged package boundary. A stack parser
 pairs nested controls within one body or table-row container before evaluation.
 The evaluator clones typed body entries and rows into candidate sequences, so
@@ -333,3 +362,25 @@ for, every repeated numbering reference resolves, and the candidate document
 serializes successfully. Any control, lookup, numbering, scalar-type, parse, or
 serialization failure leaves package parts, typed content, and layout caches
 unchanged.
+
+Mail merge uses the same fail-closed package boundary. Separate mode clones the
+typed document and complete package for each record, applies the merge-local
+field policy, serializes, and reopens every candidate before returning the
+record-ordered outputs. Section mode serializes the main document and scans it
+by expanded name for every header and footer reference, including references
+inside content controls and preserved wrappers. Relationship-namespace ids are
+resolved through the document relationship graph, and only the resulting
+internal header and footer parts join relationship-resolved footnotes and
+endnotes in the merge-dependency scan. A referenced non-body `MERGEFIELD` that
+varies across records rejects the operation before candidate assembly.
+
+Combined output reuses the first validated package and replaces only its main
+body with the record bodies and their schema-ordered section boundaries.
+Bookmark, content-control, and drawing identities are allocated without
+collision across those bodies. Simple and complex bookmark field targets plus
+hyperlink anchors follow renamed bookmarks in typed and preserved raw XML.
+Clean parsed footnotes remain source-backed. An actual footnote field update
+patches only the field-source spans in the relationship-resolved part, so
+unmodelled siblings remain byte-preserved. Any rejected record, XML parse, or
+identity-allocation failure leaves the source and all prospective outputs
+uncommitted.

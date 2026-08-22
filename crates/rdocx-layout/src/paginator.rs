@@ -96,6 +96,18 @@ pub struct HeaderFooterContent {
     pub first_header_blocks: Vec<ParagraphBlock>,
     /// First-page footer blocks (used when title_pg is true).
     pub first_footer_blocks: Vec<ParagraphBlock>,
+    /// Even-page header blocks.
+    pub even_header_blocks: Vec<ParagraphBlock>,
+    /// Even-page footer blocks.
+    pub even_footer_blocks: Vec<ParagraphBlock>,
+    /// Whether Word selects the even header and footer variants.
+    pub even_headers_active: bool,
+    /// Default-header watermark, already positioned in page coordinates.
+    pub watermark: Option<oxml_layout::GroupElement>,
+    /// First-page-header watermark.
+    pub first_watermark: Option<oxml_layout::GroupElement>,
+    /// Even-page-header watermark.
+    pub even_watermark: Option<oxml_layout::GroupElement>,
 }
 
 /// A section with its blocks, geometry, and header/footer content.
@@ -105,6 +117,8 @@ pub struct Section {
     pub header_footer: Option<HeaderFooterContent>,
     /// Whether this section uses a different first page header/footer.
     pub title_pg: bool,
+    /// Displayed page number assigned to the first page of this section.
+    pub page_number_start: Option<usize>,
 }
 
 /// Paginate across multiple sections, each with its own geometry and header/footer.
@@ -133,6 +147,8 @@ pub fn paginate_sections(
             fm,
             media,
             notes,
+            1,
+            s.page_number_start.unwrap_or(1),
         );
     }
 
@@ -140,8 +156,12 @@ pub fn paginate_sections(
     let mut all_pages = Vec::new();
     let mut all_outlines = Vec::new();
     let mut page_offset = 0;
+    let mut next_section_page_number = 1usize;
 
     for section in sections {
+        let section_page_number = section
+            .page_number_start
+            .unwrap_or(next_section_page_number);
         let (mut pages, mut outlines) = paginate_with_media(
             &section.blocks,
             section.geometry,
@@ -150,16 +170,11 @@ pub fn paginate_sections(
             fm,
             media,
             notes,
+            page_offset + 1,
+            section_page_number,
         );
 
-        // Adjust page numbers and outline page indices
-        for page in &mut pages {
-            page.page_number += page_offset;
-        }
-        for outline in &mut outlines {
-            outline.page_index += page_offset;
-        }
-
+        next_section_page_number = section_page_number.saturating_add(pages.len());
         page_offset += pages.len();
         all_pages.append(&mut pages);
         all_outlines.append(&mut outlines);
@@ -192,6 +207,8 @@ pub fn paginate(
         _fm,
         media.media(),
         notes,
+        1,
+        1,
     )
 }
 
@@ -232,6 +249,8 @@ fn paginate_with_media(
     _fm: &FontManager,
     media: &HashMap<MediaId, ImageData>,
     notes: &NoteRegistry,
+    first_page_number: usize,
+    first_header_page_number: usize,
 ) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
     let context = PassContext {
         geometry,
@@ -240,6 +259,8 @@ fn paginate_with_media(
         fm: _fm,
         media,
         notes,
+        first_page_number,
+        first_header_page_number,
     };
     let first = paginate_pass(blocks, &context, &ResolvedWraps::new());
 
@@ -278,6 +299,8 @@ struct PassContext<'a> {
     fm: &'a FontManager,
     media: &'a HashMap<MediaId, ImageData>,
     notes: &'a NoteRegistry,
+    first_page_number: usize,
+    first_header_page_number: usize,
 }
 
 fn paginate_pass(
@@ -294,6 +317,8 @@ fn paginate_pass(
         context.notes,
         context.fm,
         resolved_in,
+        context.first_page_number,
+        context.first_header_page_number,
     );
 
     for (block_idx, block) in blocks.iter().enumerate() {
@@ -382,6 +407,7 @@ struct Pager<'a> {
     behind_elements: Vec<PositionedElement>,
     cursor_y: f64,
     page_number: usize,
+    header_page_number: usize,
     content_height: f64,
     geometry: PageGeometry,
     header_footer: Option<&'a HeaderFooterContent>,
@@ -430,13 +456,16 @@ impl<'a> Pager<'a> {
         notes: &'a NoteRegistry,
         fm: &'a FontManager,
         resolved_in: &'a ResolvedWraps,
+        first_page_number: usize,
+        first_header_page_number: usize,
     ) -> Self {
         Pager {
             pages: Vec::new(),
             elements: Vec::new(),
             behind_elements: Vec::new(),
             cursor_y: 0.0,
-            page_number: 1,
+            page_number: first_page_number,
+            header_page_number: first_header_page_number,
             content_height: geometry.content_height(),
             geometry,
             header_footer,
@@ -894,6 +923,19 @@ impl<'a> Pager<'a> {
         self.place_page_notes();
         let mut all_elements = Vec::new();
 
+        if let Some(hf) = self.header_footer {
+            let watermark = if self.is_first_page && self.title_pg {
+                hf.first_watermark.as_ref()
+            } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
+                hf.even_watermark.as_ref()
+            } else {
+                hf.watermark.as_ref()
+            };
+            if let Some(watermark) = watermark {
+                all_elements.push(PositionedElement::Group(watermark.clone()));
+            }
+        }
+
         // behindDoc drawings render underneath everything else on the page.
         all_elements.append(&mut self.behind_elements);
 
@@ -901,6 +943,8 @@ impl<'a> Pager<'a> {
             // Choose header blocks: first-page or default
             let header_blocks = if self.is_first_page && self.title_pg {
                 &hf.first_header_blocks
+            } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
+                &hf.even_header_blocks
             } else {
                 &hf.header_blocks
             };
@@ -923,6 +967,8 @@ impl<'a> Pager<'a> {
             // Choose footer blocks: first-page or default
             let footer_blocks = if self.is_first_page && self.title_pg {
                 &hf.first_footer_blocks
+            } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
+                &hf.even_footer_blocks
             } else {
                 &hf.footer_blocks
             };
@@ -948,6 +994,7 @@ impl<'a> Pager<'a> {
             all_elements,
         ));
         self.page_number += 1;
+        self.header_page_number += 1;
         self.cursor_y = 0.0;
         self.page_wraps.clear();
         self.ink_bottom = 0.0;
@@ -1011,6 +1058,7 @@ fn draw_note(
             glyph_ids: note.marker.glyph_ids.clone(),
             advances: note.marker.advances.clone(),
             text: note.marker.text.clone(),
+            source: None,
             color: note.marker.color,
             bold: note.marker.bold,
             italic: note.marker.italic,
@@ -1054,6 +1102,7 @@ fn draw_note(
                     glyph_ids: seg.glyph_ids.clone(),
                     advances: seg.advances.clone(),
                     text: seg.text.clone(),
+                    source: seg.source,
                     color: seg.color,
                     bold: seg.bold,
                     italic: seg.italic,
@@ -1859,6 +1908,7 @@ fn render_paragraph_lines(
                         glyph_ids: seg.glyph_ids.clone(),
                         advances,
                         text: seg.text.clone(),
+                        source: seg.source,
                         color: seg.color,
                         bold: seg.bold,
                         italic: seg.italic,
@@ -1976,6 +2026,7 @@ fn render_paragraph_lines(
                             glyph_ids: leader_seg.glyph_ids.clone(),
                             advances: leader_seg.advances.clone(),
                             text: leader_seg.text.clone(),
+                            source: None,
                             color: leader_seg.color,
                             bold: leader_seg.bold,
                             italic: leader_seg.italic,
@@ -2612,6 +2663,7 @@ mod tests {
         use oxml_layout::TextSegment;
         let seg = TextSegment {
             text: "Hello".to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1, 2, 3],
@@ -2734,6 +2786,7 @@ mod tests {
         let fm = FontManager::new();
         let seg = TextSegment {
             text: "Hi".to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1],
@@ -2955,6 +3008,7 @@ mod tests {
         use oxml_layout::TextSegment;
         let seg = TextSegment {
             text: text.to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1; text.len()],
@@ -2994,6 +3048,7 @@ mod tests {
         let fm = FontManager::new();
         let seg = TextSegment {
             text: "Click me".to_string(),
+            source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
             glyph_ids: vec![1, 2, 3],
@@ -3481,6 +3536,8 @@ mod tests {
             &notes,
             &fm,
             &empty,
+            1,
+            1,
         );
 
         // With nothing resolved, the look-ahead offers the page-relative
@@ -3522,6 +3579,8 @@ mod tests {
                 &notes,
                 &fm,
                 &resolved,
+                1,
+                1,
             );
 
             // The pager is building page one. A drawing the previous pass put
@@ -3553,6 +3612,8 @@ mod tests {
             fm: &fm,
             media: &media,
             notes: &notes,
+            first_page_number: 1,
+            first_header_page_number: 1,
         };
         let pass = paginate_pass(&blocks, &context, &empty);
 

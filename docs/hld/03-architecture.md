@@ -85,6 +85,13 @@ output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
 format.
 
+`SourceNodeId` and `SourceSpan` are the format-neutral provenance carriers at
+this boundary. A text segment and its positioned glyph run can hold one
+result-local node id plus an exclusive Unicode-scalar range. Shared line
+breaking preserves and subdivides that range without learning what the node
+means. Consumers must resolve an id through the format-specific result that
+created it and must not compare ids from different results.
+
 One construct is an exception and is called out rather than glossed. A text
 segment carries an optional `NoteRef`, a footnote or endnote reference, and
 notes are a WordprocessingML idea with no PresentationML counterpart. It sits
@@ -201,6 +208,21 @@ byte methods remain leave alone operations that preserve cache content and
 dirty spelling. Update-aware save methods opt into the same atomic operation
 before writing. The settings-level `w:updateFields` value remains untouched.
 
+The `rdocx` facade also owns flat native mail merge over
+`BTreeMap<String, String>` records. Separate mode stages, serializes, and
+reopens one complete package clone per record. Its private evaluator policy
+maps only an absent `MERGEFIELD` value to empty text, while ordinary field
+evaluation retains its cached-display fallback. Section mode first rejects a
+record-varying merge dependency in a referenced header, footer, footnote, or
+endnote. It then concatenates candidate body entries in record order, moves
+each non-final body section properties value to a next-page section-ending
+paragraph, and retains the final body-level section properties value. A
+namespace-aware serialized-body pass remaps bookmark, content-control, and
+drawing identities together with bookmark field and hyperlink references,
+including values held in preserved raw XML. The operation does not evaluate
+structured template tags, and ordinary field traversal keeps its existing
+typed story scope.
+
 The `rdocx` facade owns structured template evaluation over
 `serde_json::Value`. The focused `template` module recognizes scalar tags
 across ordinary run boundaries and pairs nested `for` and `if` controls with a
@@ -258,6 +280,17 @@ property, or row. Resolution stages the complete main-document XML, resolves
 selected descendants before their enclosing subtree, reparses the result, and
 commits once only after validation succeeds.
 
+The `rdocx` facade also owns deterministic comparison of the modeled main
+body. A concrete hierarchical longest-common-subsequence alignment covers body
+content, paragraph runs, table rows, nested tables, lists, and modeled content
+inside existing content-control shells. It emits canonical fixed-prefix run,
+paragraph-mark, row, and numbering revisions at their schema-defined owners.
+Formatting-only differences retain the original formatting and produce stable
+`ComparisonDiagnostic` values instead. Inputs with existing modeled revisions
+or differing control shells are rejected. Comparison stages the candidate,
+proves that accepting it matches the edited modeled structure and rejecting it
+matches the original, then commits once.
+
 `rdocx-layout` owns the renderer-only revision projection. The
 `LayoutInput::revision_view` selector chooses an accepted or tracked view. The
 engine merges ordinary runs and typed revision runs at their preserved
@@ -268,14 +301,63 @@ through pagination. The `rdocx` facade owns the concrete `RenderOptions` value
 that passes this selection into layout. Default accepted renders reuse the
 normal and deterministic caches, while tracked renders remain uncached.
 
+The same Word projection owns glyph provenance. `rdocx-layout` allocates one
+deterministic `WordSourcePath` for each modeled paragraph in the document,
+arbitrarily nested tables, headers, footers, footnotes, and endnotes. A
+`WordLayoutResult` resolves shared node ids through that result-local table and
+records the selected revision view. Ordinary text ranges address the selected
+projection. Parsed complex-field caches advance projection offsets, while new
+simple fields do not. Generated markers, evaluated fields, note labels, and
+non-bijective display transformations remain unattributed.
+
+The `rdocx` facade caches that complete `WordLayoutResult` for accepted normal
+and deterministic layout. It also retains one synchronized normal-font
+`rdocx-layout::Engine` across document edits. Mutation clears completed result
+caches but preserves the engine's bounded paragraph and shaping work.
+`Document::layout` and `Document::layout_with_options` return a shared `Arc`
+for accepted normal-font layout. A tracked result stays uncached, while its
+revision-view cache identity prevents reuse of accepted paragraph blocks.
+`Document::layout_with_fonts` and `Document::layout_with_fonts_and_options`
+construct isolated engines and return owned uncached bundles because arbitrary
+caller font sets have no stable cache key. Deterministic layout also retains
+its separate result cache and never enters the normal engine. PDF, raster, and
+cloned page access borrow the backend-neutral `layout` field from the same
+bundle, so external renderers receive the exact font bytes and source table
+used for each glyph run.
+
 `rdocx-layout` keeps the flow model: the engine, the paginator, blocks, tables
 and the style resolver. Slides do not paginate, so none of it transfers. The
-flow engine resolves Word relationship IDs to content-addressed `MediaId`
+normal Word engine caches only ordinary body paragraphs that are independent
+of traversal state. Its exact identity includes the paragraph, width, revision
+view, styles, theme, and active embedded fonts. Numbering, drawings, fields,
+hyperlinks, relationships, generated markers, and other contextual content
+bypass reuse. A successful whole-document layout publishes staged entries,
+including their diagnostics and exact font-resolution trace. Failure publishes
+nothing. Cached scalar ranges use a placeholder source node and are rebound to
+the current result-local node before pagination.
+
+The same engine owns bounded loaded-face, coverage, shaping, and paragraph
+state. Paragraph entries count all retained owned buffers, including reflow tab
+stops, against both entry and byte ceilings. Font traces are bounded and shrunk
+before retention. Active fonts are canonicalized by first resolution order so
+a warm layout returns the same font table and ids as a cold layout, including a
+legitimate working set larger than the memo ceilings.
+
+The flow engine resolves Word relationship IDs to content-addressed `MediaId`
 values before pagination, and page output carries the resolved bytes and MIME
 type rather than a relationship-scoped placeholder. One `MediaRegistry` per
 layout compares complete bytes, assigns deterministic alternate IDs when two
 compact keys collide, and is shared by the lower-level layout and pagination
 entry points.
+
+Header VML watermarks keep the same ownership split. `rdocx-oxml` retains the
+complete `w:pict` source and projects only supported `v:shape` text paths and
+images for layout. The `rdocx` facade owns atomic text and image authoring,
+header-local relationships, section inheritance, and package-visible first and
+even variants. `rdocx-layout` consumes that projection, resolves header images
+through the shared `MediaRegistry`, and lowers each selected watermark to a
+backend-neutral group before pagination. Unsupported VML stays opaque and no
+backend parses WordprocessingML.
 
 Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
 the paginator reserves, splits and draws them. Note placement is part of
@@ -327,9 +409,11 @@ an endnote sharing a number.
 The 15 shared and PowerPoint publication candidates use the explicit common
 incubating version in their manifests and workspace pins. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
-source-compatible deprecated shim. The released `rdocx-*` crates
-continue to use the separate workspace version. Version preparation and
-manifest eligibility do not authorize publication. Every release still
+source-compatible deprecated shim. The released `rdocx-*` crates continue to
+use the separate workspace version. That stable workspace and its exact
+seven-package crates.io family are published coherently at 0.8.0 from the
+annotated `v0.8.0` tag. Version preparation and manifest eligibility do not
+authorize publication. Every later release still
 requires `/release` at an exact reviewed SHA and separate final approval at
 the external mutation boundary. `oxml-cli-support` is the format-neutral owner
 of range parsing, JSON envelope, and output-path contracts. It has no
@@ -414,6 +498,14 @@ row, cell, and paragraph accessors expose each wrapped ordinary paragraph,
 table, row, cell, and run once while retaining the surrounding `CT_Sdt` for
 metadata lookup. The facade consumes this single WordprocessingML ownership
 tree and does not maintain a second content-control representation.
+
+`Document::body_items` exposes the direct body ownership vector without
+flattening it. Its borrowed items distinguish paragraphs, tables, body-level
+content controls, and preserved unsupported XML in exact source order. The
+recursive `paragraphs()` and `tables()` accessors keep their existing behavior.
+Self-closing Word paragraphs and tables normalize to typed empty values, while
+self-closing final section properties remain outside the item vector. Empty
+foreign and unsupported children remain captured raw rather than being lost.
 
 Revision traversal follows that ownership tree through the main body, tables,
 cells, and content controls. `Document::revisions` reports every valid modeled

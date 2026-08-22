@@ -1233,6 +1233,73 @@ fn default_render_methods_keep_the_accepted_view() {
     );
 }
 
+#[test]
+fn downstream_renderers_can_traverse_the_complete_public_layout_result() {
+    let mut document = Document::new();
+    document.add_paragraph("public layout integration");
+
+    let result = document.layout().expect("public layout should succeed");
+    let mut saw_resolvable_run = false;
+    for page in &result.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                let font = result
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+                    .expect("glyph run font should resolve");
+                assert!(!font.data.is_empty());
+                if let Some(source) = run.source {
+                    assert!(result.source_node(source.node).is_some());
+                }
+                saw_resolvable_run = true;
+            }
+        });
+    }
+    assert!(saw_resolvable_run);
+}
+
+#[test]
+fn caller_font_layout_options_select_the_tracked_revision_projection() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>ordinary </w:t></w:r><w:ins w:id="1" w:author="Ada"><w:r><w:t>accepted</w:t></w:r></w:ins><w:del w:id="2" w:author="Ben"><w:r><w:delText> omitted</w:delText></w:r></w:del></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let (family, bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+    let accepted = document
+        .layout_with_fonts(&[(family, bytes)])
+        .expect("accepted caller-font layout should succeed");
+    let tracked = document
+        .layout_with_fonts_and_options(
+            &[(family, bytes)],
+            RenderOptions {
+                revision_view: RevisionView::Tracked,
+            },
+        )
+        .expect("tracked caller-font layout should succeed");
+
+    let visible_text = |result: &rdocx_layout::WordLayoutResult| {
+        let mut text = String::new();
+        for page in &result.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    text.push_str(&run.text);
+                }
+            });
+        }
+        text
+    };
+
+    let accepted_text = visible_text(&accepted);
+    let tracked_text = visible_text(&tracked);
+    assert_eq!(accepted.revision_view, RevisionView::Accepted);
+    assert_eq!(tracked.revision_view, RevisionView::Tracked);
+    assert!(accepted_text.contains("ordinary accepted"));
+    assert!(!accepted_text.contains("omitted"));
+    assert!(tracked_text.contains("ordinary accepted omitted"));
+}
+
 fn document_with_content_controls(document_xml: &str) -> Document {
     document_with_bound_content_controls(document_xml, None)
 }
@@ -1519,6 +1586,35 @@ fn contextual_row_markers_keep_or_remove_the_owning_row() {
     let mut conflicting = document_with_content_controls(&conflicting_xml);
     assert_eq!(conflicting.accept_all().unwrap(), 2);
     assert!(!conflicting.text().contains("ambiguous"));
+}
+
+#[test]
+fn contextual_cleanup_preserves_foreign_property_shells() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><x:rPr xmlns:x="urn:foreign-property"><w:del w:id="91" w:author="lookalike"/></x:rPr><w:t>kept</w:t></w:r><w:ins w:id="93" w:author="Ada"><w:r><w:t> accepted</w:t></w:r></w:ins></w:p>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.accept_all().unwrap(), 1);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains(r#"<x:rPr xmlns:x="urn:foreign-property">"#));
+    assert!(saved.contains(r#"w:id="91" w:author="lookalike""#));
+    assert!(saved.contains("<w:t>kept</w:t>"));
+    assert!(saved.contains("<w:t> accepted</w:t>"));
+}
+
+#[test]
+fn table_cleanup_retains_rows_owned_by_content_controls() {
+    let xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:sdt><w:sdtPr><w:tag w:val="retained-row"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>retained</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:trPr><w:del w:id="92" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>deleted</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    assert_eq!(document.accept_all().unwrap(), 1);
+    let saved = document_xml(&mut document);
+    assert!(saved.contains(r#"w:val="retained-row""#), "{saved}");
+    assert!(saved.contains("<w:t>retained</w:t>"), "{saved}");
+    assert!(!saved.contains("<w:t>deleted</w:t>"), "{saved}");
 }
 
 #[test]
@@ -3436,4 +3532,1457 @@ fn repeated_numbered_items_keep_one_continuous_sequence() {
             .is_err()
     );
     assert_eq!(invalid.to_bytes().unwrap(), before);
+}
+
+fn mail_merge_record(values: &[(&str, &str)]) -> BTreeMap<String, String> {
+    values
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+fn document_with_mail_merge_header() -> Document {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tbl xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:tblPr/><q:tblGrid/><q:tr><q:tc><q:p><q:fldSimple q:instr="MERGEFIELD &quot;Full Name&quot;"><q:r><q:t>stored table header</q:t></q:r></q:fldSimple></q:p></q:tc></q:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="merge"/></w:sdtPr><w:sdtContent><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> MERGEFIELD Name </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stored control header</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:sdtContent></w:sdt></w:hdr>"#;
+    package.set_part("/word/header1.xml", header.as_bytes().to_vec());
+    package.content_types.add_override(
+        "/word/header1.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let header_id = package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn a_fixture_record_set_produces_separate_and_sectioned_documents() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="MERGEFIELD Name \* Upper"><w:r><w:t>stored name</w:t></w:r></w:fldSimple></w:p>
+        <w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:p><w:fldSimple w:instr="MERGEFIELD City"><w:r><w:t>stored city</w:t></w:r></w:fldSimple></w:p></w:tc></w:tr></w:tbl>
+        <w:sdt><w:sdtPr><w:tag w:val="role"/></w:sdtPr><w:sdtContent><w:p><w:fldSimple w:instr="MERGEFIELD Role"><w:r><w:t>stored role</w:t></w:r></w:fldSimple></w:p></w:sdtContent></w:sdt>
+        <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>
+    "#;
+    let document = document_with_content_controls(&wrap_word_body(body));
+    let records = vec![
+        mail_merge_record(&[("Name", "Ada"), ("City", "London"), ("Role", "Engineer")]),
+        mail_merge_record(&[("Name", "Grace"), ("Role", "Admiral")]),
+    ];
+
+    let mut separate = document.mail_merge(&records).unwrap();
+    assert_eq!(separate.len(), 2);
+    let first = document_xml(&mut separate[0]);
+    let second = document_xml(&mut separate[1]);
+    assert!(first.contains(">ADA<"), "{first}");
+    assert!(first.contains(">London<"), "{first}");
+    assert!(first.contains(">Engineer<"), "{first}");
+    assert!(second.contains(">GRACE<"), "{second}");
+    assert!(second.contains(">Admiral<"), "{second}");
+    assert!(!second.contains("stored city"), "{second}");
+
+    let mut sectioned = document.mail_merge_sections(&records).unwrap();
+    let xml = document_xml(&mut sectioned);
+    let ada = xml.find(">ADA<").unwrap();
+    let grace = xml.find(">GRACE<").unwrap();
+    assert!(ada < grace, "{xml}");
+    assert!(!xml.contains("stored city"), "{xml}");
+    assert_eq!(xml.matches(r#"<w:type w:val="nextPage"/>"#).count(), 1);
+}
+
+#[test]
+fn mail_merge_preserves_switches_and_general_field_policy() {
+    let body = r#"
+        <w:p><w:fldSimple w:instr="MERGEFIELD Name \* Upper"><w:r><w:t>stored name</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="MERGEFIELD Missing"><w:r><w:t>stored missing</w:t></w:r></w:fldSimple></w:p>
+        <w:sectPr/>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut merged = document
+        .mail_merge(&[mail_merge_record(&[("Name", "Ada")])])
+        .unwrap()
+        .pop()
+        .unwrap();
+    let merged_xml = document_xml(&mut merged);
+    assert!(merged_xml.contains(r#"MERGEFIELD Name \* Upper"#));
+    assert!(merged_xml.contains(">ADA<"), "{merged_xml}");
+    assert!(!merged_xml.contains("stored missing"), "{merged_xml}");
+
+    let outcomes = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(matches!(
+        &outcomes[0].outcome,
+        FieldOutcome::KeepStored { .. }
+    ));
+    assert!(matches!(
+        &outcomes[1].outcome,
+        FieldOutcome::KeepStored { .. }
+    ));
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        2
+    );
+    let ordinary_xml = document_xml(&mut document);
+    assert!(ordinary_xml.contains("stored name"), "{ordinary_xml}");
+    assert!(ordinary_xml.contains("stored missing"), "{ordinary_xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_preserves_section_properties_and_unmodelled_xml() {
+    const PRODUCER_BODY: &str = r#"<x:producer xmlns:x="urn:producer" mark="kept"/>"#;
+    const PRODUCER_SECTION: &str = r#"<x:section xmlns:x="urn:producer" mark="kept"/>"#;
+    let body = r#"
+        <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>fixed</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+        <x:producer xmlns:x="urn:producer" mark="kept"/>
+        <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><x:section xmlns:x="urn:producer" mark="kept"/></w:sectPr>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let records = vec![
+        mail_merge_record(&[("Name", "one")]),
+        mail_merge_record(&[("Name", "two")]),
+    ];
+    let mut merged = document.mail_merge_sections(&records).unwrap();
+    let bytes = merged.to_bytes().unwrap();
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    let body = body_from_document(&mut reopened);
+
+    assert_eq!(body.tables().count(), 2);
+    assert_eq!(
+        body.content
+            .iter()
+            .filter(|content| matches!(content, BodyContent::Paragraph(paragraph) if paragraph.properties.as_ref().and_then(|properties| properties.sect_pr.as_ref()).is_some()))
+            .count(),
+        1
+    );
+    let section_break = body.content.iter().find_map(|content| match content {
+        BodyContent::Paragraph(paragraph) => paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.sect_pr.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        section_break.unwrap().section_type,
+        Some(rdocx_oxml::shared::ST_SectionType::NextPage)
+    );
+    assert_eq!(body.sect_pr.as_ref().unwrap().page_width.unwrap().0, 11906);
+
+    let xml = document_xml(&mut reopened);
+    assert_eq!(xml.matches(PRODUCER_BODY).count(), 2, "{xml}");
+    assert_eq!(xml.matches(PRODUCER_SECTION).count(), 2, "{xml}");
+    assert!(xml.rfind("<w:sectPr>").unwrap() < xml.rfind("</w:body>").unwrap());
+}
+
+#[test]
+fn sectioned_mail_merge_remaps_record_local_body_identities() {
+    let body = r#"
+        <w:p><w:bookmarkStart w:id="7" w:name="Target"/><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored target</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="7"/></w:p>
+        <w:p><w:fldSimple w:instr="REF Target"><w:r><w:t>stored reference</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:fldSimple w:instr="REF MailMerge1"><w:r><w:t>intentionally unresolved</w:t></w:r></w:fldSimple></w:p>
+        <w:p><w:hyperlink w:anchor="MailMerge2"><w:r><w:t>unresolved anchor</w:t></w:r></w:hyperlink></w:p>
+        <w:sdt><w:sdtPr><w:id w:val="9"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>
+        <w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:extent cx="1" cy="1"/><wp:docPr id="11" name="Picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="12" name="Picture"/><pic:cNvPicPr/></pic:nvPicPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+        <w:sectPr/>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let records = [
+        mail_merge_record(&[("Name", "one")]),
+        mail_merge_record(&[("Name", "two")]),
+    ];
+    let mut merged = document.mail_merge_sections(&records).unwrap();
+
+    let bookmarks = merged.bookmarks();
+    assert_eq!(bookmarks.len(), 2);
+    assert!(bookmarks.iter().all(|bookmark| bookmark.issue().is_none()));
+    assert_ne!(bookmarks[0].id(), bookmarks[1].id());
+    assert_ne!(bookmarks[0].name(), bookmarks[1].name());
+
+    let evaluations = merged
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(evaluations.iter().any(|evaluation| {
+        evaluation.instruction == "REF MailMerge1"
+            && matches!(evaluation.outcome, FieldOutcome::KeepStored { .. })
+    }));
+    assert!(
+        evaluations
+            .iter()
+            .filter(|evaluation| {
+                matches!(
+                    evaluation.instruction.as_str(),
+                    "REF Target" | "REF MailMerge3"
+                )
+            })
+            .all(|evaluation| matches!(evaluation.outcome, FieldOutcome::Resolved(_)))
+    );
+    let xml = document_xml(&mut merged);
+    assert!(xml.contains(r#"w:instr="REF Target""#), "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge3""#), "{xml}");
+    assert_eq!(
+        xml.matches(r#"w:instr="REF MailMerge1""#).count(),
+        2,
+        "{xml}"
+    );
+    assert_eq!(xml.matches(r#"w:anchor="MailMerge2""#).count(), 2, "{xml}");
+    assert!(!xml.contains(r#"w:name="MailMerge1""#), "{xml}");
+    assert!(!xml.contains(r#"w:name="MailMerge2""#), "{xml}");
+    assert_eq!(xml.matches(r#"w:val="9""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"wp:docPr id="11""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"pic:cNvPr id="12""#).count(), 1, "{xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_remaps_references_inside_preserved_body_xml() {
+    let body = r#"
+        <w:customXml>
+          <w:p><w:bookmarkStart w:id="21" w:name="RawTarget"/><w:r><w:t>raw target</w:t></w:r><w:bookmarkEnd w:id="21"/></w:p>
+          <w:p><w:fldSimple w:instr="REF RawTarget"><w:r><w:t>stored ref</w:t></w:r></w:fldSimple></w:p>
+          <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText><w:instrText>REF RawTarget</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+          <w:p><w:hyperlink w:anchor="RawTarget"><w:r><w:t>raw link</w:t></w:r></w:hyperlink></w:p>
+          <w:p><w:fldSimple w:instr="REF MailMerge1"><w:r><w:t>unresolved</w:t></w:r></w:fldSimple></w:p>
+        </w:customXml>
+        <w:sectPr/>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let records = [mail_merge_record(&[]), mail_merge_record(&[])];
+    let mut merged = document.mail_merge_sections(&records).unwrap();
+    let xml = document_xml(&mut merged);
+
+    assert_eq!(xml.matches(r#"w:name="RawTarget""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="MailMerge2""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge2""#), "{xml}");
+    assert!(xml.contains("PAGEREF MailMerge2"), "{xml}");
+    assert!(xml.contains(r#"w:anchor="MailMerge2""#), "{xml}");
+    assert_eq!(
+        xml.matches(r#"w:instr="REF MailMerge1""#).count(),
+        2,
+        "{xml}"
+    );
+    assert!(!xml.contains(r#"w:name="MailMerge1""#), "{xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_correlates_entity_escaped_bookmark_names() {
+    let body = r#"
+        <w:p><w:bookmarkStart w:id="7" w:name="A&amp;B"/><w:r><w:t>target</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>
+        <w:p><w:fldSimple w:instr="REF A&amp;B"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p>
+        <w:sectPr/>
+    "#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut merged = document
+        .mail_merge_sections(&[mail_merge_record(&[]), mail_merge_record(&[])])
+        .unwrap();
+    let evaluations = merged
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    assert!(
+        evaluations
+            .iter()
+            .filter(|evaluation| evaluation.instruction.starts_with("REF "))
+            .all(|evaluation| matches!(evaluation.outcome, FieldOutcome::Resolved(_)))
+    );
+    let xml = document_xml(&mut merged);
+    assert_eq!(xml.matches(r#"w:name="A&amp;B""#).count(), 1, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="MailMerge1""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge1""#), "{xml}");
+}
+
+#[test]
+fn sectioned_mail_merge_ignores_foreign_same_local_name_attributes() {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:p><w:fldSimple x:instr="MERGEFIELD Stable" w:instr="MERGEFIELD Vary"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+    package.set_part("/word/header-foreign.xml", header.as_bytes().to_vec());
+    package.content_types.add_override(
+        "/word/header-foreign.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "header-foreign.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:customXml xmlns:x="urn:producer"><w:p><w:bookmarkStart x:id="701" w:id="7" x:name="Foreign" w:name="Target"/><w:r><w:t>target</w:t></w:r><w:bookmarkEnd x:id="702" w:id="7"/></w:p><w:p><w:fldSimple x:instr="REF Foreign" w:instr="REF Target"><w:r><w:t>stored ref</w:t></w:r></w:fldSimple></w:p><w:sdt><w:sdtPr><w:id x:val="900" w:val="9"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:extent cx="1" cy="1"/><wp:docPr x:id="1100" id="11" name="Picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr x:id="1200" id="12" name="Picture"/><pic:cNvPicPr/></pic:nvPicPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:customXml><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Stable", "same"), ("Vary", "one")]),
+                mail_merge_record(&[("Stable", "same"), ("Vary", "two")]),
+            ])
+            .is_err()
+    );
+
+    let mut merged = document
+        .mail_merge_sections(&[
+            mail_merge_record(&[("Stable", "same"), ("Vary", "same")]),
+            mail_merge_record(&[("Stable", "same"), ("Vary", "same")]),
+        ])
+        .unwrap();
+    let xml = document_xml(&mut merged);
+    assert_eq!(xml.matches(r#"x:id="701""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:id="702""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:name="Foreign""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:val="900""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:id="1100""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"x:id="1200""#).count(), 2, "{xml}");
+    assert_eq!(xml.matches(r#"w:name="Target""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:name="MailMerge1""#), "{xml}");
+    assert_eq!(xml.matches(r#"w:instr="REF Target""#).count(), 1, "{xml}");
+    assert!(xml.contains(r#"w:instr="REF MailMerge1""#), "{xml}");
+    assert_eq!(xml.matches(r#"w:val="9""#).count(), 1, "{xml}");
+    assert_eq!(
+        xml.matches(r#"wp:docPr x:id="1100" id="11""#).count(),
+        1,
+        "{xml}"
+    );
+    assert_eq!(
+        xml.matches(r#"pic:cNvPr x:id="1200" id="12""#).count(),
+        1,
+        "{xml}"
+    );
+}
+
+#[test]
+fn sectioned_mail_merge_scans_header_references_in_block_content_controls() {
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="MERGEFIELD Vary"><w:r><w:t>stored nested header</w:t></w:r></w:fldSimple></w:p></w:hdr>"#;
+    package.set_part(
+        "/word/sections/nested-header.xml",
+        header.as_bytes().to_vec(),
+    );
+    package.content_types.add_override(
+        "/word/sections/nested-header.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    );
+    let header_id = package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "sections/nested-header.xml",
+    );
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:sdt><w:sdtPr><w:tag w:val="nested-section"/></w:sdtPr><w:sdtContent><w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/></w:sectPr></w:pPr><w:r><w:t>nested section</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    assert!(
+        document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        0
+    );
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Vary", "one")]),
+                mail_merge_record(&[("Vary", "two")]),
+            ])
+            .is_err()
+    );
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Vary", "same")]),
+                mail_merge_record(&[("Vary", "same")]),
+            ])
+            .is_ok()
+    );
+}
+
+#[test]
+fn mail_merge_uses_the_relationship_resolved_footnotes_part() {
+    const RAW_TABLE: &str = r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>producer table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let mut document = document_with_field_parts(
+        &wrap_word_body(r#"<w:p><w:r><w:t>body</w:t></w:r></w:p><w:sectPr/>"#),
+        None,
+        None,
+    );
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let footnotes = format!(
+        r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="2"><w:p><w:fldSimple w:instr="MERGEFIELD Note"><w:r><w:t>stored note</w:t></w:r></w:fldSimple></w:p>{RAW_TABLE}</w:footnote></w:footnotes>"#
+    );
+    package.set_part("/word/notes/producer-footnotes.xml", footnotes.into_bytes());
+    package.content_types.add_override(
+        "/word/notes/producer-footnotes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    );
+    package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::FOOTNOTES,
+        "notes/producer-footnotes.xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let records = [
+        mail_merge_record(&[("Note", "one")]),
+        mail_merge_record(&[("Note", "two")]),
+    ];
+
+    for (mut output, expected) in document
+        .mail_merge(&records)
+        .unwrap()
+        .into_iter()
+        .zip(["one", "two"])
+    {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(output.to_bytes().unwrap()))
+                .unwrap();
+        let producer = std::str::from_utf8(
+            package
+                .get_part("/word/notes/producer-footnotes.xml")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(producer.contains(&format!(">{expected}<")), "{producer}");
+        assert!(producer.contains(RAW_TABLE), "{producer}");
+        assert!(package.get_part("/word/footnotes.xml").is_none());
+    }
+    assert!(document.mail_merge_sections(&records).is_err());
+    let mut sectioned = document
+        .mail_merge_sections(&[
+            mail_merge_record(&[("Note", "same")]),
+            mail_merge_record(&[("Note", "same")]),
+        ])
+        .unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(sectioned.to_bytes().unwrap()))
+            .unwrap();
+    let producer = std::str::from_utf8(
+        package
+            .get_part("/word/notes/producer-footnotes.xml")
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(producer.contains(RAW_TABLE), "{producer}");
+}
+
+#[test]
+fn a_failed_record_leaves_the_source_and_outputs_uncommitted() {
+    let body = r#"<w:p><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p><w:sectPr/>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let before = document.to_bytes().unwrap();
+    let records = vec![
+        mail_merge_record(&[("Name", "valid")]),
+        mail_merge_record(&[("Name", "invalid\u{000b}value")]),
+    ];
+
+    assert!(document.mail_merge(&records).is_err());
+    assert!(document.mail_merge_sections(&records).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn empty_and_single_record_merges_have_stable_boundaries() {
+    let body = r#"<w:p><w:fldSimple w:instr="MERGEFIELD Name"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>"#;
+    let document = document_with_field_parts(&wrap_word_body(body), None, None);
+    assert!(document.mail_merge(&[]).is_err());
+    assert!(document.mail_merge_sections(&[]).is_err());
+
+    let mut single = document
+        .mail_merge_sections(&[mail_merge_record(&[("Name", "only")])])
+        .unwrap();
+    let xml = document_xml(&mut single);
+    assert!(xml.contains(">only<"), "{xml}");
+    assert!(!xml.contains(r#"<w:type w:val="nextPage"/>"#), "{xml}");
+    let body = body_from_document(&mut single);
+    assert!(body.sect_pr.is_some());
+    assert!(body.content.iter().all(|content| {
+        !matches!(content, BodyContent::Paragraph(paragraph) if paragraph.properties.as_ref().and_then(|properties| properties.sect_pr.as_ref()).is_some())
+    }));
+
+    let mut document = document_with_mail_merge_header();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let header_before = package.get_part("/word/header1.xml").unwrap().to_vec();
+    assert!(
+        document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap(),
+        0
+    );
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert_eq!(
+        package.get_part("/word/header1.xml").unwrap(),
+        header_before
+    );
+    let varying = vec![
+        mail_merge_record(&[("Name", "same"), ("Full Name", "one")]),
+        mail_merge_record(&[("Name", "same"), ("Full Name", "two")]),
+    ];
+    let mut separate = document.mail_merge(&varying).unwrap();
+    for output in &mut separate {
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(output.to_bytes().unwrap()))
+                .unwrap();
+        let header = std::str::from_utf8(package.get_part("/word/header1.xml").unwrap()).unwrap();
+        assert!(header.contains("stored table header"), "{header}");
+        assert!(header.contains("stored control header"), "{header}");
+        assert!(!header.contains(">one<"), "{header}");
+        assert!(!header.contains(">two<"), "{header}");
+    }
+    assert!(document.mail_merge_sections(&varying).is_err());
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Name", "one"), ("Full Name", "same")]),
+                mail_merge_record(&[("Name", "two"), ("Full Name", "same")]),
+            ])
+            .is_err()
+    );
+    assert!(
+        document
+            .mail_merge_sections(&[
+                mail_merge_record(&[("Name", "same"), ("Full Name", "same")]),
+                mail_merge_record(&[("Name", "same"), ("Full Name", "same")]),
+            ])
+            .is_ok()
+    );
+}
+
+#[test]
+fn repeated_content_produces_a_deterministic_comparison() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>repeat</w:t></w:r><w:r><w:t>repeat</w:t></w:r></w:p><w:p><w:r><w:t>repeat</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>repeat row</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>repeat row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>repeat</w:t></w:r><w:r><w:t>changed</w:t></w:r></w:p><w:p><w:r><w:t>repeat</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>repeat row</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>changed row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut first = document_with_content_controls(&original_xml);
+    let mut second = document_with_content_controls(&original_xml);
+
+    assert_eq!(
+        first
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap(),
+        second
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap()
+    );
+    assert_eq!(first.to_bytes().unwrap(), second.to_bytes().unwrap());
+}
+
+#[test]
+fn comparison_metadata_is_escaped_and_ids_do_not_collide() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:bookmarkStart w:id="0" w:name="kept"/><w:r><w:t>old</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:bookmarkStart w:id="0" w:name="kept"/><w:r><w:t>new</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut document = document_with_content_controls(&original_xml);
+    document
+        .compare(&edited, "Ada & \"Bob\"", "2026-08-21T09:30:00+01:00")
+        .unwrap();
+
+    let xml = document_xml(&mut document);
+    assert!(xml.contains(r#"w:author="Ada &amp; &quot;Bob&quot;""#));
+    assert!(
+        document
+            .revisions()
+            .iter()
+            .all(|revision| revision.id() != 0)
+    );
+    let before = document.to_bytes().unwrap();
+    assert!(document.compare(&edited, "Ada", "not-a-date").is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn accepting_a_comparison_reproduces_the_edited_body_exactly() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>old body</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>old cell</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>old nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="scope"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>new body</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new cell</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="scope"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>new control</w:t></w:r></w:p><w:p><w:r><w:t>added control child</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert!(!compared.revisions().is_empty());
+    compared.accept_all().unwrap();
+    assert!(
+        compared
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(compared.revisions().is_empty());
+}
+
+#[test]
+fn rejecting_a_comparison_reproduces_the_original_body_exactly() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>one</w:t></w:r><w:r><w:t>changed</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>changed row</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    compared.reject_all().unwrap();
+    assert!(
+        compared
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(compared.revisions().is_empty());
+}
+
+#[test]
+fn formatting_only_changes_report_diagnostics_without_revisions() {
+    let original_xml =
+        wrap_word_body(r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p>"#);
+    let edited_xml =
+        wrap_word_body(r#"<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>same</w:t></w:r></w:p>"#);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    let before = body_from_document(&mut compared);
+    let diagnostics = compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+
+    assert_eq!(
+        diagnostics,
+        vec![rdocx::ComparisonDiagnostic {
+            location: "body/paragraph[0]/run[0]".to_owned(),
+            message: "formatting differs and the original formatting was retained".to_owned(),
+        }]
+    );
+    assert!(compared.revisions().is_empty());
+    assert_eq!(body_from_document(&mut compared), before);
+}
+
+#[test]
+fn a_failed_comparison_leaves_the_original_package_unchanged() {
+    let existing_xml = wrap_word_body(
+        r#"<w:p><w:ins w:id="4" w:author="prior"><w:r><w:t>tracked</w:t></w:r></w:ins></w:p>"#,
+    );
+    let edited = Document::new();
+    let mut document = document_with_content_controls(&existing_xml);
+    let before = document.to_bytes().unwrap();
+
+    assert!(
+        document
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comparison_preserves_unmodelled_xml_byte_for_byte() {
+    let body_raw = r#"<x:bodyOpaque xmlns:x="urn:comparison-body" x:value="keep"/>"#;
+    let paragraph_raw =
+        r#"<x:paragraphOpaque xmlns:x="urn:comparison-paragraph"><x:nested/></x:paragraphOpaque>"#;
+    let table_raw = r#"<x:tableOpaque xmlns:x="urn:comparison-table" x:value="keep"/>"#;
+    let cell_raw = r#"<x:cellOpaque xmlns:x="urn:comparison-cell" x:value="keep"/>"#;
+    let control_raw =
+        r#"<x:controlOpaque xmlns:x="urn:comparison-control"><x:nested/></x:controlOpaque>"#;
+    let body = |value: &str| {
+        wrap_word_body(&format!(
+            r#"{body_raw}<w:p><w:r><w:t>{value} body</w:t>{paragraph_raw}</w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/>{table_raw}<w:tr><w:tc>{cell_raw}<w:p><w:r><w:t>{value} cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="raw-scope"/></w:sdtPr><w:sdtContent>{control_raw}<w:p><w:r><w:t>{value} control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+        ))
+    };
+    let original_xml = body("old");
+    let edited_xml = body("new");
+    let edited = document_with_content_controls(&edited_xml);
+    let mut document = document_with_content_controls(&original_xml);
+    document
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+
+    let xml = document_xml(&mut document);
+    for raw in [body_raw, table_raw, cell_raw, control_raw] {
+        assert_eq!(xml.matches(raw).count(), 1, "{xml}");
+    }
+    assert_eq!(xml.matches(paragraph_raw).count(), 2, "{xml}");
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_xml = document_xml(&mut reopened);
+    for raw in [body_raw, table_raw, cell_raw, control_raw] {
+        assert_eq!(reopened_xml.matches(raw).count(), 1, "{reopened_xml}");
+    }
+    assert_eq!(reopened_xml.matches(paragraph_raw).count(), 2);
+}
+
+#[test]
+fn inserted_and_deleted_body_blocks_resolve_without_empty_containers() {
+    let original_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>inserted</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>"#,
+    );
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut inserted = document_with_content_controls(&original_xml);
+    inserted
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&inserted.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let diagnostics = accepted
+        .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let mut rejected = Document::from_bytes(&inserted.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let diagnostics = rejected
+        .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let empty_xml = wrap_word_body(r#"<w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#);
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>only row</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let empty = document_with_content_controls(&empty_xml);
+    let table = document_with_content_controls(&table_xml);
+    let mut inserted_table = document_with_content_controls(&empty_xml);
+    inserted_table
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    inserted_table.reject_all().unwrap();
+    assert!(
+        inserted_table
+            .compare(&empty, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let final_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>final</w:t></w:r></w:p>"#,
+    );
+    let final_document = document_with_content_controls(&final_xml);
+    let mut inserted_final = document_with_content_controls(&empty_xml);
+    inserted_final
+        .compare(&final_document, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    inserted_final.reject_all().unwrap();
+    assert!(
+        inserted_final
+            .compare(&empty, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_revises_nested_control_content_without_replacing_its_shell() {
+    let body = |value: &str, paragraph_tag: &str| {
+        wrap_word_body(&format!(
+            r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="{paragraph_tag}"/></w:sdtPr><w:sdtContent><w:r><w:t>{value} paragraph control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:sdt><w:sdtPr><w:tag w:val="table-control"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>{value} table control</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:sdt><w:sdtPr><w:tag w:val="row-control"/></w:sdtPr><w:sdtContent><w:tc><w:p><w:r><w:t>{value} row control</w:t></w:r></w:p></w:tc></w:sdtContent></w:sdt><w:tc><w:sdt><w:sdtPr><w:tag w:val="cell-control"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{value} cell control</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>"#,
+        ))
+    };
+    let original_xml = body("old", "paragraph-control");
+    let edited_xml = body("new", "paragraph-control");
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked_xml = document_xml(&mut compared);
+    for tag in [
+        "paragraph-control",
+        "table-control",
+        "row-control",
+        "cell-control",
+    ] {
+        assert_eq!(tracked_xml.matches(&format!(r#"w:val="{tag}""#)).count(), 1);
+    }
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let diagnostics = accepted
+        .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let diagnostics = rejected
+        .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+        .unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let changed_shell_xml = body("old", "changed-shell");
+    let changed_shell = document_with_content_controls(&changed_shell_xml);
+    let mut unchanged = document_with_content_controls(&original_xml);
+    let before = unchanged.to_bytes().unwrap();
+    assert!(
+        unchanged
+            .compare(&changed_shell, "Ada", "2026-08-21T09:30:00Z")
+            .is_err()
+    );
+    assert_eq!(unchanged.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn comparison_preserves_content_control_whitespace_slots() {
+    let first_slot = "\r\n\t \t\r\n";
+    let second_slot = "\n \t \n";
+    let body = |value: &str| {
+        wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="pretty"/></w:sdtPr><w:sdtContent>{first_slot}<w:p><w:r><w:t>{value}</w:t></w:r></w:p>{second_slot}</w:sdtContent></w:sdt>"#,
+        ))
+    };
+    let original_xml = body("old");
+    let edited_xml = body("new");
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    assert!(tracked.contains(first_slot), "{tracked:?}");
+    assert!(tracked.contains(second_slot), "{tracked:?}");
+
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_deletes_text_without_corrupting_tabs() {
+    let original_xml =
+        wrap_word_body(r#"<w:p><w:r><w:t>old</w:t><w:tab/><w:t>tail</w:t></w:r></w:p>"#);
+    let edited_xml =
+        wrap_word_body(r#"<w:p><w:r><w:t>new</w:t><w:tab/><w:t>tail</w:t></w:r></w:p>"#);
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    assert!(tracked.contains("<w:tab/>"), "{tracked}");
+    assert!(!tracked.contains("delTextab"), "{tracked}");
+
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_reports_formatting_inside_matched_table_rows() {
+    let original_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:shd w:fill="FF0000"/></w:tcPr><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>same</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:shd w:fill="0000FF"/></w:tcPr><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>same</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    let diagnostics = compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.location.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "body/table[0]/row[0]/cell[0]",
+            "body/table[0]/row[0]/cell[0]/content[0]",
+            "body/table[0]/row[0]/cell[0]/content[0]/run[0]",
+        ]
+    );
+    assert!(compared.revisions().is_empty());
+}
+
+#[test]
+fn comparison_replaces_paragraphs_and_tables_before_an_anchor() {
+    let paragraph_xml = wrap_word_body(
+        r#"<w:p><w:r><w:t>old paragraph</w:t></w:r></w:p><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new table</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let paragraph = document_with_content_controls(&paragraph_xml);
+    let table = document_with_content_controls(&table_xml);
+
+    let mut paragraph_to_table = document_with_content_controls(&paragraph_xml);
+    paragraph_to_table
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&paragraph_to_table.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&table, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&paragraph_to_table.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&paragraph, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut table_to_paragraph = document_with_content_controls(&table_xml);
+    table_to_paragraph
+        .compare(&paragraph, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&table_to_paragraph.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&paragraph, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&table_to_paragraph.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&table, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_preserves_unrelated_modeled_fields() {
+    let field =
+        r#"<w:fldSimple w:instr="AUTHOR"><w:r><w:t>stored author</w:t></w:r></w:fldSimple>"#;
+    let original_xml = wrap_word_body(&format!(
+        r#"<w:p>{field}<w:r><w:t>old text</w:t></w:r></w:p>"#
+    ));
+    let edited_xml = wrap_word_body(&format!(
+        r#"<w:p>{field}<w:r><w:t>new text</w:t></w:r></w:p>"#
+    ));
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    assert_eq!(
+        document_xml(&mut compared).matches("<w:fldSimple").count(),
+        1
+    );
+
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document_xml(&mut accepted).matches("<w:fldSimple").count(),
+        1
+    );
+
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        document_xml(&mut rejected).matches("<w:fldSimple").count(),
+        1
+    );
+}
+
+#[test]
+fn final_paragraph_markers_stay_outside_formatted_run_properties() {
+    let anchor = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>anchor</w:t></w:r></w:p>"#;
+    let added = r#"<w:p><w:r><w:t>added</w:t></w:r></w:p>"#;
+    let original_xml = wrap_word_body(anchor);
+    let edited_xml = wrap_word_body(&format!("{anchor}{added}"));
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&edited_xml);
+    let mut compared = document_with_content_controls(&original_xml);
+
+    compared
+        .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    let marker = tracked.find("<w:ins").unwrap();
+    let properties_start = tracked.find("<w:pPr").unwrap();
+    let properties_end = tracked.find("</w:pPr>").unwrap();
+    let first_run = tracked.find("<w:r>").unwrap();
+    assert!(
+        properties_start < marker && marker < properties_end,
+        "{tracked}"
+    );
+    assert!(properties_end < first_run, "{tracked}");
+    assert_eq!(tracked.matches("<w:b/>").count(), 1, "{tracked}");
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut deletion = document_with_content_controls(&edited_xml);
+    deletion
+        .compare(&original, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut deletion);
+    let marker = tracked.find("<w:del").unwrap();
+    let properties_start = tracked.find("<w:pPr").unwrap();
+    let properties_end = tracked.find("</w:pPr>").unwrap();
+    let first_run = tracked.find("<w:r>").unwrap();
+    assert!(
+        properties_start < marker && marker < properties_end,
+        "{tracked}"
+    );
+    assert!(properties_end < first_run, "{tracked}");
+    let mut accepted = Document::from_bytes(&deletion.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn whole_row_markers_target_the_outer_row_properties() {
+    let anchor_xml = wrap_word_body(r#"<w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#);
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:trPr><w:cantSplit/></w:trPr><w:tc><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let anchor = document_with_content_controls(&anchor_xml);
+    let table = document_with_content_controls(&table_xml);
+    let mut compared = document_with_content_controls(&anchor_xml);
+
+    compared
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut compared);
+    let marker = tracked.find("<w:ins").unwrap();
+    let outer_cell = tracked.find("<w:tc>").unwrap();
+    let nested_properties = tracked.find("<w:tblHeader/>").unwrap();
+    assert!(marker < outer_cell, "{tracked}");
+    assert!(marker < nested_properties, "{tracked}");
+    assert_eq!(tracked.matches("<w:ins").count(), 1, "{tracked}");
+
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut deletion = document_with_content_controls(&table_xml);
+    deletion
+        .compare(&anchor, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut deletion);
+    assert!(tracked.find("<w:del").unwrap() < tracked.find("<w:tc>").unwrap());
+    let mut accepted = Document::from_bytes(&deletion.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn whole_table_marking_includes_control_owned_rows() {
+    let anchor_xml = wrap_word_body(r#"<w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#);
+    let table_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:sdt><w:sdtPr><w:tag w:val="owned-row"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>same row</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt><w:tr><w:tc><w:p><w:r><w:t>same row</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>anchor</w:t></w:r></w:p>"#,
+    );
+    let anchor = document_with_content_controls(&anchor_xml);
+    let table = document_with_content_controls(&table_xml);
+
+    let mut insertion = document_with_content_controls(&anchor_xml);
+    insertion
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut insertion);
+    assert_eq!(tracked.matches(r#"<w:trPr><w:ins"#).count(), 2, "{tracked}");
+    let mut rejected = Document::from_bytes(&insertion.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut deletion = document_with_content_controls(&table_xml);
+    deletion
+        .compare(&anchor, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let tracked = document_xml(&mut deletion);
+    assert_eq!(tracked.matches(r#"<w:trPr><w:del"#).count(), 2, "{tracked}");
+    let mut accepted = Document::from_bytes(&deletion.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&anchor, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn table_row_insertions_stay_inside_table_schema_boundaries() {
+    let original_xml = wrap_word_body(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let edited_xmls = [
+        wrap_word_body(
+            r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>inserted</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        ),
+        wrap_word_body(
+            r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>inserted</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        ),
+    ];
+    let original = document_with_content_controls(&original_xml);
+
+    for edited_xml in edited_xmls {
+        let edited = document_with_content_controls(&edited_xml);
+        let mut compared = document_with_content_controls(&original_xml);
+        compared
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap();
+        let tracked = document_xml(&mut compared);
+        let table_start = tracked.find("<w:tbl>").unwrap();
+        let table_end = tracked.find("</w:tbl>").unwrap();
+        let inserted_row = tracked
+            .find("<w:ins")
+            .unwrap_or_else(|| panic!("{tracked}"));
+        assert!(
+            table_start < inserted_row && inserted_row < table_end,
+            "{tracked}"
+        );
+
+        let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        accepted.accept_all().unwrap();
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+        let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        rejected.reject_all().unwrap();
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn comparison_adds_and_removes_numbering_without_a_property_owner() {
+    let plain_xml = wrap_word_body(r#"<w:p><w:r><w:t>item</w:t></w:r></w:p>"#);
+    let numbered_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let plain = document_with_content_controls(&plain_xml);
+    let numbered = document_with_content_controls(&numbered_xml);
+
+    let mut addition = document_with_content_controls(&plain_xml);
+    addition
+        .compare(&numbered, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let addition_xml = document_xml(&mut addition);
+    assert!(addition_xml.contains("<w:pPrChange"), "{addition_xml}");
+    let mut accepted = Document::from_bytes(&addition.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&numbered, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&addition.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&plain, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut removal = document_with_content_controls(&numbered_xml);
+    removal
+        .compare(&plain, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let removal_xml = document_xml(&mut removal);
+    assert!(removal_xml.contains("<w:pPrChange"), "{removal_xml}");
+    let mut accepted = Document::from_bytes(&removal.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    assert!(
+        accepted
+            .compare(&plain, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&removal.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    assert!(
+        rejected
+            .compare(&numbered, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn numbering_changes_preserve_unrelated_paragraph_properties() {
+    let unnumbered_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:keepNext/><w:jc w:val="center"/></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let numbered_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:keepNext/><w:numPr><w:ilvl w:val="1"/><w:numId w:val="9"/></w:numPr><w:jc w:val="center"/></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+
+    for (original_xml, edited_xml) in [
+        (&unnumbered_xml, &numbered_xml),
+        (&numbered_xml, &unnumbered_xml),
+    ] {
+        let original = document_with_content_controls(original_xml);
+        let edited = document_with_content_controls(edited_xml);
+        let mut compared = document_with_content_controls(original_xml);
+        compared
+            .compare(&edited, "Ada", "2026-08-21T09:30:00Z")
+            .unwrap();
+
+        let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        accepted.accept_all().unwrap();
+        let accepted_xml = document_xml(&mut accepted);
+        assert!(accepted_xml.contains("<w:keepNext"), "{accepted_xml}");
+        assert!(
+            accepted_xml.contains(r#"<w:jc w:val="center"/>"#),
+            "{accepted_xml}"
+        );
+        assert!(
+            accepted
+                .compare(&edited, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+        rejected.reject_all().unwrap();
+        let rejected_xml = document_xml(&mut rejected);
+        assert!(rejected_xml.contains("<w:keepNext"), "{rejected_xml}");
+        assert!(
+            rejected_xml.contains(r#"<w:jc w:val="center"/>"#),
+            "{rejected_xml}"
+        );
+        assert!(
+            rejected
+                .compare(&original, "postcondition", "2026-08-21T09:31:00Z")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn resolving_empty_paragraph_property_changes_cleans_only_empty_owners() {
+    let empty_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:pPrChange w:id="1" w:author="Ada"><w:pPr/></w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let retained_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:keepNext/><w:pPrChange w:id="1" w:author="Ada"><w:pPr><w:keepNext/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+
+    for accept in [true, false] {
+        let mut empty = document_with_content_controls(&empty_xml);
+        if accept {
+            empty.accept_all().unwrap();
+        } else {
+            empty.reject_all().unwrap();
+        }
+        let empty = document_xml(&mut empty);
+        assert!(!empty.contains("<w:pPr"), "{empty}");
+
+        let mut retained = document_with_content_controls(&retained_xml);
+        if accept {
+            retained.accept_all().unwrap();
+        } else {
+            retained.reject_all().unwrap();
+        }
+        let retained = document_xml(&mut retained);
+        assert_eq!(retained.matches("<w:pPr>").count(), 1, "{retained}");
+        assert_eq!(retained.matches("<w:keepNext").count(), 1, "{retained}");
+        assert!(!retained.contains("<w:pPrChange"), "{retained}");
+    }
+}
+
+#[test]
+fn rejecting_an_attributed_empty_prior_paragraph_owner_preserves_it_exactly() {
+    let prior = format!(
+        r#"<old:pPr xmlns:old="{}" xmlns:ext="urn:producer" ext:flag="keep" ext:mode="exact"/>"#,
+        rdocx_oxml::namespace::W_NS
+    );
+    let tracked_xml = wrap_word_body(&format!(
+        r#"<w:p><w:pPr><w:pPrChange w:id="1" w:author="Ada">{prior}</w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    ));
+    let mut tracked = document_with_content_controls(&tracked_xml);
+
+    let mut accepted = Document::from_bytes(&tracked.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let accepted = document_xml(&mut accepted);
+    assert!(!accepted.contains("<w:pPr"), "{accepted}");
+    assert!(!accepted.contains("ext:flag"), "{accepted}");
+
+    let mut rejected = Document::from_bytes(&tracked.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let rejected = document_xml(&mut rejected);
+    assert!(rejected.contains(&prior), "{rejected}");
+    assert!(!rejected.contains("<w:pPrChange"), "{rejected}");
+
+    let tracked_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:pPrChange xmlns:ext="urn:inherited" w:id="2" w:author="Ada"><w:pPr ext:flag="keep"/></w:pPrChange></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let mut tracked = document_with_content_controls(&tracked_xml);
+    let mut rejected = Document::from_bytes(&tracked.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let rejected = document_xml(&mut rejected);
+    assert!(rejected.contains("<w:pPr"), "{rejected}");
+    assert!(
+        rejected.contains(r#"xmlns:ext="urn:inherited""#),
+        "{rejected}"
+    );
+    assert!(rejected.contains(r#"ext:flag="keep""#), "{rejected}");
+    assert!(!rejected.contains("<w:pPrChange"), "{rejected}");
+}
+
+#[test]
+fn control_block_replacement_keeps_whitespace_before_the_replacement() {
+    let before = "\r\n\t  \t\r\n";
+    let between = "\n\t \n";
+    let control = |first: &str| {
+        wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="block-replacement"/></w:sdtPr><w:sdtContent>{before}{first}{between}<w:p><w:r><w:t>anchor</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+        ))
+    };
+    let paragraph_xml = control(r#"<w:p><w:r><w:t>old paragraph</w:t></w:r></w:p>"#);
+    let table_xml = control(
+        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>new table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let paragraph = document_with_content_controls(&paragraph_xml);
+    let table = document_with_content_controls(&table_xml);
+    let mut compared = document_with_content_controls(&paragraph_xml);
+
+    compared
+        .compare(&table, "Ada", "2026-08-21T09:30:00Z")
+        .unwrap();
+    let mut accepted = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    accepted.accept_all().unwrap();
+    let accepted_xml = document_xml(&mut accepted);
+    assert!(accepted_xml.contains(before), "{accepted_xml:?}");
+    assert!(accepted_xml.contains(between), "{accepted_xml:?}");
+    assert!(accepted_xml.find(before).unwrap() < accepted_xml.find("<w:tbl>").unwrap());
+    assert!(accepted_xml.find("</w:tbl>").unwrap() < accepted_xml.find(between).unwrap());
+    assert!(
+        accepted
+            .compare(&table, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut rejected = Document::from_bytes(&compared.to_bytes().unwrap()).unwrap();
+    rejected.reject_all().unwrap();
+    let rejected_xml = document_xml(&mut rejected);
+    assert!(rejected_xml.find(before).unwrap() < rejected_xml.find("<w:p>").unwrap());
+    assert!(
+        rejected
+            .compare(&paragraph, "postcondition", "2026-08-21T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
 }

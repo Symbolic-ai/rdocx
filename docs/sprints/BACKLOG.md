@@ -31,13 +31,13 @@ regenerated, never hand-edited.
 | M13, Bindings and tooling                   | 18 | 18 | 0 | 0  |
 | M14, Word collaboration layer                  | 9  | 9 | 0 | 0  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
-| M16, Document automation                       | 10 | 7 | 0 | 3  |
+| M16, Document automation                       | 10 | 10 | 0 | 0  |
 | M17, Security and compliance                   | 7  | 0 | 0 | 7  |
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 34 | 32 | 0 | 1  |
-| **Total** | **245** | **206** | **0** | **38** |
+| X, Cross-cutting (opportunistic)            | 41 | 38 | 1 | 1  |
+| **Total** | **252** | **215** | **1** | **35** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -326,9 +326,9 @@ regenerated, never hand-edited.
 | F-163 | Template syntax                              | S50  | L | done |
 | F-164 | Loops and conditionals                       | S50  | L | done |
 | F-165 | Repeating table rows and lists               | S50  | M | done |
-| F-166 | Mail merge                                   | S51  | M | pending |
-| F-167 | Document comparison                          | S51  | L | pending |
-| F-168 | Watermarks                                   | S51  | S | pending |
+| F-166 | Mail merge                                   | S51  | M | done |
+| F-167 | Document comparison                          | S51  | L | done |
+| F-168 | Watermarks                                   | S51  | S | done |
 <!-- AUTOGEN:backlog-M16 END -->
 
 ### M17, Security and compliance
@@ -432,4 +432,11 @@ regenerated, never hand-edited.
 | F-X029 | Path-filtered CI jobs                       | S44 | M | done |
 | F-X030 | Decouple the npm package versions           | -   | S | archived |
 | F-X031 | Require the CI gate in branch protection    | S62 | S | pending |
+| F-X032 | Expose complete Word layout results         | S51 | S | done |
+| F-X033 | Integrate PR 36 ordered body items          | S51 | S | done |
+| F-X034 | Reviewed release notes for every release    | S51 | S | done |
+| F-X035 | Tag rpptx-v0.4.0                            | S51 | S | done |
+| F-X036 | Tag v0.8.0                                  | S51 | S | done |
+| F-X037 | Trace Word glyphs to source paragraphs     | S51 | M | done |
+| F-X038 | Cache relayout work across document edits  | S51 | L | done |
 <!-- AUTOGEN:backlog-MX END -->

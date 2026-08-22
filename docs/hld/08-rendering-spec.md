@@ -18,7 +18,17 @@ pub struct LayoutResult { pages: Vec<PageFrame>, fonts: Vec<FontData>,
                           diagnostics: Vec<Diagnostic> }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
+pub struct SourceNodeId(NonZeroU32)
+pub struct SourceSpan { node: SourceNodeId, char_start: u32, char_end: u32 }
 ```
+
+`TextSegment` and `GlyphRun` each carry `source: Option<SourceSpan>`. The node
+is meaningful only within the result that allocated it. `char_start` and
+`char_end` are exclusive Unicode-scalar offsets, not byte, UTF-16, grapheme, or
+glyph-cluster positions. Word assigns spans before shaping. Its initial text
+segmentation and the shared line breaker both count scalars at byte split
+points, so every wrapped fragment retains an exact contiguous source range.
+Generated text uses `None`.
 
 **A slide is a page with a fixed size.** Font subsetting, ToUnicode CMaps, JPEG
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
@@ -436,11 +446,57 @@ them. Table cells do not use the shape autofit algorithm.
 
 ## Performance
 
-`Document` keeps normal-font and deterministic `LayoutResult` values in
-separate `Mutex<Option<Arc<_>>>` caches. `render_page_to_png`,
-`render_all_pages`, `to_pdf` and `layout_page` share the normal result. The
-deterministic page renderer uses its own result, while caller-supplied font
-layouts remain uncached because those fonts are not part of a stable cache key.
+`Document` keeps normal-font and deterministic `WordLayoutResult` values in
+separate `Mutex<Option<Arc<_>>>` caches. `layout`, option-taking accepted
+layout, `render_page_to_png`, `render_all_pages`, `to_pdf`, and `layout_page`
+share the normal result. The normal path also retains one synchronized
+`rdocx-layout::Engine` after mutation invalidates that completed result. The
+deterministic renderers use their own bundle. Tracked layouts remain uncached
+and use the normal engine with a distinct revision-view paragraph identity.
+Caller-supplied font layouts construct an isolated engine, remain uncached, and
+cannot observe bundled or system fonts. Caller-font access returns an owned
+bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
+bundle that owns the exact font data and Word source map.
+
+Normal `FontManager` construction clones one process-lifetime snapshot of the
+bundled and system face table. Installing, removing, or replacing a system font
+therefore takes effect after process restart. File-backed faces share an
+`Arc<[u8]>` by canonical file identity, including distinct TTC collection
+indices, through a 256-entry and 128 MiB process cache. Poisoned process locks
+recover by rebuilding the requested entry. Deterministic managers build from
+bundled fonts only. Caller-font managers build from caller bytes only.
+
+Each reusable font manager keeps exact shaping results keyed by `FontId`, owned
+source text, and floating-point size bits. The memo is capped at 2,048 entries
+and 16 MiB. Resolution, coverage misses, coverage fallbacks, and per-paragraph
+font traces also have explicit bounds. Loading a different additional font set
+rebuilds face identity and clears all dependent memo state.
+
+The Word engine caches only ordinary context-independent body paragraphs. The
+entry key compares the complete typed paragraph, content width, revision view,
+styles, theme, and additional font set. Numbering, drawings including
+`AlternateContent`, fields, hyperlinks, relationships, media, generated
+markers, and other traversal-sensitive input bypass reuse. Each entry owns its
+block, diagnostics, and exact bounded font-resolution trace. Both the published
+and transaction-pending queues are capped at 256 entries and 16 MiB using
+retained-capacity accounting for all owned block and reflow buffers. Oversized
+entries bypass retention.
+
+Cache publication is a whole-layout transaction. A late error publishes none
+of the staged entries. A hit replays diagnostics and the font trace, then
+rebinds placeholder scalar provenance to the source node allocated for the
+current `WordLayoutResult`. After success, active faces are retained in
+first-resolution order and stale faces and entries are removed. This makes warm
+and cold pages, font ids, font bytes, diagnostics, revision view, and resolved
+source provenance equal.
+
+The low-level Word engine keeps its existing `LayoutResult` entry points and
+discards provenance there. `layout_document_with_provenance` and
+`layout_document_deterministic_with_provenance` allocate one immutable source
+table before layout and return it with the positioned output as
+`WordLayoutResult`. Repeated header and note layout reuses the same node rather
+than allocating per page. Source metadata does not change shaping, pagination,
+font selection, or rendered bytes.
 
 ### Word revision views
 
@@ -454,6 +510,12 @@ layout includes both sides. It forces single underline on insertion and move
 destination text and single strike on deletion and move source text while
 retaining the remaining resolved formatting.
 
+Provenance ranges are local to this selected projection. The field model's
+`Field::projected_text` decision is the single owner of whether a field cache
+advances a run's projection offset, which prevents repeated cached and literal
+text from producing a plausible but false range. Field display glyphs remain
+unattributed even when a parsed complex cache contributes to later offsets.
+
 A tracked paragraph with visible revised content or a property-only revision
 carries a changed marker into pagination. Every page fragment of that paragraph
 draws one solid line outside the text margin, on the right for odd pages and on
@@ -461,11 +523,39 @@ the left for even pages. The marker does not affect text placement. Existing
 render methods select accepted layout and retain the normal and deterministic
 caches. Option-taking tracked renders are uncached.
 
+### Word watermarks
+
+Header `w:pict` content has a conservative renderer-only projection. A direct
+VML shape with finite positive point bounds becomes a watermark only when it
+contains one VML text path string or one relationship-namespaced image id.
+Namespace aliases and shadows are resolved by expanded name. Unsupported,
+ambiguous, malformed, or unrelated VML remains preserved but does not enter
+layout. Named VML colours and six-digit RGB values lower to shared colour.
+Unsupported colours and unresolved image relationships suppress that watermark
+and add a stable diagnostic.
+
+Text watermarks shape with the deterministic font manager and image watermarks
+reuse the scoped relationship entry in the layout's collision-safe
+`MediaRegistry`. Both lower to an opacity-bearing `GroupElement` centered in the
+section margin rectangle, with rotation around the local watermark centre.
+Pagination inserts the selected group before behind-body drawings, ordinary
+header content, and body elements. PDF and raster backends therefore use their
+existing recursive group paths without watermark-specific code.
+
+Header selection follows Word's variants rather than content emptiness. A
+title page selects its first variant even when that variant is blank. When the
+decoded `w:evenAndOddHeaders` setting is active, displayed even page numbers
+select the even variant even when it is blank. `w:pgNumType/@w:start` resets
+that displayed parity for a section. Missing later variants inherit only the
+same type from the preceding section. No selected first or even variant borrows
+default header, footer, or watermark content.
+
 Every public document mutation and mutable-accessor entry point clears both
-caches before changing or exposing content. Rendering every page through the
-single-page entry point therefore performs one layout per font mode instead of
-one layout per page. The presentation facade follows the same ownership model
-when it is added.
+completed result caches before changing or exposing content. It preserves the
+normal engine so safe paragraph and shaping work can be reused after an edit.
+Rendering every page through the single-page entry point therefore performs one
+layout per font mode instead of one layout per page. The presentation facade
+follows the same ownership model when it is added.
 
 ```rust
 pub fn layout_presentation(input: &RenderInput) -> Result<LayoutResult>;

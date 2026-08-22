@@ -154,9 +154,15 @@ fn slice_text_segment(segment: &TextSegment, byte_start: usize, byte_end: usize)
         )
     };
     let width = advances.iter().sum();
+    let source = segment.source.map(|source| oxml_layout::SourceSpan {
+        node: source.node,
+        char_start: source.char_start + char_start as u32,
+        char_end: source.char_start + (char_start + char_count) as u32,
+    });
 
     TextSegment {
         text,
+        source,
         glyph_ids,
         advances,
         width,
@@ -280,6 +286,11 @@ mod tests {
 
         let segment = TextSegment {
             text: "one two".to_string(),
+            source: Some(oxml_layout::SourceSpan {
+                node: oxml_layout::SourceNodeId::new(3).expect("non-zero source"),
+                char_start: 20,
+                char_end: 27,
+            }),
             font_id: FontId(1),
             font_size: 12.0,
             glyph_ids: (1..=7).collect(),
@@ -308,6 +319,63 @@ mod tests {
         assert_eq!(first.text, "one ");
         assert_eq!(first.glyph_ids, vec![1, 2, 3, 4]);
         assert_eq!(first.width, 10.0);
+        assert_eq!(
+            first.source,
+            Some(oxml_layout::SourceSpan {
+                node: oxml_layout::SourceNodeId::new(3).expect("non-zero source"),
+                char_start: 20,
+                char_end: 24,
+            })
+        );
+        let InlineItem::Text(second) = &items[1] else {
+            panic!("expected a text segment");
+        };
+        assert_eq!(second.source.expect("second source").char_start, 24);
+        assert_eq!(second.source.expect("second source").char_end, 27);
+    }
+
+    #[test]
+    fn word_unicode_split_counts_scalars_instead_of_utf8_bytes() {
+        use oxml_layout::{Color, FontId, SourceNodeId, SourceSpan};
+
+        let segment = TextSegment {
+            text: "A🚀界Z".to_owned(),
+            source: Some(SourceSpan {
+                node: SourceNodeId::new(9).expect("non-zero source"),
+                char_start: 100,
+                char_end: 104,
+            }),
+            font_id: FontId(1),
+            font_size: 12.0,
+            glyph_ids: vec![1, 2, 3, 4],
+            advances: vec![1.0; 4],
+            width: 4.0,
+            ascent: 9.0,
+            descent: 3.0,
+            line_gap: 0.0,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            underline: None,
+            strike: false,
+            dstrike: false,
+            highlight: None,
+            baseline_offset: 0.0,
+            hyperlink_url: None,
+            field_kind: None,
+            note: None,
+        };
+
+        let middle = slice_text_segment(&segment, 1, 8);
+        assert_eq!(middle.text, "🚀界");
+        assert_eq!(
+            middle.source,
+            Some(SourceSpan {
+                node: SourceNodeId::new(9).expect("non-zero source"),
+                char_start: 101,
+                char_end: 103,
+            })
+        );
     }
 
     #[test]

@@ -3,7 +3,9 @@
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CT_TblBorders, CT_TblGrid, ST_VerticalJc, VMerge};
 
+use crate::WordStory;
 use crate::block::ParagraphBlock;
+use crate::engine::SourceRegistry;
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
 use oxml_layout::{Color, Diagnostic, FontManager, Result};
@@ -90,6 +92,62 @@ pub fn layout_table(
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<TableBlock> {
+    layout_table_inner(
+        tbl,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        None,
+        &WordStory::Document,
+        &[],
+    )
+}
+
+pub(crate) fn layout_table_with_provenance(
+    tbl: &CT_Tbl,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
+    story: &WordStory,
+    path: &[usize],
+) -> Result<TableBlock> {
+    layout_table_inner(
+        tbl,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        sources,
+        story,
+        path,
+    )
+}
+
+fn layout_table_inner(
+    tbl: &CT_Tbl,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
+    story: &WordStory,
+    path: &[usize],
+) -> Result<TableBlock> {
     // 1. Compute column widths
     let col_widths = compute_column_widths(tbl.grid.as_ref(), available_width, tbl);
     let table_width: f64 = col_widths.iter().sum();
@@ -147,7 +205,7 @@ pub fn layout_table(
         let mut cells = Vec::new();
         let mut col_index = 0usize;
 
-        for cell in &row.cells {
+        for (cell_index, cell) in row.cells.iter().enumerate() {
             let grid_span = cell
                 .properties
                 .as_ref()
@@ -191,6 +249,11 @@ pub fn layout_table(
                     fm,
                     num_state,
                     diagnostics,
+                    sources,
+                    story,
+                    path,
+                    row_idx,
+                    cell_index,
                 )?
             };
 
@@ -311,15 +374,23 @@ fn layout_cell_content(
     fm: &mut FontManager,
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
+    sources: Option<&SourceRegistry>,
+    story: &WordStory,
+    table_path: &[usize],
+    row_index: usize,
+    cell_index: usize,
 ) -> Result<Vec<ParagraphBlock>> {
     use crate::engine;
     use rdocx_oxml::table::CellContent;
 
     let mut blocks = Vec::new();
-    for item in content {
+    for (content_index, item) in content.iter().enumerate() {
+        let mut source_path = table_path.to_vec();
+        source_path.extend([row_index, cell_index, content_index]);
         match item {
             CellContent::Paragraph(para) => {
-                let block = engine::layout_paragraph(
+                let source = sources.and_then(|sources| sources.id(story, &source_path));
+                let block = engine::layout_paragraph_with_source(
                     para,
                     available_width,
                     styles,
@@ -328,12 +399,13 @@ fn layout_cell_content(
                     fm,
                     num_state,
                     diagnostics,
+                    source,
                 )?;
                 blocks.push(block);
             }
             CellContent::Table(tbl) => {
                 // Recursively lay out the nested table
-                let _nested = layout_table(
+                let _nested = layout_table_inner(
                     tbl,
                     available_width,
                     styles,
@@ -342,6 +414,9 @@ fn layout_cell_content(
                     fm,
                     num_state,
                     diagnostics,
+                    sources,
+                    story,
+                    &source_path,
                 )?;
                 // For now, flatten: render nested table cell content as paragraph blocks
                 // (Full nested table rendering would require the paginator to handle tables within cells)

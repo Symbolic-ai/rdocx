@@ -91,8 +91,10 @@ borrowed nested handle can mutate without a rebind:
 `doc.paragraph_mut(3).unwrap().add_run("text").set_bold(true)`.
 
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
-deterministic layouts live in separate `Mutex<Option<Arc<LayoutResult>>>`
-caches, with a compile-time regression gate preserving that contract.
+deterministic layouts live in separate
+`Mutex<Option<Arc<WordLayoutResult>>>` caches. One private normal-font engine
+lives behind a separate mutex and survives result invalidation, with a
+compile-time regression gate preserving that threading contract.
 `to_pdf`, `render_all_pages` and `to_bytes` run inside `py.allow_threads`, so a
 Python thread pool genuinely parallelises work across documents. Concurrent
 rendering of one document shares the immutable cached result after the first
@@ -249,6 +251,18 @@ caches and producer dirty spellings. These methods are additive native Rust
 APIs. Python, WASM, and CLI surfaces gain no field update methods and continue
 to preserve updates already made through their owned `Document`.
 
+Native Word callers merge flat records with `Document::mail_merge` or
+`Document::mail_merge_sections`. Each record is a
+`BTreeMap<String, String>`. Separate mode returns one complete validated
+document per record. Section mode returns one document with record bodies in
+input order and a next-page boundary after every non-final record. Empty input
+is rejected. Missing merge values become empty text only inside these two
+methods. A record-varying merge field in a referenced header, footer, footnote,
+or endnote rejects section mode because it combines main-body stories only.
+Both methods are additive on the pre-1.0 native Rust facade. Python, WASM, and
+CLI surfaces gain no merge methods and continue to preserve documents already
+merged by native code.
+
 Native Word callers render templates with
 `Document::render_template(&serde_json::Value)`. Scalar tags use
 `{{ path.to.value }}` syntax and may cross ordinary Word run boundaries.
@@ -276,6 +290,14 @@ custom XML datastore and displayed text atomically through the
 package-preserving facade. These methods are additive native APIs. They do not
 implicitly add Python, WASM, or CLI methods, and the existing binding surfaces
 remain unchanged.
+
+Native Word callers inspect direct body order through
+`Document::body_items`. Each `BodyItemRef` borrows one paragraph, table,
+body-level content control, or preserved unsupported XML child. It does not
+flatten control content, and it does not change the recursive semantics of
+`paragraphs()` or `tables()`. The API is additive on `rdocx` only. Python,
+WASM, and CLI surfaces gain no ordered-body method and continue to preserve a
+document opened and saved through their existing owners.
 
 Native Word callers inspect tracked changes through `Document::revisions`.
 Each immutable `RevisionRef` exposes the revision id, author, optional
@@ -312,10 +334,23 @@ assigns absolute schema slots to the unmodelled standard `w:hMerge`, `w:tcMar`,
 `w:tcPrChange` children. This sidecar is part of the intentional pre-1.0 0.8
 low-level Rust source break. Existing exhaustive matches and full struct
 literals must be updated or moved to the provided constructors. The workspace
-remains at 0.7 during development. Its next published stable-family version
-must be 0.8.0, not a 0.7 patch. The additive `rdocx::Document` facade and
+and its exact seven-package stable family are published at 0.8.0, not as a 0.7
+patch. Earlier immutable registry versions remain available.
+The additive `rdocx::Document` facade and
 unchanged Python, WASM, and CLI surfaces do not inherit this low-level source
 break.
+
+The low-level layout boundary also adds `source: Option<SourceSpan>` to the
+exhaustive public `TextSegment` and `GlyphRun` structs. Existing external
+struct literals must supply `None` when they do not own an exact source range.
+`rdocx-layout` adds `WordStory`, `WordSourcePath`, and `WordLayoutResult`, plus
+normal-font and deterministic provenance entry points. Node ids resolve only
+through the result-local Word source table, and ranges use Unicode scalar
+indices in the recorded revision view. The existing layout functions keep
+returning `LayoutResult`. The `rdocx::Document` facade consumes the provenance
+entry points through additive native accessors, while Python, WASM, and CLI
+surfaces remain unchanged. The exhaustive literal change is published in both
+the incubating 0.4.0 family and the stable 0.8.0 family.
 
 Native callers resolve tracked changes through `accept_all`, `reject_all`, the
 exact-author pair, the inclusive RFC 3339 date-range pair, and the id pair.
@@ -326,6 +361,16 @@ changes return an error before mutation. These eight methods are additive on
 `rdocx::Document` only. Python, WASM, and CLI surfaces remain unchanged and
 continue to preserve the resulting document when they save it.
 
+Native callers generate tracked changes with `Document::compare`, supplying an
+edited document, author, and RFC 3339 timestamp. The additive
+`ComparisonDiagnostic` value reports stable formatting-only locations and
+messages without turning those differences into revisions. Comparison rejects
+existing modeled revisions and unsupported structural shell differences, and
+it commits only after accepting and rejecting staged copies reproduce their
+respective modeled baselines. This API is native Rust only. Python, WASM, and
+CLI surfaces gain no comparison method and preserve comparison output when
+they save their owned document.
+
 Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive
 option-taking counterparts cover PDF bytes and files, single-page and all-page
@@ -333,6 +378,37 @@ raster output, page layout, deterministic rendering, and caller-supplied font
 paths. The existing methods keep their accepted default. Python, WASM, and CLI
 surfaces do not implicitly expose the selector and retain their existing
 rendering behavior.
+
+Native renderers obtain the complete positioned output through
+`Document::layout` and `Document::layout_with_options`. Accepted calls return a
+shared `Arc<WordLayoutResult>` from the normal-font cache, including pages,
+font bytes, revision view, and the result-local Word source map. After a
+mutation, the retained normal engine may reuse bounded context-independent
+paragraph and shaping work while rebuilding the completed result. Tracked calls
+stay uncached and use a distinct revision-view paragraph identity.
+`Document::layout_with_fonts` and
+`Document::layout_with_fonts_and_options` return owned uncached bundles whose
+font mapping contains the exact caller-provided bytes selected for shaping.
+They construct a caller-only engine and cannot observe the normal process font
+snapshot. Deterministic calls remain isolated on the bundled-font-only path.
+The built-in PDF, raster, and page accessors consume these same paths. This is
+an additive pre-1.0 native Rust surface and does not add binding methods.
+
+Native Word callers author watermarks with `Document::set_text_watermark` and
+`Document::set_image_watermark`. Text uses fixed Word-like defaults of 468 by
+117 points, 315 degree rotation, `D9D9D9`, Calibri, and 50 percent opacity.
+Image callers provide positive width and height, while rotation stays zero and
+opacity stays at 50 percent. Both methods replace one API-owned watermark in
+every active default, first, and enabled even header variant atomically. These
+methods are additive on the native pre-1.0 facade. Python, WASM, and CLI gain no
+watermark methods and continue to preserve watermarks already authored through
+their owned `Document`.
+
+The public low-level `VmlWatermark` projection and the added paginator section
+and header-selection fields are part of the intentional pre-1.0 Rust source
+break for the next stable family. They expose renderer input, not a second
+authoring surface. Opened header XML remains the serialization authority, and
+callers should use the native `Document` methods for mutation.
 
 The stable Rust family moves to 0.5.0 for the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
