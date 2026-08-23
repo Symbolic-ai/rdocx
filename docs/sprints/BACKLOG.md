@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 53 | 48 | 1 | 3  |
-| **Total** | **264** | **228** | **5** | **30** |
+| X, Cross-cutting (opportunistic)            | 53 | 48 | 2 | 2  |
+| **Total** | **264** | **228** | **6** | **29** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -449,6 +449,6 @@ regenerated, never hand-edited.
 | F-X046 | Reuse substituted pages exactly            | S52 | S | done |
 | F-X047 | Attribute empty Word paragraphs            | S52 | S | done |
 | F-X048 | Dense form table fidelity                  | S53 | L | in-progress |
-| F-X049 | Tag rpptx-v0.5.0                           | S53 | S | pending |
+| F-X049 | Tag rpptx-v0.5.0                           | S53 | S | in-progress |
 | F-X050 | Tag v0.9.0                                 | S53 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
