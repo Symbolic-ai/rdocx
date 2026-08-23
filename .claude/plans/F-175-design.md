@@ -1,6 +1,6 @@
 # F-175, Redaction
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S53
 **Size**: M
 **Depends on**: F-147, F-149
@@ -110,13 +110,13 @@ Expected to be unchanged. Generated samples do not invoke redaction.
 
 ## Implementation checklist
 
-- [ ] Define the smallest native selector and report types.
-- [ ] Stage all typed and raw package mutation on a complete clone.
-- [ ] Traverse every Word story, comments, revisions, and properties.
-- [ ] Redact ChartML caches and relationship-resolved embedded workbooks.
-- [ ] Preserve unrelated raw XML and package parts byte for byte.
-- [ ] Reopen, validate, and raw-scan outer and nested packages before commit.
-- [ ] Add atomic failure, round-trip, WASM, packaging, and harness checks.
+- [x] Define the smallest native selector and report types.
+- [x] Stage all typed and raw package mutation on a complete clone.
+- [x] Traverse every Word story, comments, revisions, and properties.
+- [x] Redact ChartML caches and relationship-resolved embedded workbooks.
+- [x] Preserve unrelated raw XML and package parts byte for byte.
+- [x] Reopen, validate, and raw-scan outer and nested packages before commit.
+- [x] Add atomic failure, round-trip, WASM, packaging, and harness checks.
 
 ## Open questions
 

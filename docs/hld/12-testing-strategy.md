@@ -118,6 +118,18 @@ proves that unmodeled XML and namespace declarations retain their exact bytes
 through comparison, save, and reopen. No sample invokes comparison, so the
 49-entry hash harness remains unchanged.
 
+The redaction regression gate constructs one package in code with body,
+table, content-control, header, footer, footnote, endnote, comment, inserted,
+deleted, core-property, and custom-property occurrences. A second authored
+chart fixture requires the exact literal to disappear from both ChartML caches
+and its relationship-resolved workbook. The gate scans every inflated outer
+and nested entry for UTF-8 and UTF-16LE forms after reopen. Focused cases prove
+prefix-tolerant expanded-name matching, foreign same-local-name preservation,
+unrelated part and relationship stability, malformed XML rejection, external
+workbook rejection, nested ZIP limits, and atomic residual-scan failure. The
+native-only API is absent from Python, WASM, and CLI wrappers. No sample invokes
+redaction, so all 49 hash entries remain unchanged.
+
 The watermark golden gate builds a five-page document in code, renders with
 bundled fonts, and compares the exact PNG-byte digest for every page. It also
 requires the selected watermark group to precede ordinary header and body

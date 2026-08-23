@@ -258,6 +258,14 @@ WASM, or CLI surfaces. Those consumers continue to own the same
 package-preserving `Document`, so native comment edits remain intact when a
 binding subsequently saves it.
 
+Native Word callers remove one exact non-empty literal with
+`Document::redact_text`. The returned `RedactionReport` separates Word story,
+metadata, chart-cache, and embedded-workbook replacement counts. The method is
+additive before 1.0 and commits only a reopened, relationship-valid candidate
+whose inflated outer and nested package entries contain no UTF-8 or UTF-16LE
+trace. Python, WASM, and CLI surfaces gain no redaction method and continue to
+preserve a document already redacted through the native facade.
+
 Native Word callers use `Document::bookmarks` for immutable `BookmarkRef`
 summaries and `Document::add_bookmark` for atomic insertion over the existing
 top-level half-open `RunRange`. A summary exposes an optional id, name, range,

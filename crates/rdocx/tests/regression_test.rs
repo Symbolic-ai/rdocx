@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use rdocx::{
-    Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length, RenderOptions,
-    RevisionView, RunPosition, RunRange,
+    ChartData, ChartKind, Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length,
+    RenderOptions, RevisionView, RunPosition, RunRange,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
@@ -5330,4 +5330,457 @@ fn empty_segment_is_backend_invisible_and_layout_compatible() {
         oxml_pdf::render_page_to_png(&attributed, 0, 96.0),
         oxml_pdf::render_page_to_png(&without_empty, 0, 96.0)
     );
+}
+
+fn redaction_fixture() -> Document {
+    let mut seed = Document::new();
+    seed.set_title("secret core title");
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let relationship_namespace =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    let header_id = relationships.add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "stories/header1.xml",
+    );
+    let footer_id = relationships.add(
+        oxml_opc::relationship::rel_types::FOOTER,
+        "stories/footer1.xml",
+    );
+    relationships.add(
+        oxml_opc::relationship::rel_types::FOOTNOTES,
+        "stories/footnotes1.xml",
+    );
+    relationships.add(
+        oxml_opc::relationship::rel_types::ENDNOTES,
+        "stories/endnotes1.xml",
+    );
+    relationships.add(
+        oxml_opc::relationship::rel_types::COMMENTS,
+        "stories/comments1.xml",
+    );
+
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{word_namespace}" xmlns:r="{relationship_namespace}" xmlns:p="urn:producer"><w:body><p:keep>producer bytes</p:keep><w:p><w:r><w:t>body secret</w:t></w:r><w:ins w:id="1" w:author="secret author"><w:r><w:t>inserted se</w:t></w:r><w:r><w:t>cret</w:t></w:r></w:ins><w:del w:id="2" w:author="secret author"><w:r><w:delText>deleted secret</w:delText></w:r></w:del></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>table secret</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>control secret</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    for (part, root, content_type) in [
+        (
+            "/word/stories/header1.xml",
+            "hdr",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        ),
+        (
+            "/word/stories/footer1.xml",
+            "ftr",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        ),
+    ] {
+        package.set_part(
+            part,
+            format!(
+                r#"<w:{root} xmlns:w="{word_namespace}"><w:p><w:r><w:t>{root} secret</w:t></w:r></w:p></w:{root}>"#
+            )
+            .into_bytes(),
+        );
+        package.content_types.add_override(part, content_type);
+    }
+    for (part, root, item, content_type) in [
+        (
+            "/word/stories/footnotes1.xml",
+            "footnotes",
+            "footnote",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+        ),
+        (
+            "/word/stories/endnotes1.xml",
+            "endnotes",
+            "endnote",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+        ),
+    ] {
+        package.set_part(
+            part,
+            format!(
+                r#"<w:{root} xmlns:w="{word_namespace}"><w:{item} w:id="2"><w:p><w:r><w:t>{item} secret</w:t></w:r></w:p></w:{item}></w:{root}>"#
+            )
+            .into_bytes(),
+        );
+        package.content_types.add_override(part, content_type);
+    }
+    package.set_part(
+        "/word/stories/comments1.xml",
+        format!(
+            r#"<w:comments xmlns:w="{word_namespace}"><w:comment w:id="0" w:author="secret author" w:initials="secret"><w:p><w:r><w:t>comment secret</w:t></w:r></w:p></w:comment></w:comments>"#
+        )
+        .into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/stories/comments1.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package.set_part(
+        "/metadata/custom.xml",
+        br#"<p:Properties xmlns:p="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:v="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><p:property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="Client"><v:lpwstr>custom secret</v:lpwstr></p:property></p:Properties>"#.to_vec(),
+    );
+    package.content_types.add_override(
+        "/metadata/custom.xml",
+        oxml_opc::content_types::CUSTOM_PROPERTIES,
+    );
+    package.package_rels.add(
+        oxml_opc::relationship::rel_types::CUSTOM_PROPERTIES,
+        "metadata/custom.xml",
+    );
+    package.set_part("/custom/unrelated.bin", b"producer bytes".to_vec());
+    package
+        .content_types
+        .add_override("/custom/unrelated.bin", "application/octet-stream");
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+fn assert_raw_package_has_no_selector(bytes: &[u8], selector: &str) {
+    fn absent(bytes: &[u8], selector: &str) {
+        let utf16le = selector
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert!(
+            !bytes
+                .windows(selector.len())
+                .any(|part| part == selector.as_bytes())
+        );
+        assert!(!bytes.windows(utf16le.len()).any(|part| part == utf16le));
+    }
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).expect("outer package");
+    absent(
+        &package.content_types.to_xml().expect("content types XML"),
+        selector,
+    );
+    absent(
+        &package
+            .package_rels
+            .to_xml()
+            .expect("package relationships XML"),
+        selector,
+    );
+    for relationships in package.part_rels.values() {
+        absent(
+            &relationships.to_xml().expect("part relationships XML"),
+            selector,
+        );
+    }
+    for part in package.parts.values() {
+        absent(part, selector);
+        if part.starts_with(b"PK\x03\x04") {
+            let nested = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(part))
+                .expect("nested package");
+            absent(
+                &nested
+                    .content_types
+                    .to_xml()
+                    .expect("nested content types XML"),
+                selector,
+            );
+            absent(
+                &nested
+                    .package_rels
+                    .to_xml()
+                    .expect("nested package relationships XML"),
+                selector,
+            );
+            for relationships in nested.part_rels.values() {
+                absent(
+                    &relationships
+                        .to_xml()
+                        .expect("nested part relationships XML"),
+                    selector,
+                );
+            }
+            for nested_part in nested.parts.values() {
+                absent(nested_part, selector);
+            }
+        }
+    }
+}
+
+#[test]
+fn redaction_removes_body_comments_revisions_and_metadata_traces() {
+    let mut document = redaction_fixture();
+    let report = document
+        .redact_text("secret")
+        .expect("redact all Word stories");
+    assert!(report.word_text >= 13, "{report:?}");
+    assert_eq!(report.metadata, 2);
+    let bytes = document.to_bytes().unwrap();
+    assert_raw_package_has_no_selector(&bytes, "secret");
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert!(!reopened.text().contains("secret"));
+    assert_eq!(reopened.title(), Some(" core title"));
+}
+
+#[test]
+fn redaction_removes_chart_cache_and_embedded_workbook_traces() {
+    let mut document = Document::new();
+    document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["secret north".to_owned(), "public".to_owned()],
+                series: vec![("secret revenue".to_owned(), vec![12.5, 19.0])],
+                number_format: None,
+            },
+        )
+        .unwrap();
+    let report = document.redact_text("secret").expect("redact chart source");
+    assert!(report.chart_caches >= 2, "{report:?}");
+    assert!(report.embedded_workbooks >= 2, "{report:?}");
+    assert_raw_package_has_no_selector(&document.to_bytes().unwrap(), "secret");
+
+    let mut numeric_document = Document::new();
+    numeric_document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["north".to_owned(), "south".to_owned()],
+                series: vec![("revenue".to_owned(), vec![12.5, 19.0])],
+                number_format: None,
+            },
+        )
+        .unwrap();
+    let numeric_report = numeric_document
+        .redact_text("12.5")
+        .expect("redact numeric chart source");
+    assert!(numeric_report.chart_caches >= 1, "{numeric_report:?}");
+    assert!(numeric_report.embedded_workbooks >= 1, "{numeric_report:?}");
+    assert_raw_package_has_no_selector(&numeric_document.to_bytes().unwrap(), "12.5");
+}
+
+fn assert_redaction_failure_preserves_document(document: &mut Document, selector: &str) {
+    let before_bytes = document.to_bytes().expect("atomic snapshot serializes");
+    let before_text = document.text();
+    let before_title = document.title().map(str::to_owned);
+    let before_paragraphs = document
+        .paragraphs()
+        .iter()
+        .map(|paragraph| paragraph.text())
+        .collect::<Vec<_>>();
+    let before_layout = document.layout().expect("atomic layout cache primes");
+
+    assert!(document.redact_text(selector).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before_bytes);
+    assert_eq!(document.text(), before_text);
+    assert_eq!(document.title(), before_title.as_deref());
+    assert_eq!(
+        document
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        before_paragraphs
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &before_layout,
+        &document.layout().expect("atomic layout cache remains")
+    ));
+}
+
+#[test]
+fn redaction_failure_is_atomic() {
+    let mut empty_selector = redaction_fixture();
+    assert_redaction_failure_preserves_document(&mut empty_selector, "");
+
+    let mut document = redaction_fixture();
+    let before = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+    package.set_part("/word/stories/header1.xml", b"<secret".to_vec());
+    let mut malformed = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut malformed).unwrap();
+    let mut document = Document::from_bytes(malformed.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut document, "secret");
+
+    let mut utf16_document = redaction_fixture();
+    let mut utf16_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(utf16_document.to_bytes().unwrap()))
+            .unwrap();
+    let utf16_secret = "secret"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    utf16_package.set_part("/custom/unrelated.bin", utf16_secret);
+    let mut utf16_bytes = std::io::Cursor::new(Vec::new());
+    utf16_package.write_to(&mut utf16_bytes).unwrap();
+    let mut utf16_document = Document::from_bytes(utf16_bytes.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut utf16_document, "secret");
+
+    let mut chart_document = Document::new();
+    chart_document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["secret".to_owned()],
+                series: vec![("public".to_owned(), vec![1.0])],
+                number_format: None,
+            },
+        )
+        .unwrap();
+    let mut chart_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(chart_document.to_bytes().unwrap()))
+            .unwrap();
+    let chart_part = chart_package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| {
+            relationships.get_by_type(oxml_opc::relationship::rel_types::CHART)
+        })
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target)
+        })
+        .unwrap();
+    let workbook_part = chart_package
+        .get_part_rels(&chart_part)
+        .and_then(|relationships| {
+            relationships.get_by_type(oxml_opc::relationship::rel_types::PACKAGE)
+        })
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target(&chart_part, &relationship.target)
+        })
+        .unwrap();
+
+    let mut bounded_package = chart_package.clone();
+    let mut oversized_workbook = oxml_opc::OpcPackage::new();
+    oversized_workbook
+        .content_types
+        .add_default("bin", "application/octet-stream");
+    for index in 0..1_024 {
+        oversized_workbook.set_part(&format!("/payload/{index}.bin"), Vec::new());
+    }
+    let mut oversized_bytes = std::io::Cursor::new(Vec::new());
+    oversized_workbook.write_to(&mut oversized_bytes).unwrap();
+    bounded_package.set_part(&workbook_part, oversized_bytes.into_inner());
+    let mut bounded_bytes = std::io::Cursor::new(Vec::new());
+    bounded_package.write_to(&mut bounded_bytes).unwrap();
+    let mut bounded_document = Document::from_bytes(bounded_bytes.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut bounded_document, "secret");
+
+    let workbook_relationship = chart_package
+        .get_or_create_part_rels(&chart_part)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::PACKAGE)
+        .unwrap();
+    workbook_relationship.target_mode = Some("External".to_owned());
+    workbook_relationship.target = "https://example.invalid/secret.xlsx".to_owned();
+    let mut external_bytes = std::io::Cursor::new(Vec::new());
+    chart_package.write_to(&mut external_bytes).unwrap();
+    let mut external_document = Document::from_bytes(external_bytes.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut external_document, "secret");
+}
+
+#[test]
+fn redacted_package_preserves_unrelated_parts_and_relationships() {
+    let mut document = redaction_fixture();
+    let before = document.to_bytes().unwrap();
+    let before = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+    let before_content_types = before.content_types.to_xml().unwrap();
+    let before_package_relationships = before.package_rels.to_xml().unwrap();
+    let before_relationships = before
+        .part_rels
+        .iter()
+        .map(|(source, relationships)| (source.clone(), relationships.to_xml().unwrap()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let before_endnotes = before
+        .get_part("/word/stories/endnotes1.xml")
+        .unwrap()
+        .to_vec();
+    let before_custom = before.get_part("/metadata/custom.xml").unwrap().to_vec();
+    document.redact_text("secret").unwrap();
+    let after =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert_eq!(
+        after.get_part("/custom/unrelated.bin"),
+        before.get_part("/custom/unrelated.bin")
+    );
+    assert_eq!(after.content_types.to_xml().unwrap(), before_content_types);
+    assert_eq!(
+        after.package_rels.to_xml().unwrap(),
+        before_package_relationships
+    );
+    assert_eq!(
+        after
+            .part_rels
+            .iter()
+            .map(|(source, relationships)| (source.clone(), relationships.to_xml().unwrap()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before_relationships
+    );
+    assert_eq!(
+        after.get_part("/word/stories/endnotes1.xml").unwrap(),
+        String::from_utf8(before_endnotes)
+            .unwrap()
+            .replace("secret", "")
+            .as_bytes()
+    );
+    assert_eq!(
+        after.get_part("/metadata/custom.xml").unwrap(),
+        String::from_utf8(before_custom)
+            .unwrap()
+            .replace("secret", "")
+            .as_bytes()
+    );
+    let edited_parts = std::collections::HashSet::from([
+        "/word/document.xml",
+        "/word/stories/header1.xml",
+        "/word/stories/footer1.xml",
+        "/word/stories/footnotes1.xml",
+        "/word/stories/endnotes1.xml",
+        "/word/stories/comments1.xml",
+        "/docProps/core.xml",
+        "/metadata/custom.xml",
+    ]);
+    assert_eq!(
+        after.parts.keys().collect::<std::collections::HashSet<_>>(),
+        before.parts.keys().collect()
+    );
+    for (part_name, bytes) in &before.parts {
+        if !edited_parts.contains(part_name.as_str()) {
+            assert_eq!(
+                after.get_part(part_name).unwrap(),
+                bytes,
+                "untouched part changed: {part_name}"
+            );
+        }
+    }
+    let document_xml = std::str::from_utf8(after.get_part("/word/document.xml").unwrap()).unwrap();
+    let producer = document_xml
+        .find("<p:keep>producer bytes</p:keep>")
+        .unwrap();
+    let paragraph = document_xml.find("<w:p>").unwrap();
+    let table = document_xml.find("<w:tbl>").unwrap();
+    let control = document_xml.find("<w:sdt>").unwrap();
+    let section = document_xml.find("<w:sectPr>").unwrap();
+    assert!(producer < paragraph && paragraph < table && table < control && control < section);
+}
+
+#[test]
+fn raw_zip_scan_finds_no_redacted_value() {
+    let mut document = Document::new();
+    document.add_paragraph("secret secret");
+    let report = document.redact_text("secret").unwrap();
+    assert_eq!(report.total(), 2);
+    assert_raw_package_has_no_selector(&document.to_bytes().unwrap(), "secret");
 }

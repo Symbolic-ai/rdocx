@@ -28,6 +28,7 @@ mod document;
 mod error;
 mod field;
 pub mod paragraph;
+mod redaction;
 mod revision;
 pub mod run;
 pub mod style;
@@ -58,6 +59,7 @@ pub use rdocx_layout::RevisionView;
 pub use rdocx_oxml::settings::{
     CryptAlgorithmClass, CryptAlgorithmType, CryptProviderType, DocumentProtection, ProtectionMode,
 };
+pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use run::{Run, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};

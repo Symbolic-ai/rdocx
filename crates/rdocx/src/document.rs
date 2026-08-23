@@ -484,7 +484,7 @@ impl Document {
     }
 
     /// Commit staged package state without discarding reusable layout work.
-    fn commit_staged_mutation(&mut self, mut candidate: Self) {
+    pub(crate) fn commit_staged_mutation(&mut self, mut candidate: Self) {
         std::mem::swap(
             &mut self.normal_layout_engine,
             &mut candidate.normal_layout_engine,
@@ -683,6 +683,37 @@ impl Document {
             .take();
     }
 
+    #[cfg(test)]
+    pub(crate) fn redaction_cache_identity(
+        &self,
+    ) -> (Option<usize>, Option<usize>, Option<usize>, Option<usize>) {
+        let layout = self
+            .layout_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| Arc::as_ptr(value) as usize);
+        let normal_engine = self
+            .normal_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| value as *const _ as usize);
+        let deterministic = self
+            .deterministic_layout_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| Arc::as_ptr(value) as usize);
+        let bundled_engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| value as *const _ as usize);
+        (layout, normal_engine, deterministic, bundled_engine)
+    }
+
     /// Return the normal-font layout, computing it once after each mutation.
     fn cached_layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         let mut cache = self
@@ -794,7 +825,7 @@ impl Document {
     }
 
     /// Write the in-memory document/styles back into the OPC package parts.
-    fn flush_to_package(&mut self) -> Result<()> {
+    pub(crate) fn flush_to_package(&mut self) -> Result<()> {
         // Serialize document.xml
         let doc_xml = self.document.to_xml()?;
         self.package.set_part(&self.doc_part_name, doc_xml);

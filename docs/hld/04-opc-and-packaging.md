@@ -396,6 +396,18 @@ Any metadata, alignment, unsupported-shell, parse, serialization, or
 postcondition failure leaves the original package, typed state, and caches
 unchanged.
 
+Literal redaction also uses the complete package boundary. The Word facade
+flushes a staged clone, removes one non-empty exact literal from relationship-
+resolved Word stories, comments, revisions, core and custom properties,
+ChartML caches, and internal embedded workbooks, then serializes and reopens
+the candidate. Sensitive XML is matched by expanded name. Unchanged byte
+ranges and unrelated parts remain intact. External workbook relationships,
+malformed sensitive XML, missing content types or internal targets, and ZIP
+limit failures reject the candidate. Before publication, every inflated outer
+and nested-workbook entry is scanned for both UTF-8 and UTF-16LE forms of the
+literal. Any residual trace leaves the live package, typed state, and layout
+caches unchanged.
+
 Template rendering follows the same staged package boundary. A stack parser
 pairs nested controls within one body or table-row container before evaluation.
 The evaluator clones typed body entries and rows into candidate sequences, so
