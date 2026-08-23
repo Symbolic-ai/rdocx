@@ -95,6 +95,7 @@ has its own final approval boundary.
   package families and link every included external issue and pull request.
 - Every included issue and pull request receives a maintainer comment naming
   its release, the implementation boundary, and the verified contributor
-  credit before publication.
+  credit after successful publication and release-body verification, and
+  before the release F-ID completes.
 - Incubating 0.5.0 and stable 0.9.0 each pass their exact release gates and are
   published only after separate immediate approvals at reviewed SHAs.

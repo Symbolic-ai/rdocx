@@ -2622,6 +2622,29 @@ seven stable crates resolve from crates.io at 0.9.0 and the GitHub release body
 is byte-identical to the reviewed `v0.9.0` changelog section with all verified
 issue, pull-request, reporter, and contributor credit.
 
+### F-X051, Honor caller-supplied font family aliases (M)
+
+Make the `family` value supplied with a caller font a document-facing alias for
+the font's embedded family name. Resolve an exact embedded family first, then a
+caller alias, then the existing mapped and generic fallbacks. A label equal to
+the embedded family adds no alias and leaves existing callers unchanged.
+
+Expose byte-free alias mappings so many document-facing names can target one
+loaded family without cloning the font bytes for every name. Alias identity
+belongs to the reusable engine's font context. An unchanged mapping is a no-op,
+while a changed mapping invalidates resolution-dependent state without
+discarding unrelated valid work. Reimplement Issue 44 and PR 45 against the
+current bounded cache and exact-context contracts, and credit `@emptinessform`
+in the next release that contains the behavior.
+
+**Depends on**: F-X043.
+**Test gate**: regression. Multiple document-facing aliases resolve to the
+intended caller font without repeated bytes, exact embedded-family requests
+retain priority, and unmapped requests keep the existing fallback order.
+Unchanged aliases reuse safe work, changed aliases miss the affected caches,
+warm and cold pages, fonts, diagnostics, and provenance are equal, both WASM
+targets pass, and the deterministic hash harness remains unchanged.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

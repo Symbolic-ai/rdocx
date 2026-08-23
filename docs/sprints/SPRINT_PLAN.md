@@ -941,18 +941,22 @@ stable dependency pin resolves from crates.io. Both reviewed changelog sections
 credit and link every included external issue and pull request, and each record
 receives a maintainer release note for its contributor.
 
-#### Sprint S54, RTF
+#### Sprint S54, RTF and caller font aliases
 
-**Goal**: open M18 with the inbound format that blocks the most corpora.
+**Goal**: open M18 with the inbound format that blocks the most corpora, and
+honour the document-facing family names supplied with caller fonts.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-176 | RTF reader | L |
 | F-177 | RTF writer | M |
 | F-183 | Image export options | S |
+| F-X051 | Honor caller-supplied font family aliases | M |
 
 F-183 rides along because it is a day of work against an entry point every
-format in this milestone shares.
+format in this milestone shares. F-X051 closes Issue 44 and PR 45 on the
+hardened reusable-engine path from F-X043. It remains independent of the RTF
+reader and writer.
 
 #### Sprint S55, HTML and ODT in
 
