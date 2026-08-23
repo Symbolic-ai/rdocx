@@ -28,9 +28,10 @@ use crate::style_resolver::{self, NumberingState};
 use crate::table;
 use crate::{WordSourcePath, WordStory};
 use oxml_layout::{
-    Color, Diagnostic, DocumentMetadata, FieldKind, FontId, FontManager, GlyphRun, GroupElement,
-    InlineItem, LayoutResult, LineItem, NoteRef, NoteStream, PageFrame, Point, PositionedElement,
-    Rect, Result, SourceNodeId, SourceSpan, TextSegment, Transform, Underline, break_into_lines,
+    Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FontId, FontManager,
+    GlyphRun, GroupElement, InlineItem, LayoutResult, LineItem, NoteRef, NoteStream, PageFrame,
+    Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan, StructureId, StructureNode,
+    StructureRole, TextSegment, Transform, Underline, break_into_lines,
 };
 
 #[derive(Clone, Copy)]
@@ -940,6 +941,7 @@ impl Engine {
             title_pg: final_title_pg,
             page_number_start: section_page_number_start(&final_sect_pr),
         });
+        let structure = assign_document_structure(&mut sections);
 
         // Lay the notes out once per width, before pagination, so the paginator
         // can reserve exactly the height it will later draw. A note is broken to
@@ -1123,6 +1125,9 @@ impl Engine {
         paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
 
         apply_page_background(&mut pages, input);
+        for page in &mut pages {
+            mark_remaining_artifacts(&mut page.elements);
+        }
 
         let mut pages = pages.into_iter().map(Arc::new).collect::<Vec<_>>();
         if reusable_restart_record && let Some(cache) = self.restart_cache.as_ref() {
@@ -1139,15 +1144,15 @@ impl Engine {
         let bookmark_pages = pages
             .iter()
             .flat_map(|page| {
-                page.elements.iter().filter_map(move |element| {
-                    let PositionedElement::Text(run) = element else {
-                        return None;
-                    };
-                    let Some(FieldKind::Target(target)) = run.field_kind else {
-                        return None;
-                    };
-                    Some((target, page.page_number))
-                })
+                let mut targets = Vec::new();
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element
+                        && let Some(FieldKind::Target(target)) = run.field_kind
+                    {
+                        targets.push((target, page.page_number));
+                    }
+                });
+                targets
             })
             .collect::<HashMap<_, _>>();
         let mut bookmark_identity = bookmark_pages
@@ -1258,6 +1263,9 @@ impl Engine {
                     PositionedElement::Group(group) => {
                         collect_carrier_fonts(&group.children, fonts)
                     }
+                    PositionedElement::MarkedContent { children, .. } => {
+                        collect_carrier_fonts(children, fonts)
+                    }
                     _ => {}
                 }
             }
@@ -1333,6 +1341,7 @@ impl Engine {
         }
         let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
         result.diagnostics = diagnostics;
+        result.structure = Some(structure);
         Ok(result)
     }
 
@@ -1898,7 +1907,8 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
                             CellContent::Paragraph(paragraph) => {
                                 paragraph_is_cache_safe(paragraph, styles)
                             }
-                            CellContent::Table(_) | CellContent::ContentControl(_) => false,
+                            CellContent::Table(table) => table_is_cache_safe(table, styles),
+                            CellContent::ContentControl(_) => false,
                         })
                 })
         })
@@ -1915,18 +1925,23 @@ fn rebind_table_sources(
         for (cell_index, (cell, block_cell)) in
             row.cells.iter().zip(&mut block_row.cells).enumerate()
         {
-            let mut block_paragraphs = block_cell.paragraphs.iter_mut();
+            let mut block_items = block_cell.blocks.iter_mut();
             for (content_index, content) in cell.content.iter().enumerate() {
-                let CellContent::Paragraph(_) = content else {
-                    continue;
-                };
-                let Some(paragraph) = block_paragraphs.next() else {
+                let Some(block_item) = block_items.next() else {
                     break;
                 };
                 let mut source_path = table_path.to_vec();
                 source_path.extend([row_index, cell_index, content_index]);
-                let source = sources.and_then(|sources| sources.id(story, &source_path));
-                rebind_paragraph_source(paragraph, source);
+                match (content, block_item) {
+                    (CellContent::Paragraph(_), table::CellBlock::Paragraph(paragraph)) => {
+                        let source = sources.and_then(|sources| sources.id(story, &source_path));
+                        rebind_paragraph_source(paragraph, source);
+                    }
+                    (CellContent::Table(table), table::CellBlock::Table(block)) => {
+                        rebind_table_sources(table, block, sources, story, &source_path);
+                    }
+                    _ => break,
+                }
             }
         }
     }
@@ -2008,8 +2023,10 @@ fn table_key_retained_bytes(table: &CT_Tbl) -> usize {
                                                                     usize::saturating_add,
                                                                 ),
                                                         ),
-                                                    CellContent::Table(_)
-                                                    | CellContent::ContentControl(_) => usize::MAX,
+                                                    CellContent::Table(table) => {
+                                                        table_key_retained_bytes(table)
+                                                    }
+                                                    CellContent::ContentControl(_) => usize::MAX,
                                                 })
                                                 .fold(0usize, usize::saturating_add),
                                         )
@@ -2051,19 +2068,24 @@ fn table_block_retained_bytes(block: &table::TableBlock) -> usize {
                     row.cells
                         .iter()
                         .map(|cell| {
-                            cell.paragraphs
+                            cell.blocks
                                 .capacity()
-                                .saturating_mul(std::mem::size_of::<ParagraphBlock>())
+                                .saturating_mul(std::mem::size_of::<table::CellBlock>())
                                 .saturating_add(
-                                    cell.paragraphs
+                                    cell.blocks
                                         .iter()
-                                        .map(|paragraph| {
-                                            paragraph_cache_entry_bytes(
-                                                &CT_P::new(),
-                                                paragraph,
-                                                &[],
-                                                0,
-                                            )
+                                        .map(|block| match block {
+                                            table::CellBlock::Paragraph(paragraph) => {
+                                                paragraph_cache_entry_bytes(
+                                                    &CT_P::new(),
+                                                    paragraph,
+                                                    &[],
+                                                    0,
+                                                )
+                                            }
+                                            table::CellBlock::Table(table) => {
+                                                table_block_retained_bytes(table)
+                                            }
                                         })
                                         .fold(0usize, usize::saturating_add),
                                 )
@@ -2118,6 +2140,9 @@ fn canonicalize_layout_fonts(
                     }
                 }
                 PositionedElement::Group(group) => collect(&group.children, remap, order),
+                PositionedElement::MarkedContent { children, .. } => {
+                    collect(children, remap, order)
+                }
                 _ => {}
             }
         }
@@ -2130,6 +2155,7 @@ fn canonicalize_layout_fonts(
                     run.font_id = remap[&run.font_id];
                 }
                 PositionedElement::Group(group) => rewrite(&mut group.children, remap),
+                PositionedElement::MarkedContent { children, .. } => rewrite(children, remap),
                 _ => {}
             }
         }
@@ -2198,12 +2224,11 @@ fn restart_record_block_is_safe(block: &LayoutBlock) -> bool {
 }
 
 fn page_has_substitution_state(page: &PageFrame) -> bool {
-    page.elements.iter().any(|element| {
-        matches!(
-            element,
-            PositionedElement::Text(run) if run.field_kind.is_some()
-        )
-    })
+    let mut found = false;
+    oxml_layout::walk(&page.elements, &mut |element, _| {
+        found |= matches!(element, PositionedElement::Text(run) if run.field_kind.is_some());
+    });
+    found
 }
 
 fn restart_cache_entries(cache: &RestartCache) -> usize {
@@ -2338,6 +2363,15 @@ fn page_frame_retained_bytes(page: &PageFrame) -> usize {
                         .fold(0usize, usize::saturating_add),
                 )
                 .saturating_add(format!("{:?}", group.effects).len()),
+            PositionedElement::MarkedContent { children, .. } => children
+                .capacity()
+                .saturating_mul(std::mem::size_of::<PositionedElement>())
+                .saturating_add(
+                    children
+                        .iter()
+                        .map(element_bytes)
+                        .fold(0usize, usize::saturating_add),
+                ),
             PositionedElement::Path(path) => format!("{path:?}").len(),
             _ => 0,
         }
@@ -2884,33 +2918,250 @@ fn substitute_fields(
     fm: &mut FontManager,
 ) {
     for element in elements.iter_mut() {
-        if let PositionedElement::Text(run) = element
-            && let Some(fk) = run.field_kind
+        match element {
+            PositionedElement::Text(run) => {
+                let Some(fk) = run.field_kind else {
+                    continue;
+                };
+                let value = match fk {
+                    FieldKind::Page => page_number.to_string(),
+                    FieldKind::NumPages => total_pages.to_string(),
+                    FieldKind::TargetPage(target) => bookmark_pages
+                        .get(&target)
+                        .map(usize::to_string)
+                        .unwrap_or_else(|| run.text.clone()),
+                    FieldKind::Target(_) => continue,
+                };
+                if let Ok(shaped) = fm.shape_text(run.font_id, &value, run.font_size) {
+                    run.text = value;
+                    run.glyph_ids = shaped.glyph_ids;
+                    run.advances = shaped.advances;
+                }
+            }
+            PositionedElement::Group(group) => substitute_fields(
+                &mut group.children,
+                page_number,
+                total_pages,
+                bookmark_pages,
+                fm,
+            ),
+            PositionedElement::MarkedContent { children, .. } => {
+                substitute_fields(children, page_number, total_pages, bookmark_pages, fm)
+            }
+            _ => {}
+        }
+    }
+    elements.retain(|element| match element {
+        PositionedElement::Text(run) => !matches!(run.field_kind, Some(FieldKind::Target(_))),
+        PositionedElement::MarkedContent { children, .. } => !children.is_empty(),
+        _ => true,
+    });
+}
+
+fn mark_remaining_artifacts(elements: &mut Vec<PositionedElement>) {
+    let unmarked = std::mem::take(elements);
+    *elements = unmarked
+        .into_iter()
+        .map(|element| match element {
+            PositionedElement::MarkedContent { .. } | PositionedElement::LinkAnnotation { .. } => {
+                element
+            }
+            _ => PositionedElement::MarkedContent {
+                structure: None,
+                children: vec![element],
+            },
+        })
+        .collect();
+}
+
+struct StructureBuilder {
+    nodes: Vec<StructureNode>,
+}
+
+impl StructureBuilder {
+    fn add(&mut self, role: StructureRole, parent: Option<StructureId>) -> StructureId {
+        let id = StructureId::new(self.nodes.len() as u32 + 1)
+            .expect("a structure node index is always non-zero");
+        self.nodes.push(StructureNode {
+            id,
+            role,
+            children: Vec::new(),
+            alternate_text: None,
+        });
+        if let Some(parent) = parent
+            && let Some(node) = self.nodes.get_mut(parent.get() as usize - 1)
         {
-            let value = match fk {
-                FieldKind::Page => page_number.to_string(),
-                FieldKind::NumPages => total_pages.to_string(),
-                FieldKind::TargetPage(target) => bookmark_pages
-                    .get(&target)
-                    .map(usize::to_string)
-                    .unwrap_or_else(|| run.text.clone()),
-                FieldKind::Target(_) => continue,
-            };
-            // Re-shape the text with the actual value
-            if let Ok(shaped) = fm.shape_text(run.font_id, &value, run.font_size) {
-                run.text = value;
-                run.glyph_ids = shaped.glyph_ids;
-                run.advances = shaped.advances;
+            node.children.push(id);
+        }
+        id
+    }
+
+    fn set_alternate_text(&mut self, id: StructureId, text: String) {
+        if let Some(node) = self.nodes.get_mut(id.get() as usize - 1) {
+            node.alternate_text = Some(text);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ListFrame {
+    num_id: u32,
+    level: u8,
+    list: StructureId,
+    last_item: Option<StructureId>,
+}
+
+fn assign_document_structure(sections: &mut [paginator::Section]) -> DocumentStructure {
+    let mut builder = StructureBuilder { nodes: Vec::new() };
+    let root = builder.add(StructureRole::Document, None);
+
+    for section in sections {
+        let mut lists: Vec<ListFrame> = Vec::new();
+        for block in &mut section.blocks {
+            match block {
+                LayoutBlock::Paragraph(paragraph) => {
+                    if let Some((num_id, level)) = paragraph.list {
+                        if lists.last().is_some_and(|frame| frame.num_id != num_id) {
+                            lists.clear();
+                        }
+                        while lists.last().is_some_and(|frame| frame.level > level) {
+                            lists.pop();
+                        }
+                        if lists.is_empty() || lists.last().is_some_and(|frame| frame.level < level)
+                        {
+                            let parent = lists
+                                .last()
+                                .and_then(|frame| frame.last_item)
+                                .unwrap_or(root);
+                            let list = builder.add(StructureRole::List, Some(parent));
+                            lists.push(ListFrame {
+                                num_id,
+                                level,
+                                list,
+                                last_item: None,
+                            });
+                        }
+                        let frame = lists
+                            .last_mut()
+                            .expect("the requested list level has been allocated");
+                        let item = builder.add(StructureRole::ListItem, Some(frame.list));
+                        frame.last_item = Some(item);
+                        let paragraph_id = builder.add(StructureRole::Paragraph, Some(item));
+                        paragraph.structure_id = Some(paragraph_id);
+                        assign_paragraph_figures(&mut builder, paragraph, paragraph_id, item);
+                    } else {
+                        lists.clear();
+                        let role = paragraph
+                            .heading_level
+                            .map(|level| StructureRole::Heading(level.min(6) as u8))
+                            .unwrap_or(StructureRole::Paragraph);
+                        let paragraph_id = builder.add(role, Some(root));
+                        paragraph.structure_id = Some(paragraph_id);
+                        assign_paragraph_figures(&mut builder, paragraph, paragraph_id, root);
+                    }
+                }
+                LayoutBlock::Table(table) => {
+                    lists.clear();
+                    let table_id = builder.add(StructureRole::Table, Some(root));
+                    table.structure_id = Some(table_id);
+                    for row in &mut table.rows {
+                        let row_id = builder.add(StructureRole::TableRow, Some(table_id));
+                        row.structure_id = Some(row_id);
+                        for cell in &mut row.cells {
+                            let role = if row.is_header {
+                                StructureRole::TableHeaderCell
+                            } else {
+                                StructureRole::TableCell
+                            };
+                            let cell_id = builder.add(role, Some(row_id));
+                            cell.structure_id = Some(cell_id);
+                            for block in &mut cell.blocks {
+                                assign_cell_block_structure(&mut builder, block, cell_id);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
-    elements.retain(|element| {
-        !matches!(
-            element,
-            PositionedElement::Text(run)
-                if matches!(run.field_kind, Some(FieldKind::Target(_)))
-        )
-    });
+
+    DocumentStructure {
+        root,
+        nodes: builder.nodes,
+    }
+}
+
+fn assign_cell_block_structure(
+    builder: &mut StructureBuilder,
+    block: &mut table::CellBlock,
+    parent: StructureId,
+) {
+    match block {
+        table::CellBlock::Paragraph(paragraph) => {
+            let role = paragraph
+                .heading_level
+                .map(|level| StructureRole::Heading(level.min(6) as u8))
+                .unwrap_or(StructureRole::Paragraph);
+            let paragraph_id = builder.add(role, Some(parent));
+            paragraph.structure_id = Some(paragraph_id);
+            assign_paragraph_figures(builder, paragraph, paragraph_id, parent);
+        }
+        table::CellBlock::Table(table) => {
+            let table_id = builder.add(StructureRole::Table, Some(parent));
+            table.structure_id = Some(table_id);
+            for row in &mut table.rows {
+                let row_id = builder.add(StructureRole::TableRow, Some(table_id));
+                row.structure_id = Some(row_id);
+                for cell in &mut row.cells {
+                    let role = if row.is_header {
+                        StructureRole::TableHeaderCell
+                    } else {
+                        StructureRole::TableCell
+                    };
+                    let cell_id = builder.add(role, Some(row_id));
+                    cell.structure_id = Some(cell_id);
+                    for child in &mut cell.blocks {
+                        assign_cell_block_structure(builder, child, cell_id);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn assign_paragraph_figures(
+    builder: &mut StructureBuilder,
+    paragraph: &mut ParagraphBlock,
+    inline_parent: StructureId,
+    anchored_parent: StructureId,
+) {
+    for line in &mut paragraph.lines {
+        for item in &mut line.items {
+            let (alternate_text, structure_id) = match item {
+                LineItem::Figure {
+                    alternate_text,
+                    structure_id,
+                    ..
+                } => (alternate_text, structure_id),
+                _ => continue,
+            };
+            let figure = builder.add(StructureRole::Figure, Some(inline_parent));
+            builder.set_alternate_text(figure, alternate_text.clone());
+            *structure_id = Some(figure);
+        }
+    }
+    for drawing in &mut paragraph.anchored {
+        if let Some(text) = drawing
+            .alternate_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            let figure = builder.add(StructureRole::Figure, Some(anchored_parent));
+            builder.set_alternate_text(figure, text.to_owned());
+            drawing.structure_id = Some(figure);
+        }
+    }
 }
 
 /// Detect if a paragraph has a heading style, returning the level (1-9).
@@ -2965,10 +3216,68 @@ pub(crate) fn layout_paragraph_with_source(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
 ) -> Result<ParagraphBlock> {
+    layout_paragraph_with_source_and_table(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        source_node,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn layout_paragraph_with_source_in_table(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    source_node: Option<SourceNodeId>,
+    table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+) -> Result<ParagraphBlock> {
+    layout_paragraph_with_source_and_table(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        source_node,
+        table_properties,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_paragraph_with_source_and_table(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    source_node: Option<SourceNodeId>,
+    table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
 
-    let resolved_ppr = style_resolver::resolve_paragraph_properties(para_style_id, styles);
+    let resolved_ppr = style_resolver::resolve_paragraph_properties_in_table(
+        para_style_id,
+        styles,
+        table_properties,
+    );
 
     let mut effective_ppr = resolved_ppr;
 
@@ -3296,8 +3605,8 @@ pub(crate) fn layout_paragraph_with_source(
                     if let Some(ref inline) = drawing.inline {
                         let width = inline.extent_cx.to_pt();
                         let height = inline.extent_cy.to_pt();
-                        if let Some(relationship_id) = inline.chart_rel_id.as_deref() {
-                            inline_items.push(InlineItem::Group {
+                        let item = if let Some(relationship_id) = inline.chart_rel_id.as_deref() {
+                            InlineItem::Group {
                                 width,
                                 height,
                                 group: render_word_chart(
@@ -3308,13 +3617,27 @@ pub(crate) fn layout_paragraph_with_source(
                                     fm,
                                     diagnostics,
                                 )?,
-                            });
+                            }
                         } else {
-                            inline_items.push(InlineItem::Image {
+                            InlineItem::Image {
                                 width,
                                 height,
                                 media_id: media.id_for_relationship(&inline.embed_id),
+                            }
+                        };
+                        if let Some(alternate_text) = inline
+                            .description
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                        {
+                            inline_items.push(InlineItem::Figure {
+                                item: Box::new(item),
+                                alternate_text: alternate_text.to_owned(),
+                                structure_id: None,
                             });
+                        } else {
+                            inline_items.push(item);
                         }
                     }
                 }
@@ -3585,7 +3908,11 @@ pub(crate) fn layout_paragraph_with_source(
     // Line breaking
     let line_params = convert::line_break_params(&effective_ppr, available_width);
 
-    let legacy_empty_line = if attributed_empty_paragraph {
+    let legacy_empty_line = if attributed_empty_paragraph
+        && direct_ppr
+            .and_then(|properties| properties.rpr.as_ref())
+            .is_none()
+    {
         let mut lines = break_into_lines(&[], &line_params, fm)?;
         convert::restore_word_line_heights(&mut lines, &effective_ppr);
         lines.pop()
@@ -3618,6 +3945,7 @@ pub(crate) fn layout_paragraph_with_source(
     );
     result.has_visible_revision =
         input.revision_view == RevisionView::Tracked && paragraph_has_visible_revision(para);
+    result.list = list_num_id.map(|num_id| (num_id, list_ilvl.min(8) as u8));
     result.anchored =
         collect_anchored_drawings(para, styles, input, media, fm, num_state, diagnostics)?;
     // `inline_items` is finished with here and would otherwise be dropped, so
@@ -4018,6 +4346,8 @@ fn collect_anchored_drawings(
                 off_v: anchor.pos_v_offset.to_pt(),
                 width: anchor.extent_cx.to_pt(),
                 height: anchor.extent_cy.to_pt(),
+                alternate_text: anchor.description.clone(),
+                structure_id: None,
                 wrap: anchor.wrap,
                 dist_top: anchor.dist_t.to_pt(),
                 dist_bottom: anchor.dist_b.to_pt(),
@@ -4868,6 +5198,30 @@ mod tests {
     use oxml_layout::MediaId;
     use std::collections::HashMap;
 
+    fn compatibility_elements(elements: &[PositionedElement]) -> Vec<&PositionedElement> {
+        fn collect<'a>(
+            elements: &'a [PositionedElement],
+            flattened: &mut Vec<&'a PositionedElement>,
+        ) {
+            for element in elements {
+                match element {
+                    PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, flattened);
+                    }
+                    element => flattened.push(element),
+                }
+            }
+        }
+
+        let mut flattened = Vec::new();
+        collect(elements, &mut flattened);
+        flattened
+    }
+
+    fn compatibility_page_elements(page: &PageFrame) -> Vec<&PositionedElement> {
+        compatibility_elements(&page.elements)
+    }
+
     #[test]
     fn revision_views_project_wrapped_runs_in_document_order() {
         let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
@@ -5009,10 +5363,14 @@ mod tests {
             .expect("bundled fonts load")
             .layout(&input)
             .expect("revision hyperlink lays out");
-        assert!(output.pages[0].elements.iter().any(|element| {
-            matches!(element, PositionedElement::LinkAnnotation { url, .. }
+        assert!(
+            compatibility_page_elements(&output.pages[0])
+                .into_iter()
+                .any(|element| {
+                    matches!(element, PositionedElement::LinkAnnotation { url, .. }
                 if url == "https://example.com")
-        }));
+                })
+        );
     }
 
     #[test]
@@ -5220,26 +5578,23 @@ mod tests {
         assert!(output.pages.len() > 1);
         assert_eq!(accepted.pages.len(), output.pages.len());
         for (accepted_page, page) in accepted.pages.iter().zip(&output.pages) {
-            let accepted_text = accepted_page
-                .elements
-                .iter()
+            let accepted_text = compatibility_page_elements(accepted_page)
+                .into_iter()
                 .filter_map(|element| match element {
                     PositionedElement::Text(text) => Some(text),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let tracked_text = page
-                .elements
-                .iter()
+            let tracked_text = compatibility_page_elements(page)
+                .into_iter()
                 .filter_map(|element| match element {
                     PositionedElement::Text(text) => Some(text),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
             assert_eq!(accepted_text, tracked_text);
-            let bars = page
-                .elements
-                .iter()
+            let bars = compatibility_page_elements(page)
+                .into_iter()
                 .filter_map(|element| match element {
                     PositionedElement::Line {
                         start,
@@ -5272,8 +5627,8 @@ mod tests {
 
     fn page_change_bar_count(page: &PageFrame) -> usize {
         let geometry = PageGeometry::default();
-        page.elements
-            .iter()
+        compatibility_page_elements(page)
+            .into_iter()
             .filter(|element| {
                 matches!(element, PositionedElement::Line { start, end, width, .. }
                     if (*width - 1.5).abs() < f64::EPSILON
@@ -5334,9 +5689,8 @@ mod tests {
             .layout(&input)
             .expect("tracked note lays out");
         assert_eq!(page_change_bar_count(&output.pages[0]), 1);
-        let decoration_widths = output.pages[0]
-            .elements
-            .iter()
+        let decoration_widths = compatibility_page_elements(&output.pages[0])
+            .into_iter()
             .filter_map(|element| match element {
                 PositionedElement::Line {
                     start, end, width, ..
@@ -5468,8 +5822,8 @@ mod tests {
     }
 
     fn header_footer_page_text(page: &PageFrame) -> String {
-        page.elements
-            .iter()
+        compatibility_page_elements(page)
+            .into_iter()
             .filter_map(|element| match element {
                 PositionedElement::Text(text) => Some(text.text.as_str()),
                 _ => None,
@@ -5553,7 +5907,7 @@ mod tests {
         let header_source = warm
             .pages
             .iter()
-            .flat_map(|page| &page.elements)
+            .flat_map(|page| compatibility_page_elements(page))
             .filter_map(|element| match element {
                 PositionedElement::Text(text) if text.text.contains("header") => text.source,
                 _ => None,
@@ -5946,7 +6300,7 @@ mod tests {
             .layout
             .pages
             .iter()
-            .flat_map(|page| &page.elements)
+            .flat_map(|page| compatibility_page_elements(page))
             .filter_map(|element| match element {
                 PositionedElement::Text(run) if run.source.is_some() => Some(run),
                 _ => None,
@@ -6005,10 +6359,12 @@ mod tests {
                 .expect("deterministic layout");
             let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
             for run in result.layout.pages.iter().flat_map(|page| {
-                page.elements.iter().filter_map(|element| match element {
-                    PositionedElement::Text(run) if run.source.is_some() => Some(run),
-                    _ => None,
-                })
+                compatibility_page_elements(page)
+                    .into_iter()
+                    .filter_map(|element| match element {
+                        PositionedElement::Text(run) if run.source.is_some() => Some(run),
+                        _ => None,
+                    })
             }) {
                 let family = result
                     .layout
@@ -6566,6 +6922,14 @@ mod tests {
         table
     }
 
+    fn safe_nested_table(outer_text: &str, nested_text: &str) -> CT_Tbl {
+        let mut table = safe_table(outer_text);
+        table.rows[0].cells[0]
+            .content
+            .push(CellContent::Table(safe_table(nested_text)));
+        table
+    }
+
     fn assert_layout_results_equal(left: &LayoutResult, right: &LayoutResult) {
         assert_eq!(left.pages.len(), right.pages.len());
         for (left, right) in left.pages.iter().zip(&right.pages) {
@@ -6632,13 +6996,16 @@ mod tests {
     }
 
     #[test]
-    fn safe_tables_reuse_transactionally_and_with_bounds() {
+    fn dense_form_caches_are_transactional_bounded_and_exact() {
         let mut input = make_input_with_text("before table");
         input
             .document
             .body
             .content
-            .push(BodyContent::Table(safe_table("cached cell")));
+            .push(BodyContent::Table(safe_nested_table(
+                "cached outer cell",
+                "cached nested cell",
+            )));
         let mut engine = Engine::new_deterministic().expect("bundled fonts load");
         let cold = engine.layout(&input).expect("cold table layout");
         let warm = engine.layout(&input).expect("warm table layout");
@@ -6663,19 +7030,27 @@ mod tests {
         let sourced_runs = provenance_layout
             .pages
             .iter()
-            .flat_map(|page| &page.elements)
+            .flat_map(|page| compatibility_page_elements(page))
             .filter_map(|element| match element {
                 PositionedElement::Text(run) => Some((run.text.clone(), run.source)),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let cached_cell = sourced_runs
+        let cached_outer_cell = sourced_runs
             .iter()
-            .find_map(|(text, source)| text.starts_with("cached").then_some(*source).flatten())
-            .unwrap_or_else(|| panic!("cached cell keeps provenance: {sourced_runs:?}"));
+            .find_map(|(text, source)| (text == "outer ").then_some(*source).flatten())
+            .unwrap_or_else(|| panic!("cached outer cell keeps provenance: {sourced_runs:?}"));
         assert_eq!(
-            sources[cached_cell.node.get() as usize - 1].children,
+            sources[cached_outer_cell.node.get() as usize - 1].children,
             [2, 0, 0, 0]
+        );
+        let cached_nested_cell = sourced_runs
+            .iter()
+            .find_map(|(text, source)| (text == "nested ").then_some(*source).flatten())
+            .unwrap_or_else(|| panic!("cached nested cell keeps provenance: {sourced_runs:?}"));
+        assert_eq!(
+            sources[cached_nested_cell.node.get() as usize - 1].children,
+            [2, 0, 0, 1, 0, 0, 0]
         );
         assert_eq!(provenance_engine.table_cache_counts(), (1, 1));
 
@@ -6707,7 +7082,12 @@ mod tests {
         let mut edge =
             rdocx_oxml::borders::CT_BorderEdge::new(rdocx_oxml::shared::ST_Border::Single);
         edge.color = Some(color);
-        retained_border_block.borders = Some(rdocx_oxml::table::CT_TblBorders {
+        let table::CellBlock::Table(nested_block) =
+            &mut retained_border_block.rows[0].cells[0].blocks[1]
+        else {
+            panic!("cached form retains the nested table block");
+        };
+        nested_block.borders = Some(rdocx_oxml::table::CT_TblBorders {
             top: Some(edge),
             ..Default::default()
         });
@@ -7388,7 +7768,10 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(safe_table("staged before failure")));
+            .push(BodyContent::Table(safe_nested_table(
+                "staged outer before failure",
+                "staged nested before failure",
+            )));
         let mut later = CT_P::new();
         later
             .add_run("late font failure")
@@ -7770,10 +8153,12 @@ mod tests {
             .expect("layout with provenance");
         let mut seen = std::collections::HashSet::new();
         for run in result.layout.pages.iter().flat_map(|page| {
-            page.elements.iter().filter_map(|element| match element {
-                PositionedElement::Text(run) => Some(run),
-                _ => None,
-            })
+            compatibility_page_elements(page)
+                .into_iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => Some(run),
+                    _ => None,
+                })
         }) {
             let Some(span) = run.source else {
                 continue;
@@ -7833,10 +8218,12 @@ mod tests {
         let mut header_nodes = std::collections::HashSet::new();
         let mut header_runs = 0usize;
         for run in result.layout.pages.iter().flat_map(|page| {
-            page.elements.iter().filter_map(|element| match element {
-                PositionedElement::Text(run) => Some(run),
-                _ => None,
-            })
+            compatibility_page_elements(page)
+                .into_iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => Some(run),
+                    _ => None,
+                })
         }) {
             let Some(source) = run.source else {
                 continue;
@@ -7895,10 +8282,12 @@ mod tests {
             assert_eq!(result.revision_view, view);
             let mut selected = String::new();
             for run in result.layout.pages.iter().flat_map(|page| {
-                page.elements.iter().filter_map(|element| match element {
-                    PositionedElement::Text(run) => Some(run),
-                    _ => None,
-                })
+                compatibility_page_elements(page)
+                    .into_iter()
+                    .filter_map(|element| match element {
+                        PositionedElement::Text(run) => Some(run),
+                        _ => None,
+                    })
             }) {
                 let Some(span) = run.source else {
                     continue;
@@ -7972,7 +8361,7 @@ mod tests {
                 .layout
                 .pages
                 .iter()
-                .flat_map(|page| &page.elements)
+                .flat_map(|page| compatibility_page_elements(page))
                 .filter_map(|element| match element {
                     PositionedElement::Text(run) => run
                         .source
@@ -8072,7 +8461,7 @@ mod tests {
             .layout
             .pages
             .iter()
-            .flat_map(|page| &page.elements)
+            .flat_map(|page| compatibility_page_elements(page))
             .filter_map(|element| match element {
                 PositionedElement::Text(run) => Some(run),
                 _ => None,
@@ -8111,17 +8500,23 @@ mod tests {
 
     #[test]
     fn existing_low_level_layout_functions_keep_identical_output() {
+        fn clear_sources(elements: &mut [PositionedElement]) {
+            for element in elements {
+                match element {
+                    PositionedElement::Text(run) => run.source = None,
+                    PositionedElement::MarkedContent { children, .. } => clear_sources(children),
+                    _ => {}
+                }
+            }
+        }
+
         let input = make_input_with_text("compatibility 🚀 text that wraps ".repeat(30).as_str());
         let ordinary = crate::layout_document_deterministic(&input).expect("ordinary layout");
         let mut sourced = crate::layout_document_deterministic_with_provenance(&input)
             .expect("provenance layout")
             .into_layout_result();
         for page in &mut sourced.pages {
-            for element in &mut Arc::make_mut(page).elements {
-                if let PositionedElement::Text(run) = element {
-                    run.source = None;
-                }
-            }
+            clear_sources(&mut Arc::make_mut(page).elements);
         }
         assert_eq!(format!("{ordinary:?}"), format!("{sourced:?}"));
     }
@@ -8158,7 +8553,7 @@ mod tests {
                 .layout
                 .pages
                 .iter()
-                .flat_map(|page| &page.elements)
+                .flat_map(|page| compatibility_page_elements(page))
                 .filter_map(|element| match element {
                     PositionedElement::Text(run) if run.source.is_some() => Some(run),
                     _ => None,
@@ -8222,6 +8617,229 @@ mod tests {
         if let Ok(result) = result {
             assert_eq!(result.pages.len(), 1);
         }
+    }
+
+    #[test]
+    fn word_blocks_build_document_order_semantics_before_pagination() {
+        fn paragraph() -> ParagraphBlock {
+            block::build_paragraph_block(
+                Vec::new(),
+                0.0,
+                0.0,
+                None,
+                None,
+                0.0,
+                0.0,
+                None,
+                false,
+                false,
+                false,
+                true,
+            )
+        }
+
+        let mut heading = paragraph();
+        heading.heading_level = Some(1);
+        let mut list_item = paragraph();
+        list_item.list = Some((7, 0));
+        let mut nested_item = paragraph();
+        nested_item.list = Some((7, 1));
+        nested_item.lines = vec![oxml_layout::LayoutLine {
+            items: vec![LineItem::Figure {
+                item: Box::new(LineItem::Group {
+                    width: 10.0,
+                    height: 10.0,
+                    group: GroupElement {
+                        transform: oxml_layout::Transform::IDENTITY,
+                        clip: None,
+                        opacity: 1.0,
+                        effects: Vec::new(),
+                        children: vec![PositionedElement::FilledRect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 10.0,
+                                height: 10.0,
+                            },
+                            color: Color::BLACK,
+                        }],
+                    },
+                }),
+                alternate_text: "Revenue by quarter".to_owned(),
+                structure_id: None,
+            }],
+            width: 10.0,
+            ascent: 10.0,
+            descent: 0.0,
+            line_gap: 0.0,
+            height: 10.0,
+            indent_left: 0.0,
+            available_width: 468.0,
+            is_last: true,
+        }];
+        let cell = |is_first_row: bool| table::TableCell {
+            structure_id: None,
+            blocks: vec![table::CellBlock::Paragraph(paragraph())],
+            width: 100.0,
+            height: 12.0,
+            grid_span: 1,
+            is_vmerge_continue: false,
+            starts_vmerge: false,
+            merged_height: 12.0,
+            merge_with_below: false,
+            clip_content: false,
+            col_index: 0,
+            borders: None,
+            shading: None,
+            margin_left: 0.0,
+            margin_right: 0.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            is_first_row,
+            is_last_row: !is_first_row,
+            v_align: None,
+        };
+        let table = table::TableBlock {
+            structure_id: None,
+            col_widths: vec![100.0],
+            rows: vec![
+                table::TableRow {
+                    structure_id: None,
+                    cells: vec![cell(true)],
+                    height: 12.0,
+                    is_header: true,
+                },
+                table::TableRow {
+                    structure_id: None,
+                    cells: vec![cell(false)],
+                    height: 12.0,
+                    is_header: false,
+                },
+            ],
+            header_row_indices: vec![0],
+            table_width: 100.0,
+            table_indent: 0.0,
+            borders: None,
+        };
+        let mut sections = [paginator::Section {
+            blocks: vec![
+                LayoutBlock::Paragraph(heading),
+                LayoutBlock::Paragraph(list_item),
+                LayoutBlock::Paragraph(nested_item),
+                LayoutBlock::Table(table),
+            ],
+            geometry: PageGeometry::default(),
+            header_footer: None,
+            title_pg: false,
+            page_number_start: None,
+        }];
+
+        let structure = assign_document_structure(&mut sections);
+        let roles = structure
+            .nodes
+            .iter()
+            .map(|node| node.role)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            [
+                StructureRole::Document,
+                StructureRole::Heading(1),
+                StructureRole::List,
+                StructureRole::ListItem,
+                StructureRole::Paragraph,
+                StructureRole::List,
+                StructureRole::ListItem,
+                StructureRole::Paragraph,
+                StructureRole::Figure,
+                StructureRole::Table,
+                StructureRole::TableRow,
+                StructureRole::TableHeaderCell,
+                StructureRole::Paragraph,
+                StructureRole::TableRow,
+                StructureRole::TableCell,
+                StructureRole::Paragraph,
+            ]
+        );
+        assert_eq!(
+            structure.nodes[8].alternate_text.as_deref(),
+            Some("Revenue by quarter")
+        );
+        assert_eq!(structure.nodes[5].children, [structure.nodes[6].id]);
+        assert_eq!(
+            structure.nodes[9].children,
+            [structure.nodes[10].id, structure.nodes[13].id]
+        );
+    }
+
+    #[test]
+    fn behind_document_figure_follows_its_source_paragraph_in_structure() {
+        let mut paragraph = block::build_paragraph_block(
+            Vec::new(),
+            0.0,
+            0.0,
+            None,
+            None,
+            0.0,
+            0.0,
+            None,
+            false,
+            false,
+            false,
+            true,
+        );
+        paragraph.anchored.push(block::AnchoredDrawing {
+            behind_doc: true,
+            rel_h: rdocx_oxml::drawing::ST_RelativeFromH::Page,
+            off_h: 0.0,
+            rel_v: rdocx_oxml::drawing::ST_RelativeFromV::Page,
+            off_v: 0.0,
+            width: 10.0,
+            height: 10.0,
+            wrap: rdocx_oxml::drawing::WrapType::None,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+            align_h: None,
+            align_v: None,
+            content: block::AnchoredContent::Image {
+                media_id: MediaId(1),
+            },
+            alternate_text: Some("Background diagram".to_owned()),
+            structure_id: None,
+        });
+        let mut sections = [paginator::Section {
+            blocks: vec![LayoutBlock::Paragraph(paragraph)],
+            geometry: PageGeometry::default(),
+            header_footer: None,
+            title_pg: false,
+            page_number_start: None,
+        }];
+
+        let structure = assign_document_structure(&mut sections);
+
+        assert_eq!(
+            structure
+                .nodes
+                .iter()
+                .map(|node| node.role)
+                .collect::<Vec<_>>(),
+            [
+                StructureRole::Document,
+                StructureRole::Paragraph,
+                StructureRole::Figure,
+            ]
+        );
+        assert_eq!(
+            structure.nodes[0].children,
+            [structure.nodes[1].id, structure.nodes[2].id]
+        );
+        assert!(structure.nodes[1].children.is_empty());
+        assert_eq!(
+            structure.nodes[2].alternate_text.as_deref(),
+            Some("Background diagram")
+        );
     }
 
     #[test]
@@ -8322,6 +8940,8 @@ mod tests {
             content: block::AnchoredContent::Image {
                 media_id: anchor_id,
             },
+            alternate_text: None,
+            structure_id: None,
         });
         let sections = [paginator::Section {
             blocks: vec![LayoutBlock::Paragraph(paragraph)],
@@ -8337,9 +8957,8 @@ mod tests {
             &media,
             &NoteRegistry::default(),
         );
-        let images = pages[0]
-            .elements
-            .iter()
+        let images = compatibility_page_elements(&pages[0])
+            .into_iter()
             .filter_map(|element| match element {
                 PositionedElement::Image {
                     data,
@@ -8663,8 +9282,8 @@ mod tests {
     /// The x origin of every glyph run sitting below the footnote separator,
     /// in the order the renderer emitted them. The first is the note marker.
     fn footnote_glyph_x(page: &oxml_layout::output::PageFrame) -> Vec<f64> {
-        let separator_y = page
-            .elements
+        let elements = compatibility_page_elements(page);
+        let separator_y = elements
             .iter()
             .find_map(|element| match element {
                 PositionedElement::Line { start, .. } => Some(start.y),
@@ -8672,7 +9291,7 @@ mod tests {
             })
             .expect("a page with a footnote draws a separator line");
 
-        page.elements
+        elements
             .iter()
             .filter_map(|element| match element {
                 PositionedElement::Text(run) if run.origin.y > separator_y => Some(run.origin.x),
@@ -8735,8 +9354,8 @@ mod tests {
         let geometry = sect_pr_to_geometry(&CT_SectPr::default_letter());
         let right_margin = geometry.page_width - geometry.margin_right;
 
-        let separator_y = page
-            .elements
+        let elements = compatibility_page_elements(page);
+        let separator_y = elements
             .iter()
             .find_map(|element| match element {
                 PositionedElement::Line { start, .. } => Some(start.y),
@@ -8746,7 +9365,7 @@ mod tests {
 
         let mut wrapped = false;
         let mut first_y = None;
-        for element in &page.elements {
+        for element in elements {
             let PositionedElement::Text(run) = element else {
                 continue;
             };
@@ -8840,8 +9459,8 @@ mod tests {
         let output = engine.layout(&input).expect("layout succeeds");
         let page = &output.pages[0];
 
-        let separator_y = page
-            .elements
+        let elements = compatibility_page_elements(page);
+        let separator_y = elements
             .iter()
             .find_map(|element| match element {
                 PositionedElement::Line { start, .. } => Some(start.y),
@@ -8851,8 +9470,7 @@ mod tests {
 
         // Gaps between consecutive note segments must equal the width of the
         // segment that precedes them, which is what the body path advances by.
-        let notes: Vec<&oxml_layout::GlyphRun> = page
-            .elements
+        let notes: Vec<&oxml_layout::GlyphRun> = elements
             .iter()
             .filter_map(|element| match element {
                 PositionedElement::Text(run) if run.origin.y > separator_y => Some(run),
@@ -8945,23 +9563,24 @@ mod tests {
     fn split_at_separator(
         page: &oxml_layout::output::PageFrame,
     ) -> Option<(f64, Vec<f64>, Vec<String>)> {
-        let separator_index = page.elements.iter().position(|element| {
+        let elements = compatibility_page_elements(page);
+        let separator_index = elements.iter().position(|element| {
             matches!(element, PositionedElement::Line { width, .. } if (*width - 0.5).abs() < 0.001)
         })?;
-        let PositionedElement::Line { start, end, .. } = &page.elements[separator_index] else {
+        let PositionedElement::Line { start, end, .. } = elements[separator_index] else {
             return None;
         };
         let separator_y = start.y;
         let separator_width = end.x - start.x;
 
-        let body_ys: Vec<f64> = page.elements[..separator_index]
+        let body_ys: Vec<f64> = elements[..separator_index]
             .iter()
             .filter_map(|element| match element {
                 PositionedElement::Text(run) => Some(run.origin.y),
                 _ => None,
             })
             .collect();
-        let note_text: Vec<String> = page.elements[separator_index + 1..]
+        let note_text: Vec<String> = elements[separator_index + 1..]
             .iter()
             .filter_map(|element| match element {
                 PositionedElement::Text(run) => Some(run.text.clone()),
@@ -8974,12 +9593,14 @@ mod tests {
     }
 
     fn separator_y_of(page: &oxml_layout::output::PageFrame) -> Option<f64> {
-        page.elements.iter().find_map(|element| match element {
-            PositionedElement::Line { start, width, .. } if (*width - 0.5).abs() < 0.001 => {
-                Some(start.y)
-            }
-            _ => None,
-        })
+        compatibility_page_elements(page)
+            .into_iter()
+            .find_map(|element| match element {
+                PositionedElement::Line { start, width, .. } if (*width - 0.5).abs() < 0.001 => {
+                    Some(start.y)
+                }
+                _ => None,
+            })
     }
 
     #[test]
@@ -9015,9 +9636,8 @@ mod tests {
         let output = engine.layout(&input).expect("layout succeeds");
         let page = &output.pages[0];
 
-        let separators = page
-            .elements
-            .iter()
+        let separators = compatibility_page_elements(page)
+            .into_iter()
             .filter(|e| matches!(e, PositionedElement::Line { width, .. } if (*width - 0.5).abs() < 0.001))
             .count();
         assert_eq!(separators, 1, "one note area, so one separator");
@@ -9149,13 +9769,15 @@ mod tests {
             let output = engine.layout(&input).expect("layout succeeds");
 
             let reference_page = output.pages.iter().position(|page| {
-                page.elements.iter().any(|element| {
-                    matches!(element, PositionedElement::Text(run)
-                    if run.note == Some(oxml_layout::NoteRef {
-                        stream: oxml_layout::NoteStream::Footnote,
-                        id: 1,
-                    }))
-                })
+                compatibility_page_elements(page)
+                    .into_iter()
+                    .any(|element| {
+                        matches!(element, PositionedElement::Text(run)
+                        if run.note == Some(oxml_layout::NoteRef {
+                            stream: oxml_layout::NoteStream::Footnote,
+                            id: 1,
+                        }))
+                    })
             });
             let note_page = output
                 .pages
@@ -9231,8 +9853,8 @@ mod tests {
     }
 
     fn page_text(page: &oxml_layout::output::PageFrame) -> String {
-        page.elements
-            .iter()
+        compatibility_page_elements(page)
+            .into_iter()
             .filter_map(|element| match element {
                 PositionedElement::Text(run) => Some(run.text.as_str()),
                 _ => None,
@@ -9397,8 +10019,8 @@ mod tests {
         // Body pagination is untouched.
         for (index, plain_page) in plain.pages.iter().enumerate() {
             let body_lines = |page: &oxml_layout::output::PageFrame| {
-                page.elements
-                    .iter()
+                compatibility_page_elements(page)
+                    .into_iter()
                     .filter(|element| {
                         matches!(element, PositionedElement::Text(run)
                             if run.text.starts_with("occupies"))
@@ -9497,7 +10119,7 @@ mod tests {
     /// The x origin and right edge of every body text run, by line.
     fn text_extents(page: &oxml_layout::output::PageFrame) -> Vec<(f64, f64)> {
         let mut by_line: Vec<(f64, f64, f64)> = Vec::new();
-        for element in &page.elements {
+        for element in compatibility_page_elements(page) {
             let PositionedElement::Text(run) = element else {
                 continue;
             };
@@ -9611,9 +10233,8 @@ mod tests {
 
         // The drawing sits at the paragraph top, so text starts below its
         // bottom edge plus distB.
-        let first_baseline = output.pages[0]
-            .elements
-            .iter()
+        let first_baseline = compatibility_page_elements(&output.pages[0])
+            .into_iter()
             .find_map(|element| match element {
                 PositionedElement::Text(run) => Some(run.origin.y),
                 _ => None,
@@ -9806,7 +10427,7 @@ mod tests {
 
         assert!(output.pages.len() > 1, "the paragraph must split");
         for (index, page) in output.pages.iter().enumerate() {
-            for element in &page.elements {
+            for element in compatibility_page_elements(page) {
                 let PositionedElement::Text(run) = element else {
                     continue;
                 };
@@ -9913,9 +10534,8 @@ mod tests {
         let Some(separator_y) = separator_y_of(page) else {
             return 0;
         };
-        let mut baselines: Vec<f64> = page
-            .elements
-            .iter()
+        let mut baselines: Vec<f64> = compatibility_page_elements(page)
+            .into_iter()
             .filter_map(|element| match element {
                 PositionedElement::Text(run) if run.origin.y > separator_y => Some(run.origin.y),
                 _ => None,
@@ -9992,8 +10612,8 @@ mod tests {
             output.pages[2..]
                 .iter()
                 .map(|page| {
-                    page.elements
-                        .iter()
+                    compatibility_page_elements(page)
+                        .into_iter()
                         .filter(|element| matches!(element, PositionedElement::Text(_)))
                         .count()
                 })

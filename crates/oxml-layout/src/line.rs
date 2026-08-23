@@ -4,7 +4,7 @@
 
 use crate::error::Result;
 use crate::font::FontManager;
-use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId, SourceSpan};
+use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId, SourceSpan, StructureId};
 
 /// A tab stop positioned in typographic points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,6 +95,12 @@ pub enum InlineItem {
         height: f64,
         group: GroupElement,
     },
+    /// An informative drawing carried to a semantic output container.
+    Figure {
+        item: Box<InlineItem>,
+        alternate_text: String,
+        structure_id: Option<StructureId>,
+    },
     /// A numbering marker (rendered before the first line).
     Marker(TextSegment),
 }
@@ -176,6 +182,12 @@ pub enum LineItem {
         height: f64,
         group: GroupElement,
     },
+    /// An informative drawing carried to a semantic output container.
+    Figure {
+        item: Box<LineItem>,
+        alternate_text: String,
+        structure_id: Option<StructureId>,
+    },
     Marker(TextSegment),
 }
 
@@ -186,6 +198,7 @@ impl LineItem {
             LineItem::Tab { width, .. } => *width,
             LineItem::Image { width, .. } => *width,
             LineItem::Group { width, .. } => *width,
+            LineItem::Figure { item, .. } => item.width(),
             LineItem::Marker(seg) => seg.width,
         }
     }
@@ -534,7 +547,10 @@ fn build_breakable_segments(
                     segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
                 }
             }
-            InlineItem::Marker(_) | InlineItem::Image { .. } | InlineItem::Group { .. } => {
+            InlineItem::Marker(_)
+            | InlineItem::Image { .. }
+            | InlineItem::Group { .. }
+            | InlineItem::Figure { .. } => {
                 current_group.push(item.clone());
             }
         }
@@ -665,6 +681,7 @@ fn inline_item_width(item: &InlineItem) -> f64 {
         InlineItem::Tab => 36.0, // Default tab width, will be resolved
         InlineItem::Image { width, .. } => *width,
         InlineItem::Group { width, .. } => *width,
+        InlineItem::Figure { item, .. } => inline_item_width(item),
         InlineItem::Marker(seg) => seg.width,
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => 0.0,
     }
@@ -690,6 +707,7 @@ fn item_metrics(item: &InlineItem) -> (f64, f64, f64, f64, f64) {
         InlineItem::Tab => (36.0, 0.0, 0.0, 0.0, 0.0),
         InlineItem::Image { width, height, .. } => (*width, *height, 0.0, *height, 0.0),
         InlineItem::Group { width, height, .. } => (*width, *height, 0.0, *height, 0.0),
+        InlineItem::Figure { item, .. } => item_metrics(item),
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => {
             (0.0, 0.0, 0.0, 0.0, 0.0)
         }
@@ -731,6 +749,17 @@ fn inline_to_line_item(
             width: *width,
             height: *height,
             group: group.clone(),
+        },
+        InlineItem::Figure {
+            item,
+            alternate_text,
+            structure_id,
+        } => LineItem::Figure {
+            item: Box::new(inline_to_line_item(
+                item, current_x, tab_stops, fm, font_ctx,
+            )),
+            alternate_text: alternate_text.clone(),
+            structure_id: *structure_id,
         },
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => LineItem::Tab {
             width: 0.0,
@@ -1449,6 +1478,7 @@ mod tests {
             width,
             height,
             group: actual,
+            ..
         } = &lines[0].items[0]
         else {
             panic!("inline group should remain a group line item");

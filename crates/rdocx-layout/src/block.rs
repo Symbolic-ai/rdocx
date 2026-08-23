@@ -1,7 +1,9 @@
 //! Block-level layout: paragraphs and tables as positioned blocks.
 
 use crate::table::TableBlock;
-use oxml_layout::{Align, Color, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId};
+use oxml_layout::{
+    Align, Color, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId, StructureId,
+};
 use rdocx_oxml::borders::CT_PBdr;
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV, WrapType,
@@ -43,6 +45,10 @@ pub struct AnchoredDrawing {
     pub align_v: Option<AnchorAlignV>,
     /// What the drawing actually holds.
     pub content: AnchoredContent,
+    /// Source description for an informative drawing.
+    pub alternate_text: Option<String>,
+    /// Logical figure node allocated before pagination.
+    pub structure_id: Option<StructureId>,
 }
 
 /// The drawable content of an anchored drawing.
@@ -210,6 +216,10 @@ pub struct ParagraphBlock {
     pub heading_level: Option<u32>,
     /// Heading text for outline generation.
     pub heading_text: Option<String>,
+    /// Numbering instance and zero-based nesting level for semantic lists.
+    pub list: Option<(u32, u8)>,
+    /// Logical paragraph node allocated before pagination.
+    pub structure_id: Option<StructureId>,
     /// Inputs for re-breaking this paragraph around a floating drawing.
     ///
     /// `None` unless the document holds a drawing that wraps.
@@ -268,6 +278,8 @@ pub fn build_paragraph_block(
         widow_control,
         heading_level: None,
         heading_text: None,
+        list: None,
+        structure_id: None,
         reflow: None,
         content_offset_top: 0.0,
     }
@@ -319,6 +331,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };

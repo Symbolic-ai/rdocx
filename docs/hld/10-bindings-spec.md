@@ -201,6 +201,27 @@ mutation for a larger value. `Document::set_list_level` can redefine an
 existing level without rebuilding the document. A rejected redefinition is
 side-effect free.
 
+Tagged PDF is an implementation detail of the existing deterministic and
+normal PDF methods. Word layout now carries source semantics to the shared PDF
+backend, but the native method signatures, returned byte type, binding method
+names, and error contracts do not change. Python, WASM, and CLI consumers gain
+no semantic-tree API. Presentation PDF methods continue to pass an untagged
+layout with no structure tree.
+
+Native Rust callers can request `PdfA2b` or `PdfA3b` through
+`Document::to_pdfa_deterministic` and
+`Presentation::to_pdfa_deterministic`. Both methods return the PDF backend's
+typed conformance error through the facade error enum. These methods are
+additive on the native pre-1.0 facades. Python, WASM, and CLI method names and
+dependency selections remain unchanged.
+
+The pre-1.0 shared layout API adds semantic types, `MarkedContent`, and
+informative `Figure` variants only through existing non-exhaustive enums.
+Existing `InlineItem` and `LineItem` image and group variant fields stay
+unchanged, so direct constructors retain source compatibility. The new figure
+variant lowers to the one backend-neutral marked-content carrier rather than
+creating a second PDF ownership representation.
+
 When native callers enable the default-off `agile-encryption` feature,
 `Document::open_encrypted`, `Document::from_encrypted_bytes`, and the bounded
 bytes variant open password-protected OOXML through the shared package layer.
@@ -213,9 +234,13 @@ their API and dependency graphs remain unchanged.
 
 When native callers enable the default-off `digital-signatures` feature,
 `Document::verify_signatures` directly returns the shared package verification
-reports. The additive API distinguishes cryptographic verification and
-complete declared coverage from certificate-chain trust. It does not expand
-Python, WASM, or CLI surfaces and those dependency graphs remain unchanged.
+reports. `Document::sign` accepts PKCS#8 private-key DER and X.509 certificate
+DER on native targets. It flushes typed state into a staged document, asks the
+shared package layer to sign and verify the complete graph, and commits only
+the verified candidate. The additive APIs distinguish cryptographic validity
+and complete declared coverage from certificate-chain trust. They do not
+expand Python, WASM, or CLI surfaces and those dependency graphs remain
+unchanged.
 
 Native callers rebuilding one Word document from another can call
 `Document::transfer_reusable_layout_from`. The method moves the source's normal
@@ -243,6 +268,14 @@ part-local mutation. These additions do not implicitly expand the Python,
 WASM, or CLI surfaces. Those consumers continue to own the same
 package-preserving `Document`, so native comment edits remain intact when a
 binding subsequently saves it.
+
+Native Word callers remove one exact non-empty literal with
+`Document::redact_text`. The returned `RedactionReport` separates Word story,
+metadata, chart-cache, and embedded-workbook replacement counts. The method is
+additive before 1.0 and commits only a reopened, relationship-valid candidate
+whose inflated outer and nested package entries contain no UTF-8 or UTF-16LE
+trace. Python, WASM, and CLI surfaces gain no redaction method and continue to
+preserve a document already redacted through the native facade.
 
 Native Word callers use `Document::bookmarks` for immutable `BookmarkRef`
 summaries and `Document::add_bookmark` for atomic insertion over the existing
@@ -331,6 +364,21 @@ facade reads a typed projection while serialization continues to use the
 captured raw WordprocessingML subtree. This is an additive native Rust API.
 Python, WASM, and CLI surfaces do not gain revision methods, and their existing
 load and save paths preserve the revision XML.
+
+Native Word paragraph handles expose
+`Paragraph::add_run_inheriting_mark(&mut self, text)`. The method appends one
+run whose direct run properties clone the paragraph mark properties, then
+returns the ordinary mutable run handle. It is additive on the pre-1.0 Rust
+facade. Python, WASM, and CLI surfaces gain no method and retain their existing
+package-preserving behavior.
+
+The low-level `rdocx-layout::TableCell` payload is source-ordered
+`Vec<CellBlock>`, with the present paragraph and recursive table variants. The
+additional merge-span and cell-margin fields expose renderer input rather than
+a second authoring surface. `rdocx-oxml::CT_Style` similarly exposes preserved
+table-property bytes, typed table properties, conditional table-style
+projections, and schema-positioned extra XML. These are intentional pre-1.0
+Rust source breaks. Existing facade and WASM method names do not change.
 
 Native Word callers inspect document protection through the borrowed
 `Document::document_protection` accessor. `ProtectionMode` distinguishes
@@ -497,6 +545,20 @@ honest. Do not auto-generate them from PyO3.
 **Distribution names `rdocx` and `rpptx`**, import names identical. The binding
 crates are `publish = false`, because a cdylib has no business on crates.io.
 
+The Rust package trains remain separate. The exact 15-package shared OOXML and
+PowerPoint crates.io family is published at 0.5.0 from the annotated
+`rpptx-v0.5.0` tag at reviewed SHA
+`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The stable workspace and exact
+seven-package Word crates.io family are published at 0.9.0 from the annotated
+`v0.9.0` tag at reviewed SHA
+`e27e519c94c90cd5be340fe5bf8e431cf542ac51`. Both Python project versions and
+`rdocx-wasm` track the stable workspace version, but every binding and WASM
+crate remains unpublished on crates.io. The incubating preparation group
+places the unpublished `rpptx-wasm` crate at 0.5.0. Neither preparation gives
+binding, WASM, npm, or Python package publication authority. Every later
+release still requires its selected-family gate and a separate final approval
+at the reviewed SHA.
+
 ## CI
 
 `wheels.yml` on a **`py-v*` tag namespace**, separate from `publish.yml` on
@@ -556,6 +618,9 @@ The `system-fonts` feature is default-on in `rdocx-layout` and `rdocx`, which
 preserves native behavior. `rdocx-wasm` disables `rdocx` defaults, while the
 bundled font data remains unconditional. The wasm32 graph therefore excludes
 host font discovery without inventing a second bundled-font feature.
+The crate-local sRGB2014 profile is compiled into `oxml-pdf` and introduces no
+host API or runtime dependency. The native PDF/A methods are not exported by
+either WASM wrapper.
 
 The R-class regression constructs a document with an image, header, and
 numbering, then checks the complete part, relationship, and content-type graph

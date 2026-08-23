@@ -4,6 +4,136 @@
 
 No unreleased changes.
 
+## v0.9.0
+
+### Highlights
+
+The stable Word family adds native package encryption and signing, accessible
+and archival PDF output, exact redaction, and editor-scale layout reuse. It
+also corrects duplicated shaped text, header and footer delivery, and dense
+form table layout while retaining unsupported OOXML.
+
+### Added
+
+- Open and write Microsoft Agile encrypted OOXML packages with authenticated
+  AES-256 and SHA-512 processing, bounded inputs, and failure-atomic output.
+- Verify and create RSA-SHA256 OPC digital signatures with exact declared part
+  and relationship coverage. Certificate-chain trust remains caller policy.
+- Emit tagged PDF structure with deterministic marked-content ownership, and
+  emit PDF/A-2b or PDF/A-3b with an output intent and conformance metadata.
+- Remove exact non-empty literals from Word stories, metadata, chart caches,
+  and embedded workbooks through a transactional native redaction API.
+- Share immutable font bytes and page frames, transfer reusable layout work
+  only across an exact checked context, restart pagination at safe boundaries,
+  and retain bounded transactional caches. The hardened equivalent was shaped
+  by [Issue 39](https://github.com/tensorbee/rdocx/issues/39),
+  [PR 40](https://github.com/tensorbee/rdocx/pull/40), and
+  [PR 41](https://github.com/tensorbee/rdocx/pull/41).
+
+### Fixed
+
+- Preserve default, first-page, even-page, inherited, and multi-section header
+  and footer text through reopened layout and deterministic PDF output, closing
+  [Issue 15](https://github.com/tensorbee/rdocx/issues/15).
+- Reshape final Unicode break segments exactly, so spaces, hyphens, ligatures,
+  combining text, and CJK do not duplicate source text or glyphs. This resolves
+  [Issue 23](https://github.com/tensorbee/rdocx/issues/23).
+- Keep nested tables recursive and honor grid-span-aware vertical merges,
+  exact and minimum row rules, table-style cascades, paragraph-mark metrics,
+  outer border fallbacks, and cell-relative anchors. This hardened equivalent
+  addresses [Issue 42](https://github.com/tensorbee/rdocx/issues/42) and
+  [PR 43](https://github.com/tensorbee/rdocx/pull/43).
+
+### Compatibility
+
+The exact seven-package stable crates.io family moves together from 0.8.0 to
+0.9.0. This is an intentional pre-1.0 Rust source boundary. `FontData.data`
+now uses `Arc<[u8]>`, `LayoutResult.pages` now uses
+`Vec<Arc<PageFrame>>`, table cells retain ordered `CellBlock` values, and
+typed table styles expose additional preserved and conditional properties.
+Callers that construct these low-level values must update their literals or
+use the provided constructors.
+
+The `agile-encryption` and `digital-signatures` features remain default-off.
+The high-level native additions do not expand Python, WASM, or CLI method
+surfaces, and those packages remain unpublished on crates.io. The separate
+shared OOXML and PowerPoint family remains at its published 0.5.0 boundary.
+
+### Contributors
+
+Atul Sharma maintained the release. Thanks to `@mantissaman` for the
+authenticated header and footer report in
+[Issue 15](https://github.com/tensorbee/rdocx/issues/15) and the duplicated
+text report in [Issue 23](https://github.com/tensorbee/rdocx/issues/23).
+Thanks to `@emptinessform` for the break-opportunity diagnosis on Issue 23,
+the editor profiling and reference implementations in
+[Issue 39](https://github.com/tensorbee/rdocx/issues/39),
+[PR 40](https://github.com/tensorbee/rdocx/pull/40), and
+[PR 41](https://github.com/tensorbee/rdocx/pull/41), and the dense-form report
+and reference implementation in
+[Issue 42](https://github.com/tensorbee/rdocx/issues/42) and
+[PR 43](https://github.com/tensorbee/rdocx/pull/43). Those contributions
+landed directly where noted or through the hardened equivalents described
+above.
+
+## rpptx-v0.5.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family adds native package encryption and
+digital signatures, accessible PDF structure, and deterministic PDF/A output.
+Layout results also retain their largest immutable page and font payloads by
+shared ownership, avoiding deep copies when results are cloned or retained.
+
+### Added
+
+- Read and write Microsoft Agile encrypted OOXML packages with authenticated
+  AES-256 and SHA-512 output, bounded input processing, and failure-atomic
+  publication.
+- Verify and create RSA-SHA256 OPC digital signatures with exact declared part
+  and relationship coverage. Certificate trust remains caller policy.
+- Emit tagged PDF structure with deterministic marked-content ownership,
+  document language, titles, outlines, links, and structure destinations.
+- Emit deterministic PDF/A-2b and PDF/A-3b files with an output intent,
+  conformance metadata, embedded-file relationship rules, and validator-backed
+  fixtures.
+- Share immutable `FontData` bytes and completed `PageFrame` values through
+  `Arc`, so cloning or retaining a layout result keeps those payloads shared.
+  This ownership boundary was shaped by
+  [Issue 39](https://github.com/tensorbee/rdocx/issues/39),
+  [PR 40](https://github.com/tensorbee/rdocx/pull/40), and
+  [PR 41](https://github.com/tensorbee/rdocx/pull/41).
+
+### Fixed
+
+There are no user-facing defect corrections unique to the incubating family in
+this release. Word-only rendering and document-editing corrections remain on
+the separate stable release train.
+
+### Compatibility
+
+All 15 crates.io packages in the shared OOXML and PowerPoint family move
+together from 0.4.0 to 0.5.0. This is an intentional pre-1.0 Rust source
+boundary. `FontData.data` now uses `Arc<[u8]>`, and `LayoutResult.pages` now
+uses `Vec<Arc<PageFrame>>`. Callers that construct those low-level values must
+wrap owned data with `Arc::from` or `.into()`. Callers that only inspect values
+can continue through deref coercion or `.as_ref()`.
+
+The `agile-encryption` and `digital-signatures` package capabilities remain
+default-off. Existing PowerPoint facade behavior requires no migration.
+`rpptx-wasm` is prepared at 0.5.0 but remains unpublished on crates.io.
+
+### Contributors
+
+Atul Sharma maintained the release. Thanks to `@emptinessform` for the
+authenticated editor profiling and reference implementations in
+[Issue 39](https://github.com/tensorbee/rdocx/issues/39),
+[PR 40](https://github.com/tensorbee/rdocx/pull/40), and
+[PR 41](https://github.com/tensorbee/rdocx/pull/41). Their font-copy and
+page-copy measurements informed the shared ownership surface that landed as a
+hardened equivalent. The format-specific transfer, pagination, and cache work
+remains on the stable release train.
+
 ## v0.8.0
 
 ### Highlights

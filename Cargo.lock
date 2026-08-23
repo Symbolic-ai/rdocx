@@ -694,7 +694,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "oxml-chart"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -708,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-cli-support"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde_json",
  "thiserror",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "quick-xml",
  "thiserror",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-drawing"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "oxml-core",
  "oxml-opc",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-layout"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "fontdb",
  "harfrust",
@@ -744,11 +744,11 @@ dependencies = [
 
 [[package]]
 name = "oxml-media"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "oxml-opc"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes",
  "base64",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-pdf"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-layout",
@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-py-support"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "oxml-core",
  "smallvec",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-sml"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "oxml-opc",
  "quick-xml",
@@ -935,7 +935,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rdocx"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-chart",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "rdocx-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "clap",
  "oxml-cli-support",
@@ -970,14 +970,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-html"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "rdocx-oxml",
 ]
 
 [[package]]
 name = "rdocx-layout"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "oxml-chart",
  "oxml-drawing",
@@ -987,14 +987,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-opc"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "oxml-opc",
 ]
 
 [[package]]
 name = "rdocx-oxml"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "itoa",
  "oxml-core",
@@ -1006,14 +1006,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-pdf"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "oxml-pdf",
 ]
 
 [[package]]
 name = "rdocx-py"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "oxml-layout",
  "oxml-py-support",
@@ -1024,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "rdocx-wasm"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "js-sys",
  "oxml-opc",
@@ -1105,7 +1105,7 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rpptx"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-chart",
@@ -1124,14 +1124,14 @@ dependencies = [
 
 [[package]]
 name = "rpptx-chart"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "oxml-chart",
 ]
 
 [[package]]
 name = "rpptx-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "oxml-cli-support",
@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-layout"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "oxml-chart",
  "oxml-drawing",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-oxml"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-py"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "oxml-py-support",
  "pyo3",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-render"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "oxml-drawing",
  "oxml-layout",
@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-wasm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "js-sys",
  "oxml-opc",

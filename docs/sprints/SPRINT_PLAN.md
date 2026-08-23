@@ -915,33 +915,48 @@ context identity, transactional publication, and bounded memory. The sprint
 does not import unchecked engine setters, hash-authoritative reuse, or
 unbounded caches from the draft branches.
 
-#### Sprint S53, Signatures and accessible PDF
+#### Sprint S53, Security milestone and community release
 
-**Goal**: close M17. Produce documents a public body can accept.
+**Goal**: close M17, harden the dense-form layout reported by the community,
+and publish the complete incubating and stable Rust families with reviewed
+contributor credit.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-172 | Digital signature creation | M |
 | F-173 | Tagged PDF structure tree | L |
-| F-174 | PDF/A conformance | M |
 | F-175 | Redaction | M |
+| F-X048 | Dense form table fidelity | L |
+| F-174 | PDF/A conformance | M |
+| F-X049 | Tag rpptx-v0.5.0 | S |
+| F-X050 | Tag v0.9.0 | S |
 
 F-173 is the one a LibreOffice-based pipeline cannot do well, and the layout
 engine already knows the document semantics it needs, because
-`audit_accessibility` reads them.
+`audit_accessibility` reads them. F-X048 reimplements Issue 42 and PR 43 on the
+current transactional, bounded cache model rather than importing the stacked
+draft branch. The two release stories run last and retain separate final
+approval boundaries. Incubating 0.5.0 publishes before stable 0.9.0 so every
+stable dependency pin resolves from crates.io. Both reviewed changelog sections
+credit and link every included external issue and pull request, and each record
+receives a maintainer release note for its contributor.
 
-#### Sprint S54, RTF
+#### Sprint S54, RTF and caller font aliases
 
-**Goal**: open M18 with the inbound format that blocks the most corpora.
+**Goal**: open M18 with the inbound format that blocks the most corpora, and
+honour the document-facing family names supplied with caller fonts.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-176 | RTF reader | L |
 | F-177 | RTF writer | M |
 | F-183 | Image export options | S |
+| F-X051 | Honor caller-supplied font family aliases | M |
 
 F-183 rides along because it is a day of work against an entry point every
-format in this milestone shares.
+format in this milestone shares. F-X051 closes Issue 44 and PR 45 on the
+hardened reusable-engine path from F-X043. It remains independent of the RTF
+reader and writer.
 
 #### Sprint S55, HTML and ODT in
 

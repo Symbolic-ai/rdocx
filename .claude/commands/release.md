@@ -50,7 +50,11 @@ Refuse before any tag or push if one check fails:
    the committed `CHANGELOG.md` section headed by the exact tag at the current
    HEAD. The notes must cover only the selected family and contain reviewed
    highlights, additions, fixes, compatibility guidance, and contributor
-   credit.
+   credit. Rebuild the selected-family contribution inventory required by
+   `/release-notes`. Every included GitHub issue and pull request must appear
+   as a direct link in the rendered body, and every authenticated external
+   reporter or contributor must receive specific credit for the included
+   outcome.
 4. The release F-ID named `Tag <requested-tag>` is `reviewed` in the sprint run
    state, remains `in-progress` in both delivery trackers, and every dependency
    is completed.
@@ -85,9 +89,12 @@ Refuse before any tag or push if one check fails:
 Report the exact HEAD SHA, requested tag, selected family, selected package
 set, version, remote, workflow that will run, and notes source as
 `CHANGELOG.md` under the exact tag heading. Include the rendered notes in the
-review and ask for a separate explicit go or no-go immediately before the
-first external mutation. Approval given earlier in the feature or sprint does
-not count at this boundary.
+review. Also report the exact included issue and pull-request URLs,
+authenticated contributor handles, direct versus hardened-equivalent
+classification, and the comment that will be posted to each record after a
+successful release. Ask for a separate explicit go or no-go immediately before
+the first external mutation. Approval given earlier in the feature or sprint
+does not count at this boundary.
 
 ## Release
 
@@ -108,17 +115,29 @@ After approval, preserve this order:
    for byte with a fresh `python3 scripts/sprint_workflow.py release-notes
    <requested-tag> --render` result from the reviewed SHA. Do not claim the
    unselected family was published.
+6. After publication and release-body verification succeed, notify every issue
+   and pull request in the reviewed contribution inventory. Each comment must
+   name and link the published tag, summarize the included outcome, state
+   whether the work landed directly or through a hardened equivalent, and
+   thank the authenticated reporter or contributor. Record every resulting
+   comment URL. Do not close, reopen, or otherwise change a record's state
+   unless the release F-ID explicitly authorizes that separate action.
 
 If the branch push succeeds but tag push fails, report that exact state. If the
 tag push succeeds but publication fails, retain the tag and report the failed
 package and workflow. Do not delete or move a published release tag.
+If publication succeeds but a contributor notification fails, retain the tag
+and release, report the exact record and error, and leave the release F-ID
+in-progress until the missing notification is posted and verified.
 
 ## Finalise the release F-ID
 
 Only after every selected registry version and the matching GitHub release are
 verified:
 
-1. Create the F-ID's `AS_BUILT.md` entry with the release evidence.
+1. Create the F-ID's `AS_BUILT.md` entry with the release evidence, the complete
+   included issue and pull-request inventory, verified contributor handles,
+   and every notification comment URL.
 2. Complete its sprint tracker and backlog records, clear its owner, and set
    its design plan to completed.
 3. Record the release F-ID completed in sprint state.
@@ -132,6 +151,9 @@ verified:
 - The requested tag and prepared family do not match exactly.
 - The exact reviewed release-note section is missing, invalid, or differs from
   the published GitHub release body.
+- An included issue or pull request is unlinked, a verified external
+  contributor is uncredited, or the post-release notification list is
+  incomplete.
 - A local dry-run is offered as a substitute for successful publication.
 - Any command would merge to `main`, create an `sNN` tag, or create both
   release-family tags.

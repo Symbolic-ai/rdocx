@@ -45,6 +45,14 @@ path, preserve the rendered artifact until a fresh byte comparison immediately
 before GitHub release creation, and bind the release command to the same
 preflight and post-publication body check.
 
+Release review also reconciles one selected-family contribution inventory
+against the rendered notes. Every included GitHub issue and pull request must
+survive as a direct link, every authenticated external contributor must receive
+specific credit, and cross-family records must remain excluded. Workflow
+mutation tests pin the inventory, approval-report, and post-publication
+notification requirements. After the release body verifies byte for byte, the
+release records the comment URL posted to each included issue and pull request.
+
 The Word field regression matrix records Microsoft Word 16.104 build
 16.104.25121423 with an en-US locale, Gregorian calendar, period decimal
 separator, comma grouping separator, and UTC clock context. Its readable
@@ -62,10 +70,18 @@ and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace
 prefixes. Focused tests verify prefix tolerance, strict algorithms, exclusive
 canonicalization, relationship selection and order, complete declared
 coverage, named part mutation, malformed or partial coverage, and read-only
-save and reopen behavior. The optional openability oracle is Microsoft Word
-16.104 build 16.104.25121423. It confirms that Word opens the generated DOCX.
-It does not establish certificate trust or replace the Rust cryptographic and
-coverage assertions.
+save and reopen behavior. Creation tests use a fixed PKCS#8 RSA key and X.509
+certificate produced by OpenSSL 3.6.3 on 22 August 2026. They assert schema
+order, content-type-qualified canonical references, collision-free allocation,
+key and certificate rejection, complete round-trip verification, and atomic
+failure for invalid relationship graphs. The optional interoperability oracle
+is Microsoft Word for Mac 16.104 build 16.104.25121423. The ignored gate writes
+the generated DOCX, reopens those exact bytes for local RSA-SHA256 and complete
+coverage verification, then requires an explicit human-evidence token after
+Word recognizes the embedded digital signature and protects the document from
+editing. Word for Mac does not expose a Windows certificate-trust verdict. The
+oracle does not establish certificate trust or replace the Rust cryptographic
+and coverage assertions.
 
 The scalar template unit gate splits one tag across five differently formatted
 runs and proves that the first matched run supplies replacement formatting
@@ -109,6 +125,18 @@ atomic failure, and empty property-owner cleanup. The paired round-trip test
 proves that unmodeled XML and namespace declarations retain their exact bytes
 through comparison, save, and reopen. No sample invokes comparison, so the
 49-entry hash harness remains unchanged.
+
+The redaction regression gate constructs one package in code with body,
+table, content-control, header, footer, footnote, endnote, comment, inserted,
+deleted, core-property, and custom-property occurrences. A second authored
+chart fixture requires the exact literal to disappear from both ChartML caches
+and its relationship-resolved workbook. The gate scans every inflated outer
+and nested entry for UTF-8 and UTF-16LE forms after reopen. Focused cases prove
+prefix-tolerant expanded-name matching, foreign same-local-name preservation,
+unrelated part and relationship stability, malformed XML rejection, external
+workbook rejection, nested ZIP limits, and atomic residual-scan failure. The
+native-only API is absent from Python, WASM, and CLI wrappers. No sample invokes
+redaction, so all 49 hash entries remain unchanged.
 
 The watermark golden gate builds a five-page document in code, renders with
 bundled fonts, and compares the exact PNG-byte digest for every page. It also
@@ -207,13 +235,14 @@ size, and the segment ascent and descent equal that font's resolved metrics. A
 compatibility case keeps non-empty text unchanged, proves ordinary and
 attributed layout structure agrees after removing source ids, and proves PDF
 and raster output is unchanged when the no-glyph carrier is removed. The
-49-entry hash harness remains unchanged.
+sample page-one raster and resource hashes remain unchanged.
 
-The safe-table cache gate proves an unchanged direct table hits, diagnostics
-and font traces replay, and provenance rebinds after an earlier body insertion.
-Numbering and other traversal-sensitive table content bypass the cache. A late
-font failure after staged paragraph and table work publishes neither queue.
-Focused bounds checks cover both published and pending entry and byte ceilings.
+The safe-table cache gate proves an unchanged recursive table hits, diagnostics
+and font traces replay, and outer and nested provenance rebind after an earlier
+body insertion. Numbering and other traversal-sensitive table content bypass
+the cache. A late font failure after staged paragraph and recursive table work
+publishes neither queue. Focused bounds checks cover both published and pending
+entry and byte ceilings, including the complete nested retained payload.
 
 The safe header and footer cache gate covers default, first, even, inherited,
 header, footer, and watermark variants. It requires exact hits to replay
@@ -236,7 +265,7 @@ entries and 56 MiB and header and footer state capped at 64 entries and 4 MiB.
 Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
-archive-size ceiling, and unchanged 49-entry hash harness are required riders.
+archive-size ceiling, and reviewed 49-entry hash harness are required riders.
 
 ## The hash harness
 
@@ -255,7 +284,7 @@ all beyond page one. Three entries per sample:
 | Entry | Covers |
 |---|---|
 | `<sample>:pdf/pages` | The page count, each page's `/MediaBox`, and each page's inflated content stream, in `/Kids` order |
-| `<sample>:pdf/resources` | Every other inflated stream, which is the font subsets, the ToUnicode CMaps and the image XObjects |
+| `<sample>:pdf/resources` | Inflated font subsets, ToUnicode CMaps, image XObjects, and other non-content streams except `/Type /Metadata` |
 | `<sample>:pdf/bytes` | SHA-256 of the file as written |
 
 The first two hash inflated bytes, so they say **what** moved and survive a
@@ -264,6 +293,12 @@ moved and cannot be evaded, including by a change that is purely in
 compression. A fingerprint of extracted text and page geometry alone was
 rejected, because the dependency refresh in F-X020 moved all seven sample PDFs
 while `pdftotext` output stayed identical in 7 of 7.
+
+Document metadata streams are excluded only from `pdf/resources`. They are not
+page resources, and their complete bytes remain covered by `pdf/bytes`. A
+focused scanner test adds a `/Type /Metadata` stream and requires only the byte
+entry to move. The existing changed-resource test continues to require a real
+font-like stream change to move `pdf/resources`.
 
 The harness reads a PDF with a scanner over the object syntax, using the
 standard library alone, and raises rather than skipping anything it does not
@@ -276,6 +311,13 @@ either a SHA-256 digest or JSON `null` when an optional XML part is absent.
 Check mode reads the manifest without modifying it and reports added, removed,
 and changed entries. Baseline writes require `--update --reason <text>`, and an
 empty reason is rejected. Generated PNGs remain ignored under `samples/`.
+
+The current reviewed table-fidelity delta changes exactly
+`feature_showcase:pdf/pages` and `feature_showcase:pdf/bytes`. That sample's
+later PDF page contains a valid vertical merge and a bordered nested table, so
+correct merge-edge suppression and recursive grid painting change its page
+stream. Its PDF resources, page-one PNG, selected OOXML parts, every other
+sample entry, and the manifest cardinality remain unchanged.
 
 It exists because the extraction changes unit conversion and text-shaping input
 types, and both alter output **without failing to compile**. Structural
@@ -548,6 +590,17 @@ regressions prove that continuation cells emit no duplicate fill, border, or
 text and that cell margins feed the shared fixed-box text path. Raster evidence
 uses deterministic font mode.
 
+The dense Word form golden is a readable OOXML document constructed in the
+existing regression entrypoint. It combines recursive tables, exact and
+minimum rows, a vertical merge, based-on and conditional table styles,
+cell-relative foreground and page-behind anchors, outer and interior `nil`
+borders, and a 7 point empty paragraph mark. It requires one Letter PDF page,
+exact outer, merge, and nested-grid line bounds, an absent crossing merge edge,
+all readable text, a zero-glyph mark carrier, and identical repeated PDF and
+PNG renders. The 96 dpi raster is 816 by 1056 pixels and pins the complete RGBA
+checksum plus the non-white, foreground-fill, and behind-fill pixel counts. No
+binary fixture is committed.
+
 ## New tests the extracted crates need
 
 These crates have never seen a non-docx package, so the existing tests do not
@@ -632,6 +685,26 @@ outcomes as mandatory manual evidence.
   vertical when rasterised at 72 dpi with the recorded Poppler 26.01.0.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
+- Tagged-PDF structure tests cover headings, nested lists, table headers and
+  cells, figures with alternate text, artifacts, deterministic MCIDs, and the
+  parent tree. A raster equality test compares the exact PNG bytes before and
+  after adding `MarkedContent`.
+- The Word-to-PDF regression renders all six heading levels, three real list
+  depths, and a table whose two header cells repeat across pages. It follows
+  each `TH` to its paragraph child, checks parent-tree ownership on every page,
+  and requires one MCR for every emitted semantic MCID. Source-compatibility
+  tests construct the unchanged image and group variants directly.
+- The external accessibility oracle is veraPDF 1.30.2 with profile `ua1`. Its
+  source installer and signature are pinned outside the repository. The
+  ignored differential test requires that exact version and a conforming
+  report for an in-code deterministic fixture before feature completion.
+- The archival regression gate renders one tagged in-code fixture with an
+  actually embedded bundled-font subset through PDF/A-2b and PDF/A-3b. The
+  pinned veraPDF 1.30.2 oracle must pass profiles `2b` and `ua1` on the first
+  file, then `3b` and `ua1` on the second. Focused tests assert matching XMP,
+  output intent, ICC linkage, deterministic identifiers, named preflight
+  errors, retained headings, lists, tables, and alternate text. The ordinary
+  path has a byte pin and the complete 49-entry hash harness remains unchanged.
 - `Group` containing `Image` registers the XObject.
 - `Group` containing `LinkAnnotation` emits it with a transformed rectangle.
 - A preceding leaf proves nested XObject registration and recursive emission
@@ -742,13 +815,24 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.8.0 regression pins all eleven inherited version
+The stable 0.9.0 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the incubating family remains at 0.4.0.
-The current stable 0.8.0 release verifies every crates.io README endpoint
-returns non-empty rendered HTML. Those endpoint checks remain a
-post-publication gate owned by `/release`.
+README requirement. It also proves the incubating family remains at its
+published 0.5.0 boundary and `rpptx-wasm` remains unpublished.
+The paired incubating regression pins all sixteen explicit manifests, fifteen
+workspace dependency requirements, sixteen lockfile entries, publication
+flags, README examples, Rust assertions, the CI WASM literal, and the exact
+15-package publication preflight at 0.5.0. It separately proves the stable
+workspace remains at its published 0.9.0 boundary and `rpptx-wasm` remains
+unpublished.
+The published 0.5.0 gate also verifies every selected registry entry and
+owner, the annotated tag target, and byte-identical GitHub release notes before
+the release story completes.
+The published stable 0.9.0 gate verifies every selected registry entry and
+owner, the annotated tag target, byte-identical GitHub release notes, and that
+every crates.io README endpoint returns non-empty rendered HTML before the
+release story completes.
 
 ## What CI runs
 

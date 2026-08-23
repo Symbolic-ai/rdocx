@@ -238,6 +238,9 @@ fn render_elements(
                     }
                 }
             }
+            PositionedElement::MarkedContent { children, .. } => {
+                render_elements(pixmap, fonts, children, transform, mask);
+            }
             _ => {}
         }
     }

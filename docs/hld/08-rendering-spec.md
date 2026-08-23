@@ -15,13 +15,17 @@ shim. The shared contract is:
 ```rust
 pub struct LayoutResult { pages: Vec<Arc<PageFrame>>, fonts: Vec<FontData>,
                           metadata: Option<DocumentMetadata>, outlines: Vec<OutlineEntry>,
-                          diagnostics: Vec<Diagnostic> }
+                          diagnostics: Vec<Diagnostic>,
+                          structure: Option<DocumentStructure> }
 pub struct FontData { id: FontId, family: String, data: Arc<[u8]>,
                       face_index: u32, bold: bool, italic: bool }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
 pub struct SourceNodeId(NonZeroU32)
 pub struct SourceSpan { node: SourceNodeId, char_start: u32, char_end: u32 }
+pub struct DocumentStructure { root: StructureId, nodes: Vec<StructureNode> }
+pub struct StructureNode { id: StructureId, role: StructureRole,
+                           children: Vec<StructureId>, alternate_text: Option<String> }
 ```
 
 `TextSegment` and `GlyphRun` each carry `source: Option<SourceSpan>`. The node
@@ -108,6 +112,7 @@ pub enum PositionedElement {
     Text(GlyphRun), Line { .. }, FilledRect { .. }, Image { .. }, LinkAnnotation { .. },
     Path(PathElement),      // new
     Group(GroupElement),    // new
+    MarkedContent { structure: Option<StructureId>, children: Vec<PositionedElement> },
 }
 ```
 
@@ -180,6 +185,12 @@ depth-first leaf ordinal, which recursive content emission matches. Link
 rectangles use the accumulated transform before conversion to PDF page
 coordinates. Each pass has an explicit nested-target regression test.
 
+The same walker recurses through `MarkedContent` without changing the
+accumulated transform. Word pagination wraps exact emitted leaves in this
+container. Empty no-glyph carriers produce no marked content. PDF collection
+and field-substitution passes recurse into it, and compatibility assertions
+that inspect leaf elements do the same.
+
 ## Two remaining defects to fix
 
 All are forced by pptx, and all improve rdocx:
@@ -225,6 +236,30 @@ with no visible difference and no failing test.
 
 Two writes of one document cannot detect that, since they reuse the same map
 instances. The regression builds two documents and compares their bytes.
+
+When `LayoutResult::structure` is present, the writer emits deterministic
+`BDC` and `EMC` pairs with page-local MCIDs, `/StructParents`, one parent number
+tree, `/StructTreeRoot`, `/MarkInfo`, an undetermined `/Lang`, and accessible
+document title preferences. PDF/UA identification metadata is present only
+when shown text contains no `.notdef` glyph. Word roles lower to headings,
+paragraphs, nested `L` and `LI`, `Table`, `TR`, `TH`, `TD`, and `Figure`.
+The PDF layer inserts the required `LBody` beneath each list item without
+changing the backend-neutral tree. Informative figures carry source `/Alt`.
+Table headers carry column scope. Decorative drawing and border paint emits as
+artifacts. Malformed public structure graphs are rejected, and their marked
+children recurse without BDC or orphan MCIDs. A result with no structure
+retains the byte-compatible untagged path.
+
+The explicit archival path accepts `PdfOptions` with either PDF/A-2b or
+PDF/A-3b. It preflights every used font, the complete structure graph, link
+actions, and colour components before allocating output. A failure returns a
+named `PdfError` and no partial bytes. A successful write adds deterministic
+PDF/A identification XMP, a deterministic file identifier, and one sRGB2014
+output intent. Tagged input uses the same structure writer and combines PDF/A
+and conditional PDF/UA identification in one metadata stream. The ordinary
+`render_to_pdf` path does not allocate these objects and remains byte-identical.
+PDF/A-3b does not add an associated file unless a later explicit API supplies
+one.
 
 `Path` is `m`/`l`/`c`/`h` followed by `f`, `f*`, `S`, `B` or `B*` by supported
 fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group` is
@@ -416,9 +451,17 @@ an annotation, but their visible text remains in the line.
 
 Table lowering derives cumulative row and column offsets from the resolved
 grid. Right-to-left tables reverse visual column placement without changing
-logical cell ownership. A merge continuation emits nothing. Its origin spans
-the covered row heights and column widths, then emits one fill and one fixed-box
-text body. Resolved cell margins define that text body's content box.
+logical cell ownership. Cell payloads retain paragraphs and nested tables in
+source order. A nested table resolves its own grid, fills, borders, text,
+provenance, anchors, and logical structure inside the owning cell content box.
+
+Vertical merge groups match the exact starting grid column and grid span. A
+continuation emits no content or paint. The restart paints across the resolved
+row span and suppresses physical horizontal edges inside that span. Ordinary
+cells establish row minima. Merge content grows the last non-exact row in its
+span only when the complete content needs more room. Exact rows stay pinned
+and clip overflow, while minimum rows may grow. Resolved cell margins define
+the local text and drawing content box.
 
 Borders are physical row or column segments rather than four strokes per cell.
 The renderer maps every logical cell edge onto those segments and emits each
@@ -430,6 +473,24 @@ direction.
 Each table origin draws its fill before its text. The table's unique border
 segments draw after all cell fills and text so a neighbouring fill cannot cover
 them. Table cells do not use the shape autofit algorithm.
+
+Word table styles resolve base-first through `basedOn`, then apply table-region
+properties in deterministic whole-table, band, edge, and corner priority.
+Table-style paragraph properties sit between document defaults and paragraph
+styles. Direct table and cell properties remain the final overlay. An explicit
+cell `nil` or `none` border yields to a visible table border only on the exact
+outer edge. The same value remains suppressive on an interior edge.
+
+Anchors whose horizontal frame is `column` or `character` resolve within the
+cell content box. Page and margin frames remain page-relative. Paragraph and
+line vertical frames use the cell paragraph position. Foreground anchors paint
+with cell content, while `behindDoc` anchors enter the page-behind layer.
+
+Word table lowering also assigns logical ownership before pagination. A table
+owns rows in source order. Repeating header rows use `TH`, ordinary cells use
+`TD`, and each cell owns its source-ordered paragraph and nested-table nodes. A
+header repeated on another page creates another marked-content occurrence for
+the same logical cell.
 
 ### Autofit
 
@@ -488,7 +549,7 @@ font traces also have explicit bounds. Loading a different additional font set
 rebuilds face identity and clears all dependent memo state.
 
 The Word engine caches only ordinary context-independent body paragraphs and
-tables made entirely from direct cache-safe paragraphs. It also caches safe
+tables whose complete recursive payload is cache-safe. It also caches safe
 header and footer variants. Paragraph keys compare the complete typed
 paragraph, content width, and revision view. A stable borrowed `u64` paragraph
 fingerprint prefilters lookup candidates. The complete typed equality remains
@@ -503,8 +564,8 @@ separately compares styles, numbering, section properties, headers, footers,
 media, charts, chart theme and colour map, core properties, hyperlinks, notes,
 theme, additional fonts, page background, and the document-wide
 wrapping-drawing state. Numbering, drawings including `AlternateContent`,
-fields, hyperlinks, relationships, media, generated markers, nested tables,
-content controls, preserved producer XML, and other traversal-sensitive input
+fields, hyperlinks, relationships, media, generated markers, content controls,
+preserved producer XML, and other traversal-sensitive input
 bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting an earlier note or numbering
 input cannot leave a later generated marker stale. Each entry owns its block,
@@ -520,8 +581,8 @@ Paragraph blocks receive 4,096 entries and 56 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
 aligned restart page and checkpoint slots receive 32 entries and 2 MiB. The published and
 transaction-pending queues enforce the same partitions using retained-capacity
-accounting for owned keys, resolved part bytes, rows, cells, paragraphs,
-watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
+accounting for owned keys, resolved part bytes, rows, cells, recursive cell
+blocks, watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
 insertion order without hit-time queue maintenance. Oversized entries bypass
 retention.
 
@@ -695,6 +756,13 @@ result through shared line breaking with the same width, height, ascent, and
 descent rules as an image. Pagination translates the local group to the
 resolved line position without changing its children.
 
+An informative inline image or chart uses the additive `Figure` variant in
+the same non-exhaustive inline and line enums. The variant carries alternate
+text and the logical figure id around an unchanged `Image` or `Group`, then
+pagination lowers it to `PositionedElement::MarkedContent`. Existing `Image`
+and `Group` fields and direct constructors remain unchanged. A drawing with no
+usable alternate text stays on the existing variant and becomes an artifact.
+
 An anchored chart uses `AnchoredContent::Group`. The existing anchored drawing
 path resolves its page rectangle, wrapping distances, and behind-text order,
 then translates the local group to that rectangle. Missing, external, or
@@ -716,6 +784,10 @@ pub struct RenderInput {
 `RenderInput` is the rendering boundary. It contains only owned,
 format-neutral `ResolvedSlide` values from `rpptx-layout`. Raw PresentationML
 parts remain on the upstream assembly side of that boundary:
+
+Presentation page lowering constructs `LayoutResult` with `structure: None`.
+Its PDF remains on the existing untagged path, and the added semantic carrier
+does not alter its visible elements, resources, or raster pixels.
 
 `ResolvedContent::Group` carries frozen backend-neutral chart output. The
 ordinary shape lowering path inserts that group below the graphic-frame

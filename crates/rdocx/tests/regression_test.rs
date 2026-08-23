@@ -6,11 +6,68 @@
 use std::collections::{BTreeMap, HashMap};
 
 use rdocx::{
-    Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length, RenderOptions,
-    RevisionView, RunPosition, RunRange,
+    ChartData, ChartKind, Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length,
+    RenderOptions, RevisionView, RunPosition, RunRange,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
+
+fn compatibility_page_elements(
+    elements: &[oxml_layout::PositionedElement],
+) -> Vec<&oxml_layout::PositionedElement> {
+    fn collect<'a>(
+        elements: &'a [oxml_layout::PositionedElement],
+        output: &mut Vec<&'a oxml_layout::PositionedElement>,
+    ) {
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                    collect(children, output);
+                }
+                oxml_layout::PositionedElement::Group(group) => {
+                    collect(&group.children, output);
+                }
+                other => output.push(other),
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    collect(elements, &mut output);
+    output
+}
+
+fn clear_compatibility_sources(elements: &mut [oxml_layout::PositionedElement]) {
+    for element in elements {
+        match element {
+            oxml_layout::PositionedElement::Text(run) => run.source = None,
+            oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                clear_compatibility_sources(children);
+            }
+            oxml_layout::PositionedElement::Group(group) => {
+                clear_compatibility_sources(&mut group.children);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn remove_compatibility_empty_text(elements: &mut Vec<oxml_layout::PositionedElement>) {
+    for element in elements.iter_mut() {
+        match element {
+            oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                remove_compatibility_empty_text(children);
+            }
+            oxml_layout::PositionedElement::Group(group) => {
+                remove_compatibility_empty_text(&mut group.children);
+            }
+            _ => {}
+        }
+    }
+    elements.retain(
+        |element| !matches!(element, oxml_layout::PositionedElement::Text(run) if run.text.is_empty()),
+    );
+}
 
 fn document_with_settings(settings_xml: &[u8], target: &str) -> Document {
     let mut seed = Document::new();
@@ -94,6 +151,7 @@ const CUSTOM_XML_PROPS_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
 const WORD_REVISION_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_FIELD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_DENSE_FORM_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_FIELD_ORACLE_ENVIRONMENT: &str =
     "locale=en-US; calendar=Gregorian; decimal=.; grouping=,; timezone=UTC";
 const WORD_FIELD_ORACLE_INPUT: &str = "F-161-readable-field-matrix-v1";
@@ -3238,9 +3296,8 @@ fn ref_and_pageref_resolve_to_the_bookmark_text_and_final_page() {
 
     let reopened = Document::from_bytes(rewritten.get_ref()).unwrap();
     let page = reopened.layout_page(0).unwrap().unwrap();
-    let text = page
-        .elements
-        .iter()
+    let text = compatibility_page_elements(&page.elements)
+        .into_iter()
         .filter_map(|element| match element {
             oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
             _ => None,
@@ -5086,7 +5143,7 @@ fn empty_word_stories_emit_one_attributed_zero_width_segment() {
         .layout
         .pages
         .iter()
-        .flat_map(|page| &page.elements)
+        .flat_map(|page| compatibility_page_elements(&page.elements))
         .filter_map(|element| match element {
             oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
             _ => None,
@@ -5204,6 +5261,10 @@ fn empty_paragraph_uses_resolved_default_metrics() {
             .expect("carrier metrics resolve");
         assert_eq!(segment.ascent, resolved.ascent);
         assert_eq!(segment.descent, resolved.descent);
+        if index == 0 {
+            assert_eq!(block.lines[0].ascent, resolved.ascent);
+            assert_eq!(block.lines[0].descent, resolved.descent);
+        }
     }
 
     let result = rdocx_layout::layout_document_deterministic_with_provenance(&input)
@@ -5212,7 +5273,7 @@ fn empty_paragraph_uses_resolved_default_metrics() {
         .layout
         .pages
         .iter()
-        .flat_map(|page| &page.elements)
+        .flat_map(|page| compatibility_page_elements(&page.elements))
         .filter_map(|element| match element {
             oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
             _ => None,
@@ -5259,24 +5320,24 @@ fn empty_segment_is_backend_invisible_and_layout_compatible() {
     let mut attributed = rdocx_layout::layout_document_deterministic_with_provenance(&input)
         .expect("attributed layout")
         .into_layout_result();
-    assert!(attributed.pages.iter().flat_map(|page| &page.elements).any(
-        |element| matches!(element, oxml_layout::PositionedElement::Text(run)
+    assert!(
+        attributed
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(&page.elements))
+            .any(
+                |element| matches!(element, oxml_layout::PositionedElement::Text(run)
             if run.text == "visible" && !run.glyph_ids.is_empty())
-    ));
+            )
+    );
     for page in &mut attributed.pages {
-        for element in &mut std::sync::Arc::make_mut(page).elements {
-            if let oxml_layout::PositionedElement::Text(run) = element {
-                run.source = None;
-            }
-        }
+        clear_compatibility_sources(&mut std::sync::Arc::make_mut(page).elements);
     }
     assert_eq!(format!("{ordinary:?}"), format!("{attributed:?}"));
 
     let mut without_empty = attributed.clone();
     for page in &mut without_empty.pages {
-        std::sync::Arc::make_mut(page).elements.retain(|element| {
-            !matches!(element, oxml_layout::PositionedElement::Text(run) if run.text.is_empty())
-        });
+        remove_compatibility_empty_text(&mut std::sync::Arc::make_mut(page).elements);
     }
     assert_eq!(
         oxml_pdf::render_to_pdf(&attributed),
@@ -5286,4 +5347,754 @@ fn empty_segment_is_backend_invisible_and_layout_compatible() {
         oxml_pdf::render_page_to_png(&attributed, 0, 96.0),
         oxml_pdf::render_page_to_png(&without_empty, 0, 96.0)
     );
+}
+
+#[test]
+fn empty_form_paragraphs_use_mark_metrics_and_new_runs_inherit_them() {
+    let body = r#"<w:p><w:pPr><w:rPr><w:b/><w:sz w:val="14"/></w:rPr></w:pPr></w:p>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let layout = document.layout().expect("empty mark layout");
+    let carrier = layout
+        .layout
+        .pages
+        .iter()
+        .flat_map(|page| compatibility_page_elements(&page.elements))
+        .find_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
+            _ => None,
+        })
+        .expect("zero-width paragraph-mark carrier");
+    assert_eq!(carrier.font_size, 7.0);
+    assert!(carrier.glyph_ids.is_empty());
+    assert!(carrier.advances.is_empty());
+
+    {
+        let mut paragraph = document.paragraph_mut(0).unwrap();
+        paragraph.add_run_inheriting_mark("typed");
+        let run = paragraph.run(0).unwrap();
+        assert_eq!(run.size(), Some(7.0));
+        assert!(run.is_bold());
+    }
+
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("<w:b"));
+    assert!(xml.contains(r#"<w:sz w:val="14""#));
+    assert!(xml.contains("typed"));
+}
+
+fn dense_form_document() -> Document {
+    let document_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+ <w:body>
+  <w:p><w:pPr><w:spacing w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr><w:t>Dense form receipt</w:t></w:r></w:p>
+  <w:tbl>
+   <w:tblPr>
+    <w:tblStyle w:val="DenseForm"/><w:tblW w:w="9360" w:type="dxa"/><w:tblLayout w:type="fixed"/>
+    <w:tblLook w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>
+   </w:tblPr>
+   <w:tblGrid><w:gridCol w:w="4680"/><w:gridCol w:w="4680"/></w:tblGrid>
+   <w:tr>
+    <w:trPr><w:trHeight w:val="420" w:hRule="exact"/></w:trPr>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/><w:vMerge w:val="restart"/><w:tcBorders><w:top w:val="nil"/><w:right w:val="nil"/></w:tcBorders></w:tcPr>
+     <w:p><w:r><w:t>Patient details</w:t></w:r></w:p>
+    </w:tc>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
+     <w:p><w:r><w:drawing><wp:anchor behindDoc="1">
+      <wp:positionH relativeFrom="column"><wp:posOffset>274320</wp:posOffset></wp:positionH>
+      <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+      <wp:extent cx="548640" cy="274320"/><wp:wrapNone/><wp:docPr id="41" name="Behind stamp" descr="behind cell stamp"/>
+      <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:solidFill><a:srgbClr val="DDEBFF"/></a:solidFill><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr></wps:wsp></a:graphicData></a:graphic>
+     </wp:anchor></w:drawing></w:r><w:r><w:t>Account 0042</w:t></w:r></w:p>
+    </w:tc>
+   </w:tr>
+   <w:tr>
+    <w:trPr><w:trHeight w:val="360" w:hRule="exact"/></w:trPr>
+    <w:tc><w:tcPr><w:tcW w:w="4680" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
+     <w:tbl>
+      <w:tblPr><w:tblW w:w="4400" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="336699"/><w:left w:val="single" w:sz="6" w:color="336699"/><w:bottom w:val="single" w:sz="6" w:color="336699"/><w:right w:val="single" w:sz="6" w:color="336699"/><w:insideV w:val="single" w:sz="4" w:color="7799BB"/></w:tblBorders></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="2200"/><w:gridCol w:w="2200"/></w:tblGrid>
+      <w:tr><w:trPr><w:trHeight w:val="240" w:hRule="atLeast"/></w:trPr>
+       <w:tc><w:p><w:r><w:t>Code</w:t></w:r></w:p></w:tc>
+       <w:tc><w:p><w:r><w:t>A17</w:t></w:r></w:p></w:tc>
+      </w:tr>
+     </w:tbl>
+    </w:tc>
+   </w:tr>
+   <w:tr>
+    <w:trPr><w:trHeight w:val="360" w:hRule="atLeast"/></w:trPr>
+    <w:tc><w:tcPr><w:tcW w:w="4680" w:type="dxa"/><w:tcBorders><w:top w:val="nil"/></w:tcBorders></w:tcPr><w:p><w:pPr><w:rPr><w:b/><w:sz w:val="14"/></w:rPr></w:pPr></w:p></w:tc>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
+     <w:p><w:r><w:drawing><wp:anchor behindDoc="0">
+      <wp:positionH relativeFrom="column"><wp:posOffset>1371600</wp:posOffset></wp:positionH>
+      <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+      <wp:extent cx="548640" cy="274320"/><wp:wrapNone/><wp:docPr id="42" name="Front stamp" descr="foreground cell stamp"/>
+      <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:solidFill><a:srgbClr val="FFD7D7"/></a:solidFill><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr></wps:wsp></a:graphicData></a:graphic>
+     </wp:anchor></w:drawing></w:r><w:r><w:t>Total due 18.40</w:t></w:r></w:p>
+    </w:tc>
+   </w:tr>
+  </w:tbl>
+  <w:p><w:pPr><w:spacing w:before="120"/></w:pPr><w:r><w:t>Reviewed form footer</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1440" w:bottom="1080" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
+ </w:body>
+</w:document>"#;
+    let styles_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+ <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Carlito" w:hAnsi="Carlito"/><w:sz w:val="18"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/></w:pPr></w:pPrDefault></w:docDefaults>
+ <w:style w:type="table" w:styleId="DenseBase"><w:name w:val="Dense Base"/><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="A22B2B"/><w:left w:val="single" w:sz="8" w:color="A22B2B"/><w:bottom w:val="single" w:sz="8" w:color="A22B2B"/><w:right w:val="single" w:sz="8" w:color="A22B2B"/><w:insideH w:val="single" w:sz="4" w:color="A22B2B"/><w:insideV w:val="single" w:sz="4" w:color="A22B2B"/></w:tblBorders></w:tblPr></w:style>
+ <w:style w:type="table" w:styleId="DenseForm"><w:name w:val="Dense Form"/><w:basedOn w:val="DenseBase"/><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:tblStylePr w:type="firstRow"><w:pPr><w:spacing w:after="40"/></w:pPr><w:tcPr><w:shd w:val="clear" w:fill="E8F1F8"/></w:tcPr></w:tblStylePr></w:style>
+</w:styles>"#;
+
+    let mut seed = Document::new();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        seed.to_bytes().expect("seed package"),
+    ))
+    .expect("seed opens");
+    package.set_part("/word/document.xml", document_xml.as_bytes().to_vec());
+    package.set_part("/word/styles.xml", styles_xml.as_bytes().to_vec());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).expect("dense form package");
+    Document::from_bytes(output.get_ref()).expect("dense form reopens")
+}
+
+fn decode_rgba_png(png: &[u8]) -> (u32, u32, Vec<u8>) {
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let mut cursor = 8;
+    let mut width = 0;
+    let mut height = 0;
+    let mut compressed = Vec::new();
+    while cursor + 12 <= png.len() {
+        let length = u32::from_be_bytes(png[cursor..cursor + 4].try_into().unwrap()) as usize;
+        let kind = &png[cursor + 4..cursor + 8];
+        let data = &png[cursor + 8..cursor + 8 + length];
+        match kind {
+            b"IHDR" => {
+                width = u32::from_be_bytes(data[0..4].try_into().unwrap());
+                height = u32::from_be_bytes(data[4..8].try_into().unwrap());
+                assert_eq!(&data[8..13], &[8, 6, 0, 0, 0]);
+            }
+            b"IDAT" => compressed.extend_from_slice(data),
+            b"IEND" => break,
+            _ => {}
+        }
+        cursor += 12 + length;
+    }
+    let filtered = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed).unwrap();
+    let stride = width as usize * 4;
+    assert_eq!(filtered.len(), (stride + 1) * height as usize);
+    let mut rgba = vec![0; stride * height as usize];
+    for row in 0..height as usize {
+        let source = &filtered[row * (stride + 1)..(row + 1) * (stride + 1)];
+        let (filter, source) = (source[0], &source[1..]);
+        for index in 0..stride {
+            let left = if index >= 4 {
+                rgba[row * stride + index - 4]
+            } else {
+                0
+            };
+            let up = if row > 0 {
+                rgba[(row - 1) * stride + index]
+            } else {
+                0
+            };
+            let upper_left = if row > 0 && index >= 4 {
+                rgba[(row - 1) * stride + index - 4]
+            } else {
+                0
+            };
+            let predictor = match filter {
+                0 => 0,
+                1 => left,
+                2 => up,
+                3 => ((left as u16 + up as u16) / 2) as u8,
+                4 => {
+                    let estimate = left as i32 + up as i32 - upper_left as i32;
+                    let distances = [
+                        (estimate - left as i32).unsigned_abs(),
+                        (estimate - up as i32).unsigned_abs(),
+                        (estimate - upper_left as i32).unsigned_abs(),
+                    ];
+                    if distances[0] <= distances[1] && distances[0] <= distances[2] {
+                        left
+                    } else if distances[1] <= distances[2] {
+                        up
+                    } else {
+                        upper_left
+                    }
+                }
+                other => panic!("unsupported PNG filter {other}"),
+            };
+            rgba[row * stride + index] = source[index].wrapping_add(predictor);
+        }
+    }
+    (width, height, rgba)
+}
+
+#[test]
+fn dense_form_matches_reviewed_one_page_geometry() {
+    let document = dense_form_document();
+    let layout = document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("deterministic dense-form layout");
+    assert_eq!(layout.layout.pages.len(), 1, "{WORD_DENSE_FORM_ORACLE}");
+    let page = &layout.layout.pages[0];
+    assert_eq!((page.width, page.height), (612.0, 792.0));
+
+    let positioned = compatibility_page_elements(&page.elements);
+    let visible_text = positioned
+        .iter()
+        .filter_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if !run.text.is_empty() => {
+                Some(run.text.as_str())
+            }
+            _ => None,
+        })
+        .collect::<String>();
+    for expected in [
+        "Dense form receipt",
+        "Patient details",
+        "Account 0042",
+        "Code",
+        "A17",
+        "Total due 18.40",
+        "Reviewed form footer",
+    ] {
+        assert!(
+            visible_text.contains(expected),
+            "{expected}: {visible_text}"
+        );
+    }
+    let empty_mark = positioned
+        .iter()
+        .find_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
+            _ => None,
+        })
+        .expect("empty 7pt form carrier");
+    assert_eq!(empty_mark.font_size, 7.0);
+    assert!(empty_mark.glyph_ids.is_empty());
+
+    let table_lines = positioned
+        .iter()
+        .filter_map(|element| match element {
+            oxml_layout::PositionedElement::Line { start, end, .. }
+                if start.x >= 71.0 && end.x <= 541.0 && start.y >= 60.0 && end.y <= 180.0 =>
+            {
+                Some((*start, *end))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let has_line = |x1, y1, x2, y2| {
+        table_lines
+            .iter()
+            .any(|(start, end)| (start.x, start.y, end.x, end.y) == (x1, y1, x2, y2))
+    };
+    assert_eq!(table_lines.len(), 26, "table geometry: {table_lines:?}");
+    assert!(has_line(72.0, 70.0, 306.0, 70.0));
+    assert!(has_line(72.0, 70.0, 72.0, 109.0));
+    assert!(!has_line(72.0, 91.0, 306.0, 91.0));
+    assert!(has_line(72.0, 109.0, 306.0, 109.0));
+    assert!(has_line(311.4, 91.0, 421.4, 91.0));
+    assert!(has_line(421.4, 103.0, 531.4, 103.0));
+    assert!(has_line(306.0, 127.0, 540.0, 127.0));
+
+    let pdf = document.to_pdf_deterministic().expect("dense form PDF");
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert_eq!(pdf, document.to_pdf_deterministic().unwrap());
+    let png = document
+        .render_page_to_png_deterministic(0, 96.0)
+        .expect("dense form raster")
+        .expect("page zero");
+    assert_eq!(
+        png,
+        document
+            .render_page_to_png_deterministic(0, 96.0)
+            .unwrap()
+            .unwrap()
+    );
+    let (width, height, rgba) = decode_rgba_png(&png);
+    assert_eq!((width, height), (816, 1056));
+    let checksum = rgba.iter().fold(0xcbf29ce484222325u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    });
+    let non_white_pixels = rgba
+        .chunks_exact(4)
+        .filter(|pixel| *pixel != [255, 255, 255, 255])
+        .count();
+    let behind_pixels = rgba
+        .chunks_exact(4)
+        .filter(|pixel| *pixel == [221, 235, 255, 255])
+        .count();
+    let foreground_pixels = rgba
+        .chunks_exact(4)
+        .filter(|pixel| *pixel == [255, 215, 215, 255])
+        .count();
+    assert_eq!(checksum, 0x2319_bcbe_502e_4fe8);
+    assert_eq!(non_white_pixels, 32_221);
+    assert_eq!(
+        behind_pixels, 0,
+        "page-behind stamp is covered by cell shading"
+    );
+    assert_eq!(foreground_pixels, 1_682);
+}
+
+fn redaction_fixture() -> Document {
+    let mut seed = Document::new();
+    seed.set_title("secret core title");
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let relationship_namespace =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let relationships = package.get_or_create_part_rels("/word/document.xml");
+    let header_id = relationships.add(
+        oxml_opc::relationship::rel_types::HEADER,
+        "stories/header1.xml",
+    );
+    let footer_id = relationships.add(
+        oxml_opc::relationship::rel_types::FOOTER,
+        "stories/footer1.xml",
+    );
+    relationships.add(
+        oxml_opc::relationship::rel_types::FOOTNOTES,
+        "stories/footnotes1.xml",
+    );
+    relationships.add(
+        oxml_opc::relationship::rel_types::ENDNOTES,
+        "stories/endnotes1.xml",
+    );
+    relationships.add(
+        oxml_opc::relationship::rel_types::COMMENTS,
+        "stories/comments1.xml",
+    );
+
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="{word_namespace}" xmlns:r="{relationship_namespace}" xmlns:p="urn:producer"><w:body><p:keep>producer bytes</p:keep><w:p><w:r><w:t>body secret</w:t></w:r><w:ins w:id="1" w:author="secret author"><w:r><w:t>inserted se</w:t></w:r><w:r><w:t>cret</w:t></w:r></w:ins><w:del w:id="2" w:author="secret author"><w:r><w:delText>deleted secret</w:delText></w:r></w:del></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>table secret</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>control secret</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    for (part, root, content_type) in [
+        (
+            "/word/stories/header1.xml",
+            "hdr",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        ),
+        (
+            "/word/stories/footer1.xml",
+            "ftr",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        ),
+    ] {
+        package.set_part(
+            part,
+            format!(
+                r#"<w:{root} xmlns:w="{word_namespace}"><w:p><w:r><w:t>{root} secret</w:t></w:r></w:p></w:{root}>"#
+            )
+            .into_bytes(),
+        );
+        package.content_types.add_override(part, content_type);
+    }
+    for (part, root, item, content_type) in [
+        (
+            "/word/stories/footnotes1.xml",
+            "footnotes",
+            "footnote",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+        ),
+        (
+            "/word/stories/endnotes1.xml",
+            "endnotes",
+            "endnote",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+        ),
+    ] {
+        package.set_part(
+            part,
+            format!(
+                r#"<w:{root} xmlns:w="{word_namespace}"><w:{item} w:id="2"><w:p><w:r><w:t>{item} secret</w:t></w:r></w:p></w:{item}></w:{root}>"#
+            )
+            .into_bytes(),
+        );
+        package.content_types.add_override(part, content_type);
+    }
+    package.set_part(
+        "/word/stories/comments1.xml",
+        format!(
+            r#"<w:comments xmlns:w="{word_namespace}"><w:comment w:id="0" w:author="secret author" w:initials="secret"><w:p><w:r><w:t>comment secret</w:t></w:r></w:p></w:comment></w:comments>"#
+        )
+        .into_bytes(),
+    );
+    package.content_types.add_override(
+        "/word/stories/comments1.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package.set_part(
+        "/metadata/custom.xml",
+        br#"<p:Properties xmlns:p="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:v="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><p:property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="Client"><v:lpwstr>custom secret</v:lpwstr></p:property></p:Properties>"#.to_vec(),
+    );
+    package.content_types.add_override(
+        "/metadata/custom.xml",
+        oxml_opc::content_types::CUSTOM_PROPERTIES,
+    );
+    package.package_rels.add(
+        oxml_opc::relationship::rel_types::CUSTOM_PROPERTIES,
+        "metadata/custom.xml",
+    );
+    package.set_part("/custom/unrelated.bin", b"producer bytes".to_vec());
+    package
+        .content_types
+        .add_override("/custom/unrelated.bin", "application/octet-stream");
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    Document::from_bytes(output.get_ref()).unwrap()
+}
+
+fn assert_raw_package_has_no_selector(bytes: &[u8], selector: &str) {
+    fn absent(bytes: &[u8], selector: &str) {
+        let utf16le = selector
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert!(
+            !bytes
+                .windows(selector.len())
+                .any(|part| part == selector.as_bytes())
+        );
+        assert!(!bytes.windows(utf16le.len()).any(|part| part == utf16le));
+    }
+
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).expect("outer package");
+    absent(
+        &package.content_types.to_xml().expect("content types XML"),
+        selector,
+    );
+    absent(
+        &package
+            .package_rels
+            .to_xml()
+            .expect("package relationships XML"),
+        selector,
+    );
+    for relationships in package.part_rels.values() {
+        absent(
+            &relationships.to_xml().expect("part relationships XML"),
+            selector,
+        );
+    }
+    for part in package.parts.values() {
+        absent(part, selector);
+        if part.starts_with(b"PK\x03\x04") {
+            let nested = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(part))
+                .expect("nested package");
+            absent(
+                &nested
+                    .content_types
+                    .to_xml()
+                    .expect("nested content types XML"),
+                selector,
+            );
+            absent(
+                &nested
+                    .package_rels
+                    .to_xml()
+                    .expect("nested package relationships XML"),
+                selector,
+            );
+            for relationships in nested.part_rels.values() {
+                absent(
+                    &relationships
+                        .to_xml()
+                        .expect("nested part relationships XML"),
+                    selector,
+                );
+            }
+            for nested_part in nested.parts.values() {
+                absent(nested_part, selector);
+            }
+        }
+    }
+}
+
+#[test]
+fn redaction_removes_body_comments_revisions_and_metadata_traces() {
+    let mut document = redaction_fixture();
+    let report = document
+        .redact_text("secret")
+        .expect("redact all Word stories");
+    assert!(report.word_text >= 13, "{report:?}");
+    assert_eq!(report.metadata, 2);
+    let bytes = document.to_bytes().unwrap();
+    assert_raw_package_has_no_selector(&bytes, "secret");
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert!(!reopened.text().contains("secret"));
+    assert_eq!(reopened.title(), Some(" core title"));
+}
+
+#[test]
+fn redaction_removes_chart_cache_and_embedded_workbook_traces() {
+    let mut document = Document::new();
+    document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["secret north".to_owned(), "public".to_owned()],
+                series: vec![("secret revenue".to_owned(), vec![12.5, 19.0])],
+                number_format: None,
+            },
+        )
+        .unwrap();
+    let report = document.redact_text("secret").expect("redact chart source");
+    assert!(report.chart_caches >= 2, "{report:?}");
+    assert!(report.embedded_workbooks >= 2, "{report:?}");
+    assert_raw_package_has_no_selector(&document.to_bytes().unwrap(), "secret");
+
+    let mut numeric_document = Document::new();
+    numeric_document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["north".to_owned(), "south".to_owned()],
+                series: vec![("revenue".to_owned(), vec![12.5, 19.0])],
+                number_format: None,
+            },
+        )
+        .unwrap();
+    let numeric_report = numeric_document
+        .redact_text("12.5")
+        .expect("redact numeric chart source");
+    assert!(numeric_report.chart_caches >= 1, "{numeric_report:?}");
+    assert!(numeric_report.embedded_workbooks >= 1, "{numeric_report:?}");
+    assert_raw_package_has_no_selector(&numeric_document.to_bytes().unwrap(), "12.5");
+}
+
+fn assert_redaction_failure_preserves_document(document: &mut Document, selector: &str) {
+    let before_bytes = document.to_bytes().expect("atomic snapshot serializes");
+    let before_text = document.text();
+    let before_title = document.title().map(str::to_owned);
+    let before_paragraphs = document
+        .paragraphs()
+        .iter()
+        .map(|paragraph| paragraph.text())
+        .collect::<Vec<_>>();
+    let before_layout = document.layout().expect("atomic layout cache primes");
+
+    assert!(document.redact_text(selector).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before_bytes);
+    assert_eq!(document.text(), before_text);
+    assert_eq!(document.title(), before_title.as_deref());
+    assert_eq!(
+        document
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        before_paragraphs
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &before_layout,
+        &document.layout().expect("atomic layout cache remains")
+    ));
+}
+
+#[test]
+fn redaction_failure_is_atomic() {
+    let mut empty_selector = redaction_fixture();
+    assert_redaction_failure_preserves_document(&mut empty_selector, "");
+
+    let mut document = redaction_fixture();
+    let before = document.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+    package.set_part("/word/stories/header1.xml", b"<secret".to_vec());
+    let mut malformed = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut malformed).unwrap();
+    let mut document = Document::from_bytes(malformed.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut document, "secret");
+
+    let mut utf16_document = redaction_fixture();
+    let mut utf16_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(utf16_document.to_bytes().unwrap()))
+            .unwrap();
+    let utf16_secret = "secret"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    utf16_package.set_part("/custom/unrelated.bin", utf16_secret);
+    let mut utf16_bytes = std::io::Cursor::new(Vec::new());
+    utf16_package.write_to(&mut utf16_bytes).unwrap();
+    let mut utf16_document = Document::from_bytes(utf16_bytes.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut utf16_document, "secret");
+
+    let mut chart_document = Document::new();
+    chart_document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["secret".to_owned()],
+                series: vec![("public".to_owned(), vec![1.0])],
+                number_format: None,
+            },
+        )
+        .unwrap();
+    let mut chart_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(chart_document.to_bytes().unwrap()))
+            .unwrap();
+    let chart_part = chart_package
+        .get_part_rels("/word/document.xml")
+        .and_then(|relationships| {
+            relationships.get_by_type(oxml_opc::relationship::rel_types::CHART)
+        })
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target)
+        })
+        .unwrap();
+    let workbook_part = chart_package
+        .get_part_rels(&chart_part)
+        .and_then(|relationships| {
+            relationships.get_by_type(oxml_opc::relationship::rel_types::PACKAGE)
+        })
+        .map(|relationship| {
+            oxml_opc::OpcPackage::resolve_rel_target(&chart_part, &relationship.target)
+        })
+        .unwrap();
+
+    let mut bounded_package = chart_package.clone();
+    let mut oversized_workbook = oxml_opc::OpcPackage::new();
+    oversized_workbook
+        .content_types
+        .add_default("bin", "application/octet-stream");
+    for index in 0..1_024 {
+        oversized_workbook.set_part(&format!("/payload/{index}.bin"), Vec::new());
+    }
+    let mut oversized_bytes = std::io::Cursor::new(Vec::new());
+    oversized_workbook.write_to(&mut oversized_bytes).unwrap();
+    bounded_package.set_part(&workbook_part, oversized_bytes.into_inner());
+    let mut bounded_bytes = std::io::Cursor::new(Vec::new());
+    bounded_package.write_to(&mut bounded_bytes).unwrap();
+    let mut bounded_document = Document::from_bytes(bounded_bytes.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut bounded_document, "secret");
+
+    let workbook_relationship = chart_package
+        .get_or_create_part_rels(&chart_part)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::PACKAGE)
+        .unwrap();
+    workbook_relationship.target_mode = Some("External".to_owned());
+    workbook_relationship.target = "https://example.invalid/secret.xlsx".to_owned();
+    let mut external_bytes = std::io::Cursor::new(Vec::new());
+    chart_package.write_to(&mut external_bytes).unwrap();
+    let mut external_document = Document::from_bytes(external_bytes.get_ref()).unwrap();
+    assert_redaction_failure_preserves_document(&mut external_document, "secret");
+}
+
+#[test]
+fn redacted_package_preserves_unrelated_parts_and_relationships() {
+    let mut document = redaction_fixture();
+    let before = document.to_bytes().unwrap();
+    let before = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+    let before_content_types = before.content_types.to_xml().unwrap();
+    let before_package_relationships = before.package_rels.to_xml().unwrap();
+    let before_relationships = before
+        .part_rels
+        .iter()
+        .map(|(source, relationships)| (source.clone(), relationships.to_xml().unwrap()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let before_endnotes = before
+        .get_part("/word/stories/endnotes1.xml")
+        .unwrap()
+        .to_vec();
+    let before_custom = before.get_part("/metadata/custom.xml").unwrap().to_vec();
+    document.redact_text("secret").unwrap();
+    let after =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert_eq!(
+        after.get_part("/custom/unrelated.bin"),
+        before.get_part("/custom/unrelated.bin")
+    );
+    assert_eq!(after.content_types.to_xml().unwrap(), before_content_types);
+    assert_eq!(
+        after.package_rels.to_xml().unwrap(),
+        before_package_relationships
+    );
+    assert_eq!(
+        after
+            .part_rels
+            .iter()
+            .map(|(source, relationships)| (source.clone(), relationships.to_xml().unwrap()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before_relationships
+    );
+    assert_eq!(
+        after.get_part("/word/stories/endnotes1.xml").unwrap(),
+        String::from_utf8(before_endnotes)
+            .unwrap()
+            .replace("secret", "")
+            .as_bytes()
+    );
+    assert_eq!(
+        after.get_part("/metadata/custom.xml").unwrap(),
+        String::from_utf8(before_custom)
+            .unwrap()
+            .replace("secret", "")
+            .as_bytes()
+    );
+    let edited_parts = std::collections::HashSet::from([
+        "/word/document.xml",
+        "/word/stories/header1.xml",
+        "/word/stories/footer1.xml",
+        "/word/stories/footnotes1.xml",
+        "/word/stories/endnotes1.xml",
+        "/word/stories/comments1.xml",
+        "/docProps/core.xml",
+        "/metadata/custom.xml",
+    ]);
+    assert_eq!(
+        after.parts.keys().collect::<std::collections::HashSet<_>>(),
+        before.parts.keys().collect()
+    );
+    for (part_name, bytes) in &before.parts {
+        if !edited_parts.contains(part_name.as_str()) {
+            assert_eq!(
+                after.get_part(part_name).unwrap(),
+                bytes,
+                "untouched part changed: {part_name}"
+            );
+        }
+    }
+    let document_xml = std::str::from_utf8(after.get_part("/word/document.xml").unwrap()).unwrap();
+    let producer = document_xml
+        .find("<p:keep>producer bytes</p:keep>")
+        .unwrap();
+    let paragraph = document_xml.find("<w:p>").unwrap();
+    let table = document_xml.find("<w:tbl>").unwrap();
+    let control = document_xml.find("<w:sdt>").unwrap();
+    let section = document_xml.find("<w:sectPr>").unwrap();
+    assert!(producer < paragraph && paragraph < table && table < control && control < section);
+}
+
+#[test]
+fn raw_zip_scan_finds_no_redacted_value() {
+    let mut document = Document::new();
+    document.add_paragraph("secret secret");
+    let report = document.redact_text("secret").unwrap();
+    assert_eq!(report.total(), 2);
+    assert_raw_package_has_no_selector(&document.to_bytes().unwrap(), "secret");
 }

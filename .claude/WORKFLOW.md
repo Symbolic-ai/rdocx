@@ -247,6 +247,15 @@ Only `/close-sprint` may touch `main` or create an `sNN` sprint tag. Only
 publication. `/spec-bump` may create a local `spec-v*` tag but never pushes it.
 No command crosses those namespaces implicitly.
 
+Release notes carry a reviewed selected-family contribution inventory. Every
+included GitHub issue and pull request is linked in the rendered changelog
+body, and every authenticated external reporter or contributor receives
+specific credit for the included outcome. `/release` reports the inventory and
+planned comments before its separate final approval. After publication and
+release-body verification, it posts one release-bound thank-you comment to
+every included record and records the resulting URLs before completing the
+release F-ID.
+
 Commit message format, set by `/complete-feature`:
 
 ```

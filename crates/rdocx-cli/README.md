@@ -17,7 +17,7 @@ conventions with `rpptx-cli` through `oxml-cli-support`.
 ## Example
 
 ```sh
-cargo install rdocx-cli --version '^0.8.0'
+cargo install rdocx-cli --version '^0.9.0'
 
 rdocx inspect report.docx
 rdocx text report.docx

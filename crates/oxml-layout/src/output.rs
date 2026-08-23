@@ -113,6 +113,66 @@ pub struct SourceSpan {
     pub char_end: u32,
 }
 
+/// Stable result-local identity of one logical structure element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StructureId(NonZeroU32);
+
+impl StructureId {
+    /// Construct an identity from its one-based node index.
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// Return the one-based node index.
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+/// Backend-neutral semantic role for one logical structure element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StructureRole {
+    Document,
+    Paragraph,
+    Heading(u8),
+    List,
+    ListItem,
+    Table,
+    TableRow,
+    TableHeaderCell,
+    TableCell,
+    Figure,
+}
+
+/// One node in the result-local logical structure tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructureNode {
+    pub id: StructureId,
+    pub role: StructureRole,
+    pub children: Vec<StructureId>,
+    pub alternate_text: Option<String>,
+}
+
+/// Backend-neutral logical structure for a laid-out document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentStructure {
+    pub root: StructureId,
+    pub nodes: Vec<StructureNode>,
+}
+
+impl DocumentStructure {
+    /// Resolve a result-local structure identity.
+    pub fn node(&self, id: StructureId) -> Option<&StructureNode> {
+        self.nodes
+            .get(id.get() as usize - 1)
+            .filter(|node| node.id == id)
+    }
+}
+
 /// Kind of field for post-pagination substitution.
 ///
 /// Target carriers stay format-neutral at this shared layout boundary.
@@ -194,6 +254,14 @@ pub enum PositionedElement {
     Path(PathElement),
     /// A nested group with one child-local transform.
     Group(GroupElement),
+    /// Non-drawing semantic ownership for a sequence of positioned elements.
+    ///
+    /// `structure` is `None` for an artifact that must not enter the logical
+    /// reading order.
+    MarkedContent {
+        structure: Option<StructureId>,
+        children: Vec<PositionedElement>,
+    },
 }
 
 /// One path with optional fill and stroke paints.
@@ -245,6 +313,9 @@ pub fn walk(elements: &[PositionedElement], f: &mut impl FnMut(&PositionedElemen
                 PositionedElement::Group(group) => {
                     let child_to_page = group.transform.then(accumulated);
                     visit(&group.children, child_to_page, f);
+                }
+                PositionedElement::MarkedContent { children, .. } => {
+                    visit(children, accumulated, f);
                 }
                 leaf => f(leaf, &accumulated),
             }
@@ -354,6 +425,9 @@ pub struct LayoutResult {
     pub outlines: Vec<OutlineEntry>,
     /// Rendering approximations and fallbacks collected during layout.
     pub diagnostics: Vec<Diagnostic>,
+    /// Logical structure for tagged PDF output, when the producer has source
+    /// semantics to preserve.
+    pub structure: Option<DocumentStructure>,
 }
 
 impl LayoutResult {
@@ -377,6 +451,7 @@ impl LayoutResult {
             metadata,
             outlines,
             diagnostics: Vec::new(),
+            structure: None,
         }
     }
 }
@@ -433,6 +508,62 @@ mod media_id_tests {
             panic!("constructed image should remain an image");
         };
         assert_eq!(actual, media_id);
+    }
+}
+
+#[cfg(test)]
+mod tagged_pdf_start_feature_tests {
+    use super::{
+        Color, DocumentStructure, PositionedElement, Rect, StructureId, StructureNode,
+        StructureRole, walk,
+    };
+    use crate::Transform;
+
+    #[test]
+    fn marked_content_is_backend_neutral_and_non_drawing() {
+        let root = StructureId::new(1).expect("non-zero root");
+        let paragraph = StructureId::new(2).expect("non-zero paragraph");
+        let structure = DocumentStructure {
+            root,
+            nodes: vec![
+                StructureNode {
+                    id: root,
+                    role: StructureRole::Document,
+                    children: vec![paragraph],
+                    alternate_text: None,
+                },
+                StructureNode {
+                    id: paragraph,
+                    role: StructureRole::Paragraph,
+                    children: Vec::new(),
+                    alternate_text: None,
+                },
+            ],
+        };
+        assert_eq!(
+            structure.node(paragraph).map(|node| node.role),
+            Some(StructureRole::Paragraph)
+        );
+
+        let elements = vec![PositionedElement::MarkedContent {
+            structure: Some(paragraph),
+            children: vec![PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 1.0,
+                    y: 2.0,
+                    width: 3.0,
+                    height: 4.0,
+                },
+                color: Color::BLACK,
+            }],
+        }];
+        let mut leaves = 0;
+        walk(&elements, &mut |element, transform| {
+            assert!(matches!(element, PositionedElement::FilledRect { .. }));
+            assert_eq!(*transform, Transform::IDENTITY);
+            leaves += 1;
+        });
+        assert_eq!(leaves, 1);
     }
 }
 

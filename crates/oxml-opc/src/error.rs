@@ -67,6 +67,14 @@ pub enum OpcError {
     #[error("invalid signing certificate: {0}")]
     InvalidSigningCertificate(String),
 
+    #[cfg(feature = "digital-signatures")]
+    #[error("invalid signing key: {0}")]
+    InvalidSigningKey(String),
+
+    #[cfg(feature = "digital-signatures")]
+    #[error("digital signature creation failed: {0}")]
+    SignatureCreationFailed(String),
+
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
 }

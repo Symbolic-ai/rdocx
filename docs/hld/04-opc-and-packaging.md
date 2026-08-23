@@ -316,6 +316,14 @@ relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
 
+Word table styles parse modeled children and attributes by expanded name.
+Base table properties and conditional regions retain self-contained source XML
+with every inherited namespace binding they use. Typed table, cell, border,
+shading, and paragraph projections drive layout, while unrelated producer
+children remain at their schema positions. Unchanged projections reuse the
+preserved subtree. A typed mutation writes one canonical modeled child in
+`CT_Style` sequence order and reinserts unmodelled direct children once.
+
 The default-off `oxml-opc/agile-encryption` feature reads and writes
 password-protected OOXML packages. Readers parse the CFB `EncryptionInfo` and
 `EncryptedPackage` streams, accept namespace aliases, and reject elements that
@@ -370,6 +378,21 @@ Verification is read-only. A loaded package retains the original content-types
 bytes while its typed content types remain unchanged, so saving does not
 invalidate a signature by reserializing equivalent XML.
 
+Signature creation accepts only a PKCS#8 DER RSA private key and an X.509 DER
+certificate with the matching public key. It builds the signature origin,
+signature part, content-type overrides, and internal relationships on a cloned
+package. Collision-free names never replace occupied parts. The manifest uses
+content-type-qualified references in deterministic part and relationship
+order, authenticates every non-signature part and internal relationship, and
+signs canonical `SignedInfo` with RSA-SHA256. The package object carries the
+schema-ordered OPC `SignatureTime` property. Before allocating signature
+infrastructure, creation rejects external, duplicate, dangling, misplaced
+signature-typed, or untyped package graph entries and relationship sets whose
+source is not an existing normalized part. A package that already declares a
+signature origin is rejected instead of creating a second origin. The
+candidate replaces the live package only after every shared verifier report
+has both cryptographic validity and complete declared coverage.
+
 Comment mutations validate coordinates and allocate every required id before
 changing package or document state. Saving keeps the comments and
 comments-extended relationship graph reachable from the main document, with
@@ -395,6 +418,18 @@ accepted and rejected independently to prove both structural postconditions.
 Any metadata, alignment, unsupported-shell, parse, serialization, or
 postcondition failure leaves the original package, typed state, and caches
 unchanged.
+
+Literal redaction also uses the complete package boundary. The Word facade
+flushes a staged clone, removes one non-empty exact literal from relationship-
+resolved Word stories, comments, revisions, core and custom properties,
+ChartML caches, and internal embedded workbooks, then serializes and reopens
+the candidate. Sensitive XML is matched by expanded name. Unchanged byte
+ranges and unrelated parts remain intact. External workbook relationships,
+malformed sensitive XML, missing content types or internal targets, and ZIP
+limit failures reject the candidate. Before publication, every inflated outer
+and nested-workbook entry is scanned for both UTF-8 and UTF-16LE forms of the
+literal. Any residual trace leaves the live package, typed state, and layout
+caches unchanged.
 
 Template rendering follows the same staged package boundary. A stack parser
 pairs nested controls within one body or table-row container before evaluation.

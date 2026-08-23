@@ -484,7 +484,7 @@ impl Document {
     }
 
     /// Commit staged package state without discarding reusable layout work.
-    fn commit_staged_mutation(&mut self, mut candidate: Self) {
+    pub(crate) fn commit_staged_mutation(&mut self, mut candidate: Self) {
         std::mem::swap(
             &mut self.normal_layout_engine,
             &mut candidate.normal_layout_engine,
@@ -546,6 +546,27 @@ impl Document {
         &self,
     ) -> std::result::Result<Vec<oxml_opc::SignatureReport>, oxml_opc::OpcError> {
         self.package.verify_signatures()
+    }
+
+    /// Sign the current typed document with the strict RSA-SHA256 profile.
+    ///
+    /// The private key must be PKCS#8 DER and the certificate must be X.509
+    /// DER. Typed state is flushed and signed on a staged clone, so any
+    /// serialization, key, certificate, or signature failure leaves this
+    /// document unchanged. Certificate-chain trust remains caller policy.
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    pub fn sign(
+        &mut self,
+        private_key_pkcs8_der: &[u8],
+        certificate_der: &[u8],
+    ) -> Result<oxml_opc::SignatureReport> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let report = candidate
+            .package
+            .sign(private_key_pkcs8_der, certificate_der)?;
+        self.commit_staged_mutation(candidate);
+        Ok(report)
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
@@ -683,6 +704,37 @@ impl Document {
             .take();
     }
 
+    #[cfg(test)]
+    pub(crate) fn redaction_cache_identity(
+        &self,
+    ) -> (Option<usize>, Option<usize>, Option<usize>, Option<usize>) {
+        let layout = self
+            .layout_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| Arc::as_ptr(value) as usize);
+        let normal_engine = self
+            .normal_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| value as *const _ as usize);
+        let deterministic = self
+            .deterministic_layout_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| Arc::as_ptr(value) as usize);
+        let bundled_engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|value| value as *const _ as usize);
+        (layout, normal_engine, deterministic, bundled_engine)
+    }
+
     /// Return the normal-font layout, computing it once after each mutation.
     fn cached_layout(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         let mut cache = self
@@ -794,7 +846,7 @@ impl Document {
     }
 
     /// Write the in-memory document/styles back into the OPC package parts.
-    fn flush_to_package(&mut self) -> Result<()> {
+    pub(crate) fn flush_to_package(&mut self) -> Result<()> {
         // Serialize document.xml
         let doc_xml = self.document.to_xml()?;
         self.package.set_part(&self.doc_part_name, doc_xml);
@@ -3502,6 +3554,15 @@ impl Document {
         self.to_pdf_deterministic_with_options(RenderOptions::default())
     }
 
+    /// Render the document to the selected archival PDF profile using bundled fonts.
+    pub fn to_pdfa_deterministic(&self, profile: oxml_pdf::PdfConformance) -> Result<Vec<u8>> {
+        let layout = self.layout_for_options(RenderOptions::default(), true)?;
+        Ok(oxml_pdf::render_to_pdf_with_options(
+            &layout.layout,
+            oxml_pdf::PdfOptions::new(profile),
+        )?)
+    }
+
     /// Render the selected revision view to deterministic PDF bytes.
     pub fn to_pdf_deterministic_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
         let layout = self.layout_for_options(options, true)?;
@@ -5358,6 +5419,23 @@ mod tests {
     }
 
     #[test]
+    fn native_word_pdfa_method_selects_the_requested_profile() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Archival Word document");
+
+        for (profile, part) in [
+            (oxml_pdf::PdfConformance::PdfA2b, "2"),
+            (oxml_pdf::PdfConformance::PdfA3b, "3"),
+        ] {
+            let pdf = doc.to_pdfa_deterministic(profile).unwrap();
+            assert!(
+                String::from_utf8_lossy(&pdf)
+                    .contains(&format!("<pdfaid:part>{part}</pdfaid:part>"))
+            );
+        }
+    }
+
+    #[test]
     fn full_layout_exposes_resolvable_font_data_and_reuses_the_cache() {
         let mut doc = Document::new();
         doc.add_paragraph("complete layout result");
@@ -6281,6 +6359,28 @@ mod tests {
             .expect("deterministic Word chart layout")
     }
 
+    fn compatibility_page_elements(
+        elements: &[oxml_layout::PositionedElement],
+    ) -> Vec<&oxml_layout::PositionedElement> {
+        fn collect<'a>(
+            elements: &'a [oxml_layout::PositionedElement],
+            output: &mut Vec<&'a oxml_layout::PositionedElement>,
+        ) {
+            for element in elements {
+                match element {
+                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, output);
+                    }
+                    other => output.push(other),
+                }
+            }
+        }
+
+        let mut output = Vec::new();
+        collect(elements, &mut output);
+        output
+    }
+
     fn chart_leaf_counts(layout: &oxml_layout::LayoutResult) -> (usize, usize, usize) {
         let mut paths = 0;
         let mut text = 0;
@@ -6309,8 +6409,7 @@ mod tests {
         let layout = deterministic_chart_layout(&document);
         assert!(layout.diagnostics.is_empty());
         assert!(
-            layout.pages[0]
-                .elements
+            compatibility_page_elements(&layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -6356,13 +6455,12 @@ mod tests {
 
         let layout = deterministic_chart_layout(&document);
         assert!(layout.diagnostics.is_empty());
-        let group_index = layout.pages[0]
-            .elements
+        let elements = compatibility_page_elements(&layout.pages[0].elements);
+        let group_index = elements
             .iter()
             .position(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
             .expect("anchored chart group");
-        let text_index = layout.pages[0]
-            .elements
+        let text_index = elements
             .iter()
             .position(|element| matches!(element, oxml_layout::PositionedElement::Text(_)))
             .expect("chart label text");
@@ -6370,14 +6468,11 @@ mod tests {
             group_index <= text_index,
             "behind-text group must be emitted first"
         );
-        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[group_index]
-        else {
+        let oxml_layout::PositionedElement::Group(group) = elements[group_index] else {
             unreachable!()
         };
         assert_eq!((group.transform.e, group.transform.f), (72.0, 36.0));
-        let oxml_layout::PositionedElement::Text(foreground) =
-            &layout.pages[0].elements[text_index]
-        else {
+        let oxml_layout::PositionedElement::Text(foreground) = elements[text_index] else {
             unreachable!()
         };
         assert!(
@@ -8927,9 +9022,8 @@ mod tests {
             .layout_page(0)
             .expect("layout should succeed")
             .expect("document should have a first page");
-        let images = page
-            .elements
-            .iter()
+        let images = compatibility_page_elements(&page.elements)
+            .into_iter()
             .filter_map(|element| match element {
                 oxml_layout::PositionedElement::Image {
                     data,
@@ -9021,15 +9115,35 @@ mod watermark_tests {
     }
 
     fn page_text(layout: &oxml_layout::LayoutResult, index: usize) -> String {
-        layout.pages[index]
-            .elements
-            .iter()
-            .filter_map(|element| match element {
-                oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .concat()
+        let mut text = String::new();
+        oxml_layout::walk(&layout.pages[index].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                text.push_str(&run.text);
+            }
+        });
+        text
+    }
+
+    fn compatibility_page_elements(
+        elements: &[oxml_layout::PositionedElement],
+    ) -> Vec<&oxml_layout::PositionedElement> {
+        fn collect<'a>(
+            elements: &'a [oxml_layout::PositionedElement],
+            output: &mut Vec<&'a oxml_layout::PositionedElement>,
+        ) {
+            for element in elements {
+                match element {
+                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, output);
+                    }
+                    other => output.push(other),
+                }
+            }
+        }
+
+        let mut output = Vec::new();
+        collect(elements, &mut output);
+        output
     }
 
     fn enable_even_headers(document: &mut Document) {
@@ -9259,7 +9373,7 @@ mod watermark_tests {
         assert_eq!(layout.pages.len(), 2);
         assert!(layout.pages.iter().all(|page| {
             matches!(
-                page.elements.first(),
+                compatibility_page_elements(&page.elements).first(),
                 Some(oxml_layout::PositionedElement::Group(_))
             )
         }));
@@ -9336,7 +9450,7 @@ mod watermark_tests {
         assert_eq!(layout.pages.len(), 2);
         assert!(page_text(&layout, 1).contains("Company header"));
         assert!(matches!(
-            layout.pages[1].elements.first(),
+            compatibility_page_elements(&layout.pages[1].elements).first(),
             Some(oxml_layout::PositionedElement::Group(_))
         ));
     }
@@ -9404,8 +9518,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(
-            !first_layout.pages[0]
-                .elements
+            !compatibility_page_elements(&first_layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -9429,7 +9542,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(matches!(
-            even_layout.pages[1].elements.first(),
+            compatibility_page_elements(&even_layout.pages[1].elements).first(),
             Some(oxml_layout::PositionedElement::Group(_))
         ));
         assert!(!page_text(&even_layout, 1).contains("company header"));
@@ -9491,7 +9604,8 @@ mod watermark_tests {
             .unwrap()
             .layout
             .clone();
-        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
+        let elements = compatibility_page_elements(&layout.pages[0].elements);
+        let oxml_layout::PositionedElement::Group(group) = elements[0] else {
             panic!("expected watermark group");
         };
         let oxml_layout::PositionedElement::Text(run) = &group.children[0] else {
@@ -9523,8 +9637,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(
-            !layout.pages[0]
-                .elements
+            !compatibility_page_elements(&layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -9586,8 +9699,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(
-            !layout.pages[0]
-                .elements
+            !compatibility_page_elements(&layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -9612,7 +9724,8 @@ mod watermark_tests {
             .unwrap()
             .layout
             .clone();
-        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
+        let elements = compatibility_page_elements(&layout.pages[0].elements);
+        let oxml_layout::PositionedElement::Group(group) = elements[0] else {
             panic!("expected watermark group");
         };
         let center = group.transform.apply(oxml_layout::Point {
@@ -9648,7 +9761,7 @@ mod watermark_tests {
         assert!(layout.pages.len() > 2);
         assert!(layout.pages.iter().all(|page| {
             matches!(
-                page.elements.first(),
+                compatibility_page_elements(&page.elements).first(),
                 Some(oxml_layout::PositionedElement::Group(_))
             )
         }));

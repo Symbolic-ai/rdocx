@@ -307,6 +307,28 @@ impl OpcPackage {
         crate::signature::verify_signatures(self)
     }
 
+    /// Sign a cloned candidate package with the strict RSA-SHA256 profile.
+    ///
+    /// The private key must be PKCS#8 DER and the certificate must be X.509
+    /// DER. The live package changes only after the candidate verifies with
+    /// complete declared coverage. Certificate-chain trust remains caller
+    /// policy.
+    #[cfg(feature = "digital-signatures")]
+    pub fn sign(
+        &mut self,
+        private_key_pkcs8_der: &[u8],
+        certificate_der: &[u8],
+    ) -> Result<crate::SignatureReport> {
+        let mut candidate = self.clone();
+        let report = crate::signature::create_signature(
+            &mut candidate,
+            private_key_pkcs8_der,
+            certificate_der,
+        )?;
+        *self = candidate;
+        Ok(report)
+    }
+
     /// Get the relationships for a specific part.
     pub fn get_part_rels(&self, part_name: &str) -> Option<&Relationships> {
         self.part_rels.get(part_name)

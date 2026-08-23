@@ -474,6 +474,14 @@ drawing as one atomic package mutation. Serialization or validation failure
 leaves the document unchanged. Chart and workbook names allocate independently
 after the greatest occupied positive suffix.
 
+`Document::redact_text` keeps the two chart representations synchronized in a
+staged package. It removes the exact literal from DrawingML labels and string
+or numeric cache values, follows each internal chart package relationship, and
+rewrites shared strings, inline strings, and direct worksheet cell values in
+the embedded workbook. An external workbook, malformed ChartML or
+SpreadsheetML, missing relationship target, nested archive limit, or remaining
+raw trace rejects the complete document mutation.
+
 The reviewed Word candidate has SHA-256
 `79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b`.
 Microsoft Word 16.104, Info.plist build 16.104.25121423, opened that exact file

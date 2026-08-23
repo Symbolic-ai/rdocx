@@ -3774,10 +3774,10 @@ fn rpptx_is_an_explicit_publication_candidate() {
     let manifest = include_str!("../Cargo.toml");
     assert!(workspace.contains("\"crates/rpptx\""));
     assert!(workspace.contains(
-        "rpptx = { path = \"crates/rpptx\", version = \"0.4.0\", default-features = false }"
+        "rpptx = { path = \"crates/rpptx\", version = \"0.5.0\", default-features = false }"
     ));
     assert!(manifest.contains("name = \"rpptx\""));
-    assert!(manifest.contains("version = \"0.4.0\""));
+    assert!(manifest.contains("version = \"0.5.0\""));
     assert!(manifest.contains("publish = true"));
     assert!(manifest.contains("default = [\"default-template\", \"render\", \"system-fonts\"]"));
     assert!(manifest.contains("default-template = []"));
@@ -4782,6 +4782,22 @@ fn corpus_example_and_facade_rendering_are_identical() {
         oxml_pdf::render_to_pdf(&facade)
     );
     assert_eq!(example.input.slides.len(), facade.pages.len());
+}
+
+#[test]
+fn native_presentation_pdfa_method_selects_the_requested_profile() {
+    let mut presentation = Presentation::new().expect("create presentation");
+    presentation.add_slide(0).expect("add slide");
+
+    for (profile, part) in [
+        (oxml_pdf::PdfConformance::PdfA2b, "2"),
+        (oxml_pdf::PdfConformance::PdfA3b, "3"),
+    ] {
+        let pdf = presentation.to_pdfa_deterministic(profile).unwrap();
+        assert!(
+            String::from_utf8_lossy(&pdf).contains(&format!("<pdfaid:part>{part}</pdfaid:part>"))
+        );
+    }
 }
 
 fn presentation_with_three_dimensional_chart_fallback(preview: Option<(&[u8], &str)>) -> Vec<u8> {

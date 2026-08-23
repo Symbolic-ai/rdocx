@@ -2,7 +2,7 @@
 name = "oxml-pdf"
 description = "Format-neutral PDF renderer for staged OOXML layout output"
 readme = "README.md"
-version = "0.4.0"
+version = "0.5.0"
 publish = true
 edition.workspace = true
 license.workspace = true
@@ -12,6 +12,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
+include = ["src/**/*", "assets/sRGB2014.icc", "assets/LICENSE-sRGB2014", "README.md"]
 
 [package.metadata.release]
 shared-version = "incubating"

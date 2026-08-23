@@ -60,6 +60,19 @@ different TTC indices share one byte buffer. Both process caches are compiled
 only with `system-fonts`, and poisoned file-cache locks recover by rebuilding
 the requested entry.
 
+Tagged Word PDFs use the same deterministic layout and writer path. Structure
+node references, page-local MCIDs, parent-tree keys, conditional PDF/UA
+metadata, and XMP bytes are derived only from ordered layout input. A
+`.notdef` glyph suppresses the PDF/UA claim. These outputs add no clock, random
+identifier, host lookup, or system-font dependency. Untagged Presentation
+layouts keep the existing writer path.
+
+PDF/A-2b and PDF/A-3b use the same deterministic layout boundary. The writer
+adds no clock, random source, network lookup, or host colour service. Its fixed
+XMP and file identifiers depend only on the selected profile and ordered
+layout metadata. Ordinary PDF output remains on the existing byte-compatible
+path.
+
 Reusable managers bound shaping to 2,048 entries and 16 MiB, file bytes to 256
 entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
 entry ceilings. The reusable Word engine bounds both pending and published
@@ -87,8 +100,8 @@ on CI runners as it always would have.
 |---|---|---|---|
 | `oxml-opc` | `agile-encryption` | off | Adds native read and fixed-profile write support for password-protected OOXML packages |
 | `rdocx` | `agile-encryption` | off | Forwards encrypted native document opens and saves to `oxml-opc` |
-| `oxml-opc` | `digital-signatures` | off | Adds read-only OPC signature verification and coverage reports |
-| `rdocx` | `digital-signatures` | off | Forwards native signature verification to `oxml-opc` |
+| `oxml-opc` | `digital-signatures` | off | Adds OPC signature creation, verification, and coverage reports |
+| `rdocx` | `digital-signatures` | off | Forwards native signature creation and verification to `oxml-opc` |
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
@@ -143,6 +156,20 @@ archive must remain below the crates.io 10 MiB limit. Default-off features are
 present in package metadata even when archive verification builds the default
 graph.
 
+The format-neutral semantic types are part of the published `oxml-layout`
+source inventory. The tagged writer implementation, including
+`src/structure.rs`, is part of the published `oxml-pdf` source inventory. No
+runtime oracle, installer, validation profile, or generated PDF is packaged in
+either crate.
+
+`oxml-pdf` also packages `assets/sRGB2014.icc` and
+`assets/LICENSE-sRGB2014`. The 3,024-byte profile comes from the International
+Color Consortium registry and has SHA-256
+`384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a`.
+The adjacent legal file records the ICC distribution terms, source, retrieval
+date, byte size, and digest. The verified package inventory must contain both
+files and the archive remains below the crates.io 10 MiB ceiling.
+
 The publishable `rpptx-cli` binary contains nine commands. Its `thumbnail`
 command uses the deterministic presentation renderer, and its `outline`
 command depends only on facade traversal. The package dry run and archive-size
@@ -187,19 +214,21 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
-at 0.4.0 from the annotated `rpptx-v0.4.0` tag at reviewed SHA
-`9dee4335c531ca24abbdc995294edbb48c00183f`. This is the first published
-version of `oxml-chart`. Manifest eligibility and allowlist membership do not
-authorize a later publication without a separately approved `/release`
-invocation at the exact reviewed SHA.
+at 0.5.0 from the annotated `rpptx-v0.5.0` tag at reviewed SHA
+`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The earlier 0.4.0 registry
+release remains available, and no existing version or tag was moved. Manifest
+eligibility and allowlist membership do not authorize a later publication
+without a separately approved `/release` invocation at the exact reviewed
+SHA. The unpublished `rpptx-wasm` preparation member is also at 0.5.0 but has
+no crates.io publication path.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace 0.8.0, nine internal pins, eleven
+stable regression requires workspace 0.9.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.4.0 versions, pins,
+set. The incubating regression requires the exact 0.5.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -273,20 +302,19 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group is at 0.8.0,
-and its two Python project versions and rdocx WASM contract literals are also
-0.8.0. The exact seven-package stable family is published from the annotated
-`v0.8.0` tag at reviewed SHA
-`0cc47eb8632de184ba758fe0929d9f749ab4fcb0`. Earlier immutable registry
-releases remain available. No binding, WASM, Python, npm, or incubating package
-gained publication authority from the stable release.
+`v{{version}}` tag template. That shared-version group and its two Python
+project versions and rdocx WASM contract literals are 0.9.0. The exact
+seven-package stable family is published from the annotated `v0.9.0` tag at
+reviewed SHA `e27e519c94c90cd5be340fe5bf8e431cf542ac51`. Earlier immutable
+registry releases remain available. No binding, WASM, Python, npm, or
+incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.4.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+0.5.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 exact 15-package crates.io family listed above is published from the annotated
-`rpptx-v0.4.0` tag at reviewed SHA
-`9dee4335c531ca24abbdc995294edbb48c00183f`. The preparation group also contains
-unpublished `rpptx-wasm`, while the crates.io allowlist remains exactly 15
-packages. Earlier immutable registry releases remain available.
+`rpptx-v0.5.0` tag at reviewed SHA
+`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The preparation group also
+contains unpublished `rpptx-wasm`, while the crates.io allowlist remains
+exactly 15 packages. Earlier immutable registry releases remain available.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -307,6 +335,17 @@ evidence, then updates the exact changelog section for review with the code.
 `/release` renders and inspects that section at the reviewed SHA before its
 separate final approval. After publication it requires the GitHub release body
 to equal the same rendered bytes.
+
+The ceremony also builds one selected-family inventory of every included
+GitHub issue and pull request. The reviewed notes link each record directly and
+credit its authenticated external reporter or contributor with the specific
+outcome that landed, including hardened equivalents of unmerged reference
+implementations. Before approval, `/release` reports the complete inventory and
+the planned record-specific comments. After successful registry publication
+and exact release-body verification, it posts those comments with the final tag
+and GitHub release link, then retains their URLs in the release evidence. A
+missing link, credit, inventory entry, or notification blocks completion of the
+release F-ID.
 
 Both paths require a clean sprint branch, full verification and a clean sprint
 review recorded at the exact HEAD, a workspace dry run containing exactly the
@@ -495,9 +534,14 @@ default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
 Python, WASM, or CLI graphs.
 Ring, SHA-256, base64, and X.509 parsing have the named default-off
 `oxml-opc/digital-signatures` consumer. They do not enter ordinary, Python,
-WASM, or CLI graphs. The verifier authenticates with the embedded public key.
-Certificate-chain trust requires caller policy and no ambient trust-store
-dependency is part of the workspace graph.
+WASM, or CLI graphs. The creator uses operating-system randomness for strict
+RSA-SHA256 signing and requires a matching embedded public key. The verifier
+authenticates with that embedded key. Certificate-chain trust requires caller
+policy and no ambient trust-store dependency is part of the workspace graph.
+
+PDF/A conformance adds no crate dependency. The sRGB2014 bytes are a
+crate-local compile-time asset, and veraPDF remains external test
+infrastructure rather than production logic.
 
 The single advisory exception, an unmaintained transitive font dependency,
 carries its exit route in a comment. Keep that discipline: an ignore without a

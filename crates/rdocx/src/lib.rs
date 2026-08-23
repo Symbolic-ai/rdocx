@@ -28,6 +28,7 @@ mod document;
 mod error;
 mod field;
 pub mod paragraph;
+mod redaction;
 mod revision;
 pub mod run;
 pub mod style;
@@ -58,6 +59,7 @@ pub use rdocx_layout::RevisionView;
 pub use rdocx_oxml::settings::{
     CryptAlgorithmClass, CryptAlgorithmType, CryptProviderType, DocumentProtection, ProtectionMode,
 };
+pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use run::{Run, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
@@ -76,6 +78,19 @@ mod tests {
     #[test]
     fn native_document_forwards_signature_verification() {
         let document = crate::Document::new();
+        assert!(document.verify_signatures().unwrap().is_empty());
+    }
+
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    #[test]
+    fn native_document_exposes_atomic_signature_creation() {
+        let sign: fn(&mut crate::Document, &[u8], &[u8]) -> crate::Result<crate::SignatureReport> =
+            crate::Document::sign;
+        let mut document = crate::Document::new();
+        document.add_paragraph("atomic native signature creation");
+        let before = document.to_bytes().unwrap();
+        assert!(sign(&mut document, b"not-pkcs8", b"not-x509").is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
         assert!(document.verify_signatures().unwrap().is_empty());
     }
 }

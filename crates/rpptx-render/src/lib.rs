@@ -3337,6 +3337,7 @@ mod tests {
         );
         assert!(layout.fonts.is_empty());
         assert!(layout.outlines.is_empty());
+        assert!(layout.structure.is_none());
     }
 
     #[test]
@@ -3540,7 +3541,7 @@ mod tests {
         ] {
             assert!(!oxml_manifest.contains("rpptx-render"));
         }
-        assert!(manifest.contains("version = \"0.4.0\""));
+        assert!(manifest.contains("version = \"0.5.0\""));
         assert!(manifest.contains("publish = true"));
     }
 }

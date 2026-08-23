@@ -16,6 +16,9 @@ pub enum Error {
     #[error("layout error: {0}")]
     Layout(#[from] oxml_layout::LayoutError),
 
+    #[error("PDF conformance error: {0}")]
+    Pdf(#[from] oxml_pdf::PdfError),
+
     #[error("document has no main document part")]
     NoDocumentPart,
 

@@ -77,9 +77,10 @@ lower-level seam as a second document model. Its default-off
 cryptographic primitives only when a named native consumer enables it.
 The default-off `digital-signatures` edge follows the same boundary. It keeps
 exclusive XML canonicalization, OPC relationship transforms, RSA-SHA256
-verification, and X.509 parsing in `oxml-opc`. `rdocx` only forwards the
-native package report. Ordinary and WASM graphs do not include the signature
-dependencies.
+creation and verification, and X.509 parsing in `oxml-opc`. `rdocx` forwards
+the native package report and stages typed document state before requesting a
+package signature. Ordinary, Python, WASM, and CLI graphs do not include the
+signature dependencies.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It
@@ -104,6 +105,15 @@ result-local node id plus an exclusive Unicode-scalar range. Shared line
 breaking preserves and subdivides that range without learning what the node
 means. Consumers must resolve an id through the format-specific result that
 created it and must not compare ids from different results.
+
+`DocumentStructure`, `StructureNode`, `StructureRole`, and `StructureId` are
+the format-neutral accessibility carriers at the same boundary. A
+`PositionedElement::MarkedContent` container assigns one structure node to its
+exact positioned children, or assigns no node when those children are an
+artifact. Word layout builds this tree from source headings, lists, tables,
+and drawing descriptions before pagination. Presentation layout leaves the
+optional tree absent. Shared walkers and raster output recurse through the
+container without treating it as drawing geometry.
 
 An otherwise empty Word paragraph crosses the same boundary as one empty,
 zero-width text segment. The segment resolves the paragraph mark's default
@@ -141,6 +151,14 @@ and header probing. It has no format-specific workspace dependency. A slide is
 a page with a fixed size, so the same crate serves both formats without knowing
 either exists. The `rdocx` facade renders through this crate directly, while
 `rdocx-pdf` remains an exact deprecated re-export shim.
+
+When the optional document structure is present, `oxml-pdf` alone owns PDF
+marked-content operators, page-local MCIDs, structure elements, list bodies,
+the parent tree, conditional PDF/UA metadata, and catalog accessibility
+entries. The writer rejects malformed public structure graphs and withholds a
+PDF/UA claim when shown text uses the `.notdef` glyph. This backend work does
+not introduce a Word dependency. A result without structure uses the existing
+untagged writer path.
 
 **`rpptx-layout` is separate from `rpptx-render`.** The inheritance resolver
 produces a `ResolvedSlide` in which every theme reference, colour transform and
@@ -437,22 +455,30 @@ an endnote sharing a number.
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
-incubating version in their manifests and workspace pins. The family adds
+incubating version in their manifests and workspace pins. All 15 candidates
+are published together at 0.5.0 from the annotated `rpptx-v0.5.0` tag at
+reviewed SHA `343388e19bce21b3d83f17e8cc0e5418861a94cb`. The unpublished
+`rpptx-wasm` preparation member is also at 0.5.0 but has no crates.io
+publication path. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
-source-compatible deprecated shim. The released `rdocx-*` crates continue to
-use the separate workspace version. That stable workspace and its exact
-seven-package crates.io family are published coherently at 0.8.0 from the
-annotated `v0.8.0` tag. Version preparation and manifest eligibility do not
-authorize publication. Every later release still
-requires `/release` at an exact reviewed SHA and separate final approval at
-the external mutation boundary. `oxml-cli-support` is the format-neutral owner
-of range parsing, JSON envelope, and output-path contracts. It has no
-dependency on either document family, while CLI binaries depend inward on it.
+source-compatible deprecated shim. The released `rdocx-*` crates use the
+separate workspace version. That stable workspace and its exact seven-package
+crates.io family are published coherently at 0.9.0 from the annotated
+`v0.9.0` tag at reviewed SHA
+`e27e519c94c90cd5be340fe5bf8e431cf542ac51`. The workspace includes nine
+internal pins, eleven inherited lockfile packages, two Python project
+versions, and the unpublished `rdocx-wasm` package at 0.9.0. Earlier immutable
+registry releases remain available. Version preparation and manifest
+eligibility do not authorize any later publication. `oxml-cli-support` is the
+format-neutral owner of range parsing,
+JSON envelope, and output-path contracts. It has no dependency on either
+document family, while CLI binaries depend inward on it.
 
 The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
 `oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The original
-14-package family is published at the immutable 0.1.3 and 0.2.0 boundaries. No
-existing tag or registry version was moved or overwritten.
+14-package family is published at the immutable 0.1.3 and 0.2.0 boundaries,
+and the earlier 15-package family remains available at 0.4.0. No existing tag
+or registry version was moved or overwritten.
 
 The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across

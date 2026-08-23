@@ -175,26 +175,26 @@ README_CASES = (
 
 README_REQUIRED_TEXT = {
     REPO_ROOT / "README.md": (
-        'rdocx = "0.8.0"',
-        'rdocx = { version = "0.8.0", default-features = false }',
+        'rdocx = "0.9.0"',
+        'rdocx = { version = "0.9.0", default-features = false }',
         "rdocx convert report.docx --to pdf -o report.pdf",
         "rdocx convert report.docx --to html -o report.html",
         "rdocx convert report.docx --to md -o report.md",
         'rdocx replace report.docx --placeholder "Draft" --value "Final" -o final.docx',
     ),
     REPO_ROOT / "crates/rdocx-cli/README.md": (
-        "cargo install rdocx-cli --version '^0.8.0'",
+        "cargo install rdocx-cli --version '^0.9.0'",
         "rdocx convert report.docx --to pdf -o report.pdf",
     ),
-    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.8.0"',),
-    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.8.0"',),
+    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.9.0"',),
+    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.9.0"',),
     REPO_ROOT / "crates/rdocx-opc/README.md": (
-        'rdocx-opc = "0.8.0"',
+        'rdocx-opc = "0.9.0"',
         "use rdocx_opc::OpcPackage;",
     ),
-    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.8.0"',),
+    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.9.0"',),
     REPO_ROOT / "crates/rdocx-pdf/README.md": (
-        'rdocx-pdf = "0.8.0"',
+        'rdocx-pdf = "0.9.0"',
         "use rdocx_pdf::render_to_pdf;",
     ),
     REPO_ROOT / "crates/oxml-cli-support/README.md": (
@@ -224,7 +224,7 @@ README_REQUIRED_TEXT = {
     REPO_ROOT / "crates/oxml-chart/README.md": ("AxisId::new(10_000_001)?",),
     REPO_ROOT / "crates/rpptx-chart/README.md": ("AxisId::new(10_000_001)?",),
     REPO_ROOT / "crates/rpptx-cli/README.md": (
-        "cargo install rpptx-cli --version '^0.4.0'",
+        "cargo install rpptx-cli --version '^0.5.0'",
         "rpptx convert deck.pptx --to pdf -o deck.pdf",
     ),
     REPO_ROOT / "crates/rpptx-py/README.md": (
