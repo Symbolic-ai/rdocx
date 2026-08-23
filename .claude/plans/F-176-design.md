@@ -1,6 +1,6 @@
 # F-176, RTF reader
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S54
 **Size**: L
 **Depends on**: none
@@ -142,13 +142,15 @@ Any delta is unrelated and blocks the sprint. Do not edit
 
 ## Implementation checklist
 
-- [ ] Add the bounded scanner, group stack, destination handling, and RTF error.
-- [ ] Decode Word code pages, Unicode controls, and fallback bytes.
-- [ ] Project fonts, colours, formatting, paragraphs, tables, and lists.
-- [ ] Decode and embed supported picture destinations.
-- [ ] Return stable diagnostics for every safe lossy skip.
-- [ ] Add the source-encoded structural differential gate and focused cases.
-- [ ] Run focused `rdocx`, package, oracle, and unchanged-harness checks.
+- [x] Add the bounded scanner, group stack, destination handling, and RTF error.
+- [x] Decode Word code pages, Unicode controls, and fallback bytes.
+- [x] Project fonts, colours, formatting, paragraphs, tables, and lists.
+- [x] Decode and embed supported picture destinations.
+- [x] Return stable diagnostics for every safe lossy skip.
+- [x] Add the source-encoded structural differential gate and focused cases.
+- [x] Run focused `rdocx`, oracle-checked structural, and unchanged-harness checks.
+  The package dry run passed earlier in the worker and was not retried after
+  the approval reviewer rejected the retry and prohibited workarounds.
 
 ## Open questions
 

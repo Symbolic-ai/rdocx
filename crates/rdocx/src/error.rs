@@ -25,6 +25,9 @@ pub enum Error {
     #[error("image dimensions are unavailable for {filename}")]
     UnavailableImageDimensions { filename: String },
 
+    #[error("RTF parse error at byte {offset}: {message}")]
+    Rtf { offset: usize, message: String },
+
     #[error("{0}")]
     Other(String),
 }

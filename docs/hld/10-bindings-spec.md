@@ -201,6 +201,16 @@ mutation for a larger value. `Document::set_list_level` can redefine an
 existing level without rebuilding the document. A rejected redefinition is
 side-effect free.
 
+Native Rust callers can import RTF through `Document::from_rtf_bytes` and
+`Document::open_rtf`. These additive pre-1.0 APIs return an `RtfReadResult`
+that carries both the converted `Document` and every stable diagnostic for
+content that was safely dropped. The reader accepts the Word-written subset for
+text, formatting, tables, lists, and PNG or JPEG images. Unsupported
+destinations and visible formatting drops are reported instead of hidden.
+Malformed RTF returns the facade `Error::Rtf` variant without exposing a second
+document model. Python, WASM, and CLI surfaces do not gain RTF entry points
+implicitly.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method

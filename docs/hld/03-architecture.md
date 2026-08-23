@@ -563,6 +563,15 @@ Self-closing Word paragraphs and tables normalize to typed empty values, while
 self-closing final section properties remain outside the item vector. Empty
 foreign and unsupported children remain captured raw rather than being lost.
 
+The `rdocx` facade also owns RTF import. The private RTF reader parses the
+Word-written subset for text, run and paragraph formatting, tables, lists, and
+PNG or JPEG pictures directly into the same `Document` ownership tree that
+DOCX opens use. Its scanner and destination stack stay inside `rdocx`, while
+media bytes flow through `oxml-media` for sniffing and intrinsic size. Safe
+lossy skips return stable `RtfDiagnostic` records, and malformed groups,
+Unicode state, numeric controls, table structure, lookup references, and image
+payloads fail through the facade error enum.
+
 Revision traversal follows that ownership tree through the main body, tables,
 cells, and content controls. `Document::revisions` reports every valid modeled
 revision once in document order as a borrowed `RevisionRef`. The facade does

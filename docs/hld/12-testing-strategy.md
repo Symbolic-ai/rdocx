@@ -64,6 +64,15 @@ inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
 
+The RTF reader differential records Microsoft Word 16.104 build
+16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
+covers body order, run and paragraph formatting, tables, list overrides, PNG
+images, diagnostics, and generated-DOCX reopen behavior. The normalized record
+binds run formatting, including all-caps, small-caps, hidden text, breaks, and
+tabs, to the generated and reopened body runs rather than relying on global
+markers. The ignored regeneration gate opens the DOCX saved by that exact Word
+build and compares the same structural record.
+
 The digital-signature regression gate constructs its DOCX and signature XML
 in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
 and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace

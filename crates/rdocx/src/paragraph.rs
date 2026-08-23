@@ -189,6 +189,24 @@ impl<'a> Paragraph<'a> {
         self.inner.runs.push(run);
     }
 
+    /// Add a tab in its own run.
+    pub(crate) fn add_tab(&mut self) {
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::Tab];
+        self.inner.runs.push(run);
+    }
+
+    /// Append an inline picture run using an existing document relationship.
+    pub(crate) fn add_picture(&mut self, rel_id: &str, width: Length, height: Length) {
+        use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
+
+        let inline = CT_Inline::new(rel_id, width.to_emu(), height.to_emu());
+        let drawing = CT_Drawing::inline(inline);
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::Drawing(drawing)];
+        self.inner.runs.push(run);
+    }
+
     /// Add a run wrapped in an external hyperlink relationship.
     ///
     /// Obtain `relationship_id` from
@@ -517,6 +535,12 @@ impl<'a> Paragraph<'a> {
         let ppr = self.ensure_ppr();
         ppr.line_spacing = Some(Twips::from_pt(pt));
         ppr.line_rule = Some("exact".to_string());
+    }
+
+    pub(crate) fn set_line_spacing_at_least(&mut self, pt: f64) {
+        let ppr = self.ensure_ppr();
+        ppr.line_spacing = Some(Twips::from_pt(pt));
+        ppr.line_rule = Some("atLeast".to_string());
     }
 
     /// Clear direct line spacing.

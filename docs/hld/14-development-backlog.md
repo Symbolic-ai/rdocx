@@ -1452,8 +1452,14 @@ new front end onto a layout engine that exists.
 level, and every lossy conversion records a diagnostic naming what it dropped.
 
 ### F-176, RTF reader (L)
-The control-word grammar, destinations, code pages and the subset of RTF that
-Word itself writes. Scoped to text, formatting, tables, lists and images.
+The native `rdocx` facade reads the Word-written RTF subset through
+`Document::from_rtf_bytes` and `Document::open_rtf`. The reader owns bounded
+control-word scanning, destination and group state, Unicode fallback handling,
+font and colour tables, list tables and overrides, code-page decoding, table
+rows, and PNG or JPEG picture projection. It converts text, run and paragraph
+formatting, tables, lists, and images into the normal `Document` tree. Safe
+lossy skips return stable diagnostics naming the dropped destination or
+formatting control, while malformed RTF fails closed through `Error::Rtf`.
 **Depends on**: none.
 **Test gate**: differential. An RTF file converted to docx here matches the same
 file opened and saved as docx by the pinned oracle, compared structurally.
