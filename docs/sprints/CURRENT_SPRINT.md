@@ -1,101 +1,62 @@
-# Current Sprint, S53
+# Current Sprint, S54
 
-**Milestone**: M17 Security and compliance.
+**Milestone**: M18 Format breadth.
 
-**Goal**: finish the security and compliance milestone with documents that an
-enterprise or public body can accept. Add standards-compatible package signing,
-semantic tagged PDF, PDF/A-2b and PDF/A-3b output, destructive redaction, and
-the dense-form table fidelity reported in Issue 42 and PR 43. Publish the
-complete incubating and stable Rust families with reviewed contributor credit.
+**Goal**: open M18 with the inbound format that blocks the most corpora by
+reading and writing the RTF subset Word emits. Add shared image export controls
+and honor document-facing family aliases supplied with caller fonts without
+duplicating font bytes or weakening reusable-engine cache identity.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for keeping package security, document
-  semantics, PDF generation, and embedded chart workbooks in their existing
-  ownership layers.
-- `docs/hld/04-opc-and-packaging.md`, for signature relationships, canonical
-  package bytes, staged mutation, content types, and preservation of unrelated
-  package parts.
-- `docs/hld/08-rendering-spec.md`, for carrying Word semantics into marked PDF
-  content, structure trees, font resources, metadata, and backend output.
-- `docs/hld/09-charts-spec.md`, for removing redacted values from embedded
-  chart workbooks without leaving cached or modeled traces.
-- `docs/hld/10-bindings-spec.md`, for additive native signing, PDF conformance,
-  and redaction APIs with unchanged Python, WASM, and CLI boundaries unless a
-  feature design explicitly expands them.
-- `docs/hld/12-testing-strategy.md`, for readable regression fixtures,
-  round-trip and external-oracle evidence, raw-package scans, accessibility
-  structure checks, and full workspace gates.
-- `docs/hld/14-development-backlog.md`, for the M17 goal, the four S53 stories,
-  their dependencies, and their exact test gates.
-- `docs/hld/15-build-and-toolchain.md`, for feature isolation, dependency and
-  licence policy, WASM checks, packaging, and publication-safe verification.
+- `docs/hld/03-architecture.md`, for the Word facade, reusable layout engine,
+  caller-font context, and ownership boundaries shared by the new format paths.
+- `docs/hld/08-rendering-spec.md`, for backend-neutral page output and the
+  raster behavior that image export options must preserve.
+- `docs/hld/10-bindings-spec.md`, for native rendering entry points,
+  caller-supplied font APIs, and unchanged Python and WASM boundaries.
+- `docs/hld/12-testing-strategy.md`, for differential RTF evidence,
+  round-trip fidelity, named regressions, and deterministic output gates.
+- `docs/hld/14-development-backlog.md`, for the M18 goal and the exact scope,
+  dependencies, and test gates of all four stories.
+- `docs/hld/15-build-and-toolchain.md`, for deterministic caller-font
+  isolation, WASM checks, packaging, and the unchanged hash-harness contract.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-172 | Digital signature creation | M | done | - |
-| F-173 | Tagged PDF structure tree | L | done | - |
-| F-175 | Redaction | M | done | - |
-| F-X048 | Dense form table fidelity | L | done | - |
-| F-174 | PDF/A conformance | M | done | - |
-| F-X049 | Tag rpptx-v0.5.0 | S | done | - |
-| F-X050 | Tag v0.9.0 | S | done | - |
+| F-176 | RTF reader | L | pending | - |
+| F-177 | RTF writer | M | pending | - |
+| F-183 | Image export options | S | pending | - |
+| F-X051 | Honor caller-supplied font family aliases | M | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-172 builds on the signature verification and authenticated coverage model
-completed in F-171. F-173 is an independent rendering root and establishes the
-semantic PDF structure that F-174 must retain while adding PDF/A output intent,
-metadata, and prohibited-feature checks. F-175 is also ready because F-147 and
-F-149 are complete. It may proceed independently, but its body, comments,
-revisions, properties, and chart-workbook mutation paths must remain staged and
-failure safe. F-X048 is an independent community-report root, but it owns a
-separate deterministic layout-baseline tranche and must preserve the exact,
-transactional cache contracts from S52. F-X049 waits for the shared package and
-PDF stories, then publishes incubating 0.5.0. F-X050 waits for every stable
-story and the published incubating graph, then publishes stable 0.9.0. Each tag
-has its own final approval boundary.
+F-176 establishes the grammar, destinations, code pages, and typed document
+projection that F-177 writes back, so the writer starts only after the reader
+contract is stable. F-183 is independent and rides along because every format
+in M18 shares the image export entry points. F-X051 is also independent of RTF
+work because its reusable-engine dependency, F-X043, is already complete. It
+reimplements Issue 44 and PR 45 against the current bounded cache contracts.
 
 ## Definition of done for this sprint
 
-- A package signed here with a supplied key and certificate verifies through
-  the F-171 verifier and in the pinned Microsoft Word oracle.
-- Signature creation covers the complete declared package graph, uses strict
-  supported algorithms and schema order, and leaves the live package unchanged
-  on key, certificate, canonicalization, relationship, or write failure.
-- A rendered PDF emits `/StructTreeRoot`, marked content, heading levels, list
-  nesting, table headers, and alternate text that match the source semantics.
-- Tagged output preserves visible PDF and raster results unless an approved
-  design declares and reviews a deterministic baseline change.
-- PDF/A-2b and PDF/A-3b output embeds the required output intent and metadata,
-  rejects prohibited features, and passes the declared conformance checker.
-- PDF/A output retains the F-173 structure tree and continues to satisfy the
-  PDF/UA structure check required by the M17 gate.
-- Redaction removes selected text and every recoverable trace from body,
-  comments, revisions, document metadata, chart caches, and embedded chart
-  workbooks rather than covering content visually.
-- Redaction failure is atomic, unrelated parts and unmodelled XML remain
-  byte-preserved, and a raw ZIP scan cannot find the redacted value.
-- New cryptographic, PDF, or conformance dependencies satisfy supply-chain,
-  feature-isolation, default-off, WASM, package-size, and licence gates.
-- The full workspace gate passes with all deterministic hashes unchanged unless
-  an approved design declares a reviewed delta.
-- The M17 end gate passes: an encrypted document opens with its password, a
-  signed document verifies, and a rendered PDF passes a PDF/UA structure check.
-- The Issue 42 dense-form fixture renders as one page with nested tables,
-  vertical merges, exact rows, style-derived borders and spacing, correct empty
-  paragraph metrics, and cell-anchored foreground and behind-page drawings.
-- PR 43 is closed only after the useful behavior lands through the current
-  checked engine and bounded cache contracts, with its contributor credited.
-- Reviewed `rpptx-v0.5.0` and `v0.9.0` changelog sections separate the two
-  package families and link every included external issue and pull request.
-- Every included issue and pull request receives a maintainer comment naming
-  its release, the implementation boundary, and the verified contributor
-  credit after successful publication and release-body verification, and
-  before the release F-ID completes.
-- Incubating 0.5.0 and stable 0.9.0 each pass their exact release gates and are
-  published only after separate immediate approvals at reviewed SHAs.
+- The RTF reader handles the Word-written subset for text, formatting, tables,
+  lists, images, destinations, and code pages.
+- An RTF fixture converted here to DOCX matches the pinned oracle conversion
+  structurally at the declared differential boundary.
+- The RTF writer preserves the same supported content when its output is read
+  back, with every lossy conversion naming what it dropped in a diagnostic.
+- Image entry points support multi-page TIFF, JPEG quality, transparent PNG
+  backgrounds, and page ranges that select exactly the requested pages.
+- Caller font resolution tries exact embedded families before byte-free caller
+  aliases, then retains the existing mapped and generic fallback order.
+- Unchanged aliases reuse safe work, changed aliases invalidate only affected
+  resolution state, and warm and cold pages, fonts, diagnostics, and provenance
+  remain equal.
+- Issue 44 and PR 45 land through the hardened reusable-engine path with
+  `@emptinessform` retained for credit in the next release containing the work.
+- Both WASM targets pass and the deterministic hash harness remains unchanged.
