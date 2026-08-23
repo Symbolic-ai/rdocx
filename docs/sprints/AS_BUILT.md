@@ -8413,3 +8413,202 @@ carrier removal for PDF and raster comparison.
 
 **Notes for future sessions.** This completes the safe remaining visible
 behavior from PR 41 by `emptinessform` without synthesizing a space or glyph.
+
+### F-172, Digital signature creation
+
+**Sprint.** S53
+**Completed.** 2026-08-23
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The feature-gated OPC package and native Word facade can
+create deterministic RSA-SHA256 digital signatures from PKCS#8 key material
+and an X.509 certificate. Creation stages the complete signature graph,
+verifies every resulting signature report, and publishes only after complete
+cryptographic and relationship coverage succeeds.
+
+**Non-obvious choices.** Certificate trust remains caller policy. The unsigned
+relationship graph is validated before part allocation so dangling targets,
+misplaced signature relationship types, and invalid orphan signature parts
+cannot be repaired or hidden by signing.
+
+**Deviations from the design plan.** The external oracle was revised to the
+available Word for Mac 16.104 evidence. Word recognized the signature and
+protected the document, while the exact serialized and reopened bytes passed
+local cryptographic and coverage verification. No Windows trust verdict is
+claimed. Microscope review added the unsigned-graph and all-report checks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `signature_creation_uses_schema_order_and_complete_canonical_references`,
+`signature_creation_rejects_mismatched_or_unsupported_key_material`,
+`signed_package_verifies_with_complete_coverage`,
+`every_signature_creation_failure_leaves_live_package_unchanged`, and
+`word_for_mac_recognizes_and_protects_the_created_signature`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The Mac oracle proves recognition and document
+protection. It does not replace Windows certificate-chain trust evidence.
+
+### F-173, Tagged PDF structure tree
+
+**Sprint.** S53
+**Completed.** 2026-08-23
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Word pagination now carries one backend-neutral semantic
+tree into deterministic PDF marked content. The writer emits headings, nested
+lists, table roles, figures with alternate text, page parent arrays,
+`StructTreeRoot`, `MarkInfo`, language, titles, links, and destinations with
+exact MCID ownership.
+
+**Non-obvious choices.** Decorative paint is always an artifact. Invalid
+public structure graphs fall back without orphan MCIDs. Presentation output
+keeps `structure: None`. A PDF containing a shown `.notdef` glyph remains
+tagged but truthfully omits the PDF/UA identification claim.
+
+**Deviations from the design plan.** The real `feature_showcase` sample exposed
+its pre-existing glyph-zero content, so it cannot claim PDF/UA yet. The other
+six claiming samples and the in-code fixture pass veraPDF 1.30.2. Audit passes
+also strengthened source-order, malformed-graph, artifact, and multipage
+ParentTree evidence.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `marked_content_is_backend_neutral_and_non_drawing`,
+`tagged_pdf_preserves_heading_and_nested_list_structure`,
+`tagged_pdf_marks_table_headers_and_cells`,
+`tagged_pdf_carries_figure_alternate_text`, and
+`tagging_preserves_visible_pdf_and_raster_output`, plus veraPDF 1.30.2 `ua1`
+validation.
+
+**Hash harness.** Fourteen declared changes, `pdf/bytes` and `pdf/pages` for
+all seven samples. PNG, PDF resource, and OOXML entries are unchanged.
+
+**Notes for future sessions.** Fix the source glyph-zero content before making
+`feature_showcase.pdf` advertise PDF/UA conformance.
+
+### F-174, PDF/A conformance
+
+**Sprint.** S53
+**Completed.** 2026-08-23
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The shared PDF writer and native Word and Presentation
+facades now expose explicit deterministic PDF/A-2b and PDF/A-3b paths. They
+preflight fonts, structure, links, paint, and colour before allocation, then
+emit matching XMP, deterministic identifiers, and the bundled sRGB2014 output
+intent while retaining tagged structure.
+
+**Non-obvious choices.** Ordinary PDF entry points remain byte-identical.
+Archival link annotations set the Print flag. Unsupported tile paint fails with
+a named error before output instead of being silently dropped.
+
+**Deviations from the design plan.** Microscope review added the annotation
+flag and tile-paint preflight. The PDF/UA XMP extension declaration was also
+required by the pinned validator.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `pdfa_profiles_emit_matching_xmp_and_output_intent`,
+`pdfa_rejects_prohibited_or_incomplete_features_before_output`,
+`ordinary_pdf_api_remains_byte_identical`,
+`pdfa_retains_tagged_structure_tree`, and
+`pdfa_2b_and_3b_pass_verapdf` under veraPDF 1.30.2.
+
+**Hash harness.** Unchanged by this story, 49 of 49 against the reviewed
+integrated baseline.
+
+**Notes for future sessions.** The packaged ICC profile digest is
+`384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a`.
+
+### F-175, Redaction
+
+**Sprint.** S53
+**Completed.** 2026-08-23
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Document::redact_text` performs exact native redaction
+across visible and revision Word text, comments, notes, metadata, ChartML
+caches, and relationship-resolved embedded workbooks. It handles UTF-8 and
+BOM-marked UTF-16 XML, nested packages, entity-normalized content, and
+fixed-point matches before a raw residual scan.
+
+**Non-obvious choices.** The operation flushes to a staged package, rewrites
+only approved expanded names and raw value spans, reparses and validates every
+sensitive part, and publishes only after the outer and nested scans pass.
+Python, WASM, and CLI surfaces remain unchanged.
+
+**Deviations from the design plan.** Eleven microscope passes expanded the XML
+lexical validator, revision projections, flow boundaries, UTF-16 support,
+duplicate relationship checks, fixed-point behavior, and atomic cache and
+engine evidence. The public contract stayed within the approved native API.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/09-charts-spec.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** `redaction_rewrites_only_approved_xml_text_and_attributes`,
+`redaction_removes_body_comments_revisions_and_metadata_traces`,
+`redaction_removes_chart_cache_and_embedded_workbook_traces`,
+`redaction_failure_is_atomic`,
+`redacted_package_preserves_unrelated_parts_and_relationships`, and
+`raw_zip_scan_finds_no_redacted_value`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep redaction native-only unless a later plan
+explicitly designs the policy and atomicity boundary for another adapter.
+
+### F-X048, Dense form table fidelity
+
+**Sprint.** S53
+**Completed.** 2026-08-23
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Word table cells now retain source-ordered recursive
+paragraph and nested-table blocks. Layout implements grid-span-aware vertical
+merges, exact and minimum row rules, style inheritance and conditional layers,
+outer nil-border fallback, cell-relative anchors, paragraph-mark metrics, and
+bounded transactional cache accounting with provenance rebinding.
+
+**Non-obvious choices.** Exact rows clip cell content while leaving borders
+outside the clip. Merged content grows the final eligible non-exact row. The
+native paragraph facade adds text that inherits direct paragraph-mark run
+properties without synthesizing a glyph for an empty mark.
+
+**Deviations from the design plan.** Microsoft Word was unavailable on the
+worker host, so no external Word geometry observation is claimed. The readable
+one-page deterministic PDF and raster fixture remains authoritative. Review
+added exact clipping, terminal merge borders, conditional shading, character
+anchor indent, and mutation-safe preserved style output.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** `nested_tables_remain_recursive_cell_blocks`,
+`vertical_merges_and_row_height_rules_share_the_exact_grid_span`,
+`table_style_cascade_resolves_borders_and_paragraph_spacing`,
+`cell_anchors_use_cell_coordinates_and_page_behind_order`,
+`outer_nil_border_matches_word_without_changing_interior_nil`,
+`empty_form_paragraphs_use_mark_metrics_and_new_runs_inherit_them`,
+`dense_form_matches_reviewed_one_page_geometry`, and
+`dense_form_caches_are_transactional_bounded_and_exact`.
+
+**Hash harness.** Two declared changes within the F-173 PDF category,
+`feature_showcase:pdf/bytes` and `feature_showcase:pdf/pages`, caused by the
+recursive nested table and corrected vertical-merge borders. All other entries
+are unchanged from the preceding reviewed baseline.
+
+**Notes for future sessions.** The `CellBlock` recursion is part of cache keys,
+retained-byte limits, source mapping, semantic ownership, and painting. Treat
+all five paths as one contract when changing table layout.

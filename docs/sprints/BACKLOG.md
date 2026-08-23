@@ -32,12 +32,12 @@ regenerated, never hand-edited.
 | M14, Word collaboration layer                  | 9  | 9 | 0 | 0  |
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
-| M17, Security and compliance                   | 7  | 3 | 4 | 0  |
+| M17, Security and compliance                   | 7  | 7 | 0 | 0  |
 | M18, Format breadth                            | 8  | 0 | 0 | 8  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 53 | 48 | 2 | 2  |
-| **Total** | **264** | **228** | **6** | **29** |
+| X, Cross-cutting (opportunistic)            | 53 | 49 | 1 | 2  |
+| **Total** | **264** | **233** | **1** | **29** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -339,10 +339,10 @@ regenerated, never hand-edited.
 | F-169 | Agile encryption, read                       | S52  | L | done |
 | F-170 | Agile encryption, write                      | S52  | M | done |
 | F-171 | Digital signature verification               | S52  | L | done |
-| F-172 | Digital signature creation                   | S53  | M | in-progress |
-| F-173 | Tagged PDF structure tree                    | S53  | L | in-progress |
-| F-174 | PDF/A conformance                            | S53  | M | in-progress |
-| F-175 | Redaction                                    | S53  | M | in-progress |
+| F-172 | Digital signature creation                   | S53  | M | done |
+| F-173 | Tagged PDF structure tree                    | S53  | L | done |
+| F-174 | PDF/A conformance                            | S53  | M | done |
+| F-175 | Redaction                                    | S53  | M | done |
 <!-- AUTOGEN:backlog-M17 END -->
 
 ### M18, Format breadth
@@ -448,7 +448,7 @@ regenerated, never hand-edited.
 | F-X045 | Cache headers and footers transactionally  | S52 | M | done |
 | F-X046 | Reuse substituted pages exactly            | S52 | S | done |
 | F-X047 | Attribute empty Word paragraphs            | S52 | S | done |
-| F-X048 | Dense form table fidelity                  | S53 | L | in-progress |
+| F-X048 | Dense form table fidelity                  | S53 | L | done |
 | F-X049 | Tag rpptx-v0.5.0                           | S53 | S | in-progress |
 | F-X050 | Tag v0.9.0                                 | S53 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

@@ -300,6 +300,11 @@ defended.
 | F-X045 | S52 | M | 2 | 1 | 2026-08-22 | Transactional exact bounded header and footer cache from PR 41 |
 | F-X046 | S52 | S | 1 | 1 | 2026-08-22 | Exact bounded substituted-page Arc reuse from PR 41 |
 | F-X047 | S52 | S | 1 | 1 | 2026-08-22 | Invisible attributed caret carriers for empty Word paragraphs from PR 41 |
+| F-172 | S53 | M | 2 | 1 | 2026-08-23 | Atomic RSA-SHA256 OPC signature creation with Word for Mac recognition |
+| F-173 | S53 | L | 4 | 1 | 2026-08-23 | Deterministic tagged PDF structure with PDF/UA validation |
+| F-174 | S53 | M | 2 | 1 | 2026-08-23 | Deterministic PDF/A-2b and PDF/A-3b conformance paths |
+| F-175 | S53 | M | 2 | 1 | 2026-08-23 | Atomic exact native redaction across document and workbook XML |
+| F-X048 | S53 | L | 4 | 1 | 2026-08-23 | Recursive dense-form tables with reviewed one-page geometry |
 
 ## Velocity
 
