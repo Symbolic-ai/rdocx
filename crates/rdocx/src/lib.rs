@@ -62,7 +62,7 @@ pub use rdocx_oxml::settings::{
 };
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
-pub use rtf::{RtfDiagnostic, RtfReadResult};
+pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{Run, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
 pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
@@ -124,6 +124,74 @@ mod tests {
         }
         oversized_table.push_str("\\row}");
         assert!(crate::Document::from_rtf_bytes(oversized_table.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn rtf_writer_escapes_control_characters_and_signed_unicode() {
+        let mut document = crate::Document::new();
+        let mut paragraph = document.add_paragraph("");
+        paragraph.add_run("slash \\ brace { } alpha α grin 😀");
+        paragraph.add_tab();
+        paragraph.add_line_break();
+        paragraph.add_run("tail");
+
+        let written = document.to_rtf_bytes().expect("RTF serializes");
+        assert!(written.diagnostics.is_empty());
+        let rtf = String::from_utf8(written.bytes).expect("RTF is ASCII");
+
+        assert!(rtf.contains("slash \\\\ brace \\{ \\} alpha \\u945? grin \\u-10179?\\u-8704?"));
+        assert!(rtf.contains("\\tab"));
+        assert!(rtf.contains("\\line"));
+    }
+
+    #[test]
+    fn save_rtf_writes_serialized_bytes_and_returns_diagnostics() {
+        let path = std::env::temp_dir().join(format!(
+            "rdocx-save-rtf-{}-{}.rtf",
+            std::process::id(),
+            "writer"
+        ));
+        let mut document = crate::Document::new();
+        document.add_paragraph("saved");
+        std::fs::write(&path, b"old RTF bytes").expect("old RTF file writes");
+
+        let diagnostics = document.save_rtf(&path).expect("RTF file writes");
+        let bytes = std::fs::read(&path).expect("RTF file exists");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(diagnostics.is_empty());
+        let rtf = String::from_utf8(bytes).unwrap();
+        assert!(rtf.contains("saved"));
+        assert!(!rtf.contains("old RTF bytes"));
+    }
+
+    #[test]
+    fn save_rtf_preserves_existing_destination_when_staging_fails() {
+        let root =
+            std::env::temp_dir().join(format!("rdocx-save-rtf-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("existing.rtf");
+        std::fs::write(&path, b"existing destination").unwrap();
+        for attempt in 0..128_u8 {
+            let temporary = root.join(format!(
+                ".existing.rtf.rdocx-{}-{attempt}.tmp",
+                std::process::id()
+            ));
+            std::fs::write(temporary, b"occupied").unwrap();
+        }
+
+        let mut document = crate::Document::new();
+        document.add_paragraph("replacement");
+        let error = document.save_rtf(&path).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("could not allocate RTF-save staging file")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

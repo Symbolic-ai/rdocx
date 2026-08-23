@@ -73,6 +73,18 @@ tabs, to the generated and reopened body runs rather than relying on global
 markers. The ignored regeneration gate opens the DOCX saved by that exact Word
 build and compares the same structural record.
 
+The RTF writer round-trip gate builds its document in code, writes RTF through
+the native facade, reads the bytes back through the RTF reader, and compares
+the normalized public structure for text, run formatting, paragraph
+formatting, tables, lists, and PNG and JPEG images. Focused writer regressions
+lock deterministic header table order, signed UTF-16 escaping, formatting
+resets, table cell boundaries, multilevel list emission, truncating EMU to twip
+image dimensions, atomic path saves, output bounds, diagnostic caps, and exact
+location-aware diagnostics for unsupported body, paragraph, run, table, row,
+cell, image, field, note, comment, bookmark, hyperlink, and raw XML cases.
+All fixtures stay in source, and a DOCX preservation regression proves the
+writer does not mutate unmodelled XML in the source package.
+
 The digital-signature regression gate constructs its DOCX and signature XML
 in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
 and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace

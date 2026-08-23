@@ -1,11 +1,17 @@
 //! Bounded RTF 1.9.1 reader for the subset emitted by Microsoft Word.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::io::Read;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{Read, Write};
 use std::path::Path;
 
 use encoding_rs::Encoding;
+use rdocx_oxml::document::BodyContent;
+use rdocx_oxml::numbering::ST_NumberFormat;
+use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::shared::ST_Jc;
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_TblWidth, CT_TcPr, CT_TrPr, CellContent};
+use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent};
 
 use crate::{Alignment, Document, Error, Length, ListLevel, ListNumberFormat, Result};
 
@@ -32,6 +38,12 @@ pub struct RtfDiagnostic {
 /// A converted document together with every lossy-conversion diagnostic.
 pub struct RtfReadResult {
     pub document: Document,
+    pub diagnostics: Vec<RtfDiagnostic>,
+}
+
+/// Serialized RTF bytes together with every lossy-conversion diagnostic.
+pub struct RtfWriteResult {
+    pub bytes: Vec<u8>,
     pub diagnostics: Vec<RtfDiagnostic>,
 }
 
@@ -66,6 +78,1499 @@ impl Document {
             return Err(rtf_error(0, "RTF input exceeds the size limit"));
         }
         Self::from_rtf_bytes(&bytes)
+    }
+
+    /// Serialize the editable document to the supported RTF subset.
+    pub fn to_rtf_bytes(&self) -> Result<RtfWriteResult> {
+        RtfWriter::new(self).write()
+    }
+
+    /// Serialize and save RTF to a path, returning lossy-conversion diagnostics.
+    pub fn save_rtf<P: AsRef<Path>>(&self, path: P) -> Result<Vec<RtfDiagnostic>> {
+        let result = self.to_rtf_bytes()?;
+        write_atomic_file(path.as_ref(), &result.bytes)?;
+        Ok(result.diagnostics)
+    }
+}
+
+fn write_atomic_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
+    })?;
+    for attempt in 0..128_u8 {
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(file_name);
+        temporary_name.push(format!(".rdocx-{}-{attempt}.tmp", std::process::id()));
+        let temporary = parent.join(temporary_name);
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let result = result.and_then(|()| crate::document::replace_file(&temporary, path));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate RTF-save staging file",
+    ))
+}
+
+#[derive(Clone, Debug)]
+struct WriterList {
+    list_id: i32,
+    override_id: i32,
+    levels: Vec<WriterListLevel>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WriterListLevel {
+    format: Option<ListNumberFormat>,
+    start: u32,
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl BoundedOutput {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+
+    fn into_vec(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    fn check_available(&self, additional: usize) -> std::io::Result<()> {
+        let next = self
+            .bytes
+            .len()
+            .checked_add(additional)
+            .ok_or_else(output_limit_error)?;
+        if next > self.limit {
+            return Err(output_limit_error());
+        }
+        Ok(())
+    }
+
+    fn push(&mut self, byte: u8) -> Result<()> {
+        self.write_all(&[byte])?;
+        Ok(())
+    }
+}
+
+impl Write for BoundedOutput {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.check_available(buf.len())?;
+        self.bytes.extend_from_slice(buf);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn output_limit_error() -> std::io::Error {
+    std::io::Error::other("RTF output exceeds the size limit")
+}
+
+struct RtfWriter<'a> {
+    document: &'a Document,
+    fonts: BTreeMap<String, usize>,
+    colors: BTreeMap<String, usize>,
+    lists: Vec<WriterList>,
+    list_indexes: BTreeMap<u32, usize>,
+    diagnostics: Vec<RtfDiagnostic>,
+    output_limit: usize,
+}
+
+impl<'a> RtfWriter<'a> {
+    fn new(document: &'a Document) -> Self {
+        Self::new_with_output_limit(document, MAX_RETAINED_OUTPUT_BYTES)
+    }
+
+    fn new_with_output_limit(document: &'a Document, output_limit: usize) -> Self {
+        let mut fonts = BTreeMap::new();
+        fonts.insert("Calibri".to_owned(), 0);
+        Self {
+            document,
+            fonts,
+            colors: BTreeMap::new(),
+            lists: Vec::new(),
+            list_indexes: BTreeMap::new(),
+            diagnostics: Vec::new(),
+            output_limit,
+        }
+    }
+
+    fn write(mut self) -> Result<RtfWriteResult> {
+        for (index, content) in self.document.document.body.content.iter().enumerate() {
+            self.scan_body_content(content, format!("body[{index}]"));
+        }
+
+        let mut output = BoundedOutput::new(self.output_limit);
+        write!(output, "{{\\rtf1\\ansi\\deff0")?;
+        self.write_font_table(&mut output)?;
+        self.write_color_table(&mut output)?;
+        self.write_list_tables(&mut output)?;
+
+        for (index, content) in self.document.document.body.content.iter().enumerate() {
+            self.write_body_content(&mut output, content, &format!("body[{index}]"))?;
+        }
+        output.push(b'}')?;
+        let output = output.into_vec();
+        Ok(RtfWriteResult {
+            bytes: output,
+            diagnostics: self.diagnostics,
+        })
+    }
+
+    fn scan_body_content(&mut self, content: &BodyContent, location: String) {
+        match content {
+            BodyContent::Paragraph(paragraph) => self.scan_paragraph(paragraph, location),
+            BodyContent::Table(table) => self.scan_table(table, location),
+            BodyContent::ContentControl(_) => self.diagnose(
+                &location,
+                "body content control was dropped during RTF export",
+            ),
+            BodyContent::RawXml(_) => self.diagnose(
+                &location,
+                "unmodelled body XML was dropped during RTF export",
+            ),
+        }
+    }
+
+    fn scan_table(&mut self, table: &CT_Tbl, location: String) {
+        if let Some(properties) = &table.properties {
+            self.scan_table_properties(table, properties, &location);
+        }
+        for (index, _) in &table.extra_xml {
+            self.diagnose(
+                &format!("{location}/raw[{index}]"),
+                "unmodelled table XML was dropped during RTF export",
+            );
+        }
+        for (row_index, row) in table.rows.iter().enumerate() {
+            if let Some(properties) = &row.properties {
+                self.scan_row_properties(properties, &format!("{location}/row[{row_index}]"));
+            }
+            for (index, _) in &row.extra_xml {
+                self.diagnose(
+                    &format!("{location}/row[{row_index}]/raw[{index}]"),
+                    "unmodelled table-row XML was dropped during RTF export",
+                );
+            }
+            for (cell_index, cell) in row.cells.iter().enumerate() {
+                self.scan_cell_width(
+                    table,
+                    row,
+                    cell_index,
+                    &format!("{location}/row[{row_index}]/cell[{cell_index}]"),
+                );
+                if let Some(properties) = &cell.properties {
+                    self.scan_cell_properties(
+                        properties,
+                        &format!("{location}/row[{row_index}]/cell[{cell_index}]"),
+                    );
+                }
+                for (index, _) in &cell.extra_xml {
+                    self.diagnose(
+                        &format!("{location}/row[{row_index}]/cell[{cell_index}]/raw[{index}]"),
+                        "unmodelled table-cell XML was dropped during RTF export",
+                    );
+                }
+                for (content_index, content) in cell.content.iter().enumerate() {
+                    let cell_location = format!(
+                        "{location}/row[{row_index}]/cell[{cell_index}]/content[{content_index}]"
+                    );
+                    match content {
+                        CellContent::Paragraph(paragraph) => {
+                            self.scan_paragraph(paragraph, cell_location)
+                        }
+                        CellContent::Table(_) => self
+                            .diagnose(&cell_location, "nested table was dropped during RTF export"),
+                        CellContent::ContentControl(_) => self.diagnose(
+                            &cell_location,
+                            "table-cell content control was dropped during RTF export",
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    fn scan_table_properties(&mut self, table: &CT_Tbl, properties: &CT_TblPr, location: &str) {
+        if properties.style_id.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/tblStyle"),
+                "table style was dropped during RTF export",
+            );
+        }
+        if properties
+            .width
+            .as_ref()
+            .is_some_and(|width| !table_width_is_preserved_by_grid(table, width))
+        {
+            self.diagnose(
+                &format!("{location}/tblPr/tblW"),
+                "table width was dropped during RTF export",
+            );
+        }
+        if properties.jc.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/jc"),
+                "table alignment was dropped during RTF export",
+            );
+        }
+        if properties.borders.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/tblBorders"),
+                "table borders were dropped during RTF export",
+            );
+        }
+        if properties.cell_margin.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/tblCellMar"),
+                "table cell margins were dropped during RTF export",
+            );
+        }
+        if properties.layout.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/tblLayout"),
+                "table layout was dropped during RTF export",
+            );
+        }
+        if properties.indent.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/tblInd"),
+                "table indent was dropped during RTF export",
+            );
+        }
+        if properties.shading.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/shd"),
+                "table shading was dropped during RTF export",
+            );
+        }
+        if properties.look.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/tblLook"),
+                "table look was dropped during RTF export",
+            );
+        }
+        if properties.change.is_some() {
+            self.diagnose(
+                &format!("{location}/tblPr/tblPrChange"),
+                "table property revision was dropped during RTF export",
+            );
+        }
+        if !properties.revision_xml.is_empty() {
+            self.diagnose(
+                &format!("{location}/tblPr/revisionXml"),
+                "unmodelled table property revision XML was dropped during RTF export",
+            );
+        }
+    }
+
+    fn scan_row_properties(&mut self, properties: &CT_TrPr, location: &str) {
+        if properties.height.is_some() {
+            self.diagnose(
+                &format!("{location}/trPr/trHeight"),
+                "table-row height was dropped during RTF export",
+            );
+        }
+        if properties.height_rule.is_some() {
+            self.diagnose(
+                &format!("{location}/trPr/hRule"),
+                "table-row height rule was dropped during RTF export",
+            );
+        }
+        if properties.header.is_some() {
+            self.diagnose(
+                &format!("{location}/trPr/tblHeader"),
+                "table-row repeat header property was dropped during RTF export",
+            );
+        }
+        if properties.jc.is_some() {
+            self.diagnose(
+                &format!("{location}/trPr/jc"),
+                "table-row alignment was dropped during RTF export",
+            );
+        }
+        if properties.cant_split.is_some() {
+            self.diagnose(
+                &format!("{location}/trPr/cantSplit"),
+                "table-row cant-split property was dropped during RTF export",
+            );
+        }
+        if properties.cnf_style.is_some() {
+            self.diagnose(
+                &format!("{location}/trPr/cnfStyle"),
+                "table-row conditional style property was dropped during RTF export",
+            );
+        }
+        if !properties.revision_markers.is_empty() {
+            self.diagnose(
+                &format!("{location}/trPr/revisions"),
+                "table-row revision markers were dropped during RTF export",
+            );
+        }
+        if !properties.revision_xml.is_empty() {
+            self.diagnose(
+                &format!("{location}/trPr/revisionXml"),
+                "unmodelled table-row revision XML was dropped during RTF export",
+            );
+        }
+    }
+
+    fn scan_cell_properties(&mut self, properties: &CT_TcPr, location: &str) {
+        if let Some(width) = &properties.width {
+            if width.width_type != "dxa" {
+                self.diagnose(
+                    &format!("{location}/tcPr/tcW"),
+                    "unsupported table-cell width type was dropped during RTF export",
+                );
+            } else if width.w <= 0 {
+                self.diagnose(
+                    &format!("{location}/tcPr/tcW"),
+                    "invalid table-cell width was dropped during RTF export",
+                );
+            }
+        }
+        if properties.v_merge.is_some() {
+            self.diagnose(
+                &format!("{location}/tcPr/vMerge"),
+                "vertical table-cell merge was dropped during RTF export",
+            );
+        }
+        if properties.borders.is_some() {
+            self.diagnose(
+                &format!("{location}/tcPr/borders"),
+                "table-cell borders were dropped during RTF export",
+            );
+        }
+        if properties.shading.is_some() {
+            self.diagnose(
+                &format!("{location}/tcPr/shading"),
+                "table-cell shading was dropped during RTF export",
+            );
+        }
+        if properties.v_align.is_some() {
+            self.diagnose(
+                &format!("{location}/tcPr/vAlign"),
+                "table-cell vertical alignment was dropped during RTF export",
+            );
+        }
+        if properties.no_wrap.is_some() {
+            self.diagnose(
+                &format!("{location}/tcPr/noWrap"),
+                "table-cell no-wrap property was dropped during RTF export",
+            );
+        }
+        if properties.text_direction.is_some() {
+            self.diagnose(
+                &format!("{location}/tcPr/textDirection"),
+                "table-cell text direction was dropped during RTF export",
+            );
+        }
+        if properties.cnf_style.is_some() {
+            self.diagnose(
+                &format!("{location}/tcPr/cnfStyle"),
+                "table-cell conditional style property was dropped during RTF export",
+            );
+        }
+        let mut occurrences = BTreeMap::<usize, usize>::new();
+        for (index, raw) in &properties.extra_xml {
+            let occurrence = occurrences.entry(*index).or_insert(0);
+            let suffix = if *occurrence == 0 {
+                String::new()
+            } else {
+                format!("#{occurrence}")
+            };
+            let item_name = raw_xml_item_name(raw).unwrap_or("unknown");
+            self.diagnose(
+                &format!("{location}/tcPr/raw[{index}]{suffix}"),
+                &format!(
+                    "unmodelled table-cell property {item_name} was dropped during RTF export"
+                ),
+            );
+            *occurrence += 1;
+        }
+    }
+
+    fn scan_cell_width(&mut self, table: &CT_Tbl, row: &CT_Row, cell_index: usize, location: &str) {
+        let cell = &row.cells[cell_index];
+        let explicit_width = cell
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.width.as_ref());
+        if explicit_width.is_some() {
+            return;
+        }
+        let Some(grid) = &table.grid else {
+            self.diagnose(
+                &format!("{location}/tcPr/tcW"),
+                "table-cell width could not be preserved because the table grid is missing",
+            );
+            return;
+        };
+        if row_grid_span_end(row, cell_index).is_none_or(|end| end > grid.columns.len()) {
+            self.diagnose(
+                &format!("{location}/tcPr/tcW"),
+                "table-cell width could not be preserved because the table grid is too short",
+            );
+        }
+    }
+
+    fn scan_paragraph(&mut self, paragraph: &CT_P, location: String) {
+        if let Some((num_id, level)) = paragraph_numbering(paragraph) {
+            if level > 8 {
+                self.diagnose(
+                    &format!("{location}/ppr/numPr/ilvl"),
+                    "numbering level above 8 was dropped during RTF export",
+                );
+            } else {
+                self.ensure_writer_list(num_id, &location);
+            }
+        }
+        if let Some(properties) = &paragraph.properties {
+            self.scan_paragraph_properties(properties, &location);
+        }
+        let marker_raw_positions = paragraph_marker_raw_positions(paragraph);
+        for (index, _) in &paragraph.extra_xml {
+            if marker_raw_positions.contains(index) {
+                continue;
+            }
+            self.diagnose(
+                &format!("{location}/raw[{index}]"),
+                "unmodelled paragraph XML was dropped during RTF export",
+            );
+        }
+        for (index, _, _, _) in &paragraph.content_controls {
+            self.diagnose(
+                &format!("{location}/content-control[{index}]"),
+                "run content control was dropped during RTF export",
+            );
+        }
+        for (index, _, _) in &paragraph.revisions {
+            self.diagnose(
+                &format!("{location}/revision[{index}]"),
+                "paragraph revision wrapper was flattened during RTF export",
+            );
+        }
+        for marker in &paragraph.comment_ranges {
+            self.diagnose(
+                &format!("{location}/comment-range[{}]", marker_location(marker)),
+                "comment range marker was dropped during RTF export",
+            );
+        }
+        for marker in &paragraph.bookmark_markers {
+            self.diagnose(
+                &format!("{location}/bookmark[{}]", marker.run_index()),
+                "bookmark marker was dropped during RTF export",
+            );
+        }
+        for hyperlink in &paragraph.hyperlinks {
+            self.diagnose(
+                &format!("{location}/hyperlink[{}]", hyperlink.run_start),
+                "hyperlink wrapper was flattened during RTF export",
+            );
+        }
+        for (index, run) in paragraph.runs.iter().enumerate() {
+            self.scan_run(run, format!("{location}/run[{index}]"));
+        }
+    }
+
+    fn scan_paragraph_properties(&mut self, properties: &CT_PPr, location: &str) {
+        if properties.style_id.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/pStyle"),
+                "paragraph style was dropped during RTF export",
+            );
+        }
+        if properties.line_rule.is_some() && properties.line_spacing.is_none() {
+            self.diagnose(
+                &format!("{location}/ppr/lineRule"),
+                "paragraph line-spacing rule without line spacing was dropped during RTF export",
+            );
+        }
+        if properties.before_autospacing.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/beforeAutospacing"),
+                "paragraph before auto-spacing was dropped during RTF export",
+            );
+        }
+        if properties.after_autospacing.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/afterAutospacing"),
+                "paragraph after auto-spacing was dropped during RTF export",
+            );
+        }
+        if properties.keep_next.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/keepNext"),
+                "keep-with-next paragraph property was dropped during RTF export",
+            );
+        }
+        if properties.keep_lines.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/keepLines"),
+                "keep-lines paragraph property was dropped during RTF export",
+            );
+        }
+        if properties.page_break_before.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/pageBreakBefore"),
+                "page-break-before paragraph property was dropped during RTF export",
+            );
+        }
+        if properties.widow_control.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/widowControl"),
+                "widow-control paragraph property was dropped during RTF export",
+            );
+        }
+        if properties.suppress_auto_hyphens.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/suppressAutoHyphens"),
+                "paragraph suppress-auto-hyphens property was dropped during RTF export",
+            );
+        }
+        if properties.outline_lvl.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/outlineLvl"),
+                "paragraph outline level was dropped during RTF export",
+            );
+        }
+        if properties.borders.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/borders"),
+                "paragraph borders were dropped during RTF export",
+            );
+        }
+        if properties.tabs.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/tabs"),
+                "paragraph tab stops were dropped during RTF export",
+            );
+        }
+        if properties.shading.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/shading"),
+                "paragraph shading was dropped during RTF export",
+            );
+        }
+        if properties.rpr.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/rPr"),
+                "paragraph mark run properties were dropped during RTF export",
+            );
+        }
+        if properties.num_ilvl.is_some() && properties.num_id.is_none() {
+            self.diagnose(
+                &format!("{location}/ppr/numPr"),
+                "paragraph numbering level without numbering id was dropped during RTF export",
+            );
+        }
+        if properties.sect_pr.is_some() {
+            self.diagnose(
+                &format!("{location}/ppr/sectPr"),
+                "paragraph section properties were dropped during RTF export",
+            );
+        }
+        if properties.numbering_revision.is_some() || !properties.numbering_revision_xml.is_empty()
+        {
+            self.diagnose(
+                &format!("{location}/ppr/numPrChange"),
+                "paragraph numbering revision was dropped during RTF export",
+            );
+        }
+        if properties.change.is_some() || !properties.revision_xml.is_empty() {
+            self.diagnose(
+                &format!("{location}/ppr/pPrChange"),
+                "paragraph property revision was dropped during RTF export",
+            );
+        }
+    }
+
+    fn scan_run(&mut self, run: &CT_R, location: String) {
+        if let Some(properties) = &run.properties {
+            if let Some(font) = run_font(properties) {
+                self.ensure_font(font);
+            }
+            if let Some(color) = properties.color.as_deref() {
+                self.ensure_hex_color(color, &format!("{location}/color"));
+            }
+            if let Some(fill) = properties
+                .shading
+                .as_ref()
+                .and_then(|shading| shading.fill.as_deref())
+            {
+                self.ensure_hex_color(fill, &format!("{location}/highlight"));
+            }
+            self.scan_run_properties(properties, &location);
+        }
+        for index in &run.extra_xml_positions {
+            self.diagnose(
+                &format!("{location}/raw[{index}]"),
+                "unmodelled run XML was dropped during RTF export",
+            );
+        }
+        for (content_index, content) in run.content.iter().enumerate() {
+            if let RunContent::Drawing(drawing) = content {
+                let content_location = format!("{location}/content[{content_index}]");
+                if let Some(inline) = &drawing.inline {
+                    match self.document.image_data(&inline.embed_id) {
+                        Some(bytes) => {
+                            if picture_kind(&bytes).is_none() {
+                                self.diagnose(
+                                    &content_location,
+                                    "unsupported inline image type was dropped during RTF export",
+                                );
+                            }
+                        }
+                        None => self.diagnose(
+                            &content_location,
+                            "unresolved inline image was dropped during RTF export",
+                        ),
+                    }
+                }
+                if drawing.anchor.is_some() {
+                    self.diagnose(
+                        &content_location,
+                        "anchored drawing was dropped during RTF export",
+                    );
+                }
+            }
+        }
+    }
+
+    fn scan_run_properties(&mut self, properties: &CT_RPr, location: &str) {
+        if properties.style_id.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/rStyle"),
+                "run style was dropped during RTF export",
+            );
+        }
+        let selected_font = run_font(properties);
+        for (field, font) in [
+            ("hAnsi", properties.font_hansi.as_deref()),
+            ("eastAsia", properties.font_east_asia.as_deref()),
+            ("cs", properties.font_cs.as_deref()),
+        ] {
+            if let Some(font) = font
+                && Some(font) != selected_font
+            {
+                self.diagnose(
+                    &format!("{location}/rPr/{field}"),
+                    "alternate run font was dropped during RTF export",
+                );
+            }
+        }
+        for (field, font) in [
+            ("asciiTheme", properties.font_ascii_theme.as_deref()),
+            ("hAnsiTheme", properties.font_hansi_theme.as_deref()),
+        ] {
+            if font.is_some() {
+                self.diagnose(
+                    &format!("{location}/rPr/{field}"),
+                    "theme run font was dropped during RTF export",
+                );
+            }
+        }
+        if properties.bold_cs.is_some() && properties.bold_cs != properties.bold {
+            self.diagnose(
+                &format!("{location}/rPr/bCs"),
+                "complex-script bold was dropped during RTF export",
+            );
+        }
+        if properties.italic_cs.is_some() && properties.italic_cs != properties.italic {
+            self.diagnose(
+                &format!("{location}/rPr/iCs"),
+                "complex-script italic was dropped during RTF export",
+            );
+        }
+        if properties.underline.is_some_and(|underline| {
+            !matches!(
+                underline,
+                rdocx_oxml::shared::ST_Underline::None | rdocx_oxml::shared::ST_Underline::Single
+            )
+        }) {
+            self.diagnose(
+                &format!("{location}/rPr/u"),
+                "non-basic underline style was simplified during RTF export",
+            );
+        }
+        if properties.dstrike.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/dstrike"),
+                "double strikethrough was dropped during RTF export",
+            );
+        }
+        if properties.sz_cs.is_some() && properties.sz_cs != properties.sz {
+            self.diagnose(
+                &format!("{location}/rPr/szCs"),
+                "complex-script font size was dropped during RTF export",
+            );
+        }
+        if properties.color_theme.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/themeColor"),
+                "theme run colour was dropped during RTF export",
+            );
+        }
+        if properties.highlight.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/highlight"),
+                "keyword highlight colour was dropped during RTF export",
+            );
+        }
+        if properties.spacing.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/spacing"),
+                "run character spacing was dropped during RTF export",
+            );
+        }
+        if properties.width_scale.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/w"),
+                "run width scale was dropped during RTF export",
+            );
+        }
+        if properties.position.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/position"),
+                "run text position was dropped during RTF export",
+            );
+        }
+        if !properties.revision_markers.is_empty() {
+            self.diagnose(
+                &format!("{location}/rPr/revisions"),
+                "run revision markers were dropped during RTF export",
+            );
+        }
+        if properties.change.is_some() {
+            self.diagnose(
+                &format!("{location}/rPr/rPrChange"),
+                "run property revision was dropped during RTF export",
+            );
+        }
+        if !properties.revision_xml.is_empty() {
+            self.diagnose(
+                &format!("{location}/rPr/revisionXml"),
+                "unmodelled run property revision XML was dropped during RTF export",
+            );
+        }
+    }
+
+    fn write_font_table(&self, output: &mut BoundedOutput) -> Result<()> {
+        write!(output, "{{\\fonttbl")?;
+        let mut fonts = self.fonts.iter().collect::<Vec<_>>();
+        fonts.sort_by_key(|(_, id)| **id);
+        for (font, id) in fonts {
+            write!(output, "{{\\f{id}\\fcharset0 ")?;
+            write_ascii_text(output, font)?;
+            write!(output, ";}}")?;
+        }
+        write!(output, "}}")?;
+        Ok(())
+    }
+
+    fn write_color_table(&self, output: &mut BoundedOutput) -> Result<()> {
+        if self.colors.is_empty() {
+            return Ok(());
+        }
+        write!(output, "{{\\colortbl;")?;
+        let mut colors = self.colors.iter().collect::<Vec<_>>();
+        colors.sort_by_key(|(_, id)| **id);
+        for (color, _) in colors {
+            let (red, green, blue) = parse_hex_color(color).unwrap_or((0, 0, 0));
+            write!(output, "\\red{red}\\green{green}\\blue{blue};")?;
+        }
+        write!(output, "}}")?;
+        Ok(())
+    }
+
+    fn write_list_tables(&self, output: &mut BoundedOutput) -> Result<()> {
+        if self.lists.is_empty() {
+            return Ok(());
+        }
+        write!(output, "{{\\*\\listtable")?;
+        for list in &self.lists {
+            write!(output, "{{\\list")?;
+            for level in &list.levels {
+                let format = level.format.unwrap_or(ListNumberFormat::Decimal);
+                write!(
+                    output,
+                    "{{\\listlevel\\levelnfc{}\\levelnfcn{}\\levelstartat{}}}",
+                    list_format_value(format),
+                    list_format_value(format),
+                    level.start
+                )?;
+            }
+            write!(output, "\\listid{}}}", list.list_id)?;
+        }
+        write!(output, "}}{{\\*\\listoverridetable")?;
+        for list in &self.lists {
+            write!(
+                output,
+                "{{\\listoverride\\listid{}\\ls{}}}",
+                list.list_id, list.override_id
+            )?;
+        }
+        write!(output, "}}")?;
+        Ok(())
+    }
+
+    fn write_body_content(
+        &mut self,
+        output: &mut BoundedOutput,
+        content: &BodyContent,
+        location: &str,
+    ) -> Result<()> {
+        match content {
+            BodyContent::Paragraph(paragraph) => self.write_paragraph(output, paragraph, location),
+            BodyContent::Table(table) => self.write_table(output, table, location),
+            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => Ok(()),
+        }
+    }
+
+    fn write_table(
+        &mut self,
+        output: &mut BoundedOutput,
+        table: &CT_Tbl,
+        location: &str,
+    ) -> Result<()> {
+        for (row_index, row) in table.rows.iter().enumerate() {
+            write!(output, "\\trowd")?;
+            let widths = table_row_cell_widths(table, row);
+            let mut boundary = 0_i32;
+            for width in &widths {
+                boundary = boundary.checked_add(*width).ok_or_else(|| {
+                    rtf_error(0, "RTF table cell boundaries exceed the supported range")
+                })?;
+                write!(output, "\\cellx{boundary}")?;
+            }
+            output.push(b' ')?;
+            for (cell_index, cell) in row.cells.iter().enumerate() {
+                for (content_index, content) in cell.content.iter().enumerate() {
+                    if let CellContent::Paragraph(paragraph) = content {
+                        if content_index > 0 {
+                            write!(output, "\\par ")?;
+                        }
+                        self.write_paragraph_contents(
+                            output,
+                            paragraph,
+                            &format!("{location}/row[{row_index}]/cell[{cell_index}]/content[{content_index}]"),
+                        )?;
+                    }
+                }
+                write!(output, "\\cell ")?;
+            }
+            writeln!(output, "\\row")?;
+        }
+        Ok(())
+    }
+
+    fn write_paragraph(
+        &mut self,
+        output: &mut BoundedOutput,
+        paragraph: &CT_P,
+        location: &str,
+    ) -> Result<()> {
+        write!(output, "\\pard")?;
+        self.write_paragraph_format(output, paragraph.properties.as_ref(), paragraph)?;
+        self.write_runs(output, &paragraph.runs, location)?;
+        writeln!(output, "\\par")?;
+        Ok(())
+    }
+
+    fn write_paragraph_contents(
+        &mut self,
+        output: &mut BoundedOutput,
+        paragraph: &CT_P,
+        location: &str,
+    ) -> Result<()> {
+        write!(output, "\\pard\\intbl")?;
+        self.write_paragraph_format(output, paragraph.properties.as_ref(), paragraph)?;
+        self.write_runs(output, &paragraph.runs, location)
+    }
+
+    fn write_paragraph_format(
+        &self,
+        output: &mut BoundedOutput,
+        properties: Option<&CT_PPr>,
+        paragraph: &CT_P,
+    ) -> Result<()> {
+        let Some(properties) = properties else {
+            return Ok(());
+        };
+        match properties.jc {
+            Some(ST_Jc::Center) => write!(output, "\\qc")?,
+            Some(ST_Jc::Right | ST_Jc::End) => write!(output, "\\qr")?,
+            Some(ST_Jc::Both | ST_Jc::Distribute) => write!(output, "\\qj")?,
+            Some(_) | None => {}
+        }
+        if let Some(value) = properties.ind_left {
+            write!(output, "\\li{}", value.0)?;
+        }
+        if let Some(value) = properties.ind_right {
+            write!(output, "\\ri{}", value.0)?;
+        }
+        if let Some(value) = properties.ind_first_line {
+            write!(output, "\\fi{}", value.0)?;
+        } else if let Some(value) = properties.ind_hanging {
+            write!(output, "\\fi{}", value.0.saturating_neg())?;
+        }
+        if let Some(value) = properties.space_before {
+            write!(output, "\\sb{}", value.0)?;
+        }
+        if let Some(value) = properties.space_after {
+            write!(output, "\\sa{}", value.0)?;
+        }
+        if let Some(value) = properties.line_spacing {
+            match properties.line_rule.as_deref() {
+                Some("exact") => write!(output, "\\sl{}\\slmult0", value.0.saturating_neg())?,
+                Some("atLeast") => write!(output, "\\sl{}\\slmult0", value.0)?,
+                _ => write!(output, "\\sl{}\\slmult1", value.0)?,
+            }
+        }
+        if let Some((num_id, level)) = paragraph_numbering(paragraph)
+            && level <= 8
+            && let Some(list_index) = self.list_indexes.get(&num_id)
+        {
+            let list = &self.lists[*list_index];
+            let Some(writer_level) = list.levels.get(level as usize) else {
+                return Ok(());
+            };
+            if writer_level.format.is_some() {
+                write!(output, "\\ls{}\\ilvl{}", list.override_id, level)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_runs(
+        &mut self,
+        output: &mut BoundedOutput,
+        runs: &[CT_R],
+        location: &str,
+    ) -> Result<()> {
+        for (run_index, run) in runs.iter().enumerate() {
+            write!(output, "{{\\plain")?;
+            self.write_run_format(output, run.properties.as_ref())?;
+            output.push(b' ')?;
+            for (content_index, content) in run.content.iter().enumerate() {
+                self.write_run_content(
+                    output,
+                    content,
+                    &format!("{location}/run[{run_index}]/content[{content_index}]"),
+                )?;
+            }
+            write!(output, "}}")?;
+        }
+        Ok(())
+    }
+
+    fn write_run_format(
+        &self,
+        output: &mut BoundedOutput,
+        properties: Option<&CT_RPr>,
+    ) -> Result<()> {
+        let Some(properties) = properties else {
+            write!(output, "\\f0")?;
+            return Ok(());
+        };
+        let font_id = run_font(properties)
+            .and_then(|font| self.fonts.get(font).copied())
+            .unwrap_or(0);
+        write!(output, "\\f{font_id}")?;
+        if let Some(size) = properties.sz {
+            write!(output, "\\fs{}", size.0)?;
+        }
+        write_toggle(output, "b", properties.bold)?;
+        write_toggle(output, "i", properties.italic)?;
+        match properties.underline {
+            Some(rdocx_oxml::shared::ST_Underline::None) => write!(output, "\\ulnone")?,
+            Some(_) => write!(output, "\\ul")?,
+            None => {}
+        }
+        write_toggle(output, "strike", properties.strike)?;
+        write_toggle(output, "caps", properties.caps)?;
+        write_toggle(output, "scaps", properties.small_caps)?;
+        write_toggle(output, "v", properties.vanish)?;
+        match properties.vert_align.as_deref() {
+            Some("superscript") => write!(output, "\\super")?,
+            Some("subscript") => write!(output, "\\sub")?,
+            _ => {}
+        }
+        if let Some(color) = properties.color.as_deref()
+            && let Some(index) = self.colors.get(&normalize_hex_color(color))
+        {
+            write!(output, "\\cf{index}")?;
+        }
+        if let Some(fill) = properties
+            .shading
+            .as_ref()
+            .and_then(|shading| shading.fill.as_deref())
+            && let Some(index) = self.colors.get(&normalize_hex_color(fill))
+        {
+            write!(output, "\\highlight{index}")?;
+        }
+        Ok(())
+    }
+
+    fn write_run_content(
+        &mut self,
+        output: &mut BoundedOutput,
+        content: &RunContent,
+        location: &str,
+    ) -> Result<()> {
+        match content {
+            RunContent::Text(text) => write_rtf_text(output, &text.text),
+            RunContent::DeletedText(text) => {
+                self.diagnose(location, "deleted text was flattened during RTF export");
+                write_rtf_text(output, &text.text)
+            }
+            RunContent::Tab => {
+                write!(output, "\\tab ")?;
+                Ok(())
+            }
+            RunContent::Break(BreakType::Line) => {
+                write!(output, "\\line ")?;
+                Ok(())
+            }
+            RunContent::Break(_) => {
+                self.diagnose(
+                    location,
+                    "unsupported break type was dropped during RTF export",
+                );
+                Ok(())
+            }
+            RunContent::Drawing(drawing) => {
+                if let Some(inline) = &drawing.inline
+                    && let Some(bytes) = self.document.image_data(&inline.embed_id)
+                    && let Some(kind) = picture_kind(&bytes)
+                {
+                    write!(
+                        output,
+                        "{{\\pict\\{}\\picwgoal{}\\pichgoal{} ",
+                        kind,
+                        Length::emu(inline.extent_cx.0).to_twips(),
+                        Length::emu(inline.extent_cy.0).to_twips()
+                    )?;
+                    write_hex_bytes(output, &bytes)?;
+                    write!(output, "}}")?;
+                }
+                Ok(())
+            }
+            RunContent::Field(field) => {
+                self.diagnose(location, "field was flattened during RTF export");
+                if let Some(text) = field.projected_text() {
+                    write_rtf_text(output, text)?;
+                }
+                Ok(())
+            }
+            RunContent::FootnoteRef { .. } => {
+                self.diagnose(location, "footnote reference was dropped during RTF export");
+                Ok(())
+            }
+            RunContent::EndnoteRef { .. } => {
+                self.diagnose(location, "endnote reference was dropped during RTF export");
+                Ok(())
+            }
+            RunContent::CommentReference { .. } => {
+                self.diagnose(location, "comment reference was dropped during RTF export");
+                Ok(())
+            }
+        }
+    }
+
+    fn ensure_font(&mut self, font: &str) {
+        if !self.fonts.contains_key(font) {
+            let next = self.fonts.len();
+            self.fonts.insert(font.to_owned(), next);
+        }
+    }
+
+    fn ensure_hex_color(&mut self, color: &str, location: &str) {
+        let color = normalize_hex_color(color);
+        if parse_hex_color(&color).is_none() {
+            self.diagnose(
+                location,
+                "unsupported colour value was dropped during RTF export",
+            );
+            return;
+        }
+        if !self.colors.contains_key(&color) {
+            let next = self.colors.len() + 1;
+            self.colors.insert(color, next);
+        }
+    }
+
+    fn ensure_writer_list(&mut self, num_id: u32, location: &str) {
+        if self.list_indexes.contains_key(&num_id) {
+            return;
+        }
+        let mut levels = Vec::new();
+        if let Some(abstract_num) = self
+            .document
+            .numbering
+            .as_ref()
+            .and_then(|numbering| numbering.get_abstract_num_for(num_id))
+        {
+            for level_index in 0..9_u32 {
+                let level = abstract_num
+                    .levels
+                    .iter()
+                    .find(|level| level.ilvl == level_index);
+                let format = level
+                    .and_then(|level| level.num_fmt)
+                    .and_then(public_number_format);
+                if level.and_then(|level| level.num_fmt).is_some() && format.is_none() {
+                    self.diagnose(
+                        &format!("numbering[numId={num_id}]/level[{level_index}]/numFmt"),
+                        "unsupported numbering format was dropped during RTF export",
+                    );
+                }
+                levels.push(WriterListLevel {
+                    format,
+                    start: level.and_then(|level| level.start).unwrap_or(1),
+                });
+            }
+        } else {
+            self.diagnose(
+                location,
+                "unknown list definition was exported as decimal RTF list",
+            );
+            levels.push(WriterListLevel {
+                format: Some(ListNumberFormat::Decimal),
+                start: 1,
+            });
+        }
+        let index = self.lists.len();
+        self.lists.push(WriterList {
+            list_id: 10 + index as i32,
+            override_id: 1 + index as i32,
+            levels,
+        });
+        self.list_indexes.insert(num_id, index);
+    }
+
+    fn diagnose(&mut self, location: &str, message: &str) {
+        if self.diagnostics.len() >= MAX_DIAGNOSTICS {
+            return;
+        }
+        self.diagnostics.push(RtfDiagnostic {
+            offset: stable_location_offset(location),
+            destination: Some(location.to_owned()),
+            message: message.to_owned(),
+        });
+    }
+}
+
+fn paragraph_numbering(paragraph: &CT_P) -> Option<(u32, u32)> {
+    let properties = paragraph.properties.as_ref()?;
+    Some((properties.num_id?, properties.num_ilvl.unwrap_or(0)))
+}
+
+fn paragraph_marker_raw_positions(paragraph: &CT_P) -> BTreeSet<usize> {
+    let mut positions = BTreeSet::new();
+    for marker in &paragraph.comment_ranges {
+        match marker {
+            rdocx_oxml::text::CommentRangeMarker::Start { run_index, .. }
+            | rdocx_oxml::text::CommentRangeMarker::End { run_index, .. } => {
+                positions.insert(*run_index);
+            }
+        }
+    }
+    for marker in &paragraph.bookmark_markers {
+        positions.insert(marker.run_index());
+    }
+    positions
+}
+
+fn marker_location(marker: &rdocx_oxml::text::CommentRangeMarker) -> usize {
+    match marker {
+        rdocx_oxml::text::CommentRangeMarker::Start { run_index, .. }
+        | rdocx_oxml::text::CommentRangeMarker::End { run_index, .. } => *run_index,
+    }
+}
+
+fn run_font(properties: &CT_RPr) -> Option<&str> {
+    properties
+        .font_ascii
+        .as_deref()
+        .or(properties.font_hansi.as_deref())
+        .or(properties.font_east_asia.as_deref())
+        .or(properties.font_cs.as_deref())
+}
+
+fn write_toggle(output: &mut BoundedOutput, name: &str, value: Option<bool>) -> Result<()> {
+    match value {
+        Some(true) => write!(output, "\\{name}")?,
+        Some(false) => write!(output, "\\{name}0")?,
+        None => {}
+    }
+    Ok(())
+}
+
+fn write_ascii_text(output: &mut BoundedOutput, text: &str) -> Result<()> {
+    for scalar in text.chars() {
+        if scalar.is_ascii() && scalar != '\\' && scalar != '{' && scalar != '}' {
+            write!(output, "{scalar}")?;
+        } else {
+            write_rtf_char(output, scalar)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_rtf_text(output: &mut BoundedOutput, text: &str) -> Result<()> {
+    for scalar in text.chars() {
+        write_rtf_char(output, scalar)?;
+    }
+    Ok(())
+}
+
+fn write_rtf_char(output: &mut BoundedOutput, scalar: char) -> Result<()> {
+    match scalar {
+        '\\' => write!(output, "\\\\")?,
+        '{' => write!(output, "\\{{")?,
+        '}' => write!(output, "\\}}")?,
+        '\t' => write!(output, "\\tab ")?,
+        '\n' => write!(output, "\\line ")?,
+        '\r' => {}
+        scalar if scalar.is_ascii() => write!(output, "{scalar}")?,
+        scalar => {
+            let mut units = [0_u16; 2];
+            for unit in scalar.encode_utf16(&mut units) {
+                let signed = i16::from_ne_bytes(unit.to_ne_bytes()) as i32;
+                write!(output, "\\u{signed}?")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_hex_bytes(output: &mut BoundedOutput, bytes: &[u8]) -> Result<()> {
+    let expanded = bytes.len().checked_mul(2).ok_or_else(output_limit_error)?;
+    output.check_available(expanded)?;
+    for byte in bytes {
+        write!(output, "{byte:02x}")?;
+    }
+    Ok(())
+}
+
+fn picture_kind(bytes: &[u8]) -> Option<&'static str> {
+    match oxml_media::probe(bytes)?.format {
+        oxml_media::ImageFormat::Png => Some("pngblip"),
+        oxml_media::ImageFormat::Jpeg => Some("jpegblip"),
+        _ => None,
+    }
+}
+
+fn table_row_cell_widths(table: &CT_Tbl, row: &CT_Row) -> Vec<i32> {
+    let mut grid_index = 0_usize;
+    row.cells
+        .iter()
+        .map(|cell| {
+            let span = cell
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.grid_span)
+                .unwrap_or(1)
+                .max(1) as usize;
+            let width = cell
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.width.as_ref())
+                .and_then(cell_width_twips)
+                .or_else(|| {
+                    let grid = table.grid.as_ref()?;
+                    let end = grid_index.checked_add(span)?;
+                    if end > grid.columns.len() {
+                        return None;
+                    }
+                    let width = grid.columns[grid_index..end]
+                        .iter()
+                        .try_fold(0_i32, |total, column| total.checked_add(column.width.0))?;
+                    (width > 0).then_some(width)
+                })
+                .unwrap_or(1440);
+            grid_index = grid_index.saturating_add(span);
+            if width == 0 { 1440 } else { width }
+        })
+        .collect()
+}
+
+fn table_width_is_preserved_by_grid(table: &CT_Tbl, width: &CT_TblWidth) -> bool {
+    let Some(width) = cell_width_twips(width) else {
+        return false;
+    };
+    let Some(grid) = &table.grid else {
+        return false;
+    };
+    grid.columns
+        .iter()
+        .try_fold(0_i32, |total, column| total.checked_add(column.width.0))
+        == Some(width)
+}
+
+fn cell_width_twips(width: &CT_TblWidth) -> Option<i32> {
+    (width.width_type == "dxa" && width.w > 0).then_some(width.w)
+}
+
+fn row_grid_span_end(row: &CT_Row, cell_index: usize) -> Option<usize> {
+    let mut grid_index = 0_usize;
+    for cell in row.cells.iter().take(cell_index + 1) {
+        let span = cell
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.grid_span)
+            .unwrap_or(1)
+            .max(1) as usize;
+        grid_index = grid_index.checked_add(span)?;
+    }
+    Some(grid_index)
+}
+
+fn raw_xml_item_name(raw: &[u8]) -> Option<&str> {
+    let start = raw.iter().position(|byte| *byte == b'<')? + 1;
+    let name_start = start + usize::from(raw.get(start) == Some(&b'/'));
+    let name_end = raw[name_start..]
+        .iter()
+        .position(|byte| matches!(*byte, b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'>'))?
+        + name_start;
+    let qualified = std::str::from_utf8(&raw[name_start..name_end]).ok()?;
+    Some(
+        qualified
+            .rsplit_once(':')
+            .map_or(qualified, |(_, local)| local),
+    )
+}
+
+fn normalize_hex_color(color: &str) -> String {
+    color.trim_start_matches('#').to_ascii_uppercase()
+}
+
+fn parse_hex_color(color: &str) -> Option<(u8, u8, u8)> {
+    let color = normalize_hex_color(color);
+    if color.len() != 6 || !color.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let red = u8::from_str_radix(&color[0..2], 16).ok()?;
+    let green = u8::from_str_radix(&color[2..4], 16).ok()?;
+    let blue = u8::from_str_radix(&color[4..6], 16).ok()?;
+    Some((red, green, blue))
+}
+
+fn public_number_format(format: ST_NumberFormat) -> Option<ListNumberFormat> {
+    match format {
+        ST_NumberFormat::Bullet => Some(ListNumberFormat::Bullet),
+        ST_NumberFormat::Decimal => Some(ListNumberFormat::Decimal),
+        ST_NumberFormat::LowerLetter => Some(ListNumberFormat::LowerLetter),
+        ST_NumberFormat::UpperLetter => Some(ListNumberFormat::UpperLetter),
+        ST_NumberFormat::LowerRoman => Some(ListNumberFormat::LowerRoman),
+        ST_NumberFormat::UpperRoman => Some(ListNumberFormat::UpperRoman),
+        ST_NumberFormat::Ordinal => Some(ListNumberFormat::Ordinal),
+        _ => None,
+    }
+}
+
+fn list_format_value(format: ListNumberFormat) -> i32 {
+    match format {
+        ListNumberFormat::Decimal => 0,
+        ListNumberFormat::UpperRoman => 1,
+        ListNumberFormat::LowerRoman => 2,
+        ListNumberFormat::UpperLetter => 3,
+        ListNumberFormat::LowerLetter => 4,
+        ListNumberFormat::Ordinal => 5,
+        ListNumberFormat::Bullet => 23,
+    }
+}
+
+fn stable_location_offset(location: &str) -> usize {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in location.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash as usize
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60,
+        0xf8, 0xcf, 0xf0, 0x00, 0x00, 0x04, 0x01, 0x01, 0x08, 0x9d, 0x1d, 0xe1, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn rtf_writer_checks_picture_hex_budget_before_expansion() {
+        let mut document = Document::new();
+        document.add_picture(
+            TINY_PNG,
+            "tiny.png",
+            Length::emu(12_700),
+            Length::emu(12_700),
+        );
+
+        let error = match RtfWriter::new_with_output_limit(&document, 180).write() {
+            Ok(_) => panic!("picture hex expansion should be rejected before writing"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("RTF output exceeds the size limit")
+        );
+    }
+
+    #[test]
+    fn rtf_writer_caps_diagnostics_at_reader_limit() {
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        for index in 0..(MAX_DIAGNOSTICS + 1) {
+            document.document.body.content.push(BodyContent::RawXml(
+                format!("<p:item id=\"{index}\"/>").into_bytes(),
+            ));
+        }
+
+        let written = document.to_rtf_bytes().unwrap();
+
+        assert_eq!(written.diagnostics.len(), MAX_DIAGNOSTICS);
+        assert_eq!(
+            written.diagnostics.last().unwrap().destination.as_deref(),
+            Some("body[9999]")
+        );
     }
 }
 

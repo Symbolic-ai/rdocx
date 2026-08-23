@@ -70,7 +70,7 @@ pub struct Document {
     pub(crate) package: OpcPackage,
     pub(crate) document: CT_Document,
     pub(crate) styles: CT_Styles,
-    numbering: Option<CT_Numbering>,
+    pub(crate) numbering: Option<CT_Numbering>,
     pub(crate) core_properties: Option<CoreProperties>,
     /// Read-only custom document properties resolved from package relationships.
     pub(crate) custom_properties: Option<CustomProperties>,
@@ -4444,21 +4444,13 @@ fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     ))
 }
 
-#[cfg(all(
-    feature = "agile-encryption",
-    not(target_arch = "wasm32"),
-    not(target_os = "windows")
-))]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::rename(source, destination)
 }
 
-#[cfg(all(
-    feature = "agile-encryption",
-    not(target_arch = "wasm32"),
-    target_os = "windows"
-))]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+#[cfg(target_os = "windows")]
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;

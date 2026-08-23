@@ -569,14 +569,22 @@ Self-closing Word paragraphs and tables normalize to typed empty values, while
 self-closing final section properties remain outside the item vector. Empty
 foreign and unsupported children remain captured raw rather than being lost.
 
-The `rdocx` facade also owns RTF import. The private RTF reader parses the
-Word-written subset for text, run and paragraph formatting, tables, lists, and
-PNG or JPEG pictures directly into the same `Document` ownership tree that
-DOCX opens use. Its scanner and destination stack stay inside `rdocx`, while
-media bytes flow through `oxml-media` for sniffing and intrinsic size. Safe
-lossy skips return stable `RtfDiagnostic` records, and malformed groups,
-Unicode state, numeric controls, table structure, lookup references, and image
-payloads fail through the facade error enum.
+The `rdocx` facade also owns RTF import and export. The private RTF reader
+parses the Word-written subset for text, run and paragraph formatting, tables,
+lists, and PNG or JPEG pictures directly into the same `Document` ownership
+tree that DOCX opens use. Its scanner and destination stack stay inside
+`rdocx`, while media bytes flow through `oxml-media` for sniffing and intrinsic
+size. The private RTF writer walks the same typed document and package media
+state without flushing or rewriting the DOCX package. It allocates font,
+colour, list, and image references deterministically, emits RTF header tables
+before body content, writes formatting resets at paragraph, run, cell, and row
+boundaries, and serializes non-ASCII text as signed UTF-16 `\uN` code units
+with surrogate pairs where needed. Safe lossy skips return stable
+`RtfDiagnostic` records, malformed reader state fails through the facade error
+enum, and writer output is bounded before retained byte growth or picture hex
+expansion. RTF path saves serialize first, stage a same-directory temporary
+file, sync that file, and publish through the shared portable replacement
+helper.
 
 Revision traversal follows that ownership tree through the main body, tables,
 cells, and content controls. `Document::revisions` reports every valid modeled

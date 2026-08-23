@@ -1,6 +1,6 @@
 # F-177, RTF writer
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S54
 **Size**: M
 **Depends on**: F-176
@@ -112,13 +112,13 @@ blocks integration and the baseline is not re-recorded.
 
 ## Implementation checklist
 
-- [ ] Reuse F-176 grammar, projection, diagnostics, and code-page decisions.
-- [ ] Allocate stable font, colour, list, and image references.
-- [ ] Emit header tables, formatting resets, Unicode text, tables, and lists.
-- [ ] Resolve and emit supported images with truncating goal dimensions.
-- [ ] Diagnose unsupported content once at stable document locations.
-- [ ] Add the exact round-trip gate and focused regression cases.
-- [ ] Run unit, packaging, full verify, and unchanged-harness checks.
+- [x] Reuse F-176 grammar, projection, diagnostics, and code-page decisions.
+- [x] Allocate stable font, colour, list, and image references.
+- [x] Emit header tables, formatting resets, Unicode text, tables, and lists.
+- [x] Resolve and emit supported images with truncating goal dimensions.
+- [x] Diagnose unsupported content once at stable document locations.
+- [x] Add the exact round-trip gate and focused regression cases.
+- [x] Run unit, packaging, full verify, and unchanged-harness checks.
 
 ## Open questions
 

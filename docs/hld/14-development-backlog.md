@@ -1465,7 +1465,18 @@ formatting control, while malformed RTF fails closed through `Error::Rtf`.
 file opened and saved as docx by the pinned oracle, compared structurally.
 
 ### F-177, RTF writer (M)
-The inverse, at the same scope.
+The native `rdocx` facade writes the F-176 RTF fidelity boundary through
+`Document::to_rtf_bytes` and `Document::save_rtf`. The writer allocates font,
+colour, list, and image references deterministically, emits header tables
+before body content, resets formatting at paragraph, run, cell, and row
+boundaries, and writes non-ASCII text as signed UTF-16 RTF Unicode controls.
+It preserves supported text, run and paragraph formatting, tables, multilevel
+lists, and PNG or JPEG pictures with truncating goal dimensions. Unsupported
+or lossy public properties and retained raw XML produce one stable
+location-aware diagnostic while supported siblings continue. Output growth,
+picture hex expansion, and diagnostics are bounded. Path saves serialize
+first, stage a same-directory temporary file, sync it, and publish with the
+shared portable replacement helper.
 **Depends on**: F-176.
 **Test gate**: round-trip. A document written to RTF and read back preserves
 text, formatting, tables, lists and images.

@@ -15,7 +15,7 @@ fn settings_relationship_target_is_resolved_instead_of_assumed() {
     let settings = br#"<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="comments" w:enforcement="true" w:hash="custom-hash" w:salt="custom-salt"/></w:settings>"#;
     let mut seed = Document::new();
     let bytes = seed.to_bytes().unwrap();
-    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
     package.set_part("/word/config/protection.xml", settings.to_vec());
     package.content_types.add_override(
         "/word/config/protection.xml",
@@ -93,6 +93,1062 @@ fn rtf_reader_projects_word_text_formatting_tables_lists_and_images() {
 
 const WORD_RTF_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_RTF_SOURCE: &[u8] = br"{\rtf1\ansi\deff0{\fonttbl{\f0 Calibri;}}{\colortbl;\red18\green52\blue86;}{\*\listtable{\list{\listlevel\levelnfc23\levelstartat1}\listid10}}{\*\listoverridetable{\listoverride\listid10\ls5}}\pard\qc\li720\ri360\fi-240\sb60\sa120\sl-360\slmult0\f0\fs22\cf1 Oracle{\b B}{\i I}{\ul U}{\strike S}{\highlight1 H}{\super P}{\sub D}{\caps C}{\scaps M}{\v V}X\line Y\tab Z\par\pard\plain\f0\fs22\ls5\ilvl0 List item\par\trowd\cellx1440\cellx4320 left\cell right\cell\row\pard{\pict\pngblip\picwgoal100\pichgoal200\picscalex200\picscaley50 89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cff00000040101089d1de10000000049454e44ae426082}{\*\wordprivate ignored}}";
+
+fn rtf_text(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).expect("RTF writer emits ASCII")
+}
+
+fn tiny_jpeg() -> Vec<u8> {
+    let mut jpeg = vec![0xff, 0xd8];
+    jpeg.extend_from_slice(&[0xff, 0xe0, 0x00, 0x02]);
+    jpeg.extend_from_slice(&[
+        0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11,
+        0x00, 0x03, 0x11, 0x00,
+    ]);
+    jpeg.extend_from_slice(&[0xff, 0xd9]);
+    jpeg
+}
+
+#[test]
+fn rtf_writer_emits_stable_header_tables_before_body() {
+    let mut document = Document::new();
+    let list_id = document.add_list_definition(&[
+        ListLevel::bullet(),
+        ListLevel::decimal().start(3),
+        ListLevel::new(rdocx::ListNumberFormat::UpperRoman).start(5),
+    ]);
+    let mut first = document.add_paragraph("");
+    first
+        .add_run("header order")
+        .font("Arial")
+        .color("123456")
+        .highlight("ABCDEF");
+    document
+        .add_paragraph("list item")
+        .set_numbering(list_id, 2);
+
+    let rtf = rtf_text(document.to_rtf_bytes().unwrap().bytes);
+
+    assert!(rtf.starts_with(
+        "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fcharset0 Calibri;}{\\f1\\fcharset0 Arial;}}"
+    ));
+    let font_table = rtf.find("{\\fonttbl").unwrap();
+    let color_table = rtf
+        .find("{\\colortbl;\\red18\\green52\\blue86;\\red171\\green205\\blue239;}")
+        .unwrap();
+    let list_table = rtf.find("{\\*\\listtable").unwrap();
+    let body = rtf.find("\\pard").unwrap();
+    assert!(font_table < color_table && color_table < list_table && list_table < body);
+    assert!(rtf.contains("{\\listlevel\\levelnfc23\\levelnfcn23\\levelstartat1}"));
+    assert!(rtf.contains("{\\listlevel\\levelnfc0\\levelnfcn0\\levelstartat3}"));
+    assert!(rtf.contains("{\\listlevel\\levelnfc1\\levelnfcn1\\levelstartat5}"));
+    assert!(rtf.contains("\\ls1\\ilvl2"));
+}
+
+#[test]
+fn rtf_writer_round_trip_preserves_supported_document_content() {
+    let mut document = Document::new();
+    let list_id = document.add_list_definition(&[ListLevel::bullet(), ListLevel::decimal()]);
+    let mut paragraph = document.add_paragraph("");
+    paragraph.set_alignment(Alignment::Center);
+    paragraph.set_indent_left(Length::twips(720));
+    paragraph.set_indent_right(Length::twips(360));
+    paragraph.set_signed_first_line_indent_value(Some(Length::twips(-240)));
+    paragraph.set_space_before(Length::twips(60));
+    paragraph.set_space_after(Length::twips(120));
+    paragraph.set_line_spacing(18.0);
+    paragraph
+        .add_run("Round")
+        .font("Arial")
+        .size(11.0)
+        .bold(true)
+        .color("123456");
+    paragraph.add_run(" trip").italic(true).underline(true);
+    paragraph.add_run(" strike").strike(true);
+    paragraph.add_run("\tline\nend");
+    document
+        .add_paragraph("nested item")
+        .set_numbering(list_id, 1);
+    {
+        let mut table = document.add_table(1, 2);
+        table.cell(0, 0).unwrap().set_text("left");
+        table.cell(0, 1).unwrap().set_text("right");
+    }
+    document.add_picture(
+        PNG_2_BY_3,
+        "two-by-three.png",
+        Length::emu(12_700),
+        Length::emu(25_400),
+    );
+
+    let written = document.to_rtf_bytes().unwrap();
+    assert!(written.diagnostics.is_empty());
+    let mut reparsed = Document::from_rtf_bytes(&written.bytes).unwrap().document;
+
+    assert_eq!(
+        reparsed.paragraph(0).unwrap().text(),
+        "Round trip strike\tline\nend"
+    );
+    assert_eq!(
+        reparsed.paragraph(0).unwrap().alignment(),
+        Some(Alignment::Center)
+    );
+    assert_eq!(
+        reparsed
+            .paragraph(0)
+            .unwrap()
+            .indent_left()
+            .map(Length::to_emu),
+        Some(457_200)
+    );
+    assert_eq!(
+        reparsed.paragraph(0).unwrap().run(0).unwrap().font_name(),
+        Some("Arial")
+    );
+    assert_eq!(
+        reparsed.paragraph(0).unwrap().run(0).unwrap().bold_value(),
+        Some(true)
+    );
+    assert_eq!(
+        reparsed.paragraph(0).unwrap().run(0).unwrap().color(),
+        Some("123456")
+    );
+    assert_eq!(
+        reparsed
+            .paragraph(0)
+            .unwrap()
+            .run(1)
+            .unwrap()
+            .italic_value(),
+        Some(true)
+    );
+    assert!(
+        reparsed
+            .paragraph(0)
+            .unwrap()
+            .run(1)
+            .unwrap()
+            .is_underline()
+    );
+    assert_eq!(
+        reparsed
+            .paragraph(0)
+            .unwrap()
+            .run(2)
+            .unwrap()
+            .strike_value(),
+        Some(true)
+    );
+    let numbering = reparsed.paragraph(1).unwrap().numbering().unwrap();
+    assert_eq!(numbering.1, 1);
+    assert_eq!(reparsed.numbering_is_bullet(numbering.0), Some(true));
+    assert_eq!(
+        reparsed.table(0).unwrap().cell(0, 0).unwrap().text(),
+        "left"
+    );
+    assert_eq!(
+        reparsed.table(0).unwrap().cell(0, 1).unwrap().text(),
+        "right"
+    );
+    let images = reparsed.images();
+    assert_eq!(images.len(), 1);
+    assert_eq!(
+        (images[0].width_emu, images[0].height_emu),
+        (12_700, 25_400)
+    );
+    assert!(
+        normalize_word_rtf_oracle(&mut reparsed)
+            .document_markers
+            .contains(&"break")
+    );
+}
+
+#[test]
+fn rtf_writer_preserves_truncating_image_goal_dimensions() {
+    let mut document = Document::new();
+    document.add_picture(
+        PNG_2_BY_3,
+        "two-by-three.png",
+        Length::emu(12_699),
+        Length::emu(-12_699),
+    );
+    let jpeg = tiny_jpeg();
+    document.add_picture(&jpeg, "tiny.jpg", Length::emu(12_700), Length::emu(19_049));
+
+    let rtf = rtf_text(document.to_rtf_bytes().unwrap().bytes);
+
+    assert!(rtf.contains("\\pict\\pngblip\\picwgoal19\\pichgoal-19 "));
+    assert!(rtf.contains("\\pict\\jpegblip\\picwgoal20\\pichgoal29 "));
+}
+
+#[test]
+fn rtf_writer_resets_table_cell_paragraph_state() {
+    let mut document = Document::new();
+    let list_id = document.add_list_definition(&[ListLevel::decimal()]);
+    {
+        let mut table = document.add_table(1, 2);
+        let mut first_cell = table.cell(0, 0).unwrap();
+        first_cell.remove_first_empty_paragraph();
+        let mut first = first_cell.add_paragraph("center");
+        first.set_alignment(Alignment::Center);
+        let mut second = first_cell.add_paragraph("list");
+        second.set_numbering(list_id, 0);
+        table.cell(0, 1).unwrap().set_text("default");
+    }
+
+    let rtf = rtf_text(document.to_rtf_bytes().unwrap().bytes);
+    let center = rtf
+        .find("\\pard\\intbl\\qc")
+        .expect("centered cell paragraph resets");
+    let list = rtf
+        .find("\\par \\pard\\intbl\\ls1\\ilvl0")
+        .expect("list paragraph resets");
+    let next_cell = rtf
+        .find("\\cell \\pard\\intbl{\\plain\\f0 default")
+        .expect("next cell resets");
+
+    assert!(center < list && list < next_cell, "{rtf}");
+}
+
+#[test]
+fn rtf_writer_serializes_grid_span_with_one_boundary_per_output_cell() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="2000"/></w:tblGrid>
+      <w:tr>
+        <w:tc>
+          <w:tcPr><w:gridSpan w:val="2"/></w:tcPr>
+          <w:p><w:r><w:t>merged</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let written = document.to_rtf_bytes().unwrap();
+    assert!(written.diagnostics.is_empty());
+    let rtf = rtf_text(written.bytes.clone());
+    let row = rtf
+        .split("\\trowd")
+        .nth(1)
+        .and_then(|tail| tail.split("\\row").next())
+        .expect("row RTF");
+
+    assert_eq!(
+        row.matches("\\cellx").count(),
+        row.matches("\\cell ").count()
+    );
+    assert!(row.contains("\\cellx3000"), "{row}");
+    assert!(!row.contains("\\cellx1000\\cellx3000"), "{row}");
+    let reparsed = Document::from_rtf_bytes(&written.bytes).unwrap().document;
+    assert_eq!(reparsed.table(0).unwrap().row(0).unwrap().cell_count(), 1);
+    assert_eq!(
+        reparsed.table(0).unwrap().cell(0, 0).unwrap().text(),
+        "merged"
+    );
+
+    let mut public_document = Document::new();
+    {
+        let mut table = public_document.add_table(1, 1);
+        let mut cell = table.cell(0, 0).unwrap();
+        cell.set_grid_span(2);
+        cell.set_text("public");
+    }
+    let public_rtf = rtf_text(public_document.to_rtf_bytes().unwrap().bytes);
+    let public_row = public_rtf
+        .split("\\trowd")
+        .nth(1)
+        .and_then(|tail| tail.split("\\row").next())
+        .expect("public row RTF");
+    assert_eq!(
+        public_row.matches("\\cellx").count(),
+        public_row.matches("\\cell ").count()
+    );
+}
+
+#[test]
+fn rtf_writer_reports_public_unsupported_paragraph_properties_once() {
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("lossy paragraph");
+    paragraph.set_keep_with_next(true);
+    paragraph.set_keep_together(true);
+    paragraph.set_page_break_before(true);
+    paragraph.set_widow_control(false);
+    paragraph.set_border_bottom(BorderStyle::Single, 8, "112233");
+    paragraph.set_add_tab_stop_with_leader(TabAlignment::Right, Length::twips(720), TabLeader::Dot);
+    paragraph.set_outline_level(2);
+    paragraph.set_shading("FFFF00");
+    paragraph.set_section_break(SectionBreak::Continuous);
+
+    let messages = document
+        .to_rtf_bytes()
+        .unwrap()
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/ppr/keepNext".to_owned(),
+                "keep-with-next paragraph property was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/keepLines".to_owned(),
+                "keep-lines paragraph property was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/pageBreakBefore".to_owned(),
+                "page-break-before paragraph property was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/widowControl".to_owned(),
+                "widow-control paragraph property was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/outlineLvl".to_owned(),
+                "paragraph outline level was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/borders".to_owned(),
+                "paragraph borders were dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/tabs".to_owned(),
+                "paragraph tab stops were dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/shading".to_owned(),
+                "paragraph shading was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/ppr/sectPr".to_owned(),
+                "paragraph section properties were dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_reports_table_and_row_property_diagnostics() {
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(1, 1);
+        table.set_style("TableGrid");
+        table.set_width(Length::twips(4000));
+        table.set_alignment(Alignment::Center);
+        table.set_borders(BorderStyle::Single, 8, "112233");
+        table.set_cell_margins(
+            Length::twips(10),
+            Length::twips(20),
+            Length::twips(30),
+            Length::twips(40),
+        );
+        table.set_layout_fixed();
+        table.set_indent(Length::twips(120));
+        let mut row = table.row(0).unwrap();
+        row.set_height_exact(Length::twips(360));
+        row.set_header();
+        row.set_cant_split();
+    }
+
+    let messages = document
+        .to_rtf_bytes()
+        .unwrap()
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/tblPr/tblStyle".to_owned(),
+                "table style was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/tblW".to_owned(),
+                "table width was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/jc".to_owned(),
+                "table alignment was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/tblBorders".to_owned(),
+                "table borders were dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/tblCellMar".to_owned(),
+                "table cell margins were dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/tblLayout".to_owned(),
+                "table layout was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/tblInd".to_owned(),
+                "table indent was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/trHeight".to_owned(),
+                "table-row height was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/hRule".to_owned(),
+                "table-row height rule was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/tblHeader".to_owned(),
+                "table-row repeat header property was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/cantSplit".to_owned(),
+                "table-row cant-split property was dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_reports_raw_table_and_row_property_diagnostics() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tblPr>
+        <w:shd w:val="clear" w:fill="FFFF00"/>
+        <w:tblLook w:firstRow="1"/>
+        <w:tblPrChange w:id="1" w:author="A" w:date="2026-08-24T00:00:00Z"/>
+        <ext:tblPrChange xmlns:ext="urn:producer"/>
+      </w:tblPr>
+      <w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid>
+      <w:tr>
+        <w:trPr>
+          <w:cnfStyle w:val="100000000000"/>
+          <w:jc w:val="center"/>
+          <w:ins w:id="2" w:author="A" w:date="2026-08-24T00:00:00Z"/>
+          <ext:del xmlns:ext="urn:producer"/>
+        </w:trPr>
+        <w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let messages = document
+        .to_rtf_bytes()
+        .unwrap()
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/tblPr/shd".to_owned(),
+                "table shading was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/tblLook".to_owned(),
+                "table look was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/tblPrChange".to_owned(),
+                "table property revision was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/tblPr/revisionXml".to_owned(),
+                "unmodelled table property revision XML was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/jc".to_owned(),
+                "table-row alignment was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/cnfStyle".to_owned(),
+                "table-row conditional style property was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/revisions".to_owned(),
+                "table-row revision markers were dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/trPr/revisionXml".to_owned(),
+                "unmodelled table-row revision XML was dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_reports_raw_table_cell_property_xml_once() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid>
+      <w:tr>
+        <w:tc>
+          <w:tcPr>
+            <w:hMerge w:val="restart"/>
+            <ext:cellProp xmlns:ext="urn:producer"/>
+          </w:tcPr>
+          <w:p><w:r><w:t>cell</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let messages = document
+        .to_rtf_bytes()
+        .unwrap()
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/row[0]/cell[0]/tcPr/raw[3]".to_owned(),
+                "unmodelled table-cell property hMerge was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/cell[0]/tcPr/raw[4]".to_owned(),
+                "unmodelled table-cell property cellProp was dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_uses_cell_widths_or_reports_width_loss() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:tcPr><w:tcW w:w="2222" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>dxa</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:tcW w:w="50" w:type="pct"/></w:tcPr><w:p><w:r><w:t>pct</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>missing</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>grid</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>short</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let written = document.to_rtf_bytes().unwrap();
+    let rtf = rtf_text(written.bytes);
+
+    assert!(rtf.contains("\\cellx2222"), "{rtf}");
+    let messages = written
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/row[0]/cell[1]/tcPr/tcW".to_owned(),
+                "unsupported table-cell width type was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/cell[2]/tcPr/tcW".to_owned(),
+                "table-cell width could not be preserved because the table grid is missing"
+                    .to_owned(),
+            ),
+            (
+                "body[1]/row[0]/cell[1]/tcPr/tcW".to_owned(),
+                "table-cell width could not be preserved because the table grid is too short"
+                    .to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_rejects_invalid_cell_width_boundaries() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:tcPr><w:tcW w:w="0" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>zero</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:tcW w:w="-5" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>negative</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let written = document.to_rtf_bytes().unwrap();
+    let rtf = rtf_text(written.bytes);
+    assert!(rtf.contains("\\cellx1440\\cellx2880"), "{rtf}");
+    let messages = written
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/row[0]/cell[0]/tcPr/tcW".to_owned(),
+                "invalid table-cell width was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/row[0]/cell[1]/tcPr/tcW".to_owned(),
+                "invalid table-cell width was dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+
+    let mut overflow_package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let overflow_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:tcPr><w:tcW w:w="2147483000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>overflow</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    overflow_package.set_part("/word/document.xml", overflow_xml.to_vec());
+    let mut overflow_input = std::io::Cursor::new(Vec::new());
+    overflow_package.write_to(&mut overflow_input).unwrap();
+    let overflow_document = Document::from_bytes(overflow_input.get_ref()).unwrap();
+    let error = match overflow_document.to_rtf_bytes() {
+        Ok(_) => panic!("overflowing table boundaries should fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("RTF table cell boundaries exceed the supported range")
+    );
+}
+
+#[test]
+fn rtf_writer_diagnoses_unsupported_numbering_without_coercion() {
+    let mut seed = Document::new();
+    seed.add_list_definition(&[ListLevel::decimal(), ListLevel::bullet()]);
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="9"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>too deep</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>unsupported format</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>supported sibling</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    let numbering_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="none"/><w:lvlText w:val="%1."/></w:lvl>
+    <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="*"/></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+</w:numbering>"#;
+    package.set_part("/word/document.xml", document_xml.to_vec());
+    package.set_part("/word/numbering.xml", numbering_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let written = document.to_rtf_bytes().unwrap();
+    let rtf = rtf_text(written.bytes);
+    assert!(!rtf.contains("\\ilvl8"), "{rtf}");
+    assert!(
+        !rtf.contains("\\ls1\\ilvl0{\\plain\\f0 unsupported format}"),
+        "{rtf}"
+    );
+    assert!(rtf.contains("{\\plain\\f0 too deep}"), "{rtf}");
+    assert!(rtf.contains("{\\plain\\f0 unsupported format}"), "{rtf}");
+    assert!(
+        rtf.contains("\\ls1\\ilvl1{\\plain\\f0 supported sibling}"),
+        "{rtf}"
+    );
+    let messages = written
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/ppr/numPr/ilvl".to_owned(),
+                "numbering level above 8 was dropped during RTF export".to_owned(),
+            ),
+            (
+                "numbering[numId=1]/level[0]/numFmt".to_owned(),
+                "unsupported numbering format was dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_reports_run_properties_individually_without_false_supported_diagnostics() {
+    let mut supported = Document::new();
+    let mut paragraph = supported.add_paragraph("");
+    paragraph
+        .add_run("supported")
+        .font("Arial")
+        .size(11.0)
+        .bold(true)
+        .italic(true)
+        .underline(true)
+        .strike(true)
+        .color("123456")
+        .highlight("ABCDEF")
+        .all_caps(true)
+        .small_caps(true)
+        .hidden(true)
+        .superscript();
+    assert!(supported.to_rtf_bytes().unwrap().diagnostics.is_empty());
+
+    let mut lossy = Document::new();
+    let mut paragraph = lossy.add_paragraph("");
+    let mut run = paragraph.add_run("lossy");
+    run.set_style("Emphasis");
+    run.set_underline_style(UnderlineStyle::Double);
+    run.set_double_strike(true);
+    run.set_character_spacing(Length::twips(20));
+    run.set_width_scale(80);
+    run.set_position(4);
+
+    let messages = lossy
+        .to_rtf_bytes()
+        .unwrap()
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/run[0]/rPr/rStyle".to_owned(),
+                "run style was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/u".to_owned(),
+                "non-basic underline style was simplified during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/dstrike".to_owned(),
+                "double strikethrough was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/spacing".to_owned(),
+                "run character spacing was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/w".to_owned(),
+                "run width scale was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/position".to_owned(),
+                "run text position was dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_reports_raw_run_property_diagnostics_individually() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:ascii="Arial" w:hAnsi="Courier New" w:eastAsia="MS Mincho" w:cs="Arial" w:asciiTheme="minorHAnsi" w:hAnsiTheme="majorHAnsi"/>
+          <w:b/>
+          <w:bCs w:val="0"/>
+          <w:i/>
+          <w:iCs w:val="0"/>
+          <w:sz w:val="22"/>
+          <w:szCs w:val="24"/>
+          <w:color w:val="123456" w:themeColor="accent1"/>
+          <w:highlight w:val="yellow"/>
+          <w:ins w:id="1" w:author="A" w:date="2026-08-24T00:00:00Z"/>
+          <w:rPrChange w:id="2" w:author="A" w:date="2026-08-24T00:00:00Z"/>
+          <ext:rPrChange xmlns:ext="urn:producer"/>
+        </w:rPr>
+        <w:t>raw</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let messages = document
+        .to_rtf_bytes()
+        .unwrap()
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.expect("diagnostic location"),
+                diagnostic.message,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[0]/run[0]/rPr/hAnsi".to_owned(),
+                "alternate run font was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/eastAsia".to_owned(),
+                "alternate run font was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/asciiTheme".to_owned(),
+                "theme run font was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/hAnsiTheme".to_owned(),
+                "theme run font was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/bCs".to_owned(),
+                "complex-script bold was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/iCs".to_owned(),
+                "complex-script italic was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/szCs".to_owned(),
+                "complex-script font size was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/themeColor".to_owned(),
+                "theme run colour was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/highlight".to_owned(),
+                "keyword highlight colour was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/revisions".to_owned(),
+                "run revision markers were dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/rPrChange".to_owned(),
+                "run property revision was dropped during RTF export".to_owned(),
+            ),
+            (
+                "body[0]/run[0]/rPr/revisionXml".to_owned(),
+                "unmodelled run property revision XML was dropped during RTF export".to_owned(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn rtf_writer_reports_each_lossy_item_without_dropping_supported_siblings() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:p="urn:producer">
+  <w:body>
+    <w:p><w:r><w:t>first</w:t></w:r></w:p>
+    <w:sdt><w:sdtPr><w:tag w:val="drop"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>
+    <p:opaque p:flag="drop"><p:child/></p:opaque>
+    <w:p><w:bookmarkStart w:id="1" w:name="mark"/><w:r><w:t>last</w:t></w:r><w:r><w:footnoteReference w:id="2"/></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let written = document.to_rtf_bytes().unwrap();
+    let messages = written
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.destination.as_deref().unwrap(),
+                diagnostic.message.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        messages,
+        [
+            (
+                "body[1]",
+                "body content control was dropped during RTF export",
+            ),
+            (
+                "body[2]",
+                "unmodelled body XML was dropped during RTF export",
+            ),
+            (
+                "body[3]/bookmark[0]",
+                "bookmark marker was dropped during RTF export",
+            ),
+            (
+                "body[3]/run[1]/content[0]",
+                "footnote reference was dropped during RTF export",
+            ),
+        ]
+    );
+    let reparsed = Document::from_rtf_bytes(&written.bytes).unwrap().document;
+    assert_eq!(reparsed.text(), "first\nlast\n");
+}
+
+#[test]
+fn rtf_writer_leaves_docx_unmodelled_xml_unchanged() {
+    let mut seed = Document::new();
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let source_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:p="urn:producer">
+  <w:body>
+    <w:p><w:r><w:t>kept</w:t></w:r></w:p>
+    <p:opaque p:flag="keep"><p:child/></p:opaque>
+    <w:sectPr/>
+  </w:body>
+</w:document>"#;
+    package.set_part("/word/document.xml", source_xml.to_vec());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+
+    let before = document_xml(&mut document);
+    assert!(!document.to_rtf_bytes().unwrap().diagnostics.is_empty());
+    let after = document_xml(&mut document);
+
+    assert_eq!(before, after);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(reopened.body_items().any(|item| matches!(
+        item,
+        BodyItemRef::UnsupportedXml(raw)
+            if std::str::from_utf8(raw).unwrap()
+                == "<p:opaque p:flag=\"keep\"><p:child/></p:opaque>"
+    )));
+}
 
 #[derive(Debug, PartialEq)]
 struct WordRtfRunRecord {

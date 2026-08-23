@@ -204,12 +204,17 @@ side-effect free.
 Native Rust callers can import RTF through `Document::from_rtf_bytes` and
 `Document::open_rtf`. These additive pre-1.0 APIs return an `RtfReadResult`
 that carries both the converted `Document` and every stable diagnostic for
-content that was safely dropped. The reader accepts the Word-written subset for
-text, formatting, tables, lists, and PNG or JPEG images. Unsupported
-destinations and visible formatting drops are reported instead of hidden.
-Malformed RTF returns the facade `Error::Rtf` variant without exposing a second
-document model. Python, WASM, and CLI surfaces do not gain RTF entry points
-implicitly.
+content that was safely dropped. Native Rust callers can export the supported
+subset through `Document::to_rtf_bytes` and `Document::save_rtf`. The byte API
+returns an `RtfWriteResult` with the serialized bytes and every stable
+diagnostic for content that could not be represented. The path API serializes
+before file I/O, publishes through the shared atomic replacement path, and
+returns the same diagnostics after a successful save. The reader and writer
+cover text, formatting, tables, lists, and PNG or JPEG images. Unsupported
+destinations, visible formatting drops, and lossy writer inputs are reported
+instead of hidden. Malformed RTF returns the facade `Error::Rtf` variant
+without exposing a second document model. Python, WASM, and CLI surfaces do
+not gain RTF entry points implicitly.
 
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
