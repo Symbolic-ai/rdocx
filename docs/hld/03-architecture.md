@@ -456,9 +456,10 @@ an endnote sharing a number.
 
 The 15 shared and PowerPoint publication candidates use the explicit common
 incubating version in their manifests and workspace pins. All 15 candidates
-and the unpublished `rpptx-wasm` preparation member are prepared together at
-0.5.0. The latest published family remains the immutable 0.4.0 release until a
-separately approved `/release rpptx-v0.5.0` succeeds. The family adds
+are published together at 0.5.0 from the annotated `rpptx-v0.5.0` tag at
+reviewed SHA `343388e19bce21b3d83f17e8cc0e5418861a94cb`. The unpublished
+`rpptx-wasm` preparation member is also at 0.5.0 but has no crates.io
+publication path. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates continue to
 use the separate workspace version. That stable workspace and its exact
@@ -472,8 +473,9 @@ dependency on either document family, while CLI binaries depend inward on it.
 
 The immutable `rpptx-v0.1.2` release contains the earlier 12-package family.
 `oxml-cli-support` and `rpptx-cli` remain unpublished at 0.1.2. The original
-14-package family is published at the immutable 0.1.3 and 0.2.0 boundaries. No
-existing tag or registry version was moved or overwritten.
+14-package family is published at the immutable 0.1.3 and 0.2.0 boundaries,
+and the earlier 15-package family remains available at 0.4.0. No existing tag
+or registry version was moved or overwritten.
 
 The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across

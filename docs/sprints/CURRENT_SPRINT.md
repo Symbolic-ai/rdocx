@@ -40,7 +40,7 @@ complete incubating and stable Rust families with reviewed contributor credit.
 | F-175 | Redaction | M | done | - |
 | F-X048 | Dense form table fidelity | L | done | - |
 | F-174 | PDF/A conformance | M | done | - |
-| F-X049 | Tag rpptx-v0.5.0 | S | in-progress | codex |
+| F-X049 | Tag rpptx-v0.5.0 | S | done | - |
 | F-X050 | Tag v0.9.0 | S | pending | - |
 
 ## Sequencing note

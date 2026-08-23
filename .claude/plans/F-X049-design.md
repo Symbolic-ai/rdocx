@@ -1,6 +1,6 @@
 # F-X049, Tag rpptx-v0.5.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S53
 **Size**: S
 **Depends on**: F-172, F-173, F-174, F-175
@@ -135,8 +135,8 @@ release metadata only. Any output delta blocks preparation.
 - [x] Update exactly the listed HLD files for the prepared release state.
 - [x] Run full verification, package, asset, WASM, supply-chain, notes, and
       hash gates.
-- [ ] Stop at `/release rpptx-v0.5.0` final approval.
-- [ ] After approval, verify registry entries, owners, release SHA and body,
+- [x] Stop at `/release rpptx-v0.5.0` final approval.
+- [x] After approval, verify registry entries, owners, release SHA and body,
       post every reviewed comment, and record every comment URL.
 
 ## Release boundary

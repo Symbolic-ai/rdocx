@@ -546,11 +546,13 @@ honest. Do not auto-generate them from PyO3.
 crates are `publish = false`, because a cdylib has no business on crates.io.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint crates.io family is prepared at 0.5.0 while the stable seven-package
-Word family remains at 0.8.0. The same preparation group moves the unpublished
-`rpptx-wasm` crate to 0.5.0, but gives no binding, WASM, npm, or Python package
-publication authority. Real publication still requires the selected-family
-release gate and a separate final approval at the reviewed SHA.
+PowerPoint crates.io family is published at 0.5.0 from the annotated
+`rpptx-v0.5.0` tag at reviewed SHA
+`343388e19bce21b3d83f17e8cc0e5418861a94cb`, while the stable seven-package
+Word family remains at 0.8.0. The same preparation group places the
+unpublished `rpptx-wasm` crate at 0.5.0, but gives no binding, WASM, npm, or
+Python package publication authority. Every later release still requires its
+selected-family gate and a separate final approval at the reviewed SHA.
 
 ## CI
 

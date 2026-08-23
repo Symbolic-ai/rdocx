@@ -8612,3 +8612,55 @@ are unchanged from the preceding reviewed baseline.
 **Notes for future sessions.** The `CellBlock` recursion is part of cache keys,
 retained-byte limits, source mapping, semantic ownership, and painting. Treat
 all five paths as one contract when changing table layout.
+
+### F-X049, Tag rpptx-v0.5.0
+
+**Sprint.** S53
+**Completed.** 2026-08-23
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete fifteen-package shared OOXML and PowerPoint
+family was published at 0.5.0 from reviewed SHA
+`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The release contains package
+encryption, digital-signature creation and verification, tagged PDF, PDF/A,
+and shared immutable font and page ownership. `rpptx-wasm` is prepared at the
+same version but remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[32654116819](https://github.com/tensorbee/rdocx/actions/runs/32654116819)
+passed output stability, metadata, release-note, archive, fifteen-crate
+publication, and GitHub Release jobs. Every 0.5.0 registry entry resolved and
+listed `mantissaman (Atul Sharma)` as owner. The annotated
+[`rpptx-v0.5.0`](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.5.0)
+tag dereferenced to the reviewed SHA, and the published body was byte-identical
+to the committed changelog render.
+
+**Contribution inventory.** Authenticated contributor `@emptinessform`
+reported [Issue 39](https://github.com/tensorbee/rdocx/issues/39) and authored
+[PR 40](https://github.com/tensorbee/rdocx/pull/40) and
+[PR 41](https://github.com/tensorbee/rdocx/pull/41). Their profiling and
+reference implementations shaped the shared `FontData` and `PageFrame`
+ownership boundary that landed as a hardened equivalent. Format-specific
+transfer, pagination, and cache work remains on the stable release train.
+
+**Notifications.** The reviewed release-bound comments were posted and
+verified at [Issue 39 comment](https://github.com/tensorbee/rdocx/issues/39#issuecomment-5387476283),
+[PR 40 comment](https://github.com/tensorbee/rdocx/pull/40#issuecomment-5387476368),
+and [PR 41 comment](https://github.com/tensorbee/rdocx/pull/41#issuecomment-5387476474).
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The incubating 0.5.0 metadata regression, all 66 workflow tests,
+full verification, the exact patched 22-package dry run, archive and asset
+inventory, both WASM targets, and supply-chain checks passed at the reviewed
+source. The release workflow then passed the real publication gate.
+
+**Hash harness.** Unchanged by the release preparation, 49 of 49 against the
+integrated reviewed baseline. The sprint baseline retains the fourteen
+declared PDF byte and page changes from F-173 and F-X048.
+
+**Notes for future sessions.** Release approval for the incubating family did
+not authorize stable `v0.9.0`. F-X050 retains its own exact-SHA approval and
+publication boundary.

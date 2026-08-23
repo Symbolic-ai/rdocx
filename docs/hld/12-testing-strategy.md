@@ -824,6 +824,9 @@ workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
 15-package publication preflight at 0.5.0. It separately proves the stable
 workspace and family remain at 0.8.0 and `rpptx-wasm` remains unpublished.
+The published 0.5.0 gate also verifies every selected registry entry and
+owner, the annotated tag target, and byte-identical GitHub release notes before
+the release story completes.
 The current stable 0.8.0 release verifies every crates.io README endpoint
 returns non-empty rendered HTML. Those endpoint checks remain a
 post-publication gate owned by `/release`.

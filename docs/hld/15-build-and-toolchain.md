@@ -214,14 +214,13 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
-at 0.4.0 from the annotated `rpptx-v0.4.0` tag at reviewed SHA
-`9dee4335c531ca24abbdc995294edbb48c00183f`. This is the first published
-version of `oxml-chart`. Manifest eligibility and allowlist membership do not
-authorize a later publication without a separately approved `/release`
-invocation at the exact reviewed SHA.
-All 15 candidates and the unpublished `rpptx-wasm` preparation member are now
-prepared at 0.5.0. The 0.4.0 registry release remains current until the
-reviewed 0.5.0 SHA passes the final release boundary.
+at 0.5.0 from the annotated `rpptx-v0.5.0` tag at reviewed SHA
+`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The earlier 0.4.0 registry
+release remains available, and no existing version or tag was moved. Manifest
+eligibility and allowlist membership do not authorize a later publication
+without a separately approved `/release` invocation at the exact reviewed
+SHA. The unpublished `rpptx-wasm` preparation member is also at 0.5.0 but has
+no crates.io publication path.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
@@ -312,11 +311,11 @@ releases remain available. No binding, WASM, Python, npm, or incubating package
 gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.5.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-previous exact 15-package crates.io family listed above is published from the annotated
-`rpptx-v0.4.0` tag at reviewed SHA
-`9dee4335c531ca24abbdc995294edbb48c00183f`. The preparation group also contains
-unpublished `rpptx-wasm`, while the crates.io allowlist remains exactly 15
-packages. Earlier immutable registry releases remain available.
+exact 15-package crates.io family listed above is published from the annotated
+`rpptx-v0.5.0` tag at reviewed SHA
+`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The preparation group also
+contains unpublished `rpptx-wasm`, while the crates.io allowlist remains
+exactly 15 packages. Earlier immutable registry releases remain available.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
