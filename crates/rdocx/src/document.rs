@@ -3533,6 +3533,15 @@ impl Document {
         self.to_pdf_deterministic_with_options(RenderOptions::default())
     }
 
+    /// Render the document to the selected archival PDF profile using bundled fonts.
+    pub fn to_pdfa_deterministic(&self, profile: oxml_pdf::PdfConformance) -> Result<Vec<u8>> {
+        let layout = self.layout_for_options(RenderOptions::default(), true)?;
+        Ok(oxml_pdf::render_to_pdf_with_options(
+            &layout.layout,
+            oxml_pdf::PdfOptions::new(profile),
+        )?)
+    }
+
     /// Render the selected revision view to deterministic PDF bytes.
     pub fn to_pdf_deterministic_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
         let layout = self.layout_for_options(options, true)?;
@@ -5386,6 +5395,23 @@ mod tests {
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         doc.to_pdf_with_fonts(&[(family, font_data)]).unwrap();
         assert_eq!(layout_invocations(), 4);
+    }
+
+    #[test]
+    fn native_word_pdfa_method_selects_the_requested_profile() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Archival Word document");
+
+        for (profile, part) in [
+            (oxml_pdf::PdfConformance::PdfA2b, "2"),
+            (oxml_pdf::PdfConformance::PdfA3b, "3"),
+        ] {
+            let pdf = doc.to_pdfa_deterministic(profile).unwrap();
+            assert!(
+                String::from_utf8_lossy(&pdf)
+                    .contains(&format!("<pdfaid:part>{part}</pdfaid:part>"))
+            );
+        }
     }
 
     #[test]

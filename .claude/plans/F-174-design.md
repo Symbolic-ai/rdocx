@@ -1,6 +1,6 @@
 # F-174, PDF/A conformance
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S53
 **Size**: M
 **Depends on**: F-173
@@ -107,13 +107,13 @@ sample renderer remains byte-identical.
 
 ## Implementation checklist
 
-- [ ] Add explicit PDF/A-2b and PDF/A-3b options and named errors.
-- [ ] Preflight every prohibited or required feature before writing.
-- [ ] Embed deterministic XMP, sRGB output intent, and ICC bytes.
-- [ ] Preserve F-173 structure in both profiles.
-- [ ] Add native Word and Presentation entry points without binding expansion.
-- [ ] Pin and run veraPDF 1.30.2 for `2b`, `3b`, and `ua1`.
-- [ ] Verify ordinary bytes, WASM graphs, package contents, licence evidence,
+- [x] Add explicit PDF/A-2b and PDF/A-3b options and named errors.
+- [x] Preflight every prohibited or required feature before writing.
+- [x] Embed deterministic XMP, sRGB output intent, and ICC bytes.
+- [x] Preserve F-173 structure in both profiles.
+- [x] Add native Word and Presentation entry points without binding expansion.
+- [x] Pin and run veraPDF 1.30.2 for `2b`, `3b`, and `ua1`.
+- [x] Verify ordinary bytes, WASM graphs, package contents, licence evidence,
       and harness output.
 
 ## Open questions

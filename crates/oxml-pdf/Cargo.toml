@@ -12,6 +12,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
+include = ["src/**/*", "assets/sRGB2014.icc", "assets/LICENSE-sRGB2014", "README.md"]
 
 [package.metadata.release]
 shared-version = "incubating"

@@ -4784,6 +4784,22 @@ fn corpus_example_and_facade_rendering_are_identical() {
     assert_eq!(example.input.slides.len(), facade.pages.len());
 }
 
+#[test]
+fn native_presentation_pdfa_method_selects_the_requested_profile() {
+    let mut presentation = Presentation::new().expect("create presentation");
+    presentation.add_slide(0).expect("add slide");
+
+    for (profile, part) in [
+        (oxml_pdf::PdfConformance::PdfA2b, "2"),
+        (oxml_pdf::PdfConformance::PdfA3b, "3"),
+    ] {
+        let pdf = presentation.to_pdfa_deterministic(profile).unwrap();
+        assert!(
+            String::from_utf8_lossy(&pdf).contains(&format!("<pdfaid:part>{part}</pdfaid:part>"))
+        );
+    }
+}
+
 fn presentation_with_three_dimensional_chart_fallback(preview: Option<(&[u8], &str)>) -> Vec<u8> {
     let bytes = presentation_with_authored_chart().to_bytes().unwrap();
     let mut package = open_opc(&bytes, "three-dimensional chart fallback");

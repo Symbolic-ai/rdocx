@@ -256,7 +256,10 @@ impl<'a> PreparedStructure<'a> {
     }
 }
 
-fn valid_structure(structure: &DocumentStructure, pages: &[std::sync::Arc<PageFrame>]) -> bool {
+pub(crate) fn valid_structure(
+    structure: &DocumentStructure,
+    pages: &[std::sync::Arc<PageFrame>],
+) -> bool {
     if structure.nodes.is_empty()
         || structure
             .nodes

@@ -250,6 +250,17 @@ artifacts. Malformed public structure graphs are rejected, and their marked
 children recurse without BDC or orphan MCIDs. A result with no structure
 retains the byte-compatible untagged path.
 
+The explicit archival path accepts `PdfOptions` with either PDF/A-2b or
+PDF/A-3b. It preflights every used font, the complete structure graph, link
+actions, and colour components before allocating output. A failure returns a
+named `PdfError` and no partial bytes. A successful write adds deterministic
+PDF/A identification XMP, a deterministic file identifier, and one sRGB2014
+output intent. Tagged input uses the same structure writer and combines PDF/A
+and conditional PDF/UA identification in one metadata stream. The ordinary
+`render_to_pdf` path does not allocate these objects and remains byte-identical.
+PDF/A-3b does not add an associated file unless a later explicit API supplies
+one.
+
 `Path` is `m`/`l`/`c`/`h` followed by `f`, `f*`, `S`, `B` or `B*` by supported
 fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group` is
 `q`, `cm`, optional clip via `W n`, optional `/GS gs` for opacity, recurse,

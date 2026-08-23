@@ -73,6 +73,10 @@ pub enum Error {
     #[error(transparent)]
     Package(#[from] OpcError),
 
+    #[cfg(feature = "render")]
+    #[error("PDF conformance error: {0}")]
+    Pdf(#[from] oxml_pdf::PdfError),
+
     #[error("presentation package has no officeDocument relationship")]
     MissingMainDocument,
 
@@ -489,6 +493,16 @@ impl Presentation {
     pub fn to_pdf_deterministic(&self) -> Result<Vec<u8>> {
         let (_, layout) = self.render_deterministic()?;
         Ok(oxml_pdf::render_to_pdf(&layout))
+    }
+
+    /// Render the presentation to the selected archival PDF profile.
+    #[cfg(feature = "render")]
+    pub fn to_pdfa_deterministic(&self, profile: oxml_pdf::PdfConformance) -> Result<Vec<u8>> {
+        let (_, layout) = self.render_deterministic()?;
+        Ok(oxml_pdf::render_to_pdf_with_options(
+            &layout,
+            oxml_pdf::PdfOptions::new(profile),
+        )?)
     }
 
     fn staged_package(&self) -> Result<OpcPackage> {

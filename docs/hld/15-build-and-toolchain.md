@@ -67,6 +67,12 @@ metadata, and XMP bytes are derived only from ordered layout input. A
 identifier, host lookup, or system-font dependency. Untagged Presentation
 layouts keep the existing writer path.
 
+PDF/A-2b and PDF/A-3b use the same deterministic layout boundary. The writer
+adds no clock, random source, network lookup, or host colour service. Its fixed
+XMP and file identifiers depend only on the selected profile and ordered
+layout metadata. Ordinary PDF output remains on the existing byte-compatible
+path.
+
 Reusable managers bound shaping to 2,048 entries and 16 MiB, file bytes to 256
 entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
 entry ceilings. The reusable Word engine bounds both pending and published
@@ -155,6 +161,14 @@ source inventory. The tagged writer implementation, including
 `src/structure.rs`, is part of the published `oxml-pdf` source inventory. No
 runtime oracle, installer, validation profile, or generated PDF is packaged in
 either crate.
+
+`oxml-pdf` also packages `assets/sRGB2014.icc` and
+`assets/LICENSE-sRGB2014`. The 3,024-byte profile comes from the International
+Color Consortium registry and has SHA-256
+`384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a`.
+The adjacent legal file records the ICC distribution terms, source, retrieval
+date, byte size, and digest. The verified package inventory must contain both
+files and the archive remains below the crates.io 10 MiB ceiling.
 
 The publishable `rpptx-cli` binary contains nine commands. Its `thumbnail`
 command uses the deterministic presentation renderer, and its `outline`
@@ -522,6 +536,10 @@ Ring, SHA-256, base64, and X.509 parsing have the named default-off
 WASM, or CLI graphs. The verifier authenticates with the embedded public key.
 Certificate-chain trust requires caller policy and no ambient trust-store
 dependency is part of the workspace graph.
+
+PDF/A conformance adds no crate dependency. The sRGB2014 bytes are a
+crate-local compile-time asset, and veraPDF remains external test
+infrastructure rather than production logic.
 
 The single advisory exception, an unmaintained transitive font dependency,
 carries its exit route in a comment. Keep that discipline: an ignore without a

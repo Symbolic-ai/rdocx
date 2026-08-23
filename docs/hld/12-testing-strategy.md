@@ -690,6 +690,13 @@ outcomes as mandatory manual evidence.
   source installer and signature are pinned outside the repository. The
   ignored differential test requires that exact version and a conforming
   report for an in-code deterministic fixture before feature completion.
+- The archival regression gate renders one tagged in-code fixture with an
+  actually embedded bundled-font subset through PDF/A-2b and PDF/A-3b. The
+  pinned veraPDF 1.30.2 oracle must pass profiles `2b` and `ua1` on the first
+  file, then `3b` and `ua1` on the second. Focused tests assert matching XMP,
+  output intent, ICC linkage, deterministic identifiers, named preflight
+  errors, retained headings, lists, tables, and alternate text. The ordinary
+  path has a byte pin and the complete 49-entry hash harness remains unchanged.
 - `Group` containing `Image` registers the XObject.
 - `Group` containing `LinkAnnotation` emits it with a transformed rectangle.
 - A preceding leaf proves nested XObject registration and recursive emission

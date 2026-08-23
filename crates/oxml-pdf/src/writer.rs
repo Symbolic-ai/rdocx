@@ -8,14 +8,15 @@ use oxml_layout::{
     PathCommand, PathElement, PositionedElement, Stroke, Transform, walk,
 };
 use pdf_writer::types::{
-    ActionType, AnnotationType, CidFontType, ColorSpaceOperand, FontFlags, FunctionShadingType,
-    LineCapStyle, LineJoinStyle, SystemInfo,
+    ActionType, AnnotationFlags, AnnotationType, CidFontType, ColorSpaceOperand, FontFlags,
+    FunctionShadingType, LineCapStyle, LineJoinStyle, OutputIntentSubtype, SystemInfo,
 };
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{self, PreparedFont};
 use crate::image;
 use crate::structure::{PreparedStructure, has_content_stream_output};
+use crate::{PdfConformance, conformance};
 
 struct AlphaEntry {
     key: u32,
@@ -391,7 +392,21 @@ fn accessibility_xmp(title: &str) -> Vec<u8> {
 
 /// Write a complete PDF document from layout results.
 pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
+    write_pdf_impl(layout, None)
+}
+
+pub(crate) fn write_archival_pdf(layout: &LayoutResult, profile: PdfConformance) -> Vec<u8> {
+    write_pdf_impl(layout, Some(profile))
+}
+
+fn write_pdf_impl(layout: &LayoutResult, profile: Option<PdfConformance>) -> Vec<u8> {
     let mut pdf = Pdf::new();
+    if profile.is_some() {
+        pdf.set_file_id((
+            conformance::FILE_IDENTIFIER.to_vec(),
+            conformance::FILE_IDENTIFIER.to_vec(),
+        ));
+    }
 
     // ── Reference ID allocation ──────────────────────────────────────
     let mut next_id = 1;
@@ -505,7 +520,8 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         .as_ref()
         .and_then(|structure| PreparedStructure::new(structure, &layout.pages, &mut alloc));
     let declares_pdfua = tagged.is_some() && !layout_uses_notdef(layout);
-    let accessibility_metadata_id = declares_pdfua.then(&mut alloc);
+    let metadata_id = (declares_pdfua || profile.is_some()).then(&mut alloc);
+    let icc_profile_id = profile.map(|_| alloc());
 
     // ── Write catalog ────────────────────────────────────────────────
     {
@@ -519,9 +535,24 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
             cat.mark_info().marked(true).suspects(false);
             cat.lang(TextStr("und"));
             cat.viewer_preferences().display_doc_title(true);
-            if let Some(metadata_id) = accessibility_metadata_id {
+            if let Some(metadata_id) = metadata_id {
                 cat.metadata(metadata_id);
             }
+        } else if let Some(metadata_id) = metadata_id {
+            cat.metadata(metadata_id);
+        }
+        if let Some(icc_profile_id) = icc_profile_id {
+            let mut intents = cat.output_intents();
+            let mut intent = intents.push();
+            intent
+                .subtype(OutputIntentSubtype::PDFA)
+                .output_condition(TextStr("sRGB IEC61966-2.1"))
+                .output_condition_identifier(TextStr("sRGB2014"))
+                .registry_name(TextStr("https://registry.color.org"))
+                .info(TextStr("sRGB2014"))
+                .dest_output_profile(icc_profile_id);
+            intent.finish();
+            intents.finish();
         }
     }
 
@@ -538,7 +569,7 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         if let Some(title) = meta
             .title
             .as_deref()
-            .or_else(|| tagged.as_ref().map(|_| "Untitled document"))
+            .or_else(|| (tagged.is_some() || profile.is_some()).then_some("Untitled document"))
         {
             info.title(TextStr(title));
         }
@@ -555,20 +586,31 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
             info.creator(TextStr(creator));
         }
         info.producer(TextStr("rdocx-pdf"));
-    } else if tagged.is_some() {
+    } else if tagged.is_some() || profile.is_some() {
         let mut info = pdf.document_info(info_id);
         info.title(TextStr("Untitled document"));
         info.producer(TextStr("rdocx-pdf"));
     }
 
-    if let Some(metadata_id) = accessibility_metadata_id {
-        let title = layout
-            .metadata
-            .as_ref()
-            .and_then(|meta| meta.title.as_deref())
-            .unwrap_or("Untitled document");
-        let xmp = accessibility_xmp(title);
+    if let Some(metadata_id) = metadata_id {
+        let xmp = if let Some(profile) = profile {
+            conformance::archival_xmp(layout, profile, declares_pdfua)
+        } else {
+            let title = layout
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.title.as_deref())
+                .unwrap_or("Untitled document");
+            accessibility_xmp(title)
+        };
         pdf.metadata(metadata_id, &xmp).finish();
+    }
+
+    if let Some(icc_profile_id) = icc_profile_id {
+        let mut icc = pdf.icc_profile(icc_profile_id, conformance::SRGB2014);
+        icc.n(3);
+        icc.alternate().device_rgb();
+        icc.finish();
     }
 
     // ── Write fonts ──────────────────────────────────────────────────
@@ -852,6 +894,9 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
                     (page_height - rect.y) as f32,
                 ));
                 annot.border(0.0, 0.0, 0.0, None);
+                if profile.is_some() {
+                    annot.flags(AnnotationFlags::PRINT);
+                }
                 annot
                     .action()
                     .action_type(ActionType::Uri)
@@ -2276,7 +2321,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires pinned veraPDF 1.30.2"]
-    fn tagged_pdf_passes_verapdf_pdf_ua_1() {
+    fn pdfa_2b_and_3b_pass_verapdf() {
         let verapdf =
             std::env::var_os("VERAPDF_BIN").expect("VERAPDF_BIN must point to veraPDF 1.30.2");
         let version = std::process::Command::new(&verapdf)
@@ -2288,32 +2333,122 @@ mod tests {
         assert!(version_text.contains("veraPDF 1.30.2"), "{version_text}");
 
         let paragraph = StructureId::new(2).expect("non-zero paragraph");
-        let pdf = tagged_pdf_bytes(
-            vec![PositionedElement::MarkedContent {
-                structure: Some(paragraph),
-                children: vec![alpha_rect(1.0)],
-            }],
+        let (family, font_bytes) = oxml_layout::bundled_fonts::bundled_font_data()[0];
+        let face = ttf_parser::Face::parse(font_bytes, 0).expect("parse bundled oracle font");
+        let glyph_id = face
+            .glyph_index('A')
+            .expect("bundled oracle font contains A")
+            .0;
+        let mut layout = LayoutResult::new(
             vec![
+                page_with(vec![PositionedElement::MarkedContent {
+                    structure: Some(paragraph),
+                    children: vec![PositionedElement::Text(GlyphRun {
+                        origin: Point { x: 72.0, y: 72.0 },
+                        font_id: FontId(1),
+                        font_size: 12.0,
+                        glyph_ids: vec![glyph_id],
+                        advances: vec![8.0],
+                        text: "A".to_owned(),
+                        source: None,
+                        color: Color::BLACK,
+                        bold: false,
+                        italic: false,
+                        field_kind: None,
+                        note: None,
+                    })],
+                }])
+                .into(),
+            ],
+            vec![FontData {
+                id: FontId(1),
+                family: family.to_owned(),
+                data: Arc::from(font_bytes),
+                face_index: 0,
+                bold: false,
+                italic: false,
+            }],
+            None,
+            Vec::new(),
+        );
+        layout.structure = Some(DocumentStructure {
+            root: StructureId::new(1).expect("non-zero root"),
+            nodes: vec![
                 structure_node(1, StructureRole::Document, vec![paragraph]),
                 structure_node(2, StructureRole::Paragraph, Vec::new()),
             ],
+        });
+        for (profile, flavour) in [
+            (PdfConformance::PdfA2b, "2b"),
+            (PdfConformance::PdfA3b, "3b"),
+        ] {
+            let pdf = crate::render_to_pdf_with_options(&layout, crate::PdfOptions::new(profile))
+                .expect("render archival oracle fixture");
+            let path = std::env::temp_dir().join(format!(
+                "rdocx-f174-verapdf-{flavour}-{}.pdf",
+                std::process::id()
+            ));
+            std::fs::write(&path, pdf).expect("write deterministic oracle fixture");
+            for validation in [flavour, "ua1"] {
+                let report = std::process::Command::new(&verapdf)
+                    .args(["--format", "text", "--flavour", validation, "--verbose"])
+                    .arg(&path)
+                    .output()
+                    .expect("veraPDF command runs");
+                let stdout = String::from_utf8_lossy(&report.stdout);
+                let stderr = String::from_utf8_lossy(&report.stderr);
+                assert!(report.status.success(), "{stdout}\n{stderr}");
+                assert!(
+                    stdout.contains("PASS") && stdout.contains(validation),
+                    "{stdout}"
+                );
+            }
+            std::fs::remove_file(&path).expect("remove oracle fixture");
+        }
+
+        let link_layout = LayoutResult::new(
+            vec![
+                page_with(vec![PositionedElement::LinkAnnotation {
+                    rect: Rect {
+                        x: 72.0,
+                        y: 72.0,
+                        width: 72.0,
+                        height: 12.0,
+                    },
+                    url: "https://example.com".to_owned(),
+                }])
+                .into(),
+            ],
+            Vec::new(),
+            None,
+            Vec::new(),
         );
-        let path =
-            std::env::temp_dir().join(format!("rdocx-f173-verapdf-{}.pdf", std::process::id()));
-        std::fs::write(&path, pdf).expect("write deterministic oracle fixture");
-        let report = std::process::Command::new(verapdf)
-            .args(["--format", "text", "--flavour", "ua1", "--verbose"])
-            .arg(&path)
-            .output()
-            .expect("veraPDF ua1 command runs");
-        std::fs::remove_file(&path).expect("remove oracle fixture");
-        let stdout = String::from_utf8_lossy(&report.stdout);
-        let stderr = String::from_utf8_lossy(&report.stderr);
-        assert!(report.status.success(), "{stdout}\n{stderr}");
-        assert!(
-            stdout.contains("PASS") && stdout.contains(" ua1"),
-            "{stdout}"
-        );
+        for (profile, flavour) in [
+            (PdfConformance::PdfA2b, "2b"),
+            (PdfConformance::PdfA3b, "3b"),
+        ] {
+            let pdf =
+                crate::render_to_pdf_with_options(&link_layout, crate::PdfOptions::new(profile))
+                    .expect("render archival link fixture");
+            let path = std::env::temp_dir().join(format!(
+                "rdocx-f174-verapdf-link-{flavour}-{}.pdf",
+                std::process::id()
+            ));
+            std::fs::write(&path, pdf).expect("write archival link fixture");
+            let report = std::process::Command::new(&verapdf)
+                .args(["--format", "text", "--flavour", flavour, "--verbose"])
+                .arg(&path)
+                .output()
+                .expect("veraPDF link command runs");
+            std::fs::remove_file(&path).expect("remove archival link fixture");
+            let stdout = String::from_utf8_lossy(&report.stdout);
+            let stderr = String::from_utf8_lossy(&report.stderr);
+            assert!(report.status.success(), "{stdout}\n{stderr}");
+            assert!(
+                stdout.contains("PASS") && stdout.contains(flavour),
+                "{stdout}"
+            );
+        }
     }
 
     #[test]

@@ -208,6 +208,13 @@ names, and error contracts do not change. Python, WASM, and CLI consumers gain
 no semantic-tree API. Presentation PDF methods continue to pass an untagged
 layout with no structure tree.
 
+Native Rust callers can request `PdfA2b` or `PdfA3b` through
+`Document::to_pdfa_deterministic` and
+`Presentation::to_pdfa_deterministic`. Both methods return the PDF backend's
+typed conformance error through the facade error enum. These methods are
+additive on the native pre-1.0 facades. Python, WASM, and CLI method names and
+dependency selections remain unchanged.
+
 The pre-1.0 shared layout API adds semantic types, `MarkedContent`, and
 informative `Figure` variants only through existing non-exhaustive enums.
 Existing `InlineItem` and `LineItem` image and group variant fields stay
@@ -593,6 +600,9 @@ The `system-fonts` feature is default-on in `rdocx-layout` and `rdocx`, which
 preserves native behavior. `rdocx-wasm` disables `rdocx` defaults, while the
 bundled font data remains unconditional. The wasm32 graph therefore excludes
 host font discovery without inventing a second bundled-font feature.
+The crate-local sRGB2014 profile is compiled into `oxml-pdf` and introduces no
+host API or runtime dependency. The native PDF/A methods are not exported by
+either WASM wrapper.
 
 The R-class regression constructs a document with an image, header, and
 numbering, then checks the complete part, relationship, and content-type graph
