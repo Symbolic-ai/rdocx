@@ -815,21 +815,22 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.8.0 regression pins all eleven inherited version
+The stable 0.9.0 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the incubating family remains at 0.5.0.
+README requirement. It also proves the incubating family remains at its
+published 0.5.0 boundary and `rpptx-wasm` remains unpublished.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
 15-package publication preflight at 0.5.0. It separately proves the stable
-workspace and family remain at 0.8.0 and `rpptx-wasm` remains unpublished.
+workspace is prepared at 0.9.0 and `rpptx-wasm` remains unpublished.
 The published 0.5.0 gate also verifies every selected registry entry and
 owner, the annotated tag target, and byte-identical GitHub release notes before
 the release story completes.
-The current stable 0.8.0 release verifies every crates.io README endpoint
-returns non-empty rendered HTML. Those endpoint checks remain a
-post-publication gate owned by `/release`.
+The current published stable 0.8.0 release verifies every crates.io README
+endpoint returns non-empty rendered HTML. The prepared 0.9.0 endpoint checks
+remain a post-publication gate owned by `/release`.
 
 ## What CI runs
 

@@ -125,18 +125,18 @@ release metadata only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Confirm all dependencies, including published incubating 0.5.0, are
+- [x] Confirm all dependencies, including published incubating 0.5.0, are
       complete before changing stable carriers.
-- [ ] Move the workspace version, stable pins, lock entries, Python metadata,
+- [x] Move the workspace version, stable pins, lock entries, Python metadata,
       WASM and CI literals, README requirements, and self-tests to 0.9.0.
-- [ ] Rename and strengthen the stable 0.9.0 metadata regression.
-- [ ] Build and reconcile the selected-family contribution inventory.
-- [ ] Close PR 43 as addressed only after F-X048 passes, with implementation
+- [x] Rename and strengthen the stable 0.9.0 metadata regression.
+- [x] Build and reconcile the selected-family contribution inventory.
+- [x] Close PR 43 as addressed only after F-X048 passes, with implementation
       evidence and contributor credit.
-- [ ] Prepare the reviewed `v0.9.0` changelog section and one unposted comment
+- [x] Prepare the reviewed `v0.9.0` changelog section and one unposted comment
       per included record.
-- [ ] Update exactly the listed HLD files for the prepared release state.
-- [ ] Run full verification, package, asset, binding, WASM, supply-chain,
+- [x] Update exactly the listed HLD files for the prepared release state.
+- [x] Run full verification, package, asset, binding, WASM, supply-chain,
       notes, and hash gates.
 - [ ] Stop at `/release v0.9.0` final approval.
 - [ ] After approval, verify registry entries, owners, release SHA and body,

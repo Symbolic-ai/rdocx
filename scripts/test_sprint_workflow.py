@@ -1617,7 +1617,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.8.0" "rdocx_wasm"',
+            '"0.9.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.5.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -3959,8 +3959,8 @@ class SprintWorkflowTests(unittest.TestCase):
             with self.subTest(credit=credit), self.assertRaises(AssertionError):
                 self.assert_stable_collaboration_release_notes_contract(mutated)
 
-    def test_stable_release_family_is_prepared_at_0_8_0(self) -> None:
-        expected_version = "0.8.0"
+    def test_stable_release_family_is_prepared_at_0_9_0(self) -> None:
+        expected_version = "0.9.0"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -4084,13 +4084,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.8.0"', 'version = "0.8.0"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.8.0'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.8.0"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.8.0"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.8.0"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.8.0"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.8.0"',),
+            "README.md": ('rdocx = "0.9.0"', 'version = "0.9.0"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.9.0'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.9.0"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.9.0"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.9.0"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.9.0"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.9.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -4116,6 +4116,35 @@ class SprintWorkflowTests(unittest.TestCase):
                 name != "rpptx-wasm",
                 name,
             )
+
+        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_publish_workflow_contract(publish)
+        self.assertEqual(
+            publish.count(
+                "scripts.test_sprint_workflow.SprintWorkflowTests."
+                "test_stable_release_family_is_prepared_at_0_9_0"
+            ),
+            1,
+        )
+
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = workflow.render_release_notes(changelog, "v0.9.0")
+        for record in (
+            "https://github.com/tensorbee/rdocx/issues/15",
+            "https://github.com/tensorbee/rdocx/issues/23",
+            "https://github.com/tensorbee/rdocx/issues/39",
+            "https://github.com/tensorbee/rdocx/issues/42",
+            "https://github.com/tensorbee/rdocx/pull/40",
+            "https://github.com/tensorbee/rdocx/pull/41",
+            "https://github.com/tensorbee/rdocx/pull/43",
+        ):
+            self.assertEqual(notes.count(record), 2, record)
+        for contributor in ("@mantissaman", "@emptinessform"):
+            self.assertGreaterEqual(notes.count(contributor), 1, contributor)
+        self.assertIn("hardened equivalent", notes)
+        self.assertIn("landed directly", notes)
 
     def test_readme_archive_gate_rejects_a_missing_local_patch(self) -> None:
         metadata = readme_doctests.cargo_metadata()
@@ -4219,7 +4248,7 @@ class SprintWorkflowTests(unittest.TestCase):
         preparation_packages = (*incubating_packages, "rpptx-wasm")
         expected_version = "0.5.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.8.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.9.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -5301,7 +5330,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_8_0",
+                "test_stable_release_family_is_prepared_at_0_9_0",
                 1,
             ),
             "job-condition": ci.replace(
@@ -5537,7 +5566,7 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_8_0"
+            "test_stable_release_family_is_prepared_at_0_9_0"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
@@ -5884,13 +5913,13 @@ Pedro Assumpcao and the rdocx maintainers.
         stated_versions = re.findall(
             r"on\s+crates\.io at ([0-9]+\.[0-9]+\.[0-9]+)", claude
         )
-        self.assertEqual(stated_versions, [workspace_version])
+        self.assertEqual(stated_versions, ["0.8.0"])
         prepared_versions = re.findall(
             r"prepared coherently at workspace version "
             r"([0-9]+\.[0-9]+\.[0-9]+)",
             claude,
         )
-        self.assertEqual(prepared_versions, [])
+        self.assertEqual(prepared_versions, [workspace_version])
         for name, (_, manifest) in packages.items():
             if not name.startswith("rdocx") or name == "rdocx-py":
                 continue

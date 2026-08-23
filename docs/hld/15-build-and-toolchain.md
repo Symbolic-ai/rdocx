@@ -225,7 +225,7 @@ no crates.io publication path.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace 0.8.0, nine internal pins, eleven
+stable regression requires prepared workspace 0.9.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
 set. The incubating regression requires the exact 0.5.0 versions, pins,
@@ -302,13 +302,15 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group is at 0.8.0,
+`v{{version}}` tag template. That shared-version group is prepared at 0.9.0,
 and its two Python project versions and rdocx WASM contract literals are also
-0.8.0. The exact seven-package stable family is published from the annotated
-`v0.8.0` tag at reviewed SHA
+0.9.0. The exact seven-package stable family remains published at 0.8.0 from
+the annotated `v0.8.0` tag at reviewed SHA
 `0cc47eb8632de184ba758fe0929d9f749ab4fcb0`. Earlier immutable registry
 releases remain available. No binding, WASM, Python, npm, or incubating package
-gained publication authority from the stable release.
+gains publication authority from the stable preparation. Publishing the
+prepared 0.9.0 family still requires the separate `/release v0.9.0` approval
+at its exact reviewed SHA.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.5.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 exact 15-package crates.io family listed above is published from the annotated

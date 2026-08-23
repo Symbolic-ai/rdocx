@@ -21,7 +21,7 @@ jobs:
         run: python3 scripts/hash_harness.py --check
 
       - name: Verify release metadata
-        run: python3 -m unittest scripts.test_sprint_workflow.SprintWorkflowTests.test_stable_release_family_is_prepared_at_0_8_0 scripts.test_sprint_workflow.SprintWorkflowTests.test_incubating_release_family_is_prepared_at_0_5_0
+        run: python3 -m unittest scripts.test_sprint_workflow.SprintWorkflowTests.test_stable_release_family_is_prepared_at_0_9_0 scripts.test_sprint_workflow.SprintWorkflowTests.test_incubating_release_family_is_prepared_at_0_5_0
 
       - name: Verify reviewed release notes
         run: python3 scripts/sprint_workflow.py release-notes "${{ github.ref_name }}" --check
