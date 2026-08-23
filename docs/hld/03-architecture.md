@@ -105,6 +105,15 @@ breaking preserves and subdivides that range without learning what the node
 means. Consumers must resolve an id through the format-specific result that
 created it and must not compare ids from different results.
 
+`DocumentStructure`, `StructureNode`, `StructureRole`, and `StructureId` are
+the format-neutral accessibility carriers at the same boundary. A
+`PositionedElement::MarkedContent` container assigns one structure node to its
+exact positioned children, or assigns no node when those children are an
+artifact. Word layout builds this tree from source headings, lists, tables,
+and drawing descriptions before pagination. Presentation layout leaves the
+optional tree absent. Shared walkers and raster output recurse through the
+container without treating it as drawing geometry.
+
 An otherwise empty Word paragraph crosses the same boundary as one empty,
 zero-width text segment. The segment resolves the paragraph mark's default
 font and metrics without shaping a glyph. Attributed results attach the
@@ -141,6 +150,14 @@ and header probing. It has no format-specific workspace dependency. A slide is
 a page with a fixed size, so the same crate serves both formats without knowing
 either exists. The `rdocx` facade renders through this crate directly, while
 `rdocx-pdf` remains an exact deprecated re-export shim.
+
+When the optional document structure is present, `oxml-pdf` alone owns PDF
+marked-content operators, page-local MCIDs, structure elements, list bodies,
+the parent tree, conditional PDF/UA metadata, and catalog accessibility
+entries. The writer rejects malformed public structure graphs and withholds a
+PDF/UA claim when shown text uses the `.notdef` glyph. This backend work does
+not introduce a Word dependency. A result without structure uses the existing
+untagged writer path.
 
 **`rpptx-layout` is separate from `rpptx-render`.** The inheritance resolver
 produces a `ResolvedSlide` in which every theme reference, colour transform and

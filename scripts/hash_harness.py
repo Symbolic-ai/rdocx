@@ -119,6 +119,7 @@ CONTENTS_ARRAY_RE = re.compile(rb"/Contents\s*\[([^\]]*)\]")
 CONTENTS_REF_RE = re.compile(rb"/Contents\s+(\d+) 0 R\b")
 ROOT_RE = re.compile(rb"/Root\s+(\d+) 0 R\b")
 PAGES_RE = re.compile(rb"/Pages\s+(\d+) 0 R\b")
+TYPE_METADATA_RE = re.compile(rb"/Type\s*/Metadata\b")
 
 
 class PdfError(ValueError):
@@ -297,8 +298,10 @@ def pdf_fingerprint(data: bytes) -> dict[str, str]:
 
     resources = sorted(
         sha256(decoded_stream(number, objects))
-        for number, (_, payload) in objects.items()
-        if payload is not None and number not in content_streams
+        for number, (body, payload) in objects.items()
+        if payload is not None
+        and number not in content_streams
+        and TYPE_METADATA_RE.search(body) is None
     )
 
     return {
@@ -469,6 +472,26 @@ class PdfFingerprintTests(unittest.TestCase):
         self.assertNotEqual(before["resources"], after["resources"])
         self.assertNotEqual(before["bytes"], after["bytes"])
         self.assertEqual(before["pages"], after["pages"])
+
+    def test_a_metadata_stream_moves_bytes_but_not_page_resources(self) -> None:
+        before_bytes = build_pdf(b"BT ET", b"subset")
+        metadata = b"<x:xmpmeta>PDF/UA metadata</x:xmpmeta>"
+        metadata_object = (
+            f"6 0 obj\n<<\n  /Type /Metadata\n  /Subtype /XML\n"
+            f"  /Length {len(metadata)}\n>>\nstream\n".encode("ascii")
+            + metadata
+            + b"\nendstream\nendobj\n"
+        )
+        after_bytes = before_bytes.replace(
+            b"  /Pages 2 0 R\n",
+            b"  /Pages 2 0 R\n  /Metadata 6 0 R\n",
+        ).replace(b"trailer\n", metadata_object + b"trailer\n")
+        before = pdf_fingerprint(before_bytes)
+        after = pdf_fingerprint(after_bytes)
+
+        self.assertEqual(before["pages"], after["pages"])
+        self.assertEqual(before["resources"], after["resources"])
+        self.assertNotEqual(before["bytes"], after["bytes"])
 
     def test_refingerprinting_identical_bytes_reproduces_every_entry(self) -> None:
         data = build_pdf(b"BT /F0 12 Tf 72 720 Td (One) Tj ET", b"subset")

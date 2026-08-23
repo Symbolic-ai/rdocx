@@ -15,6 +15,7 @@ use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{self, PreparedFont};
 use crate::image;
+use crate::structure::{PreparedStructure, has_content_stream_output};
 
 struct AlphaEntry {
     key: u32,
@@ -102,6 +103,9 @@ fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) 
             PositionedElement::Group(group) => {
                 insert_alpha(keys, group.opacity);
                 collect_alpha_keys(&group.children, keys);
+            }
+            PositionedElement::MarkedContent { children, .. } => {
+                collect_alpha_keys(children, keys);
             }
             _ => {}
         }
@@ -363,6 +367,28 @@ fn finite_f32(value: f64) -> f32 {
     if value.is_finite() { value as f32 } else { 0.0 }
 }
 
+fn accessibility_xmp(title: &str) -> Vec<u8> {
+    let title = title
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;");
+    format!(
+        r#"<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">{title}</rdf:li></rdf:Alt></dc:title>
+<pdfuaid:part>1</pdfuaid:part>
+</rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#
+    )
+    .into_bytes()
+}
+
 /// Write a complete PDF document from layout results.
 pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     let mut pdf = Pdf::new();
@@ -474,6 +500,12 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
 
     // ── Outline item refs ────────────────────────────────────────────
     let outline_item_ids: Vec<Ref> = layout.outlines.iter().map(|_| alloc()).collect();
+    let tagged = layout
+        .structure
+        .as_ref()
+        .and_then(|structure| PreparedStructure::new(structure, &layout.pages, &mut alloc));
+    let declares_pdfua = tagged.is_some() && !layout_uses_notdef(layout);
+    let accessibility_metadata_id = declares_pdfua.then(&mut alloc);
 
     // ── Write catalog ────────────────────────────────────────────────
     {
@@ -481,6 +513,15 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         cat.pages(page_tree_id);
         if !layout.outlines.is_empty() {
             cat.outlines(outline_root_id);
+        }
+        if let Some(tagged) = tagged.as_ref() {
+            cat.pair(Name(b"StructTreeRoot"), tagged.root_ref);
+            cat.mark_info().marked(true).suspects(false);
+            cat.lang(TextStr("und"));
+            cat.viewer_preferences().display_doc_title(true);
+            if let Some(metadata_id) = accessibility_metadata_id {
+                cat.metadata(metadata_id);
+            }
         }
     }
 
@@ -494,7 +535,11 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
     // ── Write document info ──────────────────────────────────────────
     if let Some(meta) = &layout.metadata {
         let mut info = pdf.document_info(info_id);
-        if let Some(title) = &meta.title {
+        if let Some(title) = meta
+            .title
+            .as_deref()
+            .or_else(|| tagged.as_ref().map(|_| "Untitled document"))
+        {
             info.title(TextStr(title));
         }
         if let Some(author) = &meta.author {
@@ -510,6 +555,20 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
             info.creator(TextStr(creator));
         }
         info.producer(TextStr("rdocx-pdf"));
+    } else if tagged.is_some() {
+        let mut info = pdf.document_info(info_id);
+        info.title(TextStr("Untitled document"));
+        info.producer(TextStr("rdocx-pdf"));
+    }
+
+    if let Some(metadata_id) = accessibility_metadata_id {
+        let title = layout
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.title.as_deref())
+            .unwrap_or("Untitled document");
+        let xmp = accessibility_xmp(title);
+        pdf.metadata(metadata_id, &xmp).finish();
     }
 
     // ── Write fonts ──────────────────────────────────────────────────
@@ -667,11 +726,14 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         let content_bytes = build_page_content(
             page_idx,
             page,
-            &prepared_fonts,
-            &font_refs,
-            &image_map,
-            &alpha_states,
-            &gradients,
+            PageContentResources {
+                prepared_fonts: &prepared_fonts,
+                font_refs: &font_refs,
+                image_map: &image_map,
+                alpha_states: &alpha_states,
+                gradients: &gradients,
+                structure: tagged.as_ref(),
+            },
         );
 
         // Compress and write content stream
@@ -685,6 +747,9 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         page_dict.parent(page_tree_id);
         page_dict.media_box(Rect::new(0.0, 0.0, page.width as f32, page.height as f32));
         page_dict.contents(content_id);
+        if tagged.is_some() {
+            page_dict.struct_parents(page_idx as i32);
+        }
 
         // Resources: fonts + images
         let mut resources = page_dict.resources();
@@ -808,7 +873,25 @@ pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
         );
     }
 
+    if let Some(tagged) = tagged.as_ref() {
+        tagged.write(&mut pdf, &page_ids);
+    }
+
     pdf.finish()
+}
+
+fn layout_uses_notdef(layout: &LayoutResult) -> bool {
+    layout.pages.iter().any(|page| {
+        let mut found = false;
+        walk(&page.elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element
+                && run.glyph_ids.contains(&0)
+            {
+                found = true;
+            }
+        });
+        found
+    })
 }
 
 fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
@@ -877,14 +960,20 @@ fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
 }
 
 /// Build the content stream for a single page.
+#[derive(Clone, Copy)]
+struct PageContentResources<'a> {
+    prepared_fonts: &'a BTreeMap<FontId, PreparedFont>,
+    font_refs: &'a BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
+    image_map: &'a HashMap<(usize, usize), usize>,
+    alpha_states: &'a AlphaStates,
+    gradients: &'a GradientRegistry,
+    structure: Option<&'a PreparedStructure<'a>>,
+}
+
 fn build_page_content(
     page_idx: usize,
     page: &oxml_layout::PageFrame,
-    prepared_fonts: &BTreeMap<FontId, PreparedFont>,
-    font_refs: &BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)>,
-    image_map: &HashMap<(usize, usize), usize>,
-    alpha_states: &AlphaStates,
-    gradients: &GradientRegistry,
+    resources: PageContentResources<'_>,
 ) -> Vec<u8> {
     let mut content = Content::new();
     let page_height = page.height as f32;
@@ -893,12 +982,14 @@ fn build_page_content(
 
     let mut state = EmitState {
         page_idx,
-        prepared_fonts,
-        font_refs,
-        image_map,
-        alpha_states,
-        gradients,
+        prepared_fonts: resources.prepared_fonts,
+        font_refs: resources.font_refs,
+        image_map: resources.image_map,
+        alpha_states: resources.alpha_states,
+        gradients: resources.gradients,
         leaf_index: 0,
+        structure: resources.structure,
+        next_mcid: 0,
     };
     emit_elements(&mut content, &page.elements, &mut state);
 
@@ -914,10 +1005,45 @@ struct EmitState<'a> {
     alpha_states: &'a AlphaStates,
     gradients: &'a GradientRegistry,
     leaf_index: usize,
+    structure: Option<&'a PreparedStructure<'a>>,
+    next_mcid: i32,
 }
 
 fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &mut EmitState<'_>) {
     for element in elements {
+        if let PositionedElement::MarkedContent {
+            structure,
+            children,
+        } = element
+        {
+            if state.structure.is_none() && structure.is_some() {
+                emit_elements(content, children, state);
+                continue;
+            }
+            if !has_content_stream_output(children) {
+                emit_elements(content, children, state);
+                continue;
+            }
+            match structure {
+                Some(id) => {
+                    let tag = state
+                        .structure
+                        .and_then(|prepared| prepared.role_name(*id))
+                        .unwrap_or(b"Span");
+                    content
+                        .begin_marked_content_with_properties(Name(tag))
+                        .properties()
+                        .identify(state.next_mcid);
+                    state.next_mcid += 1;
+                }
+                None => {
+                    content.begin_marked_content(Name(b"Artifact"));
+                }
+            }
+            emit_elements(content, children, state);
+            content.end_marked_content();
+            continue;
+        }
         let elem_idx = state.leaf_index;
         if !matches!(element, PositionedElement::Group(_))
             && !matches!(element, PositionedElement::Text(run) if run.text.is_empty() && run.glyph_ids.is_empty())
@@ -1451,8 +1577,9 @@ fn sanitize_font_name(family: &str, bold: bool, italic: bool) -> String {
 mod tests {
     use super::*;
     use oxml_layout::{
-        Color, Effect, FillRule, FontData, GlyphRun, GradientStop, GroupElement, LineCap, LineJoin,
-        MediaId, PageFrame, Paint, Path, PathCommand, PathElement, Point, Rect, Stroke, Transform,
+        Color, DocumentStructure, Effect, FillRule, FontData, GlyphRun, GradientStop, GroupElement,
+        LineCap, LineJoin, MediaId, PageFrame, Paint, Path, PathCommand, PathElement, Point, Rect,
+        Stroke, StructureId, StructureNode, StructureRole, Transform,
     };
 
     fn page_with(elements: Vec<PositionedElement>) -> PageFrame {
@@ -1476,11 +1603,14 @@ mod tests {
         String::from_utf8(build_page_content(
             0,
             &page,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &HashMap::new(),
-            &alpha_states,
-            &gradients,
+            PageContentResources {
+                prepared_fonts: &BTreeMap::new(),
+                font_refs: &BTreeMap::new(),
+                image_map: &HashMap::new(),
+                alpha_states: &alpha_states,
+                gradients: &gradients,
+                structure: None,
+            },
         ))
         .expect("PDF content operators are ASCII")
     }
@@ -1914,6 +2044,278 @@ mod tests {
         String::from_utf8_lossy(&write_pdf(&layout)).into_owned()
     }
 
+    fn tagged_pdf(elements: Vec<PositionedElement>, nodes: Vec<StructureNode>) -> String {
+        String::from_utf8_lossy(&tagged_pdf_bytes(elements, nodes)).into_owned()
+    }
+
+    fn tagged_pdf_bytes(elements: Vec<PositionedElement>, nodes: Vec<StructureNode>) -> Vec<u8> {
+        let mut layout = LayoutResult::new(
+            vec![page_with(elements).into()],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        layout.structure = Some(DocumentStructure {
+            root: StructureId::new(1).expect("non-zero root"),
+            nodes,
+        });
+        write_pdf(&layout)
+    }
+
+    fn structure_node(
+        value: u32,
+        role: StructureRole,
+        children: Vec<StructureId>,
+    ) -> StructureNode {
+        StructureNode {
+            id: StructureId::new(value).expect("non-zero structure id"),
+            role,
+            children,
+            alternate_text: None,
+        }
+    }
+
+    #[test]
+    fn tagged_pdf_preserves_heading_and_nested_list_structure() {
+        let headings = (2..=7)
+            .map(|value| StructureId::new(value).unwrap())
+            .collect::<Vec<_>>();
+        let list = StructureId::new(8).unwrap();
+        let item = StructureId::new(9).unwrap();
+        let paragraph = StructureId::new(10).unwrap();
+        let nested_list = StructureId::new(11).unwrap();
+        let nested_item = StructureId::new(12).unwrap();
+        let nested_paragraph = StructureId::new(13).unwrap();
+        let mut elements = headings
+            .iter()
+            .copied()
+            .map(|structure| PositionedElement::MarkedContent {
+                structure: Some(structure),
+                children: vec![alpha_rect(1.0)],
+            })
+            .collect::<Vec<_>>();
+        elements.extend([paragraph, nested_paragraph].map(|structure| {
+            PositionedElement::MarkedContent {
+                structure: Some(structure),
+                children: vec![alpha_rect(1.0)],
+            }
+        }));
+        let mut root_children = headings.clone();
+        root_children.push(list);
+        let pdf = tagged_pdf(
+            elements,
+            vec![
+                structure_node(1, StructureRole::Document, root_children),
+                structure_node(2, StructureRole::Heading(1), Vec::new()),
+                structure_node(3, StructureRole::Heading(2), Vec::new()),
+                structure_node(4, StructureRole::Heading(3), Vec::new()),
+                structure_node(5, StructureRole::Heading(4), Vec::new()),
+                structure_node(6, StructureRole::Heading(5), Vec::new()),
+                structure_node(7, StructureRole::Heading(6), Vec::new()),
+                structure_node(8, StructureRole::List, vec![item]),
+                structure_node(9, StructureRole::ListItem, vec![paragraph, nested_list]),
+                structure_node(10, StructureRole::Paragraph, Vec::new()),
+                structure_node(11, StructureRole::List, vec![nested_item]),
+                structure_node(12, StructureRole::ListItem, vec![nested_paragraph]),
+                structure_node(13, StructureRole::Paragraph, Vec::new()),
+            ],
+        );
+
+        assert!(pdf.contains("/StructTreeRoot"), "{pdf}");
+        assert!(pdf.contains("/ParentTree"), "{pdf}");
+        for level in 1..=6 {
+            assert!(pdf.contains(&format!("/S /H{level}")), "{pdf}");
+        }
+        assert_eq!(pdf.matches("/S /L\n").count(), 2, "{pdf}");
+        assert!(pdf.contains("/S /LI"), "{pdf}");
+        assert!(pdf.contains("/StructParents 0"), "{pdf}");
+    }
+
+    #[test]
+    fn tagged_pdf_marks_table_headers_and_cells() {
+        let table = StructureId::new(2).unwrap();
+        let row = StructureId::new(3).unwrap();
+        let header = StructureId::new(4).unwrap();
+        let data = StructureId::new(5).unwrap();
+        let pdf = tagged_pdf(
+            vec![
+                PositionedElement::MarkedContent {
+                    structure: Some(header),
+                    children: vec![alpha_rect(1.0)],
+                },
+                PositionedElement::MarkedContent {
+                    structure: Some(data),
+                    children: vec![alpha_rect(1.0)],
+                },
+            ],
+            vec![
+                structure_node(1, StructureRole::Document, vec![table]),
+                structure_node(2, StructureRole::Table, vec![row]),
+                structure_node(3, StructureRole::TableRow, vec![header, data]),
+                structure_node(4, StructureRole::TableHeaderCell, Vec::new()),
+                structure_node(5, StructureRole::TableCell, Vec::new()),
+            ],
+        );
+
+        assert!(pdf.contains("/S /Table"), "{pdf}");
+        assert!(pdf.contains("/S /TR"), "{pdf}");
+        assert!(pdf.contains("/S /TH"), "{pdf}");
+        assert!(pdf.contains("/S /TD"), "{pdf}");
+        assert!(pdf.contains("/O /Table"), "{pdf}");
+        assert!(pdf.contains("/Scope /Column"), "{pdf}");
+    }
+
+    #[test]
+    fn tagged_pdf_carries_figure_alternate_text() {
+        let figure = StructureId::new(2).unwrap();
+        let mut figure_node = structure_node(2, StructureRole::Figure, Vec::new());
+        figure_node.alternate_text = Some("A chart of quarterly revenue".to_owned());
+        let pdf = tagged_pdf(
+            vec![
+                PositionedElement::MarkedContent {
+                    structure: Some(figure),
+                    children: vec![alpha_rect(1.0)],
+                },
+                PositionedElement::MarkedContent {
+                    structure: None,
+                    children: vec![alpha_rect(1.0)],
+                },
+            ],
+            vec![
+                structure_node(1, StructureRole::Document, vec![figure]),
+                figure_node,
+            ],
+        );
+
+        assert!(pdf.contains("/S /Figure"), "{pdf}");
+        assert!(pdf.contains("A chart of quarterly revenue"), "{pdf}");
+        assert!(pdf.contains("/MarkInfo <<\n    /Marked true"), "{pdf}");
+        assert!(pdf.contains("/Lang (und)"), "{pdf}");
+        assert!(pdf.contains("pdfuaid:part"), "{pdf}");
+        let artifact = content_for(vec![PositionedElement::MarkedContent {
+            structure: None,
+            children: vec![alpha_rect(1.0)],
+        }]);
+        assert!(artifact.contains("/Artifact BMC"), "{artifact}");
+    }
+
+    #[test]
+    fn tagged_pdf_with_notdef_does_not_claim_pdfua() {
+        let paragraph = StructureId::new(2).unwrap();
+        let text = PositionedElement::Text(GlyphRun {
+            origin: Point { x: 10.0, y: 10.0 },
+            font_id: FontId(1),
+            font_size: 12.0,
+            glyph_ids: vec![0],
+            advances: vec![6.0],
+            text: "missing".to_owned(),
+            source: None,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            note: None,
+        });
+        let pdf = tagged_pdf(
+            vec![PositionedElement::MarkedContent {
+                structure: Some(paragraph),
+                children: vec![text],
+            }],
+            vec![
+                structure_node(1, StructureRole::Document, vec![paragraph]),
+                structure_node(2, StructureRole::Paragraph, Vec::new()),
+            ],
+        );
+
+        assert!(pdf.contains("/StructTreeRoot"), "{pdf}");
+        assert!(!pdf.contains("pdfuaid:part"), "{pdf}");
+        assert!(!pdf.contains("/Type /Metadata"), "{pdf}");
+    }
+
+    #[test]
+    fn rejected_structure_graph_emits_no_orphan_mcid() {
+        let root = StructureId::new(1).unwrap();
+        let paragraph = StructureId::new(2).unwrap();
+        let elements = vec![PositionedElement::MarkedContent {
+            structure: Some(paragraph),
+            children: vec![alpha_rect(1.0)],
+        }];
+        let pdf = tagged_pdf(
+            elements.clone(),
+            vec![
+                structure_node(1, StructureRole::Document, vec![paragraph]),
+                structure_node(2, StructureRole::Paragraph, vec![root]),
+            ],
+        );
+        let content = content_for(elements);
+
+        assert!(!pdf.contains("/StructTreeRoot"), "{pdf}");
+        assert!(!content.contains("/MCID"), "{content}");
+        assert!(!content.contains("BDC"), "{content}");
+    }
+
+    #[test]
+    fn untagged_metadata_without_title_keeps_the_existing_info_shape() {
+        let mut layout = LayoutResult::new(
+            vec![page_with(vec![alpha_rect(1.0)]).into()],
+            Vec::new(),
+            Some(oxml_layout::DocumentMetadata {
+                author: Some("An author".to_owned()),
+                ..oxml_layout::DocumentMetadata::default()
+            }),
+            Vec::new(),
+        );
+        layout.structure = None;
+        let pdf = String::from_utf8_lossy(&write_pdf(&layout)).into_owned();
+
+        assert!(pdf.contains("/Author (An author)"), "{pdf}");
+        assert!(pdf.contains("/Producer (rdocx-pdf)"), "{pdf}");
+        assert!(!pdf.contains("/Title"), "{pdf}");
+        assert!(!pdf.contains("/StructTreeRoot"), "{pdf}");
+    }
+
+    #[test]
+    #[ignore = "requires pinned veraPDF 1.30.2"]
+    fn tagged_pdf_passes_verapdf_pdf_ua_1() {
+        let verapdf =
+            std::env::var_os("VERAPDF_BIN").expect("VERAPDF_BIN must point to veraPDF 1.30.2");
+        let version = std::process::Command::new(&verapdf)
+            .arg("--version")
+            .output()
+            .expect("veraPDF version command runs");
+        let version_text = String::from_utf8_lossy(&version.stdout);
+        assert!(version.status.success(), "{version_text}");
+        assert!(version_text.contains("veraPDF 1.30.2"), "{version_text}");
+
+        let paragraph = StructureId::new(2).expect("non-zero paragraph");
+        let pdf = tagged_pdf_bytes(
+            vec![PositionedElement::MarkedContent {
+                structure: Some(paragraph),
+                children: vec![alpha_rect(1.0)],
+            }],
+            vec![
+                structure_node(1, StructureRole::Document, vec![paragraph]),
+                structure_node(2, StructureRole::Paragraph, Vec::new()),
+            ],
+        );
+        let path =
+            std::env::temp_dir().join(format!("rdocx-f173-verapdf-{}.pdf", std::process::id()));
+        std::fs::write(&path, pdf).expect("write deterministic oracle fixture");
+        let report = std::process::Command::new(verapdf)
+            .args(["--format", "text", "--flavour", "ua1", "--verbose"])
+            .arg(&path)
+            .output()
+            .expect("veraPDF ua1 command runs");
+        std::fs::remove_file(&path).expect("remove oracle fixture");
+        let stdout = String::from_utf8_lossy(&report.stdout);
+        let stderr = String::from_utf8_lossy(&report.stderr);
+        assert!(report.status.success(), "{stdout}\n{stderr}");
+        assert!(
+            stdout.contains("PASS") && stdout.contains(" ua1"),
+            "{stdout}"
+        );
+    }
+
     #[test]
     fn same_alpha_reuses_one_extgstate() {
         let pdf = pdf_for(vec![alpha_rect(0.5), alpha_rect(0.5)]);
@@ -2240,11 +2642,14 @@ mod tests {
         let content = String::from_utf8(build_page_content(
             0,
             &page,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &image_map,
-            &alpha_states,
-            &gradients,
+            PageContentResources {
+                prepared_fonts: &BTreeMap::new(),
+                font_refs: &BTreeMap::new(),
+                image_map: &image_map,
+                alpha_states: &alpha_states,
+                gradients: &gradients,
+                structure: None,
+            },
         ))
         .expect("PDF content operators are ASCII");
 
@@ -2352,11 +2757,14 @@ mod tests {
         let content = String::from_utf8(build_page_content(
             0,
             &page,
-            &prepared_fonts,
-            &font_refs,
-            &image_map,
-            &alpha_states,
-            &gradients,
+            PageContentResources {
+                prepared_fonts: &prepared_fonts,
+                font_refs: &font_refs,
+                image_map: &image_map,
+                alpha_states: &alpha_states,
+                gradients: &gradients,
+                structure: None,
+            },
         ))
         .expect("PDF content operators are ASCII");
 

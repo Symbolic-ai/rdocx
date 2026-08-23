@@ -3337,6 +3337,7 @@ mod tests {
         );
         assert!(layout.fonts.is_empty());
         assert!(layout.outlines.is_empty());
+        assert!(layout.structure.is_none());
     }
 
     #[test]

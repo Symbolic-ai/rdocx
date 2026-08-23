@@ -6281,6 +6281,28 @@ mod tests {
             .expect("deterministic Word chart layout")
     }
 
+    fn compatibility_page_elements(
+        elements: &[oxml_layout::PositionedElement],
+    ) -> Vec<&oxml_layout::PositionedElement> {
+        fn collect<'a>(
+            elements: &'a [oxml_layout::PositionedElement],
+            output: &mut Vec<&'a oxml_layout::PositionedElement>,
+        ) {
+            for element in elements {
+                match element {
+                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, output);
+                    }
+                    other => output.push(other),
+                }
+            }
+        }
+
+        let mut output = Vec::new();
+        collect(elements, &mut output);
+        output
+    }
+
     fn chart_leaf_counts(layout: &oxml_layout::LayoutResult) -> (usize, usize, usize) {
         let mut paths = 0;
         let mut text = 0;
@@ -6309,8 +6331,7 @@ mod tests {
         let layout = deterministic_chart_layout(&document);
         assert!(layout.diagnostics.is_empty());
         assert!(
-            layout.pages[0]
-                .elements
+            compatibility_page_elements(&layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -6356,13 +6377,12 @@ mod tests {
 
         let layout = deterministic_chart_layout(&document);
         assert!(layout.diagnostics.is_empty());
-        let group_index = layout.pages[0]
-            .elements
+        let elements = compatibility_page_elements(&layout.pages[0].elements);
+        let group_index = elements
             .iter()
             .position(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
             .expect("anchored chart group");
-        let text_index = layout.pages[0]
-            .elements
+        let text_index = elements
             .iter()
             .position(|element| matches!(element, oxml_layout::PositionedElement::Text(_)))
             .expect("chart label text");
@@ -6370,14 +6390,11 @@ mod tests {
             group_index <= text_index,
             "behind-text group must be emitted first"
         );
-        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[group_index]
-        else {
+        let oxml_layout::PositionedElement::Group(group) = elements[group_index] else {
             unreachable!()
         };
         assert_eq!((group.transform.e, group.transform.f), (72.0, 36.0));
-        let oxml_layout::PositionedElement::Text(foreground) =
-            &layout.pages[0].elements[text_index]
-        else {
+        let oxml_layout::PositionedElement::Text(foreground) = elements[text_index] else {
             unreachable!()
         };
         assert!(
@@ -8927,9 +8944,8 @@ mod tests {
             .layout_page(0)
             .expect("layout should succeed")
             .expect("document should have a first page");
-        let images = page
-            .elements
-            .iter()
+        let images = compatibility_page_elements(&page.elements)
+            .into_iter()
             .filter_map(|element| match element {
                 oxml_layout::PositionedElement::Image {
                     data,
@@ -9021,15 +9037,35 @@ mod watermark_tests {
     }
 
     fn page_text(layout: &oxml_layout::LayoutResult, index: usize) -> String {
-        layout.pages[index]
-            .elements
-            .iter()
-            .filter_map(|element| match element {
-                oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .concat()
+        let mut text = String::new();
+        oxml_layout::walk(&layout.pages[index].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                text.push_str(&run.text);
+            }
+        });
+        text
+    }
+
+    fn compatibility_page_elements(
+        elements: &[oxml_layout::PositionedElement],
+    ) -> Vec<&oxml_layout::PositionedElement> {
+        fn collect<'a>(
+            elements: &'a [oxml_layout::PositionedElement],
+            output: &mut Vec<&'a oxml_layout::PositionedElement>,
+        ) {
+            for element in elements {
+                match element {
+                    oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                        collect(children, output);
+                    }
+                    other => output.push(other),
+                }
+            }
+        }
+
+        let mut output = Vec::new();
+        collect(elements, &mut output);
+        output
     }
 
     fn enable_even_headers(document: &mut Document) {
@@ -9259,7 +9295,7 @@ mod watermark_tests {
         assert_eq!(layout.pages.len(), 2);
         assert!(layout.pages.iter().all(|page| {
             matches!(
-                page.elements.first(),
+                compatibility_page_elements(&page.elements).first(),
                 Some(oxml_layout::PositionedElement::Group(_))
             )
         }));
@@ -9336,7 +9372,7 @@ mod watermark_tests {
         assert_eq!(layout.pages.len(), 2);
         assert!(page_text(&layout, 1).contains("Company header"));
         assert!(matches!(
-            layout.pages[1].elements.first(),
+            compatibility_page_elements(&layout.pages[1].elements).first(),
             Some(oxml_layout::PositionedElement::Group(_))
         ));
     }
@@ -9404,8 +9440,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(
-            !first_layout.pages[0]
-                .elements
+            !compatibility_page_elements(&first_layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -9429,7 +9464,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(matches!(
-            even_layout.pages[1].elements.first(),
+            compatibility_page_elements(&even_layout.pages[1].elements).first(),
             Some(oxml_layout::PositionedElement::Group(_))
         ));
         assert!(!page_text(&even_layout, 1).contains("company header"));
@@ -9491,7 +9526,8 @@ mod watermark_tests {
             .unwrap()
             .layout
             .clone();
-        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
+        let elements = compatibility_page_elements(&layout.pages[0].elements);
+        let oxml_layout::PositionedElement::Group(group) = elements[0] else {
             panic!("expected watermark group");
         };
         let oxml_layout::PositionedElement::Text(run) = &group.children[0] else {
@@ -9523,8 +9559,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(
-            !layout.pages[0]
-                .elements
+            !compatibility_page_elements(&layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -9586,8 +9621,7 @@ mod watermark_tests {
             .layout
             .clone();
         assert!(
-            !layout.pages[0]
-                .elements
+            !compatibility_page_elements(&layout.pages[0].elements)
                 .iter()
                 .any(|element| matches!(element, oxml_layout::PositionedElement::Group(_)))
         );
@@ -9612,7 +9646,8 @@ mod watermark_tests {
             .unwrap()
             .layout
             .clone();
-        let oxml_layout::PositionedElement::Group(group) = &layout.pages[0].elements[0] else {
+        let elements = compatibility_page_elements(&layout.pages[0].elements);
+        let oxml_layout::PositionedElement::Group(group) = elements[0] else {
             panic!("expected watermark group");
         };
         let center = group.transform.apply(oxml_layout::Point {
@@ -9648,7 +9683,7 @@ mod watermark_tests {
         assert!(layout.pages.len() > 2);
         assert!(layout.pages.iter().all(|page| {
             matches!(
-                page.elements.first(),
+                compatibility_page_elements(&page.elements).first(),
                 Some(oxml_layout::PositionedElement::Group(_))
             )
         }));

@@ -2554,7 +2554,7 @@ fn immutable_run_accessors_are_total() {
 }
 
 mod header_footer_pdf {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
 
     use super::*;
     use oxml_layout::{PageFrame, PositionedElement, walk};
@@ -2638,6 +2638,96 @@ mod header_footer_pdf {
             cursor = marker + 4;
         }
         refs
+    }
+
+    fn structure_role(bytes: &[u8]) -> Option<&[u8]> {
+        let start = find_bytes(bytes, b"/S /")? + b"/S /".len();
+        let end = bytes[start..]
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace())?;
+        Some(&bytes[start..start + end])
+    }
+
+    fn structure_children(bytes: &[u8]) -> Vec<u32> {
+        let Some(start) = find_bytes(bytes, b"/K [").map(|start| start + b"/K [".len()) else {
+            return Vec::new();
+        };
+        let end = start + find_bytes(&bytes[start..], b"]").expect("structure child terminator");
+        references(&bytes[start..end])
+    }
+
+    fn has_nested_list_depth(
+        objects: &BTreeMap<u32, PdfObject>,
+        list_ref: u32,
+        depth: usize,
+    ) -> bool {
+        let list = &objects[&list_ref].body;
+        if structure_role(list) != Some(b"L") {
+            return false;
+        }
+        if depth == 1 {
+            return true;
+        }
+        structure_children(list)
+            .into_iter()
+            .filter(|child| structure_role(&objects[child].body) == Some(b"LI"))
+            .flat_map(|item| structure_children(&objects[&item].body))
+            .filter(|child| structure_role(&objects[child].body) == Some(b"LBody"))
+            .flat_map(|body| structure_children(&objects[&body].body))
+            .any(|child| has_nested_list_depth(objects, child, depth - 1))
+    }
+
+    fn number_tree_entries(bytes: &[u8]) -> Vec<(usize, u32)> {
+        let start = find_bytes(bytes, b"/Nums [").expect("parent number tree") + b"/Nums [".len();
+        let end = start + find_bytes(&bytes[start..], b"]").expect("parent number tree end");
+        let entries = &bytes[start..end];
+        let mut cursor = 0;
+        let mut result = Vec::new();
+        while cursor < entries.len() {
+            while cursor < entries.len() && entries[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor == entries.len() {
+                break;
+            }
+            let (key, key_end) = parse_decimal(entries, cursor);
+            cursor = key_end;
+            while cursor < entries.len() && entries[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            let (reference, reference_end) = parse_decimal(entries, cursor);
+            assert!(entries[reference_end..].starts_with(b" 0 R"));
+            result.push((key, reference as u32));
+            cursor = reference_end + b" 0 R".len();
+        }
+        result
+    }
+
+    fn marked_content_ids(bytes: &[u8]) -> Vec<usize> {
+        let mut result = Vec::new();
+        let mut cursor = 0;
+        while let Some(relative) = find_bytes(&bytes[cursor..], b"/MCID ") {
+            let start = cursor + relative + b"/MCID ".len();
+            let (mcid, end) = parse_decimal(bytes, start);
+            result.push(mcid);
+            cursor = end;
+        }
+        result
+    }
+
+    fn marked_content_references(bytes: &[u8]) -> Vec<(u32, usize)> {
+        let mut result = Vec::new();
+        let mut cursor = 0;
+        while let Some(relative) = find_bytes(&bytes[cursor..], b"/Type /MCR") {
+            let start = cursor + relative;
+            let body = &bytes[start..];
+            let page = reference_after(body, b"/Pg");
+            let mcid_start = find_bytes(body, b"/MCID ").expect("MCR MCID") + b"/MCID ".len();
+            let (mcid, _) = parse_decimal(body, mcid_start);
+            result.push((page, mcid));
+            cursor = start + b"/Type /MCR".len();
+        }
+        result
     }
 
     fn pdf_objects(pdf: &[u8]) -> BTreeMap<u32, PdfObject> {
@@ -2899,6 +2989,179 @@ mod header_footer_pdf {
                 content_text(&decoded_stream(&objects[&content_ref]), &cmaps)
             })
             .collect()
+    }
+
+    #[test]
+    fn word_semantics_reach_owned_multi_page_pdf_structure() {
+        fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+            haystack
+                .windows(needle.len())
+                .filter(|window| *window == needle)
+                .count()
+        }
+
+        let mut document = Document::new();
+        for level in 1..=6 {
+            document
+                .add_paragraph(&format!("Heading level {level}"))
+                .style(&format!("Heading{level}"));
+        }
+        document.add_bullet_list_item("Outer list item", 0);
+        document.add_bullet_list_item("Nested list item", 1);
+        document.add_bullet_list_item("Deeply nested list item", 2);
+        document.add_bullet_list_item("Second outer list item", 0);
+        {
+            let mut table = document.add_table(120, 2);
+            table.row(0).unwrap().header();
+            table.cell(0, 0).unwrap().set_text("Name");
+            table.cell(0, 1).unwrap().set_text("Value");
+            for row in 1..120 {
+                table.cell(row, 0).unwrap().set_text(&format!("Item {row}"));
+                table
+                    .cell(row, 1)
+                    .unwrap()
+                    .set_text(&format!("Value {row}"));
+            }
+        }
+
+        let pdf = document
+            .to_pdf_deterministic()
+            .expect("Word document should render deterministically");
+        let objects = pdf_objects(&pdf);
+        let pages_object = objects
+            .values()
+            .find(|object| {
+                find_bytes(&object.body, b"/Type /Pages").is_some()
+                    && find_bytes(&object.body, b"/Kids [").is_some()
+            })
+            .expect("PDF page tree");
+        let kids_start = find_bytes(&pages_object.body, b"/Kids [").unwrap() + b"/Kids [".len();
+        let kids_end = kids_start
+            + find_bytes(&pages_object.body[kids_start..], b"]").expect("page tree kids");
+        let page_refs = references(&pages_object.body[kids_start..kids_end]);
+        assert!(
+            page_refs.len() > 1,
+            "fixture must exercise repeated headers"
+        );
+
+        let structure_root = objects
+            .values()
+            .find(|object| find_bytes(&object.body, b"/Type /StructTreeRoot").is_some())
+            .expect("PDF structure root");
+        let parent_tree = number_tree_entries(&structure_root.body);
+        assert_eq!(parent_tree.len(), page_refs.len());
+        let all_mcrs = objects
+            .iter()
+            .flat_map(|(owner, object)| {
+                marked_content_references(&object.body)
+                    .into_iter()
+                    .map(|(page, mcid)| (*owner, page, mcid))
+            })
+            .collect::<Vec<_>>();
+        let mut expected_mcrs = BTreeSet::new();
+        let mut struct_parent_keys = BTreeSet::new();
+        for (page_index, page_ref) in page_refs.iter().copied().enumerate() {
+            let page = &objects[&page_ref].body;
+            let key_start = find_bytes(page, b"/StructParents ")
+                .expect("every content-owning page needs a parent-tree key")
+                + b"/StructParents ".len();
+            let struct_parent = parse_decimal(page, key_start).0;
+            assert!(
+                struct_parent_keys.insert(struct_parent),
+                "StructParents keys must be page-unique"
+            );
+            assert_eq!(
+                struct_parent, page_index,
+                "deterministic StructParents keys follow page order"
+            );
+            let parent_array_ref = parent_tree
+                .iter()
+                .find_map(|(key, reference)| (*key == struct_parent).then_some(*reference))
+                .expect("StructParents key must resolve through ParentTree");
+            let parent_refs = references(&objects[&parent_array_ref].body);
+            let content_ref = reference_after(page, b"/Contents");
+            let content = decoded_stream(&objects[&content_ref]);
+            let content_mcids = marked_content_ids(&content);
+            assert_eq!(
+                content_mcids,
+                (0..content_mcids.len()).collect::<Vec<_>>(),
+                "MCIDs must be page-local and contiguous"
+            );
+            assert_eq!(
+                parent_refs.len(),
+                content_mcids.len(),
+                "ParentTree array slots must cover every page MCID"
+            );
+            for (mcid, owner) in parent_refs.into_iter().enumerate() {
+                assert!(expected_mcrs.insert((owner, page_ref, mcid)));
+                assert_eq!(
+                    all_mcrs
+                        .iter()
+                        .filter(|candidate| **candidate == (owner, page_ref, mcid))
+                        .count(),
+                    1,
+                    "each ParentTree slot must have one matching owner MCR"
+                );
+            }
+        }
+        assert_eq!(struct_parent_keys.len(), page_refs.len());
+        assert_eq!(
+            all_mcrs.len(),
+            expected_mcrs.len(),
+            "MCR dictionaries and ParentTree slots must have exact ownership"
+        );
+        assert!(
+            all_mcrs.iter().all(|entry| expected_mcrs.contains(entry)),
+            "every MCR must point to the matching page-local ParentTree slot"
+        );
+
+        let heading_positions = (1..=6)
+            .map(|level| {
+                let tag = format!("/S /H{level}\n");
+                find_bytes(&pdf, tag.as_bytes()).expect("heading structure role")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            heading_positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "heading roles must preserve Word source order"
+        );
+        let list_refs = objects
+            .iter()
+            .filter_map(|(reference, object)| {
+                (structure_role(&object.body) == Some(b"L")).then_some(*reference)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            list_refs
+                .iter()
+                .any(|reference| has_nested_list_depth(&objects, *reference, 3)),
+            "Word levels 0, 1, and 2 must form one three-level list tree"
+        );
+        assert!(count_bytes(&pdf, b"/S /LI\n") >= 4, "list item nodes");
+        assert_eq!(count_bytes(&pdf, b"/S /TH\n"), 2, "logical header cells");
+
+        let header_owned_ranges = objects
+            .values()
+            .filter(|object| find_bytes(&object.body, b"/S /TH\n").is_some())
+            .map(|header| {
+                let kids_start =
+                    find_bytes(&header.body, b"/K [").expect("TH child array") + b"/K [".len();
+                let kids_end = kids_start
+                    + find_bytes(&header.body[kids_start..], b"]").expect("TH child terminator");
+                let kids = references(&header.body[kids_start..kids_end]);
+                assert_eq!(kids.len(), 1, "TH should own one paragraph");
+                count_bytes(&objects[&kids[0]].body, b"/Type /MCR")
+            })
+            .sum::<usize>();
+        assert!(
+            header_owned_ranges > 2,
+            "repeated header paragraph paint should remain below its logical TH"
+        );
+        assert_eq!(
+            expected_mcrs.len(),
+            count_bytes(&pdf, b"/Type /MCR"),
+            "each semantic content range belongs to exactly one structure node"
+        );
     }
 
     fn header_footer_xml(root: &str, text: &str) -> Vec<u8> {

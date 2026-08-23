@@ -60,6 +60,13 @@ different TTC indices share one byte buffer. Both process caches are compiled
 only with `system-fonts`, and poisoned file-cache locks recover by rebuilding
 the requested entry.
 
+Tagged Word PDFs use the same deterministic layout and writer path. Structure
+node references, page-local MCIDs, parent-tree keys, conditional PDF/UA
+metadata, and XMP bytes are derived only from ordered layout input. A
+`.notdef` glyph suppresses the PDF/UA claim. These outputs add no clock, random
+identifier, host lookup, or system-font dependency. Untagged Presentation
+layouts keep the existing writer path.
+
 Reusable managers bound shaping to 2,048 entries and 16 MiB, file bytes to 256
 entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
 entry ceilings. The reusable Word engine bounds both pending and published
@@ -142,6 +149,12 @@ dry run against local patches for every internal crate. Every generated
 archive must remain below the crates.io 10 MiB limit. Default-off features are
 present in package metadata even when archive verification builds the default
 graph.
+
+The format-neutral semantic types are part of the published `oxml-layout`
+source inventory. The tagged writer implementation, including
+`src/structure.rs`, is part of the published `oxml-pdf` source inventory. No
+runtime oracle, installer, validation profile, or generated PDF is packaged in
+either crate.
 
 The publishable `rpptx-cli` binary contains nine commands. Its `thumbnail`
 command uses the deterministic presentation renderer, and its `outline`

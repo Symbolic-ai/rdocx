@@ -904,6 +904,14 @@ impl<'a> Pager<'a> {
                 }
             }
 
+            produced = produced
+                .into_iter()
+                .map(|element| PositionedElement::MarkedContent {
+                    structure: a.structure_id,
+                    children: vec![element],
+                })
+                .collect();
+
             if a.behind_doc {
                 self.behind_elements.append(&mut produced);
             } else {
@@ -1341,7 +1349,7 @@ pub fn append_endnote_pages(
     // met them in.
     let mut ordered: Vec<NoteRef> = Vec::new();
     for page in pages.iter() {
-        for element in &page.elements {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
             if let PositionedElement::Text(run) = element
                 && let Some(note) = run.note
                 && note.stream == NoteStream::Endnote
@@ -1350,7 +1358,7 @@ pub fn append_endnote_pages(
             {
                 ordered.push(note);
             }
-        }
+        });
     }
 
     if ordered.is_empty() {
@@ -1920,6 +1928,8 @@ fn render_para_split(
                 widow_control: para.widow_control,
                 heading_level: None,
                 heading_text: None,
+                list: para.list,
+                structure_id: para.structure_id,
                 // The continuation was already reflowed as part of the whole
                 // paragraph, so it must not be reflowed again.
                 reflow: None,
@@ -1962,6 +1972,7 @@ fn render_paragraph_lines(
     elements: &mut Vec<PositionedElement>,
     media: &HashMap<MediaId, ImageData>,
 ) {
+    let first_element = elements.len();
     // A drawing this paragraph must clear rather than flow beside pushes its
     // first line down. `content_height` already counts the same offset.
     let mut y = start_y + para.content_offset_top;
@@ -2179,7 +2190,7 @@ fn render_paragraph_lines(
                 } => {
                     let image = media.get(media_id);
                     // Image positioned at current x, top-aligned with line
-                    elements.push(PositionedElement::Image {
+                    let image = PositionedElement::Image {
                         rect: Rect {
                             x,
                             y: geometry.margin_top + y,
@@ -2190,7 +2201,8 @@ fn render_paragraph_lines(
                         content_type: image
                             .map_or_else(String::new, |image| image.content_type.clone()),
                         media_id: *media_id,
-                    });
+                    };
+                    elements.push(image);
                     x += width;
                 }
                 LineItem::Group { width, group, .. } => {
@@ -2200,14 +2212,83 @@ fn render_paragraph_lines(
                         f: geometry.margin_top + y,
                         ..oxml_layout::Transform::IDENTITY
                     });
-                    elements.push(PositionedElement::Group(positioned));
+                    let group = PositionedElement::Group(positioned);
+                    elements.push(group);
                     x += width;
+                }
+                LineItem::Figure {
+                    item, structure_id, ..
+                } => {
+                    let figure = match item.as_ref() {
+                        LineItem::Image {
+                            width,
+                            height,
+                            media_id,
+                        } => {
+                            let image = media.get(media_id);
+                            PositionedElement::Image {
+                                rect: Rect {
+                                    x,
+                                    y: geometry.margin_top + y,
+                                    width: *width,
+                                    height: *height,
+                                },
+                                data: image.map_or_else(Vec::new, |image| image.data.clone()),
+                                content_type: image
+                                    .map_or_else(String::new, |image| image.content_type.clone()),
+                                media_id: *media_id,
+                            }
+                        }
+                        LineItem::Group { group, .. } => {
+                            let mut positioned = group.clone();
+                            positioned.transform =
+                                positioned.transform.then(oxml_layout::Transform {
+                                    e: x,
+                                    f: geometry.margin_top + y,
+                                    ..oxml_layout::Transform::IDENTITY
+                                });
+                            PositionedElement::Group(positioned)
+                        }
+                        _ => {
+                            x += item.width();
+                            continue;
+                        }
+                    };
+                    elements.push(PositionedElement::MarkedContent {
+                        structure: *structure_id,
+                        children: vec![figure],
+                    });
+                    x += item.width();
                 }
                 _ => x += item.width(),
             }
         }
 
         y += line.height;
+    }
+
+    if let Some(structure_id) = para.structure_id {
+        let produced = elements.split_off(first_element);
+        elements.extend(produced.into_iter().map(|element| match &element {
+            PositionedElement::Text(run) if !(run.text.is_empty() && run.glyph_ids.is_empty()) => {
+                PositionedElement::MarkedContent {
+                    structure: Some(structure_id),
+                    children: vec![element],
+                }
+            }
+            PositionedElement::Image { .. } | PositionedElement::Group(_) => {
+                PositionedElement::MarkedContent {
+                    structure: None,
+                    children: vec![element],
+                }
+            }
+            PositionedElement::MarkedContent { .. } => element,
+            PositionedElement::LinkAnnotation { .. } => element,
+            _ => PositionedElement::MarkedContent {
+                structure: None,
+                children: vec![element],
+            },
+        }));
     }
 }
 
@@ -2714,9 +2795,66 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         }
+    }
+
+    #[test]
+    fn descriptionless_inline_drawings_are_paragraph_artifacts() {
+        let mut paragraph = make_para(1, 14.0);
+        paragraph.structure_id = oxml_layout::StructureId::new(1);
+        paragraph.lines[0].items = vec![
+            LineItem::Image {
+                width: 10.0,
+                height: 10.0,
+                media_id: MediaId(1),
+            },
+            LineItem::Group {
+                width: 10.0,
+                height: 10.0,
+                group: oxml_layout::GroupElement {
+                    transform: oxml_layout::Transform::IDENTITY,
+                    clip: None,
+                    opacity: 1.0,
+                    effects: Vec::new(),
+                    children: vec![PositionedElement::FilledRect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 10.0,
+                            height: 10.0,
+                        },
+                        color: Color::BLACK,
+                    }],
+                },
+            },
+        ];
+        let mut elements = Vec::new();
+        let media = HashMap::new();
+
+        render_paragraph_lines(
+            &paragraph.lines,
+            &paragraph,
+            &PageGeometry::default(),
+            0.0,
+            &mut elements,
+            &media,
+        );
+
+        assert_eq!(elements.len(), 2);
+        assert!(elements.iter().all(|element| matches!(
+            element,
+            PositionedElement::MarkedContent {
+                structure: None,
+                children,
+            } if matches!(
+                children.as_slice(),
+                [PositionedElement::Image { .. }] | [PositionedElement::Group(_)]
+            )
+        )));
     }
 
     #[test]
@@ -2853,6 +2991,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -2895,6 +3035,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -2976,6 +3118,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3032,6 +3176,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3078,6 +3224,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3119,6 +3267,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3233,6 +3383,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3281,6 +3433,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3337,6 +3491,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3398,6 +3554,8 @@ mod tests {
             widow_control: true,
             heading_level: None,
             heading_text: None,
+            list: None,
+            structure_id: None,
             reflow: None,
             content_offset_top: 0.0,
         };
@@ -3618,6 +3776,8 @@ mod tests {
             content: AnchoredContent::Image {
                 media_id: MediaId(1),
             },
+            alternate_text: None,
+            structure_id: None,
         }
     }
 

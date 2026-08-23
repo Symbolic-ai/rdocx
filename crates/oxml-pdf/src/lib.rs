@@ -6,6 +6,7 @@
 mod font;
 mod image;
 pub mod raster;
+mod structure;
 mod writer;
 
 use oxml_layout::LayoutResult;
@@ -37,8 +38,8 @@ pub fn render_all_pages(layout: &LayoutResult, dpi: f64) -> Vec<Vec<u8>> {
 mod tests {
     use super::*;
     use oxml_layout::{
-        Color, DocumentMetadata, LayoutResult, OutlineEntry, PageFrame, Point, PositionedElement,
-        Rect,
+        Color, DocumentMetadata, DocumentStructure, LayoutResult, OutlineEntry, PageFrame, Point,
+        PositionedElement, Rect, StructureId, StructureNode, StructureRole,
     };
 
     fn layout_with(elements: Vec<PositionedElement>) -> LayoutResult {
@@ -85,6 +86,54 @@ mod tests {
         let pdf = render_to_pdf(&layout_with(elements));
         assert!(pdf.starts_with(b"%PDF"));
         assert!(pdf.len() > 100);
+    }
+
+    #[test]
+    fn tagging_preserves_visible_pdf_and_raster_output() {
+        let leaf = PositionedElement::FilledRect {
+            rect: Rect {
+                x: 72.0,
+                y: 100.0,
+                width: 120.0,
+                height: 30.0,
+            },
+            color: Color {
+                r: 0.25,
+                g: 0.5,
+                b: 0.75,
+                a: 1.0,
+            },
+        };
+        let plain = layout_with(vec![leaf.clone()]);
+        let document = StructureId::new(1).expect("non-zero document id");
+        let paragraph = StructureId::new(2).expect("non-zero paragraph id");
+        let mut tagged = layout_with(vec![PositionedElement::MarkedContent {
+            structure: Some(paragraph),
+            children: vec![leaf],
+        }]);
+        tagged.structure = Some(DocumentStructure {
+            root: document,
+            nodes: vec![
+                StructureNode {
+                    id: document,
+                    role: StructureRole::Document,
+                    children: vec![paragraph],
+                    alternate_text: None,
+                },
+                StructureNode {
+                    id: paragraph,
+                    role: StructureRole::Paragraph,
+                    children: Vec::new(),
+                    alternate_text: None,
+                },
+            ],
+        });
+
+        assert_eq!(
+            render_page_to_png(&plain, 0, 144.0),
+            render_page_to_png(&tagged, 0, 144.0)
+        );
+        assert_ne!(render_to_pdf(&plain), render_to_pdf(&tagged));
     }
 
     #[test]

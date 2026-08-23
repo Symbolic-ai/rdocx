@@ -263,7 +263,7 @@ all beyond page one. Three entries per sample:
 | Entry | Covers |
 |---|---|
 | `<sample>:pdf/pages` | The page count, each page's `/MediaBox`, and each page's inflated content stream, in `/Kids` order |
-| `<sample>:pdf/resources` | Every other inflated stream, which is the font subsets, the ToUnicode CMaps and the image XObjects |
+| `<sample>:pdf/resources` | Inflated font subsets, ToUnicode CMaps, image XObjects, and other non-content streams except `/Type /Metadata` |
 | `<sample>:pdf/bytes` | SHA-256 of the file as written |
 
 The first two hash inflated bytes, so they say **what** moved and survive a
@@ -272,6 +272,12 @@ moved and cannot be evaded, including by a change that is purely in
 compression. A fingerprint of extracted text and page geometry alone was
 rejected, because the dependency refresh in F-X020 moved all seven sample PDFs
 while `pdftotext` output stayed identical in 7 of 7.
+
+Document metadata streams are excluded only from `pdf/resources`. They are not
+page resources, and their complete bytes remain covered by `pdf/bytes`. A
+focused scanner test adds a `/Type /Metadata` stream and requires only the byte
+entry to move. The existing changed-resource test continues to require a real
+font-like stream change to move `pdf/resources`.
 
 The harness reads a PDF with a scanner over the object syntax, using the
 standard library alone, and raises rather than skipping anything it does not
@@ -640,6 +646,19 @@ outcomes as mandatory manual evidence.
   vertical when rasterised at 72 dpi with the recorded Poppler 26.01.0.
 - **`Group` containing `Text` finds the font.** The regression test for the
   recursion hazard.
+- Tagged-PDF structure tests cover headings, nested lists, table headers and
+  cells, figures with alternate text, artifacts, deterministic MCIDs, and the
+  parent tree. A raster equality test compares the exact PNG bytes before and
+  after adding `MarkedContent`.
+- The Word-to-PDF regression renders all six heading levels, three real list
+  depths, and a table whose two header cells repeat across pages. It follows
+  each `TH` to its paragraph child, checks parent-tree ownership on every page,
+  and requires one MCR for every emitted semantic MCID. Source-compatibility
+  tests construct the unchanged image and group variants directly.
+- The external accessibility oracle is veraPDF 1.30.2 with profile `ua1`. Its
+  source installer and signature are pinned outside the repository. The
+  ignored differential test requires that exact version and a conforming
+  report for an in-code deterministic fixture before feature completion.
 - `Group` containing `Image` registers the XObject.
 - `Group` containing `LinkAnnotation` emits it with a transformed rectangle.
 - A preceding leaf proves nested XObject registration and recursive emission

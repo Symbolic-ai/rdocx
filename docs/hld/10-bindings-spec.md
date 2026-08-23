@@ -201,6 +201,20 @@ mutation for a larger value. `Document::set_list_level` can redefine an
 existing level without rebuilding the document. A rejected redefinition is
 side-effect free.
 
+Tagged PDF is an implementation detail of the existing deterministic and
+normal PDF methods. Word layout now carries source semantics to the shared PDF
+backend, but the native method signatures, returned byte type, binding method
+names, and error contracts do not change. Python, WASM, and CLI consumers gain
+no semantic-tree API. Presentation PDF methods continue to pass an untagged
+layout with no structure tree.
+
+The pre-1.0 shared layout API adds semantic types, `MarkedContent`, and
+informative `Figure` variants only through existing non-exhaustive enums.
+Existing `InlineItem` and `LineItem` image and group variant fields stay
+unchanged, so direct constructors retain source compatibility. The new figure
+variant lowers to the one backend-neutral marked-content carrier rather than
+creating a second PDF ownership representation.
+
 When native callers enable the default-off `agile-encryption` feature,
 `Document::open_encrypted`, `Document::from_encrypted_bytes`, and the bounded
 bytes variant open password-protected OOXML through the shared package layer.

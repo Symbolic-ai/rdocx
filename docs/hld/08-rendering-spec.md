@@ -15,13 +15,17 @@ shim. The shared contract is:
 ```rust
 pub struct LayoutResult { pages: Vec<Arc<PageFrame>>, fonts: Vec<FontData>,
                           metadata: Option<DocumentMetadata>, outlines: Vec<OutlineEntry>,
-                          diagnostics: Vec<Diagnostic> }
+                          diagnostics: Vec<Diagnostic>,
+                          structure: Option<DocumentStructure> }
 pub struct FontData { id: FontId, family: String, data: Arc<[u8]>,
                       face_index: u32, bold: bool, italic: bool }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
 pub struct SourceNodeId(NonZeroU32)
 pub struct SourceSpan { node: SourceNodeId, char_start: u32, char_end: u32 }
+pub struct DocumentStructure { root: StructureId, nodes: Vec<StructureNode> }
+pub struct StructureNode { id: StructureId, role: StructureRole,
+                           children: Vec<StructureId>, alternate_text: Option<String> }
 ```
 
 `TextSegment` and `GlyphRun` each carry `source: Option<SourceSpan>`. The node
@@ -108,6 +112,7 @@ pub enum PositionedElement {
     Text(GlyphRun), Line { .. }, FilledRect { .. }, Image { .. }, LinkAnnotation { .. },
     Path(PathElement),      // new
     Group(GroupElement),    // new
+    MarkedContent { structure: Option<StructureId>, children: Vec<PositionedElement> },
 }
 ```
 
@@ -180,6 +185,12 @@ depth-first leaf ordinal, which recursive content emission matches. Link
 rectangles use the accumulated transform before conversion to PDF page
 coordinates. Each pass has an explicit nested-target regression test.
 
+The same walker recurses through `MarkedContent` without changing the
+accumulated transform. Word pagination wraps exact emitted leaves in this
+container. Empty no-glyph carriers produce no marked content. PDF collection
+and field-substitution passes recurse into it, and compatibility assertions
+that inspect leaf elements do the same.
+
 ## Two remaining defects to fix
 
 All are forced by pptx, and all improve rdocx:
@@ -225,6 +236,19 @@ with no visible difference and no failing test.
 
 Two writes of one document cannot detect that, since they reuse the same map
 instances. The regression builds two documents and compares their bytes.
+
+When `LayoutResult::structure` is present, the writer emits deterministic
+`BDC` and `EMC` pairs with page-local MCIDs, `/StructParents`, one parent number
+tree, `/StructTreeRoot`, `/MarkInfo`, an undetermined `/Lang`, and accessible
+document title preferences. PDF/UA identification metadata is present only
+when shown text contains no `.notdef` glyph. Word roles lower to headings,
+paragraphs, nested `L` and `LI`, `Table`, `TR`, `TH`, `TD`, and `Figure`.
+The PDF layer inserts the required `LBody` beneath each list item without
+changing the backend-neutral tree. Informative figures carry source `/Alt`.
+Table headers carry column scope. Decorative drawing and border paint emits as
+artifacts. Malformed public structure graphs are rejected, and their marked
+children recurse without BDC or orphan MCIDs. A result with no structure
+retains the byte-compatible untagged path.
 
 `Path` is `m`/`l`/`c`/`h` followed by `f`, `f*`, `S`, `B` or `B*` by supported
 fill, stroke and rule. Stroke state uses `w`, `J`, `j`, `M` and `d`. `Group` is
@@ -430,6 +454,11 @@ direction.
 Each table origin draws its fill before its text. The table's unique border
 segments draw after all cell fills and text so a neighbouring fill cannot cover
 them. Table cells do not use the shape autofit algorithm.
+
+Word table lowering also assigns logical ownership before pagination. A table
+owns rows in source order. Repeating header rows use `TH`, ordinary cells use
+`TD`, and each cell owns its paragraph nodes. A header repeated on another
+page creates another marked-content occurrence for the same logical cell.
 
 ### Autofit
 
@@ -695,6 +724,13 @@ result through shared line breaking with the same width, height, ascent, and
 descent rules as an image. Pagination translates the local group to the
 resolved line position without changing its children.
 
+An informative inline image or chart uses the additive `Figure` variant in
+the same non-exhaustive inline and line enums. The variant carries alternate
+text and the logical figure id around an unchanged `Image` or `Group`, then
+pagination lowers it to `PositionedElement::MarkedContent`. Existing `Image`
+and `Group` fields and direct constructors remain unchanged. A drawing with no
+usable alternate text stays on the existing variant and becomes an artifact.
+
 An anchored chart uses `AnchoredContent::Group`. The existing anchored drawing
 path resolves its page rectangle, wrapping distances, and behind-text order,
 then translates the local group to that rectangle. Missing, external, or
@@ -716,6 +752,10 @@ pub struct RenderInput {
 `RenderInput` is the rendering boundary. It contains only owned,
 format-neutral `ResolvedSlide` values from `rpptx-layout`. Raw PresentationML
 parts remain on the upstream assembly side of that boundary:
+
+Presentation page lowering constructs `LayoutResult` with `structure: None`.
+Its PDF remains on the existing untagged path, and the added semantic carrier
+does not alter its visible elements, resources, or raster pixels.
 
 `ResolvedContent::Group` carries frozen backend-neutral chart output. The
 ordinary shape lowering path inserts that group below the graphic-frame

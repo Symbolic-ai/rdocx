@@ -1,6 +1,6 @@
 # F-173, Tagged PDF structure tree
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S53
 **Size**: L
 **Depends on**: none
@@ -118,17 +118,17 @@ or removed entries.
 
 ## Implementation checklist
 
-- [ ] Add the minimal semantic tree and marked-content carrier to
+- [x] Add the minimal semantic tree and marked-content carrier to
       `oxml-layout`.
-- [ ] Carry headings, list nesting, table roles, headers, and image alternate
+- [x] Carry headings, list nesting, table roles, headers, and image alternate
       text through Word layout and pagination.
-- [ ] Mark decorative operators as artifacts.
-- [ ] Emit deterministic MCIDs, structure elements, parent tree, and catalog
+- [x] Mark decorative operators as artifacts.
+- [x] Emit deterministic MCIDs, structure elements, parent tree, and catalog
       entries.
-- [ ] Preserve Presentation rendering when no structure tree exists.
-- [ ] Add structural, extraction, raster, PDF, warm-cold, WASM, packaging, and
+- [x] Preserve Presentation rendering when no structure tree exists.
+- [x] Add structural, extraction, raster, PDF, warm-cold, WASM, packaging, and
       veraPDF checks.
-- [ ] Review the exact 14-entry hash delta as its own behavioural commit.
+- [x] Review the exact 14-entry hash delta as its own behavioural commit.
 
 ## Open questions
 

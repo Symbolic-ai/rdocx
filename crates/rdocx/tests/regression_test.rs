@@ -12,6 +12,51 @@ use rdocx::{
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
 
+fn compatibility_page_elements(
+    elements: &[oxml_layout::PositionedElement],
+) -> Vec<&oxml_layout::PositionedElement> {
+    fn collect<'a>(
+        elements: &'a [oxml_layout::PositionedElement],
+        output: &mut Vec<&'a oxml_layout::PositionedElement>,
+    ) {
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                    collect(children, output);
+                }
+                other => output.push(other),
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    collect(elements, &mut output);
+    output
+}
+
+fn clear_compatibility_sources(elements: &mut [oxml_layout::PositionedElement]) {
+    for element in elements {
+        match element {
+            oxml_layout::PositionedElement::Text(run) => run.source = None,
+            oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                clear_compatibility_sources(children);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn remove_compatibility_empty_text(elements: &mut Vec<oxml_layout::PositionedElement>) {
+    for element in elements.iter_mut() {
+        if let oxml_layout::PositionedElement::MarkedContent { children, .. } = element {
+            remove_compatibility_empty_text(children);
+        }
+    }
+    elements.retain(
+        |element| !matches!(element, oxml_layout::PositionedElement::Text(run) if run.text.is_empty()),
+    );
+}
+
 fn document_with_settings(settings_xml: &[u8], target: &str) -> Document {
     let mut seed = Document::new();
     let bytes = seed.to_bytes().unwrap();
@@ -3238,9 +3283,8 @@ fn ref_and_pageref_resolve_to_the_bookmark_text_and_final_page() {
 
     let reopened = Document::from_bytes(rewritten.get_ref()).unwrap();
     let page = reopened.layout_page(0).unwrap().unwrap();
-    let text = page
-        .elements
-        .iter()
+    let text = compatibility_page_elements(&page.elements)
+        .into_iter()
         .filter_map(|element| match element {
             oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
             _ => None,
@@ -5086,7 +5130,7 @@ fn empty_word_stories_emit_one_attributed_zero_width_segment() {
         .layout
         .pages
         .iter()
-        .flat_map(|page| &page.elements)
+        .flat_map(|page| compatibility_page_elements(&page.elements))
         .filter_map(|element| match element {
             oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
             _ => None,
@@ -5212,7 +5256,7 @@ fn empty_paragraph_uses_resolved_default_metrics() {
         .layout
         .pages
         .iter()
-        .flat_map(|page| &page.elements)
+        .flat_map(|page| compatibility_page_elements(&page.elements))
         .filter_map(|element| match element {
             oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
             _ => None,
@@ -5259,24 +5303,24 @@ fn empty_segment_is_backend_invisible_and_layout_compatible() {
     let mut attributed = rdocx_layout::layout_document_deterministic_with_provenance(&input)
         .expect("attributed layout")
         .into_layout_result();
-    assert!(attributed.pages.iter().flat_map(|page| &page.elements).any(
-        |element| matches!(element, oxml_layout::PositionedElement::Text(run)
+    assert!(
+        attributed
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(&page.elements))
+            .any(
+                |element| matches!(element, oxml_layout::PositionedElement::Text(run)
             if run.text == "visible" && !run.glyph_ids.is_empty())
-    ));
+            )
+    );
     for page in &mut attributed.pages {
-        for element in &mut std::sync::Arc::make_mut(page).elements {
-            if let oxml_layout::PositionedElement::Text(run) = element {
-                run.source = None;
-            }
-        }
+        clear_compatibility_sources(&mut std::sync::Arc::make_mut(page).elements);
     }
     assert_eq!(format!("{ordinary:?}"), format!("{attributed:?}"));
 
     let mut without_empty = attributed.clone();
     for page in &mut without_empty.pages {
-        std::sync::Arc::make_mut(page).elements.retain(|element| {
-            !matches!(element, oxml_layout::PositionedElement::Text(run) if run.text.is_empty())
-        });
+        remove_compatibility_empty_text(&mut std::sync::Arc::make_mut(page).elements);
     }
     assert_eq!(
         oxml_pdf::render_to_pdf(&attributed),

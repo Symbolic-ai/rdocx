@@ -8,11 +8,13 @@ use crate::block::ParagraphBlock;
 use crate::engine::SourceRegistry;
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
-use oxml_layout::{Color, Diagnostic, FontManager, Result};
+use oxml_layout::{Color, Diagnostic, FontManager, Result, StructureId};
 
 /// A laid-out table.
 #[derive(Debug, Clone)]
 pub struct TableBlock {
+    /// Logical table node allocated before pagination.
+    pub structure_id: Option<StructureId>,
     /// Column widths in points.
     pub col_widths: Vec<f64>,
     /// Laid-out rows.
@@ -42,6 +44,8 @@ impl TableBlock {
 /// A laid-out table row.
 #[derive(Debug, Clone)]
 pub struct TableRow {
+    /// Logical row node allocated before pagination.
+    pub structure_id: Option<StructureId>,
     /// Cells in this row.
     pub cells: Vec<TableCell>,
     /// Row height in points.
@@ -53,6 +57,8 @@ pub struct TableRow {
 /// A laid-out table cell.
 #[derive(Debug, Clone)]
 pub struct TableCell {
+    /// Logical cell node allocated before pagination.
+    pub structure_id: Option<StructureId>,
     /// Cell content (paragraph blocks).
     pub paragraphs: Vec<ParagraphBlock>,
     /// Cell width in points (may span multiple grid columns).
@@ -264,6 +270,7 @@ fn layout_table_inner(
             let v_align = cell.properties.as_ref().and_then(|p| p.v_align);
 
             cells.push(TableCell {
+                structure_id: None,
                 paragraphs,
                 width: cell_width,
                 height: content_height,
@@ -298,6 +305,7 @@ fn layout_table_inner(
         }
 
         rows.push(TableRow {
+            structure_id: None,
             cells,
             height: row_height,
             is_header,
@@ -305,6 +313,7 @@ fn layout_table_inner(
     }
 
     Ok(TableBlock {
+        structure_id: None,
         col_widths,
         rows,
         header_row_indices,
