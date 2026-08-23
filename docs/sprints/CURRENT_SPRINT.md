@@ -29,7 +29,7 @@ duplicating font bytes or weakening reusable-engine cache identity.
 | F-176 | RTF reader | L | in-progress | codex |
 | F-177 | RTF writer | M | pending | - |
 | F-183 | Image export options | S | pending | - |
-| F-X051 | Honor caller-supplied font family aliases | M | pending | - |
+| F-X051 | Honor caller-supplied font family aliases | M | in-progress | codex |
 
 ## Sequencing note
 
