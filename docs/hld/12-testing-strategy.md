@@ -818,7 +818,12 @@ docs job and canonical non-fast verification call this same runner.
 The stable 0.8.0 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the incubating family remains at 0.4.0.
+README requirement. It also proves the incubating family remains at 0.5.0.
+The paired incubating regression pins all sixteen explicit manifests, fifteen
+workspace dependency requirements, sixteen lockfile entries, publication
+flags, README examples, Rust assertions, the CI WASM literal, and the exact
+15-package publication preflight at 0.5.0. It separately proves the stable
+workspace and family remain at 0.8.0 and `rpptx-wasm` remains unpublished.
 The current stable 0.8.0 release verifies every crates.io README endpoint
 returns non-empty rendered HTML. Those endpoint checks remain a
 post-publication gate owned by `/release`.

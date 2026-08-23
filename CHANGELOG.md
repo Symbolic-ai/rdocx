@@ -4,6 +4,64 @@
 
 No unreleased changes.
 
+## rpptx-v0.5.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family adds native package encryption and
+digital signatures, accessible PDF structure, and deterministic PDF/A output.
+Layout results also retain their largest immutable page and font payloads by
+shared ownership, avoiding deep copies when results are cloned or retained.
+
+### Added
+
+- Read and write Microsoft Agile encrypted OOXML packages with authenticated
+  AES-256 and SHA-512 output, bounded input processing, and failure-atomic
+  publication.
+- Verify and create RSA-SHA256 OPC digital signatures with exact declared part
+  and relationship coverage. Certificate trust remains caller policy.
+- Emit tagged PDF structure with deterministic marked-content ownership,
+  document language, titles, outlines, links, and structure destinations.
+- Emit deterministic PDF/A-2b and PDF/A-3b files with an output intent,
+  conformance metadata, embedded-file relationship rules, and validator-backed
+  fixtures.
+- Share immutable `FontData` bytes and completed `PageFrame` values through
+  `Arc`, so cloning or retaining a layout result keeps those payloads shared.
+  This ownership boundary was shaped by
+  [Issue 39](https://github.com/tensorbee/rdocx/issues/39),
+  [PR 40](https://github.com/tensorbee/rdocx/pull/40), and
+  [PR 41](https://github.com/tensorbee/rdocx/pull/41).
+
+### Fixed
+
+There are no user-facing defect corrections unique to the incubating family in
+this release. Word-only rendering and document-editing corrections remain on
+the separate stable release train.
+
+### Compatibility
+
+All 15 crates.io packages in the shared OOXML and PowerPoint family move
+together from 0.4.0 to 0.5.0. This is an intentional pre-1.0 Rust source
+boundary. `FontData.data` now uses `Arc<[u8]>`, and `LayoutResult.pages` now
+uses `Vec<Arc<PageFrame>>`. Callers that construct those low-level values must
+wrap owned data with `Arc::from` or `.into()`. Callers that only inspect values
+can continue through deref coercion or `.as_ref()`.
+
+The `agile-encryption` and `digital-signatures` package capabilities remain
+default-off. Existing PowerPoint facade behavior requires no migration.
+`rpptx-wasm` is prepared at 0.5.0 but remains unpublished on crates.io.
+
+### Contributors
+
+Atul Sharma maintained the release. Thanks to `@emptinessform` for the
+authenticated editor profiling and reference implementations in
+[Issue 39](https://github.com/tensorbee/rdocx/issues/39),
+[PR 40](https://github.com/tensorbee/rdocx/pull/40), and
+[PR 41](https://github.com/tensorbee/rdocx/pull/41). Their font-copy and
+page-copy measurements informed the shared ownership surface that landed as a
+hardened equivalent. The format-specific transfer, pagination, and cache work
+remains on the stable release train.
+
 ## v0.8.0
 
 ### Highlights

@@ -219,6 +219,9 @@ at 0.4.0 from the annotated `rpptx-v0.4.0` tag at reviewed SHA
 version of `oxml-chart`. Manifest eligibility and allowlist membership do not
 authorize a later publication without a separately approved `/release`
 invocation at the exact reviewed SHA.
+All 15 candidates and the unpublished `rpptx-wasm` preparation member are now
+prepared at 0.5.0. The 0.4.0 registry release remains current until the
+reviewed 0.5.0 SHA passes the final release boundary.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
@@ -226,7 +229,7 @@ and incubating metadata regressions without external development tools. The
 stable regression requires prepared workspace 0.8.0, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.4.0 versions, pins,
+set. The incubating regression requires the exact 0.5.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -308,8 +311,8 @@ and its two Python project versions and rdocx WASM contract literals are also
 releases remain available. No binding, WASM, Python, npm, or incubating package
 gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.4.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-exact 15-package crates.io family listed above is published from the annotated
+0.5.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+previous exact 15-package crates.io family listed above is published from the annotated
 `rpptx-v0.4.0` tag at reviewed SHA
 `9dee4335c531ca24abbdc995294edbb48c00183f`. The preparation group also contains
 unpublished `rpptx-wasm`, while the crates.io allowlist remains exactly 15

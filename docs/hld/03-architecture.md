@@ -455,7 +455,10 @@ an endnote sharing a number.
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
-incubating version in their manifests and workspace pins. The family adds
+incubating version in their manifests and workspace pins. All 15 candidates
+and the unpublished `rpptx-wasm` preparation member are prepared together at
+0.5.0. The latest published family remains the immutable 0.4.0 release until a
+separately approved `/release rpptx-v0.5.0` succeeds. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates continue to
 use the separate workspace version. That stable workspace and its exact

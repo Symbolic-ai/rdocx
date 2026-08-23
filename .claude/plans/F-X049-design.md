@@ -124,16 +124,16 @@ release metadata only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Move sixteen prepared manifests and fifteen workspace pins to 0.5.0.
-- [ ] Regenerate lockfile entries and update all README, source, CI, workflow,
+- [x] Move sixteen prepared manifests and fifteen workspace pins to 0.5.0.
+- [x] Regenerate lockfile entries and update all README, source, CI, workflow,
       WASM, and test carriers.
-- [ ] Rename and strengthen the incubating 0.5.0 metadata regression.
-- [ ] Build and reconcile the selected-family contribution inventory.
-- [ ] Prepare the reviewed `rpptx-v0.5.0` changelog section with direct links
+- [x] Rename and strengthen the incubating 0.5.0 metadata regression.
+- [x] Build and reconcile the selected-family contribution inventory.
+- [x] Prepare the reviewed `rpptx-v0.5.0` changelog section with direct links
       and specific authenticated credit.
-- [ ] Prepare one post-release comment per included record without posting it.
-- [ ] Update exactly the listed HLD files for the prepared release state.
-- [ ] Run full verification, package, asset, WASM, supply-chain, notes, and
+- [x] Prepare one post-release comment per included record without posting it.
+- [x] Update exactly the listed HLD files for the prepared release state.
+- [x] Run full verification, package, asset, WASM, supply-chain, notes, and
       hash gates.
 - [ ] Stop at `/release rpptx-v0.5.0` final approval.
 - [ ] After approval, verify registry entries, owners, release SHA and body,
