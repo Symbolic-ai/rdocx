@@ -67,6 +67,7 @@ defended.
 | S50 | M16 | 3 | 3 | 0 | 10 | 3 | Added atomic JSON template rendering across run boundaries, nested loops and conditionals, multi-row table repetition, and continuous list numbering. The full close gate passed with all 49 hashes unchanged, all 22 package archives below 10 MiB, and the sprint review clean on pass 3 after four blocking interactions were remediated. M16 continues in S51 with mail merge, comparison, and watermarks |
 | S51 | M16, X | 10 | 10 | 0 | 18 | 2 | Completed M16 with mail merge, comparison, watermarks, complete layout provenance, bounded relayout caches, and ordered body access from PR 36. Published the complete rpptx 0.4.0 and stable rdocx 0.8.0 families with reviewed release notes and contributor credit. The full close gate passed with all 49 hashes unchanged and no carries |
 | S52 | M17, X | 12 | 12 | 0 | 27 | 1 | Added authenticated Agile encryption reads and Word-compatible writes, exact digital-signature verification, corrected break shaping, and bounded exact editor relayout reuse. PRs 40 and 41 were audited, safely reimplemented, credited, commented, and closed. The full close gate passed with all 49 hashes matching the reviewed baseline and no carries. M17 continues in S53 with signature creation and PDF compliance |
+| S53 | M17, X | 7 | 7 | 0 | 16 | 1 | Completed M17 with signature creation, tagged PDF, PDF/A, redaction, and dense-form tables. Published and verified the 15-package incubating 0.5.0 family and seven-package stable 0.9.0 family. The full close gate passed with the reviewed 14-entry PDF-only harness delta and no carries |
 
 ## Completed features
 
@@ -374,6 +375,7 @@ five working days.
 | S50 | 3 | 3 | 5.00 |
 | S51 | 10 | 2 | 25.00 |
 | S52 | 12 | 1 | 60.00 |
+| S53 | 7 | 1 | 35.00 |
 
 ## Escalation record
 
@@ -429,3 +431,4 @@ was done about it. Empty is the expected state.
 | 2026-08-21 | Sprint estimate variance exceeded 30 percent | S50 | Record 3 actual days against 10 estimated. The strict feature chain reused one template evaluator across all three stories, while the bounded sprint review concentrated four interaction corrections into the same row and scope ownership path. Retain the dependency-defined S51 boundary |
 | 2026-08-22 | Sprint estimate variance exceeded 30 percent | S51 | Record 2 actual days against 18 estimated. Nine isolated workers, reviewed community contributions, and two established release workflows allowed independent implementation and publication work to overlap safely. The resulting 25.00 stories per week is not a sustainable forecast, so retain dependency-defined future sprint boundaries |
 | 2026-08-22 | Sprint estimate variance exceeded 30 percent | S52 | Record 1 actual day against 27 estimated. Twelve isolated workers and seven scoped follow-ups from PRs 40 and 41 allowed security, rendering, and cache work to overlap safely. The resulting 60.00 stories per week is not a sustainable forecast, so retain dependency-defined S53 boundaries |
+| 2026-08-23 | Sprint estimate variance exceeded 30 percent | S53 | Record 1 actual day against 16 estimated. Seven isolated workers and established security, PDF, and release workflows allowed independent work to overlap safely. The resulting 35.00 stories per week is not a sustainable forecast, so retain the dependency-defined S54 boundary |
