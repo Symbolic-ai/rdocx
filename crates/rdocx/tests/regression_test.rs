@@ -24,6 +24,9 @@ fn compatibility_page_elements(
                 oxml_layout::PositionedElement::MarkedContent { children, .. } => {
                     collect(children, output);
                 }
+                oxml_layout::PositionedElement::Group(group) => {
+                    collect(&group.children, output);
+                }
                 other => output.push(other),
             }
         }
@@ -41,6 +44,9 @@ fn clear_compatibility_sources(elements: &mut [oxml_layout::PositionedElement]) 
             oxml_layout::PositionedElement::MarkedContent { children, .. } => {
                 clear_compatibility_sources(children);
             }
+            oxml_layout::PositionedElement::Group(group) => {
+                clear_compatibility_sources(&mut group.children);
+            }
             _ => {}
         }
     }
@@ -48,8 +54,14 @@ fn clear_compatibility_sources(elements: &mut [oxml_layout::PositionedElement]) 
 
 fn remove_compatibility_empty_text(elements: &mut Vec<oxml_layout::PositionedElement>) {
     for element in elements.iter_mut() {
-        if let oxml_layout::PositionedElement::MarkedContent { children, .. } = element {
-            remove_compatibility_empty_text(children);
+        match element {
+            oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                remove_compatibility_empty_text(children);
+            }
+            oxml_layout::PositionedElement::Group(group) => {
+                remove_compatibility_empty_text(&mut group.children);
+            }
+            _ => {}
         }
     }
     elements.retain(
@@ -139,6 +151,7 @@ const CUSTOM_XML_PROPS_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
 const WORD_REVISION_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_FIELD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_DENSE_FORM_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_FIELD_ORACLE_ENVIRONMENT: &str =
     "locale=en-US; calendar=Gregorian; decimal=.; grouping=,; timezone=UTC";
 const WORD_FIELD_ORACLE_INPUT: &str = "F-161-readable-field-matrix-v1";
@@ -5248,6 +5261,10 @@ fn empty_paragraph_uses_resolved_default_metrics() {
             .expect("carrier metrics resolve");
         assert_eq!(segment.ascent, resolved.ascent);
         assert_eq!(segment.descent, resolved.descent);
+        if index == 0 {
+            assert_eq!(block.lines[0].ascent, resolved.ascent);
+            assert_eq!(block.lines[0].descent, resolved.descent);
+        }
     }
 
     let result = rdocx_layout::layout_document_deterministic_with_provenance(&input)
@@ -5330,6 +5347,303 @@ fn empty_segment_is_backend_invisible_and_layout_compatible() {
         oxml_pdf::render_page_to_png(&attributed, 0, 96.0),
         oxml_pdf::render_page_to_png(&without_empty, 0, 96.0)
     );
+}
+
+#[test]
+fn empty_form_paragraphs_use_mark_metrics_and_new_runs_inherit_them() {
+    let body = r#"<w:p><w:pPr><w:rPr><w:b/><w:sz w:val="14"/></w:rPr></w:pPr></w:p>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let layout = document.layout().expect("empty mark layout");
+    let carrier = layout
+        .layout
+        .pages
+        .iter()
+        .flat_map(|page| compatibility_page_elements(&page.elements))
+        .find_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
+            _ => None,
+        })
+        .expect("zero-width paragraph-mark carrier");
+    assert_eq!(carrier.font_size, 7.0);
+    assert!(carrier.glyph_ids.is_empty());
+    assert!(carrier.advances.is_empty());
+
+    {
+        let mut paragraph = document.paragraph_mut(0).unwrap();
+        paragraph.add_run_inheriting_mark("typed");
+        let run = paragraph.run(0).unwrap();
+        assert_eq!(run.size(), Some(7.0));
+        assert!(run.is_bold());
+    }
+
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("<w:b"));
+    assert!(xml.contains(r#"<w:sz w:val="14""#));
+    assert!(xml.contains("typed"));
+}
+
+fn dense_form_document() -> Document {
+    let document_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+ <w:body>
+  <w:p><w:pPr><w:spacing w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr><w:t>Dense form receipt</w:t></w:r></w:p>
+  <w:tbl>
+   <w:tblPr>
+    <w:tblStyle w:val="DenseForm"/><w:tblW w:w="9360" w:type="dxa"/><w:tblLayout w:type="fixed"/>
+    <w:tblLook w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>
+   </w:tblPr>
+   <w:tblGrid><w:gridCol w:w="4680"/><w:gridCol w:w="4680"/></w:tblGrid>
+   <w:tr>
+    <w:trPr><w:trHeight w:val="420" w:hRule="exact"/></w:trPr>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/><w:vMerge w:val="restart"/><w:tcBorders><w:top w:val="nil"/><w:right w:val="nil"/></w:tcBorders></w:tcPr>
+     <w:p><w:r><w:t>Patient details</w:t></w:r></w:p>
+    </w:tc>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
+     <w:p><w:r><w:drawing><wp:anchor behindDoc="1">
+      <wp:positionH relativeFrom="column"><wp:posOffset>274320</wp:posOffset></wp:positionH>
+      <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+      <wp:extent cx="548640" cy="274320"/><wp:wrapNone/><wp:docPr id="41" name="Behind stamp" descr="behind cell stamp"/>
+      <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:solidFill><a:srgbClr val="DDEBFF"/></a:solidFill><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr></wps:wsp></a:graphicData></a:graphic>
+     </wp:anchor></w:drawing></w:r><w:r><w:t>Account 0042</w:t></w:r></w:p>
+    </w:tc>
+   </w:tr>
+   <w:tr>
+    <w:trPr><w:trHeight w:val="360" w:hRule="exact"/></w:trPr>
+    <w:tc><w:tcPr><w:tcW w:w="4680" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
+     <w:tbl>
+      <w:tblPr><w:tblW w:w="4400" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="336699"/><w:left w:val="single" w:sz="6" w:color="336699"/><w:bottom w:val="single" w:sz="6" w:color="336699"/><w:right w:val="single" w:sz="6" w:color="336699"/><w:insideV w:val="single" w:sz="4" w:color="7799BB"/></w:tblBorders></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="2200"/><w:gridCol w:w="2200"/></w:tblGrid>
+      <w:tr><w:trPr><w:trHeight w:val="240" w:hRule="atLeast"/></w:trPr>
+       <w:tc><w:p><w:r><w:t>Code</w:t></w:r></w:p></w:tc>
+       <w:tc><w:p><w:r><w:t>A17</w:t></w:r></w:p></w:tc>
+      </w:tr>
+     </w:tbl>
+    </w:tc>
+   </w:tr>
+   <w:tr>
+    <w:trPr><w:trHeight w:val="360" w:hRule="atLeast"/></w:trPr>
+    <w:tc><w:tcPr><w:tcW w:w="4680" w:type="dxa"/><w:tcBorders><w:top w:val="nil"/></w:tcBorders></w:tcPr><w:p><w:pPr><w:rPr><w:b/><w:sz w:val="14"/></w:rPr></w:pPr></w:p></w:tc>
+    <w:tc>
+     <w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
+     <w:p><w:r><w:drawing><wp:anchor behindDoc="0">
+      <wp:positionH relativeFrom="column"><wp:posOffset>1371600</wp:posOffset></wp:positionH>
+      <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+      <wp:extent cx="548640" cy="274320"/><wp:wrapNone/><wp:docPr id="42" name="Front stamp" descr="foreground cell stamp"/>
+      <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:solidFill><a:srgbClr val="FFD7D7"/></a:solidFill><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr></wps:wsp></a:graphicData></a:graphic>
+     </wp:anchor></w:drawing></w:r><w:r><w:t>Total due 18.40</w:t></w:r></w:p>
+    </w:tc>
+   </w:tr>
+  </w:tbl>
+  <w:p><w:pPr><w:spacing w:before="120"/></w:pPr><w:r><w:t>Reviewed form footer</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1440" w:bottom="1080" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
+ </w:body>
+</w:document>"#;
+    let styles_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+ <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Carlito" w:hAnsi="Carlito"/><w:sz w:val="18"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0"/></w:pPr></w:pPrDefault></w:docDefaults>
+ <w:style w:type="table" w:styleId="DenseBase"><w:name w:val="Dense Base"/><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="A22B2B"/><w:left w:val="single" w:sz="8" w:color="A22B2B"/><w:bottom w:val="single" w:sz="8" w:color="A22B2B"/><w:right w:val="single" w:sz="8" w:color="A22B2B"/><w:insideH w:val="single" w:sz="4" w:color="A22B2B"/><w:insideV w:val="single" w:sz="4" w:color="A22B2B"/></w:tblBorders></w:tblPr></w:style>
+ <w:style w:type="table" w:styleId="DenseForm"><w:name w:val="Dense Form"/><w:basedOn w:val="DenseBase"/><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:tblStylePr w:type="firstRow"><w:pPr><w:spacing w:after="40"/></w:pPr><w:tcPr><w:shd w:val="clear" w:fill="E8F1F8"/></w:tcPr></w:tblStylePr></w:style>
+</w:styles>"#;
+
+    let mut seed = Document::new();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        seed.to_bytes().expect("seed package"),
+    ))
+    .expect("seed opens");
+    package.set_part("/word/document.xml", document_xml.as_bytes().to_vec());
+    package.set_part("/word/styles.xml", styles_xml.as_bytes().to_vec());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).expect("dense form package");
+    Document::from_bytes(output.get_ref()).expect("dense form reopens")
+}
+
+fn decode_rgba_png(png: &[u8]) -> (u32, u32, Vec<u8>) {
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let mut cursor = 8;
+    let mut width = 0;
+    let mut height = 0;
+    let mut compressed = Vec::new();
+    while cursor + 12 <= png.len() {
+        let length = u32::from_be_bytes(png[cursor..cursor + 4].try_into().unwrap()) as usize;
+        let kind = &png[cursor + 4..cursor + 8];
+        let data = &png[cursor + 8..cursor + 8 + length];
+        match kind {
+            b"IHDR" => {
+                width = u32::from_be_bytes(data[0..4].try_into().unwrap());
+                height = u32::from_be_bytes(data[4..8].try_into().unwrap());
+                assert_eq!(&data[8..13], &[8, 6, 0, 0, 0]);
+            }
+            b"IDAT" => compressed.extend_from_slice(data),
+            b"IEND" => break,
+            _ => {}
+        }
+        cursor += 12 + length;
+    }
+    let filtered = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed).unwrap();
+    let stride = width as usize * 4;
+    assert_eq!(filtered.len(), (stride + 1) * height as usize);
+    let mut rgba = vec![0; stride * height as usize];
+    for row in 0..height as usize {
+        let source = &filtered[row * (stride + 1)..(row + 1) * (stride + 1)];
+        let (filter, source) = (source[0], &source[1..]);
+        for index in 0..stride {
+            let left = if index >= 4 {
+                rgba[row * stride + index - 4]
+            } else {
+                0
+            };
+            let up = if row > 0 {
+                rgba[(row - 1) * stride + index]
+            } else {
+                0
+            };
+            let upper_left = if row > 0 && index >= 4 {
+                rgba[(row - 1) * stride + index - 4]
+            } else {
+                0
+            };
+            let predictor = match filter {
+                0 => 0,
+                1 => left,
+                2 => up,
+                3 => ((left as u16 + up as u16) / 2) as u8,
+                4 => {
+                    let estimate = left as i32 + up as i32 - upper_left as i32;
+                    let distances = [
+                        (estimate - left as i32).unsigned_abs(),
+                        (estimate - up as i32).unsigned_abs(),
+                        (estimate - upper_left as i32).unsigned_abs(),
+                    ];
+                    if distances[0] <= distances[1] && distances[0] <= distances[2] {
+                        left
+                    } else if distances[1] <= distances[2] {
+                        up
+                    } else {
+                        upper_left
+                    }
+                }
+                other => panic!("unsupported PNG filter {other}"),
+            };
+            rgba[row * stride + index] = source[index].wrapping_add(predictor);
+        }
+    }
+    (width, height, rgba)
+}
+
+#[test]
+fn dense_form_matches_reviewed_one_page_geometry() {
+    let document = dense_form_document();
+    let layout = document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("deterministic dense-form layout");
+    assert_eq!(layout.layout.pages.len(), 1, "{WORD_DENSE_FORM_ORACLE}");
+    let page = &layout.layout.pages[0];
+    assert_eq!((page.width, page.height), (612.0, 792.0));
+
+    let positioned = compatibility_page_elements(&page.elements);
+    let visible_text = positioned
+        .iter()
+        .filter_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if !run.text.is_empty() => {
+                Some(run.text.as_str())
+            }
+            _ => None,
+        })
+        .collect::<String>();
+    for expected in [
+        "Dense form receipt",
+        "Patient details",
+        "Account 0042",
+        "Code",
+        "A17",
+        "Total due 18.40",
+        "Reviewed form footer",
+    ] {
+        assert!(
+            visible_text.contains(expected),
+            "{expected}: {visible_text}"
+        );
+    }
+    let empty_mark = positioned
+        .iter()
+        .find_map(|element| match element {
+            oxml_layout::PositionedElement::Text(run) if run.text.is_empty() => Some(run),
+            _ => None,
+        })
+        .expect("empty 7pt form carrier");
+    assert_eq!(empty_mark.font_size, 7.0);
+    assert!(empty_mark.glyph_ids.is_empty());
+
+    let table_lines = positioned
+        .iter()
+        .filter_map(|element| match element {
+            oxml_layout::PositionedElement::Line { start, end, .. }
+                if start.x >= 71.0 && end.x <= 541.0 && start.y >= 60.0 && end.y <= 180.0 =>
+            {
+                Some((*start, *end))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let has_line = |x1, y1, x2, y2| {
+        table_lines
+            .iter()
+            .any(|(start, end)| (start.x, start.y, end.x, end.y) == (x1, y1, x2, y2))
+    };
+    assert_eq!(table_lines.len(), 26, "table geometry: {table_lines:?}");
+    assert!(has_line(72.0, 70.0, 306.0, 70.0));
+    assert!(has_line(72.0, 70.0, 72.0, 109.0));
+    assert!(!has_line(72.0, 91.0, 306.0, 91.0));
+    assert!(has_line(72.0, 109.0, 306.0, 109.0));
+    assert!(has_line(311.4, 91.0, 421.4, 91.0));
+    assert!(has_line(421.4, 103.0, 531.4, 103.0));
+    assert!(has_line(306.0, 127.0, 540.0, 127.0));
+
+    let pdf = document.to_pdf_deterministic().expect("dense form PDF");
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert_eq!(pdf, document.to_pdf_deterministic().unwrap());
+    let png = document
+        .render_page_to_png_deterministic(0, 96.0)
+        .expect("dense form raster")
+        .expect("page zero");
+    assert_eq!(
+        png,
+        document
+            .render_page_to_png_deterministic(0, 96.0)
+            .unwrap()
+            .unwrap()
+    );
+    let (width, height, rgba) = decode_rgba_png(&png);
+    assert_eq!((width, height), (816, 1056));
+    let checksum = rgba.iter().fold(0xcbf29ce484222325u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    });
+    let non_white_pixels = rgba
+        .chunks_exact(4)
+        .filter(|pixel| *pixel != [255, 255, 255, 255])
+        .count();
+    let behind_pixels = rgba
+        .chunks_exact(4)
+        .filter(|pixel| *pixel == [221, 235, 255, 255])
+        .count();
+    let foreground_pixels = rgba
+        .chunks_exact(4)
+        .filter(|pixel| *pixel == [255, 215, 215, 255])
+        .count();
+    assert_eq!(checksum, 0x2319_bcbe_502e_4fe8);
+    assert_eq!(non_white_pixels, 32_221);
+    assert_eq!(
+        behind_pixels, 0,
+        "page-behind stamp is covered by cell shading"
+    );
+    assert_eq!(foreground_pixels, 1_682);
 }
 
 fn redaction_fixture() -> Document {

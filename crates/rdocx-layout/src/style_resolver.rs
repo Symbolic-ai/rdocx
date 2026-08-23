@@ -87,6 +87,16 @@ impl NumberingState {
 
 /// Resolve paragraph properties by walking the style inheritance chain.
 pub fn resolve_paragraph_properties(style_id: Option<&str>, styles: &CT_Styles) -> CT_PPr {
+    resolve_paragraph_properties_in_table(style_id, styles, None)
+}
+
+/// Resolve paragraph properties with a table-style layer between document
+/// defaults and the paragraph style.
+pub fn resolve_paragraph_properties_in_table(
+    style_id: Option<&str>,
+    styles: &CT_Styles,
+    table_properties: Option<&CT_PPr>,
+) -> CT_PPr {
     let mut effective = CT_PPr::default();
 
     // 1. Start from docDefaults
@@ -94,6 +104,10 @@ pub fn resolve_paragraph_properties(style_id: Option<&str>, styles: &CT_Styles) 
         && let Some(ref ppr) = defaults.ppr
     {
         effective.merge_from(ppr);
+    }
+
+    if let Some(properties) = table_properties {
+        effective.merge_from(properties);
     }
 
     // 2. Walk the basedOn chain
@@ -340,6 +354,11 @@ mod tests {
                 color: Some("2E74B5".to_string()),
                 ..Default::default()
             }),
+            table_properties: None,
+            table_properties_original: None,
+            table_properties_xml: None,
+            conditional_table_styles: Vec::new(),
+            extra_xml: Vec::new(),
         });
         styles
     }

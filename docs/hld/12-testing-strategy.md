@@ -227,13 +227,14 @@ size, and the segment ascent and descent equal that font's resolved metrics. A
 compatibility case keeps non-empty text unchanged, proves ordinary and
 attributed layout structure agrees after removing source ids, and proves PDF
 and raster output is unchanged when the no-glyph carrier is removed. The
-49-entry hash harness remains unchanged.
+sample page-one raster and resource hashes remain unchanged.
 
-The safe-table cache gate proves an unchanged direct table hits, diagnostics
-and font traces replay, and provenance rebinds after an earlier body insertion.
-Numbering and other traversal-sensitive table content bypass the cache. A late
-font failure after staged paragraph and table work publishes neither queue.
-Focused bounds checks cover both published and pending entry and byte ceilings.
+The safe-table cache gate proves an unchanged recursive table hits, diagnostics
+and font traces replay, and outer and nested provenance rebind after an earlier
+body insertion. Numbering and other traversal-sensitive table content bypass
+the cache. A late font failure after staged paragraph and recursive table work
+publishes neither queue. Focused bounds checks cover both published and pending
+entry and byte ceilings, including the complete nested retained payload.
 
 The safe header and footer cache gate covers default, first, even, inherited,
 header, footer, and watermark variants. It requires exact hits to replay
@@ -256,7 +257,7 @@ entries and 56 MiB and header and footer state capped at 64 entries and 4 MiB.
 Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
-archive-size ceiling, and unchanged 49-entry hash harness are required riders.
+archive-size ceiling, and reviewed 49-entry hash harness are required riders.
 
 ## The hash harness
 
@@ -302,6 +303,13 @@ either a SHA-256 digest or JSON `null` when an optional XML part is absent.
 Check mode reads the manifest without modifying it and reports added, removed,
 and changed entries. Baseline writes require `--update --reason <text>`, and an
 empty reason is rejected. Generated PNGs remain ignored under `samples/`.
+
+The current reviewed table-fidelity delta changes exactly
+`feature_showcase:pdf/pages` and `feature_showcase:pdf/bytes`. That sample's
+later PDF page contains a valid vertical merge and a bordered nested table, so
+correct merge-edge suppression and recursive grid painting change its page
+stream. Its PDF resources, page-one PNG, selected OOXML parts, every other
+sample entry, and the manifest cardinality remain unchanged.
 
 It exists because the extraction changes unit conversion and text-shaping input
 types, and both alter output **without failing to compile**. Structural
@@ -573,6 +581,17 @@ merged bounds, and exactly one physical stroke per border segment. Separate
 regressions prove that continuation cells emit no duplicate fill, border, or
 text and that cell margins feed the shared fixed-box text path. Raster evidence
 uses deterministic font mode.
+
+The dense Word form golden is a readable OOXML document constructed in the
+existing regression entrypoint. It combines recursive tables, exact and
+minimum rows, a vertical merge, based-on and conditional table styles,
+cell-relative foreground and page-behind anchors, outer and interior `nil`
+borders, and a 7 point empty paragraph mark. It requires one Letter PDF page,
+exact outer, merge, and nested-grid line bounds, an absent crossing merge edge,
+all readable text, a zero-glyph mark carrier, and identical repeated PDF and
+PNG renders. The 96 dpi raster is 816 by 1056 pixels and pins the complete RGBA
+checksum plus the non-white, foreground-fill, and behind-fill pixel counts. No
+binary fixture is committed.
 
 ## New tests the extracted crates need
 

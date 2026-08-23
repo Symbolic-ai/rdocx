@@ -316,6 +316,14 @@ relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
 
+Word table styles parse modeled children and attributes by expanded name.
+Base table properties and conditional regions retain self-contained source XML
+with every inherited namespace binding they use. Typed table, cell, border,
+shading, and paragraph projections drive layout, while unrelated producer
+children remain at their schema positions. Unchanged projections reuse the
+preserved subtree. A typed mutation writes one canonical modeled child in
+`CT_Style` sequence order and reinserts unmodelled direct children once.
+
 The default-off `oxml-opc/agile-encryption` feature reads and writes
 password-protected OOXML packages. Readers parse the CFB `EncryptionInfo` and
 `EncryptedPackage` streams, accept namespace aliases, and reject elements that

@@ -48,6 +48,11 @@ impl StyleBuilder {
                 is_default: false,
                 ppr: None,
                 rpr: None,
+                table_properties: None,
+                table_properties_original: None,
+                table_properties_xml: None,
+                conditional_table_styles: Vec::new(),
+                extra_xml: Vec::new(),
             },
         }
     }
@@ -64,6 +69,11 @@ impl StyleBuilder {
                 is_default: false,
                 ppr: None,
                 rpr: None,
+                table_properties: None,
+                table_properties_original: None,
+                table_properties_xml: None,
+                conditional_table_styles: Vec::new(),
+                extra_xml: Vec::new(),
             },
         }
     }
@@ -219,6 +229,11 @@ mod tests {
                 color: Some("2E74B5".to_string()),
                 ..Default::default()
             }),
+            table_properties: None,
+            table_properties_original: None,
+            table_properties_xml: None,
+            conditional_table_styles: Vec::new(),
+            extra_xml: Vec::new(),
         });
 
         styles

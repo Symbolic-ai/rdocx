@@ -1,6 +1,6 @@
 # F-X048, Dense form table fidelity
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S53
 **Size**: L
 **Depends on**: F-X040, F-X045, F-X047
@@ -102,6 +102,11 @@ backlog matrix, both backends, round-trip XML, provenance, warm-cold equality,
 transactional failure, memory bounds, both WASM targets, and the declared hash
 result.
 
+Microsoft Word 16.104 build 16.104.25121423 was not installed on the worker
+host, so the planned external geometry observation was not performed. No
+headless or self-produced render is recorded as Word evidence. The in-code
+deterministic fixture remains the authoritative gate as planned.
+
 ## HLD impact
 
 - `docs/hld/04-opc-and-packaging.md`
@@ -128,23 +133,31 @@ result.
 
 ## Hash harness
 
-Expected to be unchanged for the seven generated samples. The new dense-form
-golden is isolated in the existing layout and rendering test entrypoints. If an
-existing sample moves, stop and revise this plan with the exact named entries
-before updating any baseline.
+Exactly two entries move in `feature_showcase`, whose later PDF page contains
+both a valid vertical merge and a bordered nested table:
+
+- `feature_showcase:pdf/bytes` moves because the corrected page stream changes
+  the deterministic PDF bytes.
+- `feature_showcase:pdf/pages` moves because recursive nested-table painting
+  and corrected vertical-merge borders change the inflated page content.
+
+`feature_showcase:pdf/resources`, every PNG, every selected OOXML part, and
+every other sample entry remain unchanged. The in-code dense-form golden stays
+authoritative for the reviewed one-page geometry. No other baseline delta is
+approved.
 
 ## Implementation checklist
 
-- [ ] Preserve nested tables as recursive cell blocks and account for their
+- [x] Preserve nested tables as recursive cell blocks and account for their
       retained bytes.
-- [ ] Resolve vertical-merge spans and exact versus minimum row heights.
-- [ ] Preserve and project table-style properties in schema order.
-- [ ] Resolve table borders and paragraph properties through based-on and
+- [x] Resolve vertical-merge spans and exact versus minimum row heights.
+- [x] Preserve and project table-style properties in schema order.
+- [x] Resolve table borders and paragraph properties through based-on and
       conditional layers.
-- [ ] Render cell anchors in cell coordinates and route behind-page drawings.
-- [ ] Implement the reviewed outer-edge `nil` compatibility rule.
-- [ ] Resolve paragraph-mark metrics and add the inheriting-run facade method.
-- [ ] Add the readable one-page golden and focused round-trip, cache, failure,
+- [x] Render cell anchors in cell coordinates and route behind-page drawings.
+- [x] Implement the reviewed outer-edge `nil` compatibility rule.
+- [x] Resolve paragraph-mark metrics and add the inheriting-run facade method.
+- [x] Add the readable one-page golden and focused round-trip, cache, failure,
       provenance, WASM, packaging, oracle, and hash checks.
 
 ## Open questions

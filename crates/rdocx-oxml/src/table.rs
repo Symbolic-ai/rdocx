@@ -966,6 +966,13 @@ impl CT_TcPr {
         Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_owned()], &[])
     }
 
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
     fn from_xml_with_prefixes_and_owner_bindings(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],

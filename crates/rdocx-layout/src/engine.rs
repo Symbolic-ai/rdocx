@@ -1907,7 +1907,8 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
                             CellContent::Paragraph(paragraph) => {
                                 paragraph_is_cache_safe(paragraph, styles)
                             }
-                            CellContent::Table(_) | CellContent::ContentControl(_) => false,
+                            CellContent::Table(table) => table_is_cache_safe(table, styles),
+                            CellContent::ContentControl(_) => false,
                         })
                 })
         })
@@ -1924,18 +1925,23 @@ fn rebind_table_sources(
         for (cell_index, (cell, block_cell)) in
             row.cells.iter().zip(&mut block_row.cells).enumerate()
         {
-            let mut block_paragraphs = block_cell.paragraphs.iter_mut();
+            let mut block_items = block_cell.blocks.iter_mut();
             for (content_index, content) in cell.content.iter().enumerate() {
-                let CellContent::Paragraph(_) = content else {
-                    continue;
-                };
-                let Some(paragraph) = block_paragraphs.next() else {
+                let Some(block_item) = block_items.next() else {
                     break;
                 };
                 let mut source_path = table_path.to_vec();
                 source_path.extend([row_index, cell_index, content_index]);
-                let source = sources.and_then(|sources| sources.id(story, &source_path));
-                rebind_paragraph_source(paragraph, source);
+                match (content, block_item) {
+                    (CellContent::Paragraph(_), table::CellBlock::Paragraph(paragraph)) => {
+                        let source = sources.and_then(|sources| sources.id(story, &source_path));
+                        rebind_paragraph_source(paragraph, source);
+                    }
+                    (CellContent::Table(table), table::CellBlock::Table(block)) => {
+                        rebind_table_sources(table, block, sources, story, &source_path);
+                    }
+                    _ => break,
+                }
             }
         }
     }
@@ -2017,8 +2023,10 @@ fn table_key_retained_bytes(table: &CT_Tbl) -> usize {
                                                                     usize::saturating_add,
                                                                 ),
                                                         ),
-                                                    CellContent::Table(_)
-                                                    | CellContent::ContentControl(_) => usize::MAX,
+                                                    CellContent::Table(table) => {
+                                                        table_key_retained_bytes(table)
+                                                    }
+                                                    CellContent::ContentControl(_) => usize::MAX,
                                                 })
                                                 .fold(0usize, usize::saturating_add),
                                         )
@@ -2060,19 +2068,24 @@ fn table_block_retained_bytes(block: &table::TableBlock) -> usize {
                     row.cells
                         .iter()
                         .map(|cell| {
-                            cell.paragraphs
+                            cell.blocks
                                 .capacity()
-                                .saturating_mul(std::mem::size_of::<ParagraphBlock>())
+                                .saturating_mul(std::mem::size_of::<table::CellBlock>())
                                 .saturating_add(
-                                    cell.paragraphs
+                                    cell.blocks
                                         .iter()
-                                        .map(|paragraph| {
-                                            paragraph_cache_entry_bytes(
-                                                &CT_P::new(),
-                                                paragraph,
-                                                &[],
-                                                0,
-                                            )
+                                        .map(|block| match block {
+                                            table::CellBlock::Paragraph(paragraph) => {
+                                                paragraph_cache_entry_bytes(
+                                                    &CT_P::new(),
+                                                    paragraph,
+                                                    &[],
+                                                    0,
+                                                )
+                                            }
+                                            table::CellBlock::Table(table) => {
+                                                table_block_retained_bytes(table)
+                                            }
                                         })
                                         .fold(0usize, usize::saturating_add),
                                 )
@@ -3062,21 +3075,8 @@ fn assign_document_structure(sections: &mut [paginator::Section]) -> DocumentStr
                             };
                             let cell_id = builder.add(role, Some(row_id));
                             cell.structure_id = Some(cell_id);
-                            for paragraph in &mut cell.paragraphs {
-                                let paragraph_id = builder.add(
-                                    paragraph
-                                        .heading_level
-                                        .map(|level| StructureRole::Heading(level.min(6) as u8))
-                                        .unwrap_or(StructureRole::Paragraph),
-                                    Some(cell_id),
-                                );
-                                paragraph.structure_id = Some(paragraph_id);
-                                assign_paragraph_figures(
-                                    &mut builder,
-                                    paragraph,
-                                    paragraph_id,
-                                    cell_id,
-                                );
+                            for block in &mut cell.blocks {
+                                assign_cell_block_structure(&mut builder, block, cell_id);
                             }
                         }
                     }
@@ -3088,6 +3088,44 @@ fn assign_document_structure(sections: &mut [paginator::Section]) -> DocumentStr
     DocumentStructure {
         root,
         nodes: builder.nodes,
+    }
+}
+
+fn assign_cell_block_structure(
+    builder: &mut StructureBuilder,
+    block: &mut table::CellBlock,
+    parent: StructureId,
+) {
+    match block {
+        table::CellBlock::Paragraph(paragraph) => {
+            let role = paragraph
+                .heading_level
+                .map(|level| StructureRole::Heading(level.min(6) as u8))
+                .unwrap_or(StructureRole::Paragraph);
+            let paragraph_id = builder.add(role, Some(parent));
+            paragraph.structure_id = Some(paragraph_id);
+            assign_paragraph_figures(builder, paragraph, paragraph_id, parent);
+        }
+        table::CellBlock::Table(table) => {
+            let table_id = builder.add(StructureRole::Table, Some(parent));
+            table.structure_id = Some(table_id);
+            for row in &mut table.rows {
+                let row_id = builder.add(StructureRole::TableRow, Some(table_id));
+                row.structure_id = Some(row_id);
+                for cell in &mut row.cells {
+                    let role = if row.is_header {
+                        StructureRole::TableHeaderCell
+                    } else {
+                        StructureRole::TableCell
+                    };
+                    let cell_id = builder.add(role, Some(row_id));
+                    cell.structure_id = Some(cell_id);
+                    for child in &mut cell.blocks {
+                        assign_cell_block_structure(builder, child, cell_id);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3178,10 +3216,68 @@ pub(crate) fn layout_paragraph_with_source(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
 ) -> Result<ParagraphBlock> {
+    layout_paragraph_with_source_and_table(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        source_node,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn layout_paragraph_with_source_in_table(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    source_node: Option<SourceNodeId>,
+    table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+) -> Result<ParagraphBlock> {
+    layout_paragraph_with_source_and_table(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        source_node,
+        table_properties,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_paragraph_with_source_and_table(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    source_node: Option<SourceNodeId>,
+    table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
 
-    let resolved_ppr = style_resolver::resolve_paragraph_properties(para_style_id, styles);
+    let resolved_ppr = style_resolver::resolve_paragraph_properties_in_table(
+        para_style_id,
+        styles,
+        table_properties,
+    );
 
     let mut effective_ppr = resolved_ppr;
 
@@ -3812,7 +3908,11 @@ pub(crate) fn layout_paragraph_with_source(
     // Line breaking
     let line_params = convert::line_break_params(&effective_ppr, available_width);
 
-    let legacy_empty_line = if attributed_empty_paragraph {
+    let legacy_empty_line = if attributed_empty_paragraph
+        && direct_ppr
+            .and_then(|properties| properties.rpr.as_ref())
+            .is_none()
+    {
         let mut lines = break_into_lines(&[], &line_params, fm)?;
         convert::restore_word_line_heights(&mut lines, &effective_ppr);
         lines.pop()
@@ -6822,6 +6922,14 @@ mod tests {
         table
     }
 
+    fn safe_nested_table(outer_text: &str, nested_text: &str) -> CT_Tbl {
+        let mut table = safe_table(outer_text);
+        table.rows[0].cells[0]
+            .content
+            .push(CellContent::Table(safe_table(nested_text)));
+        table
+    }
+
     fn assert_layout_results_equal(left: &LayoutResult, right: &LayoutResult) {
         assert_eq!(left.pages.len(), right.pages.len());
         for (left, right) in left.pages.iter().zip(&right.pages) {
@@ -6888,13 +6996,16 @@ mod tests {
     }
 
     #[test]
-    fn safe_tables_reuse_transactionally_and_with_bounds() {
+    fn dense_form_caches_are_transactional_bounded_and_exact() {
         let mut input = make_input_with_text("before table");
         input
             .document
             .body
             .content
-            .push(BodyContent::Table(safe_table("cached cell")));
+            .push(BodyContent::Table(safe_nested_table(
+                "cached outer cell",
+                "cached nested cell",
+            )));
         let mut engine = Engine::new_deterministic().expect("bundled fonts load");
         let cold = engine.layout(&input).expect("cold table layout");
         let warm = engine.layout(&input).expect("warm table layout");
@@ -6925,13 +7036,21 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let cached_cell = sourced_runs
+        let cached_outer_cell = sourced_runs
             .iter()
-            .find_map(|(text, source)| text.starts_with("cached").then_some(*source).flatten())
-            .unwrap_or_else(|| panic!("cached cell keeps provenance: {sourced_runs:?}"));
+            .find_map(|(text, source)| (text == "outer ").then_some(*source).flatten())
+            .unwrap_or_else(|| panic!("cached outer cell keeps provenance: {sourced_runs:?}"));
         assert_eq!(
-            sources[cached_cell.node.get() as usize - 1].children,
+            sources[cached_outer_cell.node.get() as usize - 1].children,
             [2, 0, 0, 0]
+        );
+        let cached_nested_cell = sourced_runs
+            .iter()
+            .find_map(|(text, source)| (text == "nested ").then_some(*source).flatten())
+            .unwrap_or_else(|| panic!("cached nested cell keeps provenance: {sourced_runs:?}"));
+        assert_eq!(
+            sources[cached_nested_cell.node.get() as usize - 1].children,
+            [2, 0, 0, 1, 0, 0, 0]
         );
         assert_eq!(provenance_engine.table_cache_counts(), (1, 1));
 
@@ -6963,7 +7082,12 @@ mod tests {
         let mut edge =
             rdocx_oxml::borders::CT_BorderEdge::new(rdocx_oxml::shared::ST_Border::Single);
         edge.color = Some(color);
-        retained_border_block.borders = Some(rdocx_oxml::table::CT_TblBorders {
+        let table::CellBlock::Table(nested_block) =
+            &mut retained_border_block.rows[0].cells[0].blocks[1]
+        else {
+            panic!("cached form retains the nested table block");
+        };
+        nested_block.borders = Some(rdocx_oxml::table::CT_TblBorders {
             top: Some(edge),
             ..Default::default()
         });
@@ -7644,7 +7768,10 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(safe_table("staged before failure")));
+            .push(BodyContent::Table(safe_nested_table(
+                "staged outer before failure",
+                "staged nested before failure",
+            )));
         let mut later = CT_P::new();
         later
             .add_run("late font failure")
@@ -8552,16 +8679,22 @@ mod tests {
         }];
         let cell = |is_first_row: bool| table::TableCell {
             structure_id: None,
-            paragraphs: vec![paragraph()],
+            blocks: vec![table::CellBlock::Paragraph(paragraph())],
             width: 100.0,
             height: 12.0,
             grid_span: 1,
             is_vmerge_continue: false,
+            starts_vmerge: false,
+            merged_height: 12.0,
+            merge_with_below: false,
+            clip_content: false,
             col_index: 0,
             borders: None,
             shading: None,
             margin_left: 0.0,
+            margin_right: 0.0,
             margin_top: 0.0,
+            margin_bottom: 0.0,
             is_first_row,
             is_last_row: !is_first_row,
             v_align: None,

@@ -440,9 +440,17 @@ an annotation, but their visible text remains in the line.
 
 Table lowering derives cumulative row and column offsets from the resolved
 grid. Right-to-left tables reverse visual column placement without changing
-logical cell ownership. A merge continuation emits nothing. Its origin spans
-the covered row heights and column widths, then emits one fill and one fixed-box
-text body. Resolved cell margins define that text body's content box.
+logical cell ownership. Cell payloads retain paragraphs and nested tables in
+source order. A nested table resolves its own grid, fills, borders, text,
+provenance, anchors, and logical structure inside the owning cell content box.
+
+Vertical merge groups match the exact starting grid column and grid span. A
+continuation emits no content or paint. The restart paints across the resolved
+row span and suppresses physical horizontal edges inside that span. Ordinary
+cells establish row minima. Merge content grows the last non-exact row in its
+span only when the complete content needs more room. Exact rows stay pinned
+and clip overflow, while minimum rows may grow. Resolved cell margins define
+the local text and drawing content box.
 
 Borders are physical row or column segments rather than four strokes per cell.
 The renderer maps every logical cell edge onto those segments and emits each
@@ -455,10 +463,23 @@ Each table origin draws its fill before its text. The table's unique border
 segments draw after all cell fills and text so a neighbouring fill cannot cover
 them. Table cells do not use the shape autofit algorithm.
 
+Word table styles resolve base-first through `basedOn`, then apply table-region
+properties in deterministic whole-table, band, edge, and corner priority.
+Table-style paragraph properties sit between document defaults and paragraph
+styles. Direct table and cell properties remain the final overlay. An explicit
+cell `nil` or `none` border yields to a visible table border only on the exact
+outer edge. The same value remains suppressive on an interior edge.
+
+Anchors whose horizontal frame is `column` or `character` resolve within the
+cell content box. Page and margin frames remain page-relative. Paragraph and
+line vertical frames use the cell paragraph position. Foreground anchors paint
+with cell content, while `behindDoc` anchors enter the page-behind layer.
+
 Word table lowering also assigns logical ownership before pagination. A table
 owns rows in source order. Repeating header rows use `TH`, ordinary cells use
-`TD`, and each cell owns its paragraph nodes. A header repeated on another
-page creates another marked-content occurrence for the same logical cell.
+`TD`, and each cell owns its source-ordered paragraph and nested-table nodes. A
+header repeated on another page creates another marked-content occurrence for
+the same logical cell.
 
 ### Autofit
 
@@ -517,7 +538,7 @@ font traces also have explicit bounds. Loading a different additional font set
 rebuilds face identity and clears all dependent memo state.
 
 The Word engine caches only ordinary context-independent body paragraphs and
-tables made entirely from direct cache-safe paragraphs. It also caches safe
+tables whose complete recursive payload is cache-safe. It also caches safe
 header and footer variants. Paragraph keys compare the complete typed
 paragraph, content width, and revision view. A stable borrowed `u64` paragraph
 fingerprint prefilters lookup candidates. The complete typed equality remains
@@ -532,8 +553,8 @@ separately compares styles, numbering, section properties, headers, footers,
 media, charts, chart theme and colour map, core properties, hyperlinks, notes,
 theme, additional fonts, page background, and the document-wide
 wrapping-drawing state. Numbering, drawings including `AlternateContent`,
-fields, hyperlinks, relationships, media, generated markers, nested tables,
-content controls, preserved producer XML, and other traversal-sensitive input
+fields, hyperlinks, relationships, media, generated markers, content controls,
+preserved producer XML, and other traversal-sensitive input
 bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting an earlier note or numbering
 input cannot leave a later generated marker stale. Each entry owns its block,
@@ -549,8 +570,8 @@ Paragraph blocks receive 4,096 entries and 56 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
 aligned restart page and checkpoint slots receive 32 entries and 2 MiB. The published and
 transaction-pending queues enforce the same partitions using retained-capacity
-accounting for owned keys, resolved part bytes, rows, cells, paragraphs,
-watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
+accounting for owned keys, resolved part bytes, rows, cells, recursive cell
+blocks, watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
 insertion order without hit-time queue maintenance. Oversized entries bypass
 retention.
 

@@ -7,8 +7,9 @@ use crate::block::{AnchoredContent, AnchoredDrawing, LayoutBlock, ParagraphBlock
 use std::collections::HashMap;
 
 use oxml_layout::{
-    Align, Color, FontManager, GlyphRun, LayoutLine, LineItem, MediaId, NoteRef, NoteStream,
-    OutlineEntry, PageFrame, Point, PositionedElement, Rect, Underline, break_into_lines,
+    Align, Color, FontManager, GlyphRun, GroupElement, LayoutLine, LineItem, MediaId, NoteRef,
+    NoteStream, OutlineEntry, PageFrame, Path, Point, PositionedElement, Rect, Transform,
+    Underline, break_into_lines,
 };
 
 use rdocx_oxml::drawing::{
@@ -449,6 +450,7 @@ fn paginate_pass_from(
                                     pager.page_number,
                                     tbl_borders,
                                     &mut pager.elements,
+                                    &mut pager.behind_elements,
                                     pager.media,
                                 );
                                 pager.cursor_y += hdr_row.height;
@@ -466,6 +468,7 @@ fn paginate_pass_from(
                         pager.page_number,
                         tbl_borders,
                         &mut pager.elements,
+                        &mut pager.behind_elements,
                         pager.media,
                     );
                     pager.cursor_y += row.height;
@@ -852,65 +855,7 @@ impl<'a> Pager<'a> {
                 self.page_wraps.push(placed);
             }
 
-            let mut produced: Vec<PositionedElement> = Vec::new();
-
-            match &a.content {
-                AnchoredContent::Image { media_id } => {
-                    let image = self.media.get(media_id);
-                    produced.push(PositionedElement::Image {
-                        rect,
-                        data: image.map_or_else(Vec::new, |image| image.data.clone()),
-                        content_type: image
-                            .map_or_else(String::new, |image| image.content_type.clone()),
-                        media_id: *media_id,
-                    });
-                }
-                AnchoredContent::Group(group) => {
-                    let mut positioned = group.clone();
-                    positioned.transform = positioned.transform.then(oxml_layout::Transform {
-                        e: rect.x,
-                        f: rect.y,
-                        ..oxml_layout::Transform::IDENTITY
-                    });
-                    produced.push(PositionedElement::Group(positioned));
-                }
-                AnchoredContent::Shape { preset, fill, text } => {
-                    // A shape with no fill draws no body. That is not a gap:
-                    // Word uses unfilled rectangles as plain text boxes.
-                    match (preset, fill) {
-                        (ShapePreset::Rect, Some(color)) => {
-                            produced.push(PositionedElement::FilledRect {
-                                rect,
-                                color: *color,
-                            });
-                        }
-                        (ShapePreset::Line, Some(color)) => {
-                            // A line shape's extent describes its bounding box,
-                            // so the stroke runs corner to corner.
-                            produced.push(PositionedElement::Line {
-                                start: Point { x, y },
-                                end: Point {
-                                    x: x + a.width,
-                                    y: y + a.height,
-                                },
-                                width: 1.0,
-                                color: *color,
-                                dash_pattern: None,
-                            });
-                        }
-                        _ => {}
-                    }
-                    produced.extend(render_shape_text(text, &self.geometry, rect, self.media));
-                }
-            }
-
-            produced = produced
-                .into_iter()
-                .map(|element| PositionedElement::MarkedContent {
-                    structure: a.structure_id,
-                    children: vec![element],
-                })
-                .collect();
+            let mut produced = anchored_elements(a, rect, &self.geometry, self.media);
 
             if a.behind_doc {
                 self.behind_elements.append(&mut produced);
@@ -1160,6 +1105,69 @@ impl<'a> Pager<'a> {
         }
         (self.pages, self.outlines)
     }
+}
+
+fn anchored_elements(
+    anchor: &AnchoredDrawing,
+    rect: Rect,
+    geometry: &PageGeometry,
+    media: &HashMap<MediaId, ImageData>,
+) -> Vec<PositionedElement> {
+    let mut produced = Vec::new();
+    match &anchor.content {
+        AnchoredContent::Image { media_id } => {
+            let image = media.get(media_id);
+            produced.push(PositionedElement::Image {
+                rect,
+                data: image.map_or_else(Vec::new, |image| image.data.clone()),
+                content_type: image.map_or_else(String::new, |image| image.content_type.clone()),
+                media_id: *media_id,
+            });
+        }
+        AnchoredContent::Group(group) => {
+            let mut positioned = group.clone();
+            positioned.transform = positioned.transform.then(oxml_layout::Transform {
+                e: rect.x,
+                f: rect.y,
+                ..oxml_layout::Transform::IDENTITY
+            });
+            produced.push(PositionedElement::Group(positioned));
+        }
+        AnchoredContent::Shape { preset, fill, text } => {
+            match (preset, fill) {
+                (ShapePreset::Rect, Some(color)) => {
+                    produced.push(PositionedElement::FilledRect {
+                        rect,
+                        color: *color,
+                    });
+                }
+                (ShapePreset::Line, Some(color)) => {
+                    produced.push(PositionedElement::Line {
+                        start: Point {
+                            x: rect.x,
+                            y: rect.y,
+                        },
+                        end: Point {
+                            x: rect.x + anchor.width,
+                            y: rect.y + anchor.height,
+                        },
+                        width: 1.0,
+                        color: *color,
+                        dash_pattern: None,
+                    });
+                }
+                _ => {}
+            }
+            produced.extend(render_shape_text(text, geometry, rect, media));
+        }
+    }
+    produced
+        .into_iter()
+        .map(|element| PositionedElement::MarkedContent {
+            structure: anchor.structure_id,
+            children: vec![element],
+        })
+        .collect()
 }
 
 /// Draw one note, or one slice of one, with its top edge at `top`.
@@ -2376,12 +2384,18 @@ fn render_table_row(
     page_number: usize,
     table_borders: Option<&rdocx_oxml::table::CT_TblBorders>,
     elements: &mut Vec<PositionedElement>,
+    behind_elements: &mut Vec<PositionedElement>,
     media: &HashMap<MediaId, ImageData>,
 ) {
     let mut cell_x = table_x;
     let num_cells = row.cells.len();
 
     for (cell_idx, cell) in row.cells.iter().enumerate() {
+        if cell.is_vmerge_continue {
+            cell_x += cell.width;
+            continue;
+        }
+        let paint_height = cell.merged_height;
         // Render cell shading
         if let Some(ref shading) = cell.shading {
             elements.push(PositionedElement::FilledRect {
@@ -2389,7 +2403,7 @@ fn render_table_row(
                     x: cell_x,
                     y: row_y,
                     width: cell.width,
-                    height: cell.height,
+                    height: paint_height,
                 },
                 color: *shading,
             });
@@ -2400,7 +2414,7 @@ fn render_table_row(
             cell_x,
             row_y,
             cell.width,
-            cell.height,
+            paint_height,
             &cell.borders,
             table_borders,
             cell_idx,
@@ -2410,48 +2424,155 @@ fn render_table_row(
             elements,
         );
 
-        if !cell.is_vmerge_continue {
-            // Render cell content
-            let cell_margin_top = cell.margin_top;
-            let cell_margin_left = cell.margin_left;
+        let content_element_start = elements.len();
+        let behind_element_start = behind_elements.len();
 
-            // Compute vertical alignment offset
-            let content_height: f64 = cell.paragraphs.iter().map(|p| p.total_height()).sum();
-            let v_offset = match cell.v_align {
-                Some(rdocx_oxml::table::ST_VerticalJc::Center) => {
-                    ((cell.height - cell_margin_top - content_height) / 2.0).max(0.0)
-                }
-                Some(rdocx_oxml::table::ST_VerticalJc::Bottom) => {
-                    (cell.height - cell_margin_top - content_height).max(0.0)
-                }
-                _ => 0.0, // Top or unspecified
-            };
-
-            let mut para_y = row_y - geometry.margin_top + cell_margin_top + v_offset;
-            for para in &cell.paragraphs {
-                render_paragraph_lines(
-                    &para.lines,
-                    para,
-                    &PageGeometry {
-                        margin_left: cell_x + cell_margin_left,
+        let content_height = cell
+            .blocks
+            .iter()
+            .map(crate::table::CellBlock::total_height)
+            .sum::<f64>();
+        let v_offset = match cell.v_align {
+            Some(rdocx_oxml::table::ST_VerticalJc::Center) => {
+                ((paint_height - cell.margin_top - content_height) / 2.0).max(0.0)
+            }
+            Some(rdocx_oxml::table::ST_VerticalJc::Bottom) => {
+                (paint_height - cell.margin_top - content_height).max(0.0)
+            }
+            _ => 0.0,
+        };
+        let mut content_y = row_y - geometry.margin_top + cell.margin_top + v_offset;
+        for block in &cell.blocks {
+            match block {
+                crate::table::CellBlock::Paragraph(paragraph) => {
+                    let cell_geometry = PageGeometry {
+                        margin_left: cell_x + cell.margin_left,
+                        margin_right: 0.0,
+                        page_width: cell_x + cell.width - cell.margin_right,
                         ..*geometry
-                    },
-                    para_y,
-                    elements,
-                    media,
-                );
-                render_change_bar(
-                    para,
-                    para_y,
-                    para.content_height(),
-                    geometry,
-                    page_number,
-                    elements,
-                );
-                para_y += para.total_height();
+                    };
+                    render_paragraph_lines(
+                        &paragraph.lines,
+                        paragraph,
+                        &cell_geometry,
+                        content_y,
+                        elements,
+                        media,
+                    );
+                    place_cell_anchored(
+                        &paragraph.anchored,
+                        geometry,
+                        &cell_geometry,
+                        content_y,
+                        paragraph.indent_left,
+                        elements,
+                        behind_elements,
+                        media,
+                    );
+                    render_change_bar(
+                        paragraph,
+                        content_y,
+                        paragraph.content_height(),
+                        geometry,
+                        page_number,
+                        elements,
+                    );
+                }
+                crate::table::CellBlock::Table(table) => {
+                    let nested_x = cell_x + cell.margin_left + table.table_indent;
+                    let mut nested_y = geometry.margin_top + content_y;
+                    for nested_row in &table.rows {
+                        render_table_row(
+                            nested_row,
+                            &table.col_widths,
+                            nested_x,
+                            nested_y,
+                            geometry,
+                            page_number,
+                            table.borders.as_ref(),
+                            elements,
+                            behind_elements,
+                            media,
+                        );
+                        nested_y += nested_row.height;
+                    }
+                }
+            }
+            content_y += block.total_height();
+        }
+        if cell.clip_content {
+            let clip = Some(Path::rect(Rect {
+                x: cell_x,
+                y: row_y,
+                width: cell.width,
+                height: paint_height,
+            }));
+            let children = elements.split_off(content_element_start);
+            elements.push(PositionedElement::Group(GroupElement {
+                transform: Transform::IDENTITY,
+                clip: clip.clone(),
+                opacity: 1.0,
+                effects: Vec::new(),
+                children,
+            }));
+            let children = behind_elements.split_off(behind_element_start);
+            if !children.is_empty() {
+                behind_elements.push(PositionedElement::Group(GroupElement {
+                    transform: Transform::IDENTITY,
+                    clip,
+                    opacity: 1.0,
+                    effects: Vec::new(),
+                    children,
+                }));
             }
         }
         cell_x += cell.width;
+    }
+}
+
+fn place_cell_anchored(
+    anchors: &[AnchoredDrawing],
+    page_geometry: &PageGeometry,
+    cell_geometry: &PageGeometry,
+    paragraph_top: f64,
+    paragraph_indent: f64,
+    elements: &mut Vec<PositionedElement>,
+    behind_elements: &mut Vec<PositionedElement>,
+    media: &HashMap<MediaId, ImageData>,
+) {
+    for anchor in anchors {
+        let horizontal_geometry = match anchor.rel_h {
+            ST_RelativeFromH::Column | ST_RelativeFromH::Character => cell_geometry,
+            _ => page_geometry,
+        };
+        let x = resolve_anchor_h(
+            anchor.rel_h,
+            anchor.off_h,
+            anchor.align_h,
+            anchor.width,
+            horizontal_geometry,
+            paragraph_indent,
+        );
+        let y = resolve_anchor_v(
+            anchor.rel_v,
+            anchor.off_v,
+            anchor.align_v,
+            anchor.height,
+            page_geometry,
+            paragraph_top,
+        );
+        let rect = Rect {
+            x,
+            y,
+            width: anchor.width,
+            height: anchor.height,
+        };
+        let mut produced = anchored_elements(anchor, rect, page_geometry, media);
+        if anchor.behind_doc {
+            behind_elements.append(&mut produced);
+        } else {
+            elements.append(&mut produced);
+        }
     }
 }
 
@@ -2471,9 +2592,14 @@ fn render_cell_borders(
 ) {
     // Determine effective border for each edge (cell overrides table)
     let get_edge = |cell_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>,
-                    table_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>|
+                    table_edge: Option<&rdocx_oxml::borders::CT_BorderEdge>,
+                    outer_edge: bool|
      -> Option<BorderEdge> {
-        let edge = cell_edge.or(table_edge)?;
+        let edge = match cell_edge {
+            Some(edge) if edge.val == ST_Border::None && outer_edge => table_edge?,
+            Some(edge) => edge,
+            None => table_edge?,
+        };
         if edge.val == ST_Border::None {
             return None;
         }
@@ -2497,7 +2623,7 @@ fn render_cell_borders(
         }
     });
     let cell_top = cell_borders.as_ref().and_then(|b| b.top.as_ref());
-    if let Some((thickness, color, dash_pattern)) = get_edge(cell_top, table_top) {
+    if let Some((thickness, color, dash_pattern)) = get_edge(cell_top, table_top, is_first_row) {
         elements.push(PositionedElement::Line {
             start: Point { x, y },
             end: Point { x: x + w, y },
@@ -2516,7 +2642,8 @@ fn render_cell_borders(
         }
     });
     let cell_bottom = cell_borders.as_ref().and_then(|b| b.bottom.as_ref());
-    if let Some((thickness, color, dash_pattern)) = get_edge(cell_bottom, table_bottom) {
+    if let Some((thickness, color, dash_pattern)) = get_edge(cell_bottom, table_bottom, is_last_row)
+    {
         elements.push(PositionedElement::Line {
             start: Point { x, y: y + h },
             end: Point { x: x + w, y: y + h },
@@ -2535,7 +2662,7 @@ fn render_cell_borders(
         }
     });
     let cell_left = cell_borders.as_ref().and_then(|b| b.left.as_ref());
-    if let Some((thickness, color, dash_pattern)) = get_edge(cell_left, table_left) {
+    if let Some((thickness, color, dash_pattern)) = get_edge(cell_left, table_left, cell_idx == 0) {
         elements.push(PositionedElement::Line {
             start: Point { x, y },
             end: Point { x, y: y + h },
@@ -2554,7 +2681,9 @@ fn render_cell_borders(
         }
     });
     let cell_right = cell_borders.as_ref().and_then(|b| b.right.as_ref());
-    if let Some((thickness, color, dash_pattern)) = get_edge(cell_right, table_right) {
+    if let Some((thickness, color, dash_pattern)) =
+        get_edge(cell_right, table_right, cell_idx == num_cells - 1)
+    {
         elements.push(PositionedElement::Line {
             start: Point { x: x + w, y },
             end: Point { x: x + w, y: y + h },
@@ -3651,6 +3780,218 @@ mod tests {
             resolve_anchor_v(ST_RelativeFromV::BottomMargin, off, None, 0.0, &g, para_top),
             730.0
         );
+    }
+
+    #[test]
+    fn cell_anchors_use_cell_coordinates_and_page_behind_order() {
+        let page = PageGeometry::default();
+        let cell = PageGeometry {
+            margin_left: 200.0,
+            margin_right: 0.0,
+            page_width: 300.0,
+            ..page
+        };
+        let anchor = |behind_doc| AnchoredDrawing {
+            behind_doc,
+            rel_h: ST_RelativeFromH::Column,
+            off_h: 5.0,
+            rel_v: ST_RelativeFromV::Paragraph,
+            off_v: 4.0,
+            width: 20.0,
+            height: 10.0,
+            wrap: WrapType::None,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+            align_h: None,
+            align_v: None,
+            content: AnchoredContent::Shape {
+                preset: ShapePreset::Rect,
+                fill: Some(Color::from_hex("CC0000")),
+                text: Vec::new(),
+            },
+            alternate_text: Some("cell stamp".to_owned()),
+            structure_id: None,
+        };
+        let mut foreground = Vec::new();
+        let mut behind = Vec::new();
+        place_cell_anchored(
+            &[anchor(false)],
+            &page,
+            &cell,
+            30.0,
+            0.0,
+            &mut foreground,
+            &mut behind,
+            &HashMap::new(),
+        );
+        let PositionedElement::MarkedContent { children, .. } = &foreground[0] else {
+            panic!("foreground anchor remains marked content");
+        };
+        let PositionedElement::FilledRect { rect, .. } = children[0] else {
+            panic!("foreground stamp rectangle");
+        };
+        assert_eq!(rect.x, 205.0);
+        assert_eq!(rect.y, page.margin_top + 34.0);
+        assert!(behind.is_empty());
+
+        let mut character_anchor = anchor(false);
+        character_anchor.rel_h = ST_RelativeFromH::Character;
+        let mut character_elements = Vec::new();
+        place_cell_anchored(
+            &[character_anchor],
+            &page,
+            &cell,
+            30.0,
+            12.0,
+            &mut character_elements,
+            &mut behind,
+            &HashMap::new(),
+        );
+        let PositionedElement::MarkedContent { children, .. } = &character_elements[0] else {
+            panic!("character anchor remains marked content");
+        };
+        let PositionedElement::FilledRect { rect, .. } = children[0] else {
+            panic!("character stamp rectangle");
+        };
+        assert_eq!(rect.x, 217.0, "character origin includes paragraph indent");
+
+        place_cell_anchored(
+            &[anchor(true)],
+            &page,
+            &cell,
+            30.0,
+            0.0,
+            &mut foreground,
+            &mut behind,
+            &HashMap::new(),
+        );
+        assert_eq!(foreground.len(), 1);
+        assert_eq!(behind.len(), 1);
+        let mut page_order = behind;
+        page_order.extend(foreground);
+        let PositionedElement::MarkedContent { children, .. } = &page_order[0] else {
+            panic!("behind anchor remains marked content");
+        };
+        assert!(matches!(children[0], PositionedElement::FilledRect { .. }));
+    }
+
+    #[test]
+    fn exact_height_cell_content_is_group_clipped_to_the_row() {
+        let mut paragraph = make_para(2, 12.0);
+        paragraph.lines = vec![
+            make_text_line(12.0, None, false),
+            make_text_line(12.0, None, false),
+        ];
+        let row = crate::table::TableRow {
+            structure_id: None,
+            cells: vec![crate::table::TableCell {
+                structure_id: None,
+                blocks: vec![crate::table::CellBlock::Paragraph(paragraph)],
+                width: 40.0,
+                height: 10.0,
+                grid_span: 1,
+                is_vmerge_continue: false,
+                starts_vmerge: false,
+                merged_height: 10.0,
+                merge_with_below: false,
+                clip_content: true,
+                col_index: 0,
+                borders: None,
+                shading: None,
+                margin_left: 0.0,
+                margin_right: 0.0,
+                margin_top: 0.0,
+                margin_bottom: 0.0,
+                is_first_row: true,
+                is_last_row: true,
+                v_align: None,
+            }],
+            height: 10.0,
+            is_header: false,
+        };
+        let mut elements = Vec::new();
+        render_table_row(
+            &row,
+            &[40.0],
+            10.0,
+            20.0,
+            &PageGeometry::default(),
+            0,
+            None,
+            &mut elements,
+            &mut Vec::new(),
+            &HashMap::new(),
+        );
+        let [PositionedElement::Group(group)] = elements.as_slice() else {
+            panic!("exact cell content is one clipped group: {elements:?}");
+        };
+        assert!(group.clip.is_some());
+        assert_eq!(
+            group.children.len(),
+            2,
+            "both overflow lines remain in the clip"
+        );
+    }
+
+    #[test]
+    fn outer_nil_border_matches_word_without_changing_interior_nil() {
+        use rdocx_oxml::borders::CT_BorderEdge;
+        use rdocx_oxml::table::CT_TblBorders;
+
+        let mut visible = CT_BorderEdge::new(ST_Border::Single);
+        visible.sz = Some(8);
+        visible.color = Some("112233".to_owned());
+        let nil = CT_BorderEdge::new(ST_Border::None);
+        let table = CT_TblBorders {
+            top: Some(visible.clone()),
+            bottom: Some(visible.clone()),
+            left: Some(visible.clone()),
+            right: Some(visible.clone()),
+            inside_h: Some(visible.clone()),
+            inside_v: Some(visible),
+        };
+        let cell = Some(CT_TblBorders {
+            top: Some(nil.clone()),
+            bottom: Some(nil.clone()),
+            left: Some(nil.clone()),
+            right: Some(nil),
+            inside_h: None,
+            inside_v: None,
+        });
+
+        let mut outer = Vec::new();
+        render_cell_borders(
+            10.0,
+            20.0,
+            30.0,
+            40.0,
+            &cell,
+            Some(&table),
+            0,
+            1,
+            true,
+            true,
+            &mut outer,
+        );
+        assert_eq!(outer.len(), 4, "four outer edges fall back to the table");
+
+        let mut interior = Vec::new();
+        render_cell_borders(
+            10.0,
+            20.0,
+            30.0,
+            40.0,
+            &cell,
+            Some(&table),
+            1,
+            3,
+            false,
+            false,
+            &mut interior,
+        );
+        assert!(interior.is_empty(), "interior nil remains suppressive");
     }
 
     /// The same offset must land somewhere different once the paragraph moves.

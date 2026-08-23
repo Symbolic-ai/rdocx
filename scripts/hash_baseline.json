@@ -8,8 +8,8 @@
     "contract:word/numbering.xml": "01d6cb0aa0ecc30b3d2a77c4df062b1c727d70ff9cbc0824910f049daf878a26",
     "contract:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4",
     "feature_showcase:page1.png": "f4ad22ffa12cf20c667aa5de661555b7c34c362e327fbccdd854c5dd225022e5",
-    "feature_showcase:pdf/bytes": "ac65eb2c4c7c14fcc7b02e4786c4d9245e6b388f3a02f1dd57a2fd108c313592",
-    "feature_showcase:pdf/pages": "47ef995c007890e2e3eaaede953c58f251ef6ac8fdeac1cbb89221fee577963e",
+    "feature_showcase:pdf/bytes": "30cba68a9a51f7bedfe7e7ad0a661604d1dcf81a7be0d0aaba08068ede3f1744",
+    "feature_showcase:pdf/pages": "7b545dcf7bc133de76ddb332a9b17fd969188f48516149ef9609570db8e6256a",
     "feature_showcase:pdf/resources": "37bcaa81db5a6597907a16317f47154db285139170a69717fe7d5dd3832866a7",
     "feature_showcase:word/document.xml": "b5c4efbb49263060558242bad0cca79d4b03a43b62d72feed66789b4926b44f5",
     "feature_showcase:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
@@ -50,5 +50,5 @@
     "report:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "report:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4"
   },
-  "reason": "F-173 adds deterministic tagged PDF structure and PDF/UA metadata"
+  "reason": "F-X048 renders recursive nested tables and corrected vertical-merge borders"
 }

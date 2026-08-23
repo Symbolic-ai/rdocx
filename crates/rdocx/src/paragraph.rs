@@ -167,6 +167,21 @@ impl<'a> Paragraph<'a> {
         }
     }
 
+    /// Add a run that clones the paragraph mark's direct run properties.
+    pub fn add_run_inheriting_mark(&mut self, text: &str) -> Run<'_> {
+        let properties = self
+            .inner
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.rpr.clone());
+        let mut run = CT_R::new(text);
+        run.properties = properties;
+        self.inner.runs.push(run);
+        Run {
+            inner: self.inner.runs.last_mut().unwrap(),
+        }
+    }
+
     /// Add a line break in its own run.
     pub fn add_line_break(&mut self) {
         let mut run = CT_R::new("");

@@ -354,6 +354,21 @@ captured raw WordprocessingML subtree. This is an additive native Rust API.
 Python, WASM, and CLI surfaces do not gain revision methods, and their existing
 load and save paths preserve the revision XML.
 
+Native Word paragraph handles expose
+`Paragraph::add_run_inheriting_mark(&mut self, text)`. The method appends one
+run whose direct run properties clone the paragraph mark properties, then
+returns the ordinary mutable run handle. It is additive on the pre-1.0 Rust
+facade. Python, WASM, and CLI surfaces gain no method and retain their existing
+package-preserving behavior.
+
+The low-level `rdocx-layout::TableCell` payload is source-ordered
+`Vec<CellBlock>`, with the present paragraph and recursive table variants. The
+additional merge-span and cell-margin fields expose renderer input rather than
+a second authoring surface. `rdocx-oxml::CT_Style` similarly exposes preserved
+table-property bytes, typed table properties, conditional table-style
+projections, and schema-positioned extra XML. These are intentional pre-1.0
+Rust source breaks. Existing facade and WASM method names do not change.
+
 Native Word callers inspect document protection through the borrowed
 `Document::document_protection` accessor. `ProtectionMode` distinguishes
 read-only, comments-only, forced tracked changes, and forms-only intent.
