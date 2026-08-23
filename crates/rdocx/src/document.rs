@@ -548,6 +548,27 @@ impl Document {
         self.package.verify_signatures()
     }
 
+    /// Sign the current typed document with the strict RSA-SHA256 profile.
+    ///
+    /// The private key must be PKCS#8 DER and the certificate must be X.509
+    /// DER. Typed state is flushed and signed on a staged clone, so any
+    /// serialization, key, certificate, or signature failure leaves this
+    /// document unchanged. Certificate-chain trust remains caller policy.
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    pub fn sign(
+        &mut self,
+        private_key_pkcs8_der: &[u8],
+        certificate_der: &[u8],
+    ) -> Result<oxml_opc::SignatureReport> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let report = candidate
+            .package
+            .sign(private_key_pkcs8_der, certificate_der)?;
+        self.commit_staged_mutation(candidate);
+        Ok(report)
+    }
+
     fn from_package(package: OpcPackage) -> Result<Self> {
         let doc_part_name = package.main_document_part().ok_or(Error::NoDocumentPart)?;
 

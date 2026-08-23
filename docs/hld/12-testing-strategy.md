@@ -70,10 +70,18 @@ and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace
 prefixes. Focused tests verify prefix tolerance, strict algorithms, exclusive
 canonicalization, relationship selection and order, complete declared
 coverage, named part mutation, malformed or partial coverage, and read-only
-save and reopen behavior. The optional openability oracle is Microsoft Word
-16.104 build 16.104.25121423. It confirms that Word opens the generated DOCX.
-It does not establish certificate trust or replace the Rust cryptographic and
-coverage assertions.
+save and reopen behavior. Creation tests use a fixed PKCS#8 RSA key and X.509
+certificate produced by OpenSSL 3.6.3 on 22 August 2026. They assert schema
+order, content-type-qualified canonical references, collision-free allocation,
+key and certificate rejection, complete round-trip verification, and atomic
+failure for invalid relationship graphs. The optional interoperability oracle
+is Microsoft Word for Mac 16.104 build 16.104.25121423. The ignored gate writes
+the generated DOCX, reopens those exact bytes for local RSA-SHA256 and complete
+coverage verification, then requires an explicit human-evidence token after
+Word recognizes the embedded digital signature and protects the document from
+editing. Word for Mac does not expose a Windows certificate-trust verdict. The
+oracle does not establish certificate trust or replace the Rust cryptographic
+and coverage assertions.
 
 The scalar template unit gate splits one tag across five differently formatted
 runs and proves that the first matched run supplies replacement formatting

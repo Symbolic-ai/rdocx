@@ -1,6 +1,6 @@
 # F-172, Digital signature creation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S53
 **Size**: M
 **Depends on**: F-171
@@ -71,10 +71,12 @@ ordinary dependency graph continues to exclude signature dependencies.
 | unit | `signature_creation_rejects_mismatched_or_unsupported_key_material` | Invalid PKCS#8, malformed X.509, non-RSA keys, and key-certificate mismatch fail before live mutation. |
 | round-trip | `signed_package_verifies_with_complete_coverage` | A package signed here verifies through F-171 with every part and relationship covered. |
 | regression | `every_signature_creation_failure_leaves_live_package_unchanged` | Key, certificate, canonicalization, relationship, serialization, signing, and allocation failures preserve package bytes and typed state. |
-| round-trip | `word_verifies_the_created_signature` | Microsoft Word 16.104 opens the generated DOCX and reports a valid signature for the supplied certificate. |
+| round-trip | `word_for_mac_recognizes_and_protects_the_created_signature` | Microsoft Word for Mac 16.104 opens the generated DOCX, recognizes the embedded digital signature, and protects the document from editing. The same serialized and reopened bytes verify locally with RSA-SHA256 and complete declared coverage. |
 
-The test gate is **round-trip**. A document signed here verifies here and in
-Word.
+The test gate is **round-trip**. A document signed here verifies locally after
+serialization and reopen. Word for Mac recognizes the embedded signature and
+protects the document from editing. This oracle does not report Windows
+certificate trust.
 
 ## HLD impact
 
@@ -97,8 +99,10 @@ Word.
   sizes.
 - WASM and default-off feature isolation: run both WASM checks and verify the
   native signing graph is absent from Python, WASM, CLI, and default builds.
-- External oracle comparison: pin Microsoft Word 16.104 build
-  16.104.25121423 and record the generated document plus the validation result.
+- External oracle comparison: pin Microsoft Word for Mac 16.104 build
+  16.104.25121423 and record the generated document plus the observed signed
+  document recognition and protection state. Do not claim Windows certificate
+  trust.
 
 ## Hash harness
 
@@ -107,14 +111,14 @@ sample is signed.
 
 ## Implementation checklist
 
-- [ ] Reuse the verified strict canonicalization and transform profile.
-- [ ] Stage the complete signature graph on a cloned package.
-- [ ] Generate collision-free origin and signature parts in schema order.
-- [ ] Sign every required part and relationship with RSA-SHA256.
-- [ ] Verify the staged package before committing it.
-- [ ] Add the native facade method without binding expansion.
-- [ ] Cover invalid input and every atomic failure boundary.
-- [ ] Run focused signature, package, dependency, WASM, packaging, oracle, and
+- [x] Reuse the verified strict canonicalization and transform profile.
+- [x] Stage the complete signature graph on a cloned package.
+- [x] Generate collision-free origin and signature parts in schema order.
+- [x] Sign every required part and relationship with RSA-SHA256.
+- [x] Verify the staged package before committing it.
+- [x] Add the native facade method without binding expansion.
+- [x] Cover invalid input and every atomic failure boundary.
+- [x] Run focused signature, package, dependency, WASM, packaging, oracle, and
       harness checks.
 
 ## Open questions

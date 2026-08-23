@@ -77,9 +77,10 @@ lower-level seam as a second document model. Its default-off
 cryptographic primitives only when a named native consumer enables it.
 The default-off `digital-signatures` edge follows the same boundary. It keeps
 exclusive XML canonicalization, OPC relationship transforms, RSA-SHA256
-verification, and X.509 parsing in `oxml-opc`. `rdocx` only forwards the
-native package report. Ordinary and WASM graphs do not include the signature
-dependencies.
+creation and verification, and X.509 parsing in `oxml-opc`. `rdocx` forwards
+the native package report and stages typed document state before requesting a
+package signature. Ordinary, Python, WASM, and CLI graphs do not include the
+signature dependencies.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
 probing, and intrinsic EMU sizing through its local `NativeSize` value. It

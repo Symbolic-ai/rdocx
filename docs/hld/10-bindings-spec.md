@@ -234,9 +234,13 @@ their API and dependency graphs remain unchanged.
 
 When native callers enable the default-off `digital-signatures` feature,
 `Document::verify_signatures` directly returns the shared package verification
-reports. The additive API distinguishes cryptographic verification and
-complete declared coverage from certificate-chain trust. It does not expand
-Python, WASM, or CLI surfaces and those dependency graphs remain unchanged.
+reports. `Document::sign` accepts PKCS#8 private-key DER and X.509 certificate
+DER on native targets. It flushes typed state into a staged document, asks the
+shared package layer to sign and verify the complete graph, and commits only
+the verified candidate. The additive APIs distinguish cryptographic validity
+and complete declared coverage from certificate-chain trust. They do not
+expand Python, WASM, or CLI surfaces and those dependency graphs remain
+unchanged.
 
 Native callers rebuilding one Word document from another can call
 `Document::transfer_reusable_layout_from`. The method moves the source's normal

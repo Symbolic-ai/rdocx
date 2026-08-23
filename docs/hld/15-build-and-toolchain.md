@@ -100,8 +100,8 @@ on CI runners as it always would have.
 |---|---|---|---|
 | `oxml-opc` | `agile-encryption` | off | Adds native read and fixed-profile write support for password-protected OOXML packages |
 | `rdocx` | `agile-encryption` | off | Forwards encrypted native document opens and saves to `oxml-opc` |
-| `oxml-opc` | `digital-signatures` | off | Adds read-only OPC signature verification and coverage reports |
-| `rdocx` | `digital-signatures` | off | Forwards native signature verification to `oxml-opc` |
+| `oxml-opc` | `digital-signatures` | off | Adds OPC signature creation, verification, and coverage reports |
+| `rdocx` | `digital-signatures` | off | Forwards native signature creation and verification to `oxml-opc` |
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
@@ -533,9 +533,10 @@ default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
 Python, WASM, or CLI graphs.
 Ring, SHA-256, base64, and X.509 parsing have the named default-off
 `oxml-opc/digital-signatures` consumer. They do not enter ordinary, Python,
-WASM, or CLI graphs. The verifier authenticates with the embedded public key.
-Certificate-chain trust requires caller policy and no ambient trust-store
-dependency is part of the workspace graph.
+WASM, or CLI graphs. The creator uses operating-system randomness for strict
+RSA-SHA256 signing and requires a matching embedded public key. The verifier
+authenticates with that embedded key. Certificate-chain trust requires caller
+policy and no ambient trust-store dependency is part of the workspace graph.
 
 PDF/A conformance adds no crate dependency. The sRGB2014 bytes are a
 crate-local compile-time asset, and veraPDF remains external test

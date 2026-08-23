@@ -378,6 +378,21 @@ Verification is read-only. A loaded package retains the original content-types
 bytes while its typed content types remain unchanged, so saving does not
 invalidate a signature by reserializing equivalent XML.
 
+Signature creation accepts only a PKCS#8 DER RSA private key and an X.509 DER
+certificate with the matching public key. It builds the signature origin,
+signature part, content-type overrides, and internal relationships on a cloned
+package. Collision-free names never replace occupied parts. The manifest uses
+content-type-qualified references in deterministic part and relationship
+order, authenticates every non-signature part and internal relationship, and
+signs canonical `SignedInfo` with RSA-SHA256. The package object carries the
+schema-ordered OPC `SignatureTime` property. Before allocating signature
+infrastructure, creation rejects external, duplicate, dangling, misplaced
+signature-typed, or untyped package graph entries and relationship sets whose
+source is not an existing normalized part. A package that already declares a
+signature origin is rejected instead of creating a second origin. The
+candidate replaces the live package only after every shared verifier report
+has both cryptographic validity and complete declared coverage.
+
 Comment mutations validate coordinates and allocate every required id before
 changing package or document state. Saving keeps the comments and
 comments-extended relationship graph reachable from the main document, with
