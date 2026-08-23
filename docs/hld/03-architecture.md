@@ -463,14 +463,14 @@ publication path. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates use the
 separate workspace version. That stable workspace and its exact seven-package
-crates.io family are prepared coherently at 0.9.0, while 0.8.0 remains the
-latest published stable boundary from the annotated `v0.8.0` tag. The 0.9.0
-preparation includes the nine internal pins, eleven inherited lockfile
-packages, two Python project versions, and the unpublished `rdocx-wasm`
-package. Version preparation and manifest eligibility do not authorize
-publication. The prepared stable release still requires `/release` at an
-exact reviewed SHA and separate final approval at the external mutation
-boundary. `oxml-cli-support` is the format-neutral owner of range parsing,
+crates.io family are published coherently at 0.9.0 from the annotated
+`v0.9.0` tag at reviewed SHA
+`e27e519c94c90cd5be340fe5bf8e431cf542ac51`. The workspace includes nine
+internal pins, eleven inherited lockfile packages, two Python project
+versions, and the unpublished `rdocx-wasm` package at 0.9.0. Earlier immutable
+registry releases remain available. Version preparation and manifest
+eligibility do not authorize any later publication. `oxml-cli-support` is the
+format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either
 document family, while CLI binaries depend inward on it.
 

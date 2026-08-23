@@ -8664,3 +8664,66 @@ declared PDF byte and page changes from F-173 and F-X048.
 **Notes for future sessions.** Release approval for the incubating family did
 not authorize stable `v0.9.0`. F-X050 retains its own exact-SHA approval and
 publication boundary.
+
+### F-X050, Tag v0.9.0
+
+**Sprint.** S53
+**Completed.** 2026-08-23
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact seven-package stable Word family was published
+at 0.9.0 from reviewed SHA
+`e27e519c94c90cd5be340fe5bf8e431cf542ac51`. The release includes the S52 and
+S53 stable layout, package, security, accessibility, conformance, redaction,
+and dense-form outcomes. Every Python and WASM package remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[32658680024](https://github.com/tensorbee/rdocx/actions/runs/32658680024)
+passed output stability, metadata, release-note, archive, seven-crate stable
+publication, and GitHub Release jobs. The incubating allowlist was skipped.
+Every 0.9.0 registry entry resolved as non-yanked and listed
+`mantissaman (Atul Sharma)` as owner. The annotated
+[`v0.9.0`](https://github.com/tensorbee/rdocx/releases/tag/v0.9.0) tag
+dereferenced to the reviewed SHA, and the published body was byte-identical to
+the committed changelog render. Every selected crates.io README endpoint
+returned non-empty rendered HTML.
+
+**Contribution inventory.** Issues
+[15](https://github.com/tensorbee/rdocx/issues/15) and
+[23](https://github.com/tensorbee/rdocx/issues/23) reported by authenticated
+`@mantissaman` landed directly. Authenticated `@emptinessform` supplied the
+Issue 23 break-opportunity diagnosis and reported or authored
+[Issue 39](https://github.com/tensorbee/rdocx/issues/39),
+[Issue 42](https://github.com/tensorbee/rdocx/issues/42),
+[PR 40](https://github.com/tensorbee/rdocx/pull/40),
+[PR 41](https://github.com/tensorbee/rdocx/pull/41), and
+[PR 43](https://github.com/tensorbee/rdocx/pull/43). Those five records landed
+through reviewed hardened equivalents. PR 43 remains closed and unmerged, with
+the exact F-X048 implementation recorded in its closure comment.
+
+**Notifications.** The reviewed release-bound comments were posted and
+verified at [Issue 15 comment](https://github.com/tensorbee/rdocx/issues/15#issuecomment-5387845923),
+[Issue 23 comment](https://github.com/tensorbee/rdocx/issues/23#issuecomment-5387846237),
+[Issue 39 comment](https://github.com/tensorbee/rdocx/issues/39#issuecomment-5387846542),
+[PR 40 comment](https://github.com/tensorbee/rdocx/pull/40#issuecomment-5387846918),
+[PR 41 comment](https://github.com/tensorbee/rdocx/pull/41#issuecomment-5387847279),
+[Issue 42 comment](https://github.com/tensorbee/rdocx/issues/42#issuecomment-5387847592),
+and [PR 43 comment](https://github.com/tensorbee/rdocx/pull/43#issuecomment-5387847840).
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The stable 0.9.0 and incubating 0.5.0 metadata regressions, all 66
+workflow tests, full verification at the reviewed SHA, the exact clean patched
+22-package dry run, archive and asset inventory, both WASM targets,
+supply-chain checks, registry and owner queries, release target and body
+comparison, README endpoint checks, and exact notification comparisons passed.
+
+**Hash harness.** Unchanged by the stable release preparation, 49 of 49 against
+the integrated reviewed baseline. The sprint baseline retains the fourteen
+declared PDF byte and page changes from F-173 and F-X048.
+
+**Notes for future sessions.** Stable 0.9.0 is an intentional pre-1.0 Rust
+source boundary. The release does not authorize Python, WASM, npm, PyPI, or
+later stable-family publication.

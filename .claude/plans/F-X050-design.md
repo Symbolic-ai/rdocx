@@ -1,6 +1,6 @@
 # F-X050, Tag v0.9.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S53
 **Size**: S
 **Depends on**: F-172, F-173, F-174, F-175, F-X048, F-X049
@@ -138,16 +138,16 @@ release metadata only. Any output delta blocks preparation.
 - [x] Update exactly the listed HLD files for the prepared release state.
 - [x] Run full verification, package, asset, binding, WASM, supply-chain,
       notes, and hash gates.
-- [ ] Stop at `/release v0.9.0` final approval.
-- [ ] After approval, verify registry entries, owners, release SHA and body,
+- [x] Stop at `/release v0.9.0` final approval.
+- [x] After approval, verify registry entries, owners, release SHA and body,
       post every reviewed comment, and record every comment URL.
 
 ## Release boundary
 
-The **release** gate requires real publication. This F-ID remains reviewed in
-run state and in-progress in delivery trackers until `/release v0.9.0`
-succeeds and every notification verifies. The earlier incubating approval does
-not count for this tag.
+The **release** gate completed through real publication at the separately
+approved reviewed SHA. Every registry entry, owner, tag and release-body
+binding, README endpoint, and reviewed notification was verified before the
+F-ID completed. The earlier incubating approval did not count for this tag.
 
 ## Open questions
 

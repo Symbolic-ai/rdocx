@@ -306,6 +306,7 @@ defended.
 | F-175 | S53 | M | 2 | 1 | 2026-08-23 | Atomic exact native redaction across document and workbook XML |
 | F-X048 | S53 | L | 4 | 1 | 2026-08-23 | Recursive dense-form tables with reviewed one-page geometry |
 | F-X049 | S53 | S | 1 | 1 | 2026-08-23 | Published and verified the complete 15-package rpptx 0.5.0 family |
+| F-X050 | S53 | S | 1 | 1 | 2026-08-23 | Published and verified the seven-package stable rdocx 0.9.0 family |
 
 ## Velocity
 

@@ -824,13 +824,15 @@ The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
 15-package publication preflight at 0.5.0. It separately proves the stable
-workspace is prepared at 0.9.0 and `rpptx-wasm` remains unpublished.
+workspace remains at its published 0.9.0 boundary and `rpptx-wasm` remains
+unpublished.
 The published 0.5.0 gate also verifies every selected registry entry and
 owner, the annotated tag target, and byte-identical GitHub release notes before
 the release story completes.
-The current published stable 0.8.0 release verifies every crates.io README
-endpoint returns non-empty rendered HTML. The prepared 0.9.0 endpoint checks
-remain a post-publication gate owned by `/release`.
+The published stable 0.9.0 gate verifies every selected registry entry and
+owner, the annotated tag target, byte-identical GitHub release notes, and that
+every crates.io README endpoint returns non-empty rendered HTML before the
+release story completes.
 
 ## What CI runs
 
