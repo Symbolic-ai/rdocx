@@ -1,6 +1,6 @@
 # F-X051, Honor caller-supplied font family aliases
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S54
 **Size**: M
 **Depends on**: F-X043
@@ -116,14 +116,14 @@ Any delta blocks the sprint and the baseline is not edited.
 
 ## Implementation checklist
 
-- [ ] Add label-derived and explicit byte-free alias state.
-- [ ] Preserve exact-family priority and current fallback order.
-- [ ] Bound alias and resolution state without cloning font bytes.
-- [ ] Add exact alias identity to reusable compatibility and transfer.
-- [ ] Add alias-aware default, option, and checked-transfer facade paths.
-- [ ] Add named unit and regression coverage for cache and output equality.
-- [ ] Run scoped crates, both WASM targets, packaging, and unchanged harness.
-- [ ] Retain Issue 44, PR 45, and `@emptinessform` for release credit.
+- [x] Add label-derived and explicit byte-free alias state.
+- [x] Preserve exact-family priority and current fallback order.
+- [x] Bound alias and resolution state without cloning font bytes.
+- [x] Add exact alias identity to reusable compatibility and transfer.
+- [x] Add alias-aware default, option, and checked-transfer facade paths.
+- [x] Add named unit and regression coverage for cache and output equality.
+- [x] Run scoped crates, both WASM targets, packaging, and unchanged harness.
+- [x] Retain Issue 44, PR 45, and `@emptinessform` for release credit.
 
 ## Open questions
 

@@ -196,6 +196,16 @@ cases prove publication and recovery remain safe. Both WASM targets, the
 package dry run and archive ceiling, and the unchanged 49-entry hash harness
 are required riders.
 
+The `document_facing_aliases_share_one_caller_font` gate uses caller bytes that
+differ from bundled same-family bytes. Multiple document-facing names must
+select that one caller face with exact bytes, diagnostics, provenance, and
+shared ownership. Focused alias regressions cover exact-family precedence,
+case-only labels, constructor metadata retained across changed additional-font
+loads, CSS-like candidate choice, equal-context reuse, changed-context misses,
+checked-transfer rejection, and warm and cold output equality. Entry and byte
+boundary cases require oversized explicit alias slices to produce the same
+deterministic identity in the font manager and reusable engine context.
+
 The relayout-cache gate compares a warm normal-font result with a fresh cold
 engine after editing one safe body paragraph. Pages, font table order and ids,
 font bytes, diagnostics, revision view, and every resolved provenance span must
@@ -265,8 +275,9 @@ retention, and warm deterministic layout and PDF bytes equal a fresh engine.
 
 Boundary tests exercise the exact shaping identity, process font discovery,
 canonical file-byte identity, lock poison recovery, bounded resolution and
-coverage state, bounded and shrunk per-paragraph font traces, and both pending
-and published block queues. Structural byte tests use retained capacities for
+coverage state, the 256-entry and 64 KiB caller-alias identity, bounded and
+shrunk per-paragraph font traces, and both pending and published block queues.
+Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
 must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096

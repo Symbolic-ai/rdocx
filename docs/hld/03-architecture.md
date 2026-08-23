@@ -141,9 +141,15 @@ state that can affect cached paragraph work. The native Word facade can move a
 compatible engine between two documents without exposing mutable cache state.
 The facade owns a separate deterministic-base engine for layouts where caller
 fonts override the bundled inventory. Missing families resolve from bundled
-faces without consulting system fonts. Checked transfer includes the exact
-caller-font bytes in the complete retained-work context and keeps the engine
-private.
+faces without consulting system fonts. A caller font label that differs from
+its embedded family is a label-derived alias for that exact caller face. Native
+callers can also install byte-free family aliases. Resolution prefers an exact
+embedded family, then an explicit caller alias, then a label-derived alias,
+before existing mapped and generic fallbacks. Alias state retains a
+deterministic prefix of at most 256 mappings and 64 KiB of complete mapping and
+lookup identity. Checked transfer includes that exact bounded alias identity
+and the exact caller-font bytes in the complete retained-work context and keeps
+the engine private.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing

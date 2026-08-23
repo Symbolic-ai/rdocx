@@ -548,6 +548,19 @@ and 16 MiB. Resolution, coverage misses, coverage fallbacks, and per-paragraph
 font traces also have explicit bounds. Loading a different additional font set
 rebuilds face identity and clears all dependent memo state.
 
+Caller font labels that differ from their embedded family names create
+label-derived aliases to the exact loaded faces. Native callers can also set
+explicit byte-free aliases from document-facing family names to loaded caller
+families. Resolution checks an exact embedded family first, then an explicit
+alias, then a label-derived alias, followed by the existing mapped alternatives
+and generic fallbacks. Candidate stretch, style, and directional weight choice
+uses the same CSS-like `fontdb` query as ordinary family resolution. Explicit
+aliases retain their ordered identity and lookup map as one deterministic
+prefix capped at 256 mappings and 64 KiB of mapping plus lookup identity. An
+equal update changes nothing. A changed update clears resolution and coverage
+state while retaining loaded faces and shaping entries whose `FontId` remains
+valid.
+
 The Word engine caches only ordinary context-independent body paragraphs and
 tables whose complete recursive payload is cache-safe. It also caches safe
 header and footer variants. Paragraph keys compare the complete typed
@@ -630,6 +643,11 @@ checked move to the private deterministic-base caller-font engine. The caller
 must provide the exact font slice used by the receiver. Font order and bytes,
 revision view, and every other retained-work input participate in
 compatibility, and rejection preserves both engines.
+`Document::transfer_reusable_bundled_fallback_layout_from_with_aliases` also
+requires the receiver's exact bounded alias identity. The retained-work context
+uses that same identity for every block and restart decision. A changed alias
+mapping therefore cannot reuse work resolved under its predecessor, while an
+equal mapping remains reusable.
 
 The low-level Word engine keeps its existing `LayoutResult` entry points and
 discards provenance there. `layout_document_with_provenance` and

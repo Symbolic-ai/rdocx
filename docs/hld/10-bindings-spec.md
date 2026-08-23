@@ -476,8 +476,14 @@ snapshot. `Document::layout_with_fonts_and_bundled_fallback` and its
 option-taking counterpart return the same owned result shape while retaining a
 private reusable deterministic-base engine. Caller faces override bundled
 faces, missing families resolve from the bundled inventory, and system fonts
-remain unavailable. The exact-font checked transfer method moves compatible
-private work between documents without exposing `Engine`. Deterministic calls
+remain unavailable. Differing caller labels act as aliases automatically on
+the existing strict and bundled-fallback paths.
+`Document::layout_with_fonts_aliases_and_bundled_fallback` and
+`Document::layout_with_fonts_aliases_and_bundled_fallback_and_options` add
+explicit byte-free aliases to the owned bundled-fallback result paths.
+`Document::transfer_reusable_bundled_fallback_layout_from_with_aliases` moves
+private work only when the exact caller-font bytes, bounded aliases, and other
+retained inputs match. Rejection preserves both engines. Deterministic calls
 remain isolated on the bundled-font-only path. The built-in PDF, raster, and
 page accessors consume their existing paths. These additions are pre-1.0 native
 Rust APIs and do not add Python, WASM, or CLI methods.
@@ -631,6 +637,10 @@ host font discovery without inventing a second bundled-font feature.
 The crate-local sRGB2014 profile is compiled into `oxml-pdf` and introduces no
 host API or runtime dependency. The native PDF/A methods are not exported by
 either WASM wrapper.
+
+Caller-font alias setters and alias-aware layout or transfer methods remain
+native Rust APIs. Neither WASM wrapper exports a new method, and its host-font
+free dependency graph is unchanged.
 
 The R-class regression constructs a document with an image, header, and
 numbering, then checks the complete part, relationship, and content-type graph
