@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 58 | 54 | 0 | 3  |
-| **Total** | **305** | **243** | **0** | **61** |
+| X, Cross-cutting (opportunistic)            | 58 | 54 | 1 | 2  |
+| **Total** | **305** | **243** | **1** | **60** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -506,6 +506,6 @@ regenerated, never hand-edited.
 | F-X051 | Honor caller-supplied font family aliases  | S54 | M | done |
 | F-X052 | Restore interactive relayout performance   | S55 | L | done |
 | F-X053 | Complete layout migration and contribution records | S55 | S | done |
-| F-X054 | Integrate PRs 47 through 52                | S56 | L | pending |
+| F-X054 | Integrate PRs 47 through 52                | S56 | L | in-progress |
 | F-X055 | Tag v0.10.0                               | S56 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
