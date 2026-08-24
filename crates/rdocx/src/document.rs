@@ -70,7 +70,7 @@ pub struct Document {
     pub(crate) package: OpcPackage,
     pub(crate) document: CT_Document,
     pub(crate) styles: CT_Styles,
-    numbering: Option<CT_Numbering>,
+    pub(crate) numbering: Option<CT_Numbering>,
     pub(crate) core_properties: Option<CoreProperties>,
     /// Read-only custom document properties resolved from package relationships.
     pub(crate) custom_properties: Option<CustomProperties>,
@@ -154,6 +154,13 @@ thread_local! {
 #[cfg(test)]
 fn record_layout_invocation() {
     LAYOUT_INVOCATIONS.set(LAYOUT_INVOCATIONS.get() + 1);
+}
+
+fn owned_font_aliases(font_aliases: &[(&str, &str)]) -> Vec<(String, String)> {
+    font_aliases
+        .iter()
+        .map(|(requested, target)| ((*requested).to_owned(), (*target).to_owned()))
+        .collect()
 }
 
 fn new_word_package() -> OpcPackage {
@@ -3427,6 +3434,40 @@ impl Document {
         true
     }
 
+    /// Transfer compatible alias-aware bundled-fallback layout work.
+    ///
+    /// Caller-font bytes and the exact ordered alias slice are both part of
+    /// compatibility. A rejected transfer preserves both private engines.
+    pub fn transfer_reusable_bundled_fallback_layout_from_with_aliases(
+        &mut self,
+        source: &mut Document,
+        font_files: &[(&str, &[u8])],
+        font_aliases: &[(&str, &str)],
+    ) -> bool {
+        let input = self.build_layout_input_with_fonts(font_files, RenderOptions::default());
+        let font_aliases = owned_font_aliases(font_aliases);
+        let transferred = {
+            let mut source_engine = source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rdocx_layout::engine::Engine::take_if_compatible_with_caller_aliases(
+                &mut source_engine,
+                &input,
+                &font_aliases,
+            )
+        };
+        let Some(transferred) = transferred else {
+            return false;
+        };
+        let mut receiver_engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *receiver_engine = Some(transferred);
+        true
+    }
+
     /// Return the cached normal-font layout with its Word source map.
     ///
     /// Repeated calls share the same accepted-view result until the document
@@ -3444,6 +3485,25 @@ impl Document {
         options: RenderOptions,
     ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
         self.layout_for_options(options, false)
+    }
+
+    /// Return the bundled-font-only layout with its Word source map.
+    ///
+    /// Repeated accepted-view calls share the deterministic layout cache. This
+    /// is the same snapshot used by deterministic PDF and raster render helpers.
+    pub fn layout_deterministic(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_deterministic_with_options(RenderOptions::default())
+    }
+
+    /// Return a bundled-font-only layout with the selected revision view.
+    ///
+    /// Accepted-view calls share the deterministic layout cache. Tracked-view
+    /// calls remain uncached because they do not replace the accepted-view cache.
+    pub fn layout_deterministic_with_options(
+        &self,
+        options: RenderOptions,
+    ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_for_options(options, true)
     }
 
     /// Return an uncached layout using user-provided font files.
@@ -3503,6 +3563,48 @@ impl Document {
             Some(engine) => engine,
             None => engine.insert(rdocx_layout::engine::Engine::new_deterministic()?),
         };
+        engine.set_caller_font_aliases(&[]);
+        Ok(rdocx_layout::layout_document_with_reusable_engine(
+            engine, &input,
+        )?)
+    }
+
+    /// Return a reusable bundled-fallback layout with byte-free font aliases.
+    ///
+    /// Exact embedded families retain priority. A caller alias is tried next,
+    /// before the existing mapped and generic fallbacks.
+    pub fn layout_with_fonts_aliases_and_bundled_fallback(
+        &self,
+        font_files: &[(&str, &[u8])],
+        font_aliases: &[(&str, &str)],
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        self.layout_with_fonts_aliases_and_bundled_fallback_and_options(
+            font_files,
+            font_aliases,
+            RenderOptions::default(),
+        )
+    }
+
+    /// Return an alias-aware bundled-fallback layout for one revision view.
+    pub fn layout_with_fonts_aliases_and_bundled_fallback_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        font_aliases: &[(&str, &str)],
+        options: RenderOptions,
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        let input = self.build_layout_input_with_fonts(font_files, options);
+        let font_aliases = owned_font_aliases(font_aliases);
+        #[cfg(test)]
+        record_layout_invocation();
+        let mut engine = self
+            .bundled_fallback_layout_engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let engine = match engine.as_mut() {
+            Some(engine) => engine,
+            None => engine.insert(rdocx_layout::engine::Engine::new_deterministic()?),
+        };
+        engine.set_caller_font_aliases(&font_aliases);
         Ok(rdocx_layout::layout_document_with_reusable_engine(
             engine, &input,
         )?)
@@ -3730,6 +3832,58 @@ impl Document {
             page_index,
             dpi,
         ))
+    }
+
+    /// Render selected zero-based pages to the requested image format.
+    pub fn render_pages(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        self.render_pages_with_options(page_indices, raster_options, RenderOptions::default())
+    }
+
+    /// Render selected zero-based pages with the selected revision view.
+    pub fn render_pages_with_options(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+        options: RenderOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_pages(
+            &layout.layout,
+            page_indices,
+            raster_options,
+        )?)
+    }
+
+    /// Render selected zero-based pages using bundled fonts without system font discovery.
+    pub fn render_pages_deterministic(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        self.render_pages_deterministic_with_options(
+            page_indices,
+            raster_options,
+            RenderOptions::default(),
+        )
+    }
+
+    /// Render selected zero-based pages to deterministic images with the selected revision view.
+    pub fn render_pages_deterministic_with_options(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+        options: RenderOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        let layout = self.layout_for_options(options, true)?;
+        Ok(oxml_pdf::render_pages(
+            &layout.layout,
+            page_indices,
+            raster_options,
+        )?)
     }
 
     /// Render all pages of the document to PNG bytes.
@@ -4361,21 +4515,13 @@ fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     ))
 }
 
-#[cfg(all(
-    feature = "agile-encryption",
-    not(target_arch = "wasm32"),
-    not(target_os = "windows")
-))]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::rename(source, destination)
 }
 
-#[cfg(all(
-    feature = "agile-encryption",
-    not(target_arch = "wasm32"),
-    target_os = "windows"
-))]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+#[cfg(target_os = "windows")]
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
@@ -5737,6 +5883,149 @@ mod tests {
         assert_eq!(
             oxml_pdf::render_to_pdf(&warm.layout),
             oxml_pdf::render_to_pdf(&fresh.layout)
+        );
+    }
+
+    #[test]
+    fn changed_alias_context_cannot_reuse_stale_layout_work() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let first_aliases = [("Document Sans", caller_family)];
+        let changed_aliases = [("Document Sans", "Carlito")];
+        let mut source = Document::new();
+        source
+            .add_paragraph("")
+            .add_run("alias-sensitive paragraph")
+            .font("Document Sans");
+
+        let first = source
+            .layout_with_fonts_aliases_and_bundled_fallback(&fonts, &first_aliases)
+            .expect("prime alias-aware engine");
+        let first_repeat = source
+            .layout_with_fonts_aliases_and_bundled_fallback(&fonts, &first_aliases)
+            .expect("equal alias context reuses safely");
+        assert!(
+            first
+                .layout
+                .pages
+                .iter()
+                .zip(&first_repeat.layout.pages)
+                .all(|(left, right)| Arc::ptr_eq(left, right)),
+            "equal aliases reuse completed page work"
+        );
+        let changed = source
+            .layout_with_fonts_aliases_and_bundled_fallback(&fonts, &changed_aliases)
+            .expect("changed alias context relayouts");
+        assert_ne!(
+            format!("{:?}", first_repeat.layout.fonts),
+            format!("{:?}", changed.layout.fonts)
+        );
+
+        let mut receiver = source.clone_for_staging();
+        receiver
+            .layout_with_fonts_aliases_and_bundled_fallback(&fonts, &changed_aliases)
+            .expect("prime receiver engine");
+        assert!(
+            !receiver.transfer_reusable_bundled_fallback_layout_from_with_aliases(
+                &mut source,
+                &fonts,
+                &first_aliases,
+            )
+        );
+        assert!(
+            source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+
+        let mut compatible_source = receiver.clone_for_staging();
+        compatible_source
+            .layout_with_fonts_aliases_and_bundled_fallback(&fonts, &changed_aliases)
+            .expect("prime compatible source engine");
+        let mut compatible_receiver = compatible_source.clone_for_staging();
+        assert!(
+            compatible_receiver.transfer_reusable_bundled_fallback_layout_from_with_aliases(
+                &mut compatible_source,
+                &fonts,
+                &changed_aliases,
+            )
+        );
+        assert!(
+            compatible_source
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
+        assert!(
+            compatible_receiver
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn caller_alias_warm_layout_equals_cold_layout() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let fonts = [(caller_family, caller_bytes.as_slice())];
+        let aliases = [
+            ("Document Sans", caller_family),
+            ("Document UI", caller_family),
+        ];
+        let mut warm_document = Document::new();
+        for index in 0..140 {
+            warm_document
+                .add_paragraph("")
+                .add_run(&format!("alias paragraph {index:03}"))
+                .font(if index % 2 == 0 {
+                    "Document Sans"
+                } else {
+                    "Document UI"
+                });
+        }
+        warm_document
+            .layout_with_fonts_aliases_and_bundled_fallback(&fonts, &aliases)
+            .expect("prime alias-aware engine");
+        warm_document
+            .paragraph_mut(70)
+            .expect("middle paragraph")
+            .add_run(" changed");
+        let cold_document = warm_document.clone_for_staging();
+
+        let warm = warm_document
+            .layout_with_fonts_aliases_and_bundled_fallback_and_options(
+                &fonts,
+                &aliases,
+                RenderOptions::default(),
+            )
+            .expect("warm alias-aware layout");
+        let cold = cold_document
+            .layout_with_fonts_aliases_and_bundled_fallback_and_options(
+                &fonts,
+                &aliases,
+                RenderOptions::default(),
+            )
+            .expect("cold alias-aware layout");
+
+        assert_eq!(format!("{warm:?}"), format!("{cold:?}"));
+        assert_eq!(
+            oxml_pdf::render_to_pdf(&warm.layout),
+            oxml_pdf::render_to_pdf(&cold.layout)
+        );
+        assert_eq!(
+            oxml_pdf::render_page_to_png(&warm.layout, 0, 72.0),
+            oxml_pdf::render_page_to_png(&cold.layout, 0, 72.0)
         );
     }
 

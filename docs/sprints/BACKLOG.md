@@ -33,11 +33,11 @@ regenerated, never hand-edited.
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
-| M18, Format breadth                            | 8  | 0 | 0 | 8  |
+| M18, Format breadth                            | 8  | 3 | 0 | 5  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 54 | 51 | 0 | 2  |
-| **Total** | **265** | **235** | **0** | **29** |
+| X, Cross-cutting (opportunistic)            | 54 | 52 | 0 | 1  |
+| **Total** | **265** | **239** | **0** | **25** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -350,14 +350,14 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M18 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-176 | RTF reader                                   | S54  | L | pending |
-| F-177 | RTF writer                                   | S54  | M | pending |
+| F-176 | RTF reader                                   | S54  | L | done |
+| F-177 | RTF writer                                   | S54  | M | done |
 | F-178 | HTML import                                  | S55  | L | pending |
 | F-179 | ODT reader                                   | S55  | L | pending |
 | F-180 | ODT writer                                   | S56  | L | pending |
 | F-181 | EPUB export                                  | S56  | M | pending |
 | F-182 | SVG page export                              | S56  | M | pending |
-| F-183 | Image export options                         | S54  | S | pending |
+| F-183 | Image export options                         | S54  | S | done |
 <!-- AUTOGEN:backlog-M18 END -->
 
 ### M19, Spreadsheets
@@ -451,5 +451,5 @@ regenerated, never hand-edited.
 | F-X048 | Dense form table fidelity                  | S53 | L | done |
 | F-X049 | Tag rpptx-v0.5.0                           | S53 | S | done |
 | F-X050 | Tag v0.9.0                                 | S53 | S | done |
-| F-X051 | Honor caller-supplied font family aliases  | S54 | M | pending |
+| F-X051 | Honor caller-supplied font family aliases  | S54 | M | done |
 <!-- AUTOGEN:backlog-MX END -->

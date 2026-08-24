@@ -31,11 +31,11 @@ enum Command {
         /// Path to the DOCX file
         file: PathBuf,
     },
-    /// Convert DOCX to another format (pdf, html, md, png)
+    /// Convert DOCX to another format (pdf, html, md, png, jpeg, tiff)
     Convert {
         /// Path to the DOCX file
         file: PathBuf,
-        /// Output format: pdf, html, md, png
+        /// Output format: pdf, html, md, png, jpeg, tiff
         #[arg(long, short = 't')]
         to: String,
         /// Output file path (defaults to input with new extension)
@@ -47,6 +47,15 @@ enum Command {
         /// Directory containing font files (.ttf/.otf) to use for PDF rendering
         #[arg(long)]
         font_dir: Option<PathBuf>,
+        /// One-based page range for image output, such as 1,3-5
+        #[arg(long)]
+        pages: Option<String>,
+        /// JPEG quality from 1 through 100
+        #[arg(long, default_value = "90")]
+        quality: u8,
+        /// Preserve unpainted PNG pixels as transparent
+        #[arg(long)]
+        transparent: bool,
     },
     /// Structural diff between two DOCX files
     Diff {
@@ -74,7 +83,7 @@ enum Command {
         /// Path to the DOCX file
         file: PathBuf,
     },
-    /// Render pages to PNG images
+    /// Render pages to image files
     Render {
         /// Path to the DOCX file
         file: PathBuf,
@@ -85,8 +94,20 @@ enum Command {
         #[arg(long, default_value = "150")]
         dpi: f64,
         /// Render only a specific page (0-based index)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "pages")]
         page: Option<usize>,
+        /// One-based page range, such as 1,3-5
+        #[arg(long)]
+        pages: Option<String>,
+        /// Output format: png, jpeg, tiff
+        #[arg(long, default_value = "png")]
+        format: String,
+        /// JPEG quality from 1 through 100
+        #[arg(long, default_value = "90")]
+        quality: u8,
+        /// Preserve unpainted PNG pixels as transparent
+        #[arg(long)]
+        transparent: bool,
     },
 }
 
@@ -115,7 +136,21 @@ fn main() {
             output,
             dpi,
             font_dir,
-        } => commands::convert(&file, &to, output.as_deref(), dpi, font_dir.as_deref()),
+            pages,
+            quality,
+            transparent,
+        } => commands::convert(
+            &file,
+            &to,
+            output.as_deref(),
+            dpi,
+            font_dir.as_deref(),
+            commands::ImageOptions {
+                pages: pages.as_deref(),
+                quality,
+                transparent,
+            },
+        ),
         Command::Diff { file_a, file_b } => commands::diff(&file_a, &file_b),
         Command::Replace {
             file,
@@ -130,7 +165,22 @@ fn main() {
             output_dir,
             dpi,
             page,
-        } => commands::render(&file, output_dir.as_deref(), dpi, page),
+            pages,
+            format,
+            quality,
+            transparent,
+        } => commands::render(
+            &file,
+            output_dir.as_deref(),
+            dpi,
+            commands::RenderOptions {
+                page,
+                pages: pages.as_deref(),
+                format: &format,
+                quality,
+                transparent,
+            },
+        ),
     };
 
     if let Err(e) = result {

@@ -68,6 +68,7 @@ defended.
 | S51 | M16, X | 10 | 10 | 0 | 18 | 2 | Completed M16 with mail merge, comparison, watermarks, complete layout provenance, bounded relayout caches, and ordered body access from PR 36. Published the complete rpptx 0.4.0 and stable rdocx 0.8.0 families with reviewed release notes and contributor credit. The full close gate passed with all 49 hashes unchanged and no carries |
 | S52 | M17, X | 12 | 12 | 0 | 27 | 1 | Added authenticated Agile encryption reads and Word-compatible writes, exact digital-signature verification, corrected break shaping, and bounded exact editor relayout reuse. PRs 40 and 41 were audited, safely reimplemented, credited, commented, and closed. The full close gate passed with all 49 hashes matching the reviewed baseline and no carries. M17 continues in S53 with signature creation and PDF compliance |
 | S53 | M17, X | 7 | 7 | 0 | 16 | 1 | Completed M17 with signature creation, tagged PDF, PDF/A, redaction, and dense-form tables. Published and verified the 15-package incubating 0.5.0 family and seven-package stable 0.9.0 family. The full close gate passed with the reviewed 14-entry PDF-only harness delta and no carries |
+| S54 | M18, X | 4 | 4 | 0 | 9 | 1 | Opened M18 with bounded RTF reading and deterministic diagnostic RTF writing, shared PNG, JPEG, TIFF, transparency, and page-range export, plus exact caller-font family aliases. The full close gate passed with all 49 hashes and 7 golden pixel buffers unchanged, all package archives below 10 MiB, and sprint review clean on pass 2 after two gate gaps were fixed. M18 continues in S55 with HTML and ODT input |
 
 ## Completed features
 
@@ -308,6 +309,10 @@ defended.
 | F-X048 | S53 | L | 4 | 1 | 2026-08-23 | Recursive dense-form tables with reviewed one-page geometry |
 | F-X049 | S53 | S | 1 | 1 | 2026-08-23 | Published and verified the complete 15-package rpptx 0.5.0 family |
 | F-X050 | S53 | S | 1 | 1 | 2026-08-23 | Published and verified the seven-package stable rdocx 0.9.0 family |
+| F-176 | S54 | L | 4 | 1 | 2026-08-24 | Bounded RTF reader with Word differential evidence |
+| F-177 | S54 | M | 2 | 1 | 2026-08-24 | Deterministic diagnostic RTF writer and round trip |
+| F-183 | S54 | S | 1 | 1 | 2026-08-24 | Shared PNG, JPEG, TIFF, transparency, and page-range export |
+| F-X051 | S54 | M | 2 | 1 | 2026-08-24 | Bounded caller-font family aliases with exact cache identity |
 
 ## Velocity
 
@@ -376,6 +381,7 @@ five working days.
 | S51 | 10 | 2 | 25.00 |
 | S52 | 12 | 1 | 60.00 |
 | S53 | 7 | 1 | 35.00 |
+| S54 | 4 | 1 | 20.00 |
 
 ## Escalation record
 
@@ -432,3 +438,4 @@ was done about it. Empty is the expected state.
 | 2026-08-22 | Sprint estimate variance exceeded 30 percent | S51 | Record 2 actual days against 18 estimated. Nine isolated workers, reviewed community contributions, and two established release workflows allowed independent implementation and publication work to overlap safely. The resulting 25.00 stories per week is not a sustainable forecast, so retain dependency-defined future sprint boundaries |
 | 2026-08-22 | Sprint estimate variance exceeded 30 percent | S52 | Record 1 actual day against 27 estimated. Twelve isolated workers and seven scoped follow-ups from PRs 40 and 41 allowed security, rendering, and cache work to overlap safely. The resulting 60.00 stories per week is not a sustainable forecast, so retain dependency-defined S53 boundaries |
 | 2026-08-23 | Sprint estimate variance exceeded 30 percent | S53 | Record 1 actual day against 16 estimated. Seven isolated workers and established security, PDF, and release workflows allowed independent work to overlap safely. The resulting 35.00 stories per week is not a sustainable forecast, so retain the dependency-defined S54 boundary |
+| 2026-08-24 | Sprint estimate variance exceeded 30 percent | S54 | Record 1 actual day against 9 estimated. Four isolated workers and established RTF, raster, and layout paths allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S55 boundary |

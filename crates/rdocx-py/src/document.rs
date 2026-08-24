@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList};
+use pyo3::types::{PyAny, PyBytes, PyList};
 use smallvec::smallvec;
 
 use crate::paragraph::{PyParagraph, PyParagraphCollection};
@@ -90,6 +90,38 @@ impl PyDocument {
         PyList::new(py, pages.iter().map(|page| PyBytes::new(py, page)))
     }
 
+    #[pyo3(signature = (*, dpi = 150.0, format = "png", quality = 90, transparent = false, pages = None))]
+    fn render_pages(
+        &self,
+        py: Python<'_>,
+        dpi: f64,
+        format: &str,
+        quality: u8,
+        transparent: bool,
+        pages: Option<Vec<usize>>,
+    ) -> PyResult<Py<PyAny>> {
+        let rendered = py
+            .detach(|| {
+                let format = parse_raster_format(format, quality, transparent)?;
+                let selected = match pages {
+                    Some(pages) => pages,
+                    None => (0..self.inner.layout()?.layout.pages.len()).collect(),
+                };
+                self.inner
+                    .render_pages(&selected, rdocx::RasterOptions { dpi, format })
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        match rendered {
+            rdocx::RasterOutput::SeparatePages(pages) => {
+                let list = PyList::new(py, pages.iter().map(|page| PyBytes::new(py, page)))?;
+                Ok(list.into_any().unbind())
+            }
+            rdocx::RasterOutput::MultiPageTiff(tiff) => {
+                Ok(PyBytes::new(py, &tiff).into_any().unbind())
+            }
+        }
+    }
+
     #[getter]
     fn paragraphs(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyParagraphCollection>> {
         Py::new(py, PyParagraphCollection::new(slf))
@@ -135,5 +167,22 @@ impl PyDocument {
             self.revisions.bump();
         }
         removed
+    }
+}
+
+fn parse_raster_format(
+    format: &str,
+    quality: u8,
+    transparent: bool,
+) -> rdocx::Result<rdocx::RasterFormat> {
+    match format {
+        "png" => Ok(rdocx::RasterFormat::Png {
+            transparent_background: transparent,
+        }),
+        "jpg" | "jpeg" => Ok(rdocx::RasterFormat::Jpeg { quality }),
+        "tif" | "tiff" => Ok(rdocx::RasterFormat::Tiff),
+        other => Err(rdocx::Error::Other(format!(
+            "unknown raster format {other:?}, expected png, jpeg, or tiff"
+        ))),
     }
 }

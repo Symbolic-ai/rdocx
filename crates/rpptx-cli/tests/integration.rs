@@ -470,6 +470,36 @@ fn convert_rejects_zero_slide_png_without_creating_output() {
 }
 
 #[test]
+fn render_rejects_zero_slide_image_formats_without_creating_output() {
+    let temp = TempWorkspace::new("render-empty");
+    let deck = temp.path.join("empty.pptx");
+    let presentation = Presentation::new().unwrap();
+    assert!(presentation.is_empty());
+    presentation.save(&deck).unwrap();
+
+    for format in ["png", "jpeg", "tiff"] {
+        let output = temp.path.join(format!("empty-{format}"));
+        let result = cli(&[
+            "render",
+            deck.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--format",
+            format,
+        ]);
+
+        assert!(!result.status.success(), "{format} unexpectedly succeeded");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("no slides selected"),
+            "unexpected {format} error: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.stdout.is_empty());
+        assert!(!output.exists());
+    }
+}
+
+#[test]
 fn convert_and_render_write_deterministic_pdf_and_png_outputs() {
     let temp = TempWorkspace::new("render");
     let deck = temp.path.join("rendered.pptx");
@@ -511,6 +541,82 @@ fn convert_and_render_write_deterministic_pdf_and_png_outputs() {
 }
 
 #[test]
+fn image_export_options_write_declared_formats_and_ranges() {
+    let temp = TempWorkspace::new("image-options");
+    let deck = temp.path.join("images.pptx");
+    write_deck(&deck, &["one", "two", "three"]);
+
+    let converted = cli(&[
+        "convert",
+        deck.to_str().unwrap(),
+        "--to",
+        "jpeg",
+        "--dpi",
+        "72",
+        "--quality",
+        "80",
+        "--slides",
+        "2",
+    ]);
+    assert!(converted.status.success());
+    assert!(
+        fs::read(temp.path.join("images.jpg"))
+            .unwrap()
+            .starts_with(b"\xff\xd8")
+    );
+    assert!(!temp.path.join("images_001.jpg").exists());
+
+    let output_dir = temp.path.join("tiff");
+    let rendered = cli(&[
+        "render",
+        deck.to_str().unwrap(),
+        "--output",
+        output_dir.to_str().unwrap(),
+        "--format",
+        "tiff",
+        "--dpi",
+        "72",
+        "--slide",
+        "1,3",
+    ]);
+    assert!(rendered.status.success());
+    assert!(
+        fs::read(output_dir.join("images.tiff"))
+            .unwrap()
+            .starts_with(b"II*\0")
+    );
+    assert!(!output_dir.join("images_slide2.tiff").exists());
+
+    let bad_output = temp.path.join("bad.jpg");
+    let rejected = cli(&[
+        "convert",
+        deck.to_str().unwrap(),
+        "--to",
+        "jpeg",
+        "--output",
+        bad_output.to_str().unwrap(),
+        "--quality",
+        "0",
+        "--slides",
+        "1",
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!bad_output.exists());
+
+    let bad_dir = temp.path.join("bad-range");
+    let rejected = cli(&[
+        "render",
+        deck.to_str().unwrap(),
+        "--output",
+        bad_dir.to_str().unwrap(),
+        "--slide",
+        "4",
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!bad_dir.exists());
+}
+
+#[test]
 fn convert_streams_crafted_multi_slide_pngs_with_one_based_names() {
     let temp = TempWorkspace::new("convert-stream");
     let deck = temp.path.join("streamed.pptx");
@@ -534,11 +640,44 @@ fn convert_streams_crafted_multi_slide_pngs_with_one_based_names() {
         assert!(stdout.contains(&format!("Slide {one_based} ->")));
     }
     let commands = include_str!("../src/commands.rs");
-    assert!(commands.contains("render_page_to_png"));
+    assert!(commands.contains("render_one_raster_page"));
     assert!(
         !commands.contains("render_all_pages"),
         "convert must not retain every encoded PNG"
     );
+    assert!(
+        !commands.contains("RasterOutput::SeparatePages(images)"),
+        "separate PNG and JPEG export must not branch on an all-pages image Vec"
+    );
+    assert!(
+        !commands.contains("zip(images.iter())"),
+        "separate PNG and JPEG export must not retain every encoded page"
+    );
+}
+
+#[test]
+fn multi_file_image_export_preserves_existing_outputs_before_streaming() {
+    let temp = TempWorkspace::new("convert-existing-output");
+    let deck = temp.path.join("existing.pptx");
+    let output = temp.path.join("export.png");
+    write_deck(&deck, &["one", "two"]);
+    let preexisting = temp.path.join("export_002.png");
+    fs::write(&preexisting, b"keep me").unwrap();
+
+    let converted = cli(&[
+        "convert",
+        deck.to_str().unwrap(),
+        "--to",
+        "png",
+        "--output",
+        output.to_str().unwrap(),
+        "--dpi",
+        "72",
+    ]);
+
+    assert!(!converted.status.success());
+    assert!(!temp.path.join("export_001.png").exists());
+    assert_eq!(fs::read(preexisting).unwrap(), b"keep me");
 }
 
 #[test]

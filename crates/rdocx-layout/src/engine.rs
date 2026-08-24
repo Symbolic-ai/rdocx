@@ -393,6 +393,7 @@ fn revision_is_visible(revision: &CT_Revision) -> bool {
 /// The layout engine.
 pub struct Engine {
     font_manager: FontManager,
+    caller_font_aliases: Vec<(String, String)>,
     paragraph_cache_context: Option<ReusableEngineContext>,
     paragraph_cache: VecDeque<ParagraphCacheEntry>,
     paragraph_cache_bytes: usize,
@@ -450,11 +451,12 @@ struct ReusableEngineContext {
     endnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
     theme: Option<rdocx_oxml::theme::Theme>,
     fonts: Vec<oxml_layout::FontFile>,
+    caller_font_aliases: Vec<(String, String)>,
     background_xml: Option<Vec<u8>>,
 }
 
 impl ReusableEngineContext {
-    fn for_input(input: &LayoutInput) -> Self {
+    fn for_input(input: &LayoutInput, caller_font_aliases: &[(String, String)]) -> Self {
         let mut sections = input
             .document
             .body
@@ -487,6 +489,7 @@ impl ReusableEngineContext {
             endnotes: input.endnotes.clone(),
             theme: input.theme.clone(),
             fonts: input.fonts.clone(),
+            caller_font_aliases: bounded_caller_aliases(caller_font_aliases),
             background_xml: input.document.background_xml.clone(),
         }
     }
@@ -587,6 +590,8 @@ const HEADER_FOOTER_CACHE_MAX_ENTRIES: usize = 64;
 const HEADER_FOOTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const RESTART_CACHE_MAX_ENTRIES: usize = 32;
 const RESTART_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const CALLER_ALIAS_MAX_ENTRIES: usize = 256;
+const CALLER_ALIAS_MAX_RETAINED_BYTES: usize = 64 * 1024;
 const _: () = assert!(PARAGRAPH_CACHE_MAX_ENTRIES == 4_096);
 const _: () = assert!(PARAGRAPH_CACHE_MAX_BYTES == 56 * 1024 * 1024);
 const _: () = assert!(HEADER_FOOTER_CACHE_MAX_ENTRIES == 64);
@@ -612,6 +617,34 @@ const CACHE_SOURCE_NODE: SourceNodeId = match SourceNodeId::new(1) {
     None => panic!("one is a valid source node id"),
 };
 
+/// Return the deterministic prefix that fits the private caller-alias bounds.
+///
+/// The byte accounting matches `oxml-layout`: requested and target strings in
+/// the ordered identity plus the normalized requested key and target value in
+/// the font lookup map.
+fn bounded_caller_aliases(aliases: &[(String, String)]) -> Vec<(String, String)> {
+    let mut bounded = Vec::with_capacity(aliases.len().min(CALLER_ALIAS_MAX_ENTRIES));
+    let mut retained_bytes = 0usize;
+    for (requested, target) in aliases {
+        if bounded.len() == CALLER_ALIAS_MAX_ENTRIES {
+            break;
+        }
+        let normalized_requested = requested.to_lowercase();
+        let entry_bytes = requested
+            .len()
+            .saturating_add(target.len())
+            .saturating_add(normalized_requested.len())
+            .saturating_add(target.len());
+        let next_retained_bytes = retained_bytes.saturating_add(entry_bytes);
+        if next_retained_bytes > CALLER_ALIAS_MAX_RETAINED_BYTES {
+            break;
+        }
+        bounded.push((requested.clone(), target.clone()));
+        retained_bytes = next_retained_bytes;
+    }
+    bounded
+}
+
 impl Default for Engine {
     fn default() -> Self {
         Self::new()
@@ -622,6 +655,7 @@ impl Engine {
     fn with_font_manager(font_manager: FontManager) -> Self {
         Self {
             font_manager,
+            caller_font_aliases: Vec::new(),
             paragraph_cache_context: None,
             paragraph_cache: VecDeque::new(),
             paragraph_cache_bytes: 0,
@@ -676,13 +710,37 @@ impl Engine {
         Self::with_font_manager(FontManager::new_with_fonts(Vec::new()))
     }
 
+    /// Set byte-free caller aliases from requested family to loaded family.
+    pub fn set_caller_font_aliases(&mut self, aliases: &[(String, String)]) {
+        let aliases = bounded_caller_aliases(aliases);
+        if self.caller_font_aliases != aliases {
+            self.caller_font_aliases = aliases;
+        }
+    }
+
     /// Take a reusable engine only when its complete retained-work context
     /// matches the proposed receiver input.
     #[doc(hidden)]
     pub fn take_if_compatible(source: &mut Option<Self>, input: &LayoutInput) -> Option<Self> {
+        Self::take_if_compatible_with_caller_aliases(source, input, &[])
+    }
+
+    /// Take a reusable engine only when its complete caller-font and alias
+    /// context matches the proposed receiver input.
+    #[doc(hidden)]
+    pub fn take_if_compatible_with_caller_aliases(
+        source: &mut Option<Self>,
+        input: &LayoutInput,
+        caller_font_aliases: &[(String, String)],
+    ) -> Option<Self> {
+        let caller_font_aliases = bounded_caller_aliases(caller_font_aliases);
         let compatible = source.as_ref().is_some_and(|engine| {
-            engine.paragraph_cache_context.as_ref()
-                == Some(&ReusableEngineContext::for_input(input))
+            engine.caller_font_aliases == caller_font_aliases
+                && engine.paragraph_cache_context.as_ref()
+                    == Some(&ReusableEngineContext::for_input(
+                        input,
+                        &caller_font_aliases,
+                    ))
                 && engine.pending_paragraph_cache.is_none()
                 && engine.pending_header_footer_cache.is_none()
         });
@@ -711,11 +769,14 @@ impl Engine {
     ) -> Result<LayoutResult> {
         // Load user-provided / DOCX-embedded fonts (highest priority). An exact
         // unchanged set is a no-op in a reusable engine.
-        let fonts_changed = self.font_manager.load_additional_fonts(&input.fonts);
+        let font_context_changed = self.font_manager.load_additional_fonts(&input.fonts)
+            | self
+                .font_manager
+                .set_caller_aliases(&self.caller_font_aliases);
         self.font_manager.begin_layout();
 
-        let paragraph_context = ReusableEngineContext::for_input(input);
-        if fonts_changed {
+        let paragraph_context = ReusableEngineContext::for_input(input, &self.caller_font_aliases);
+        if font_context_changed {
             self.paragraph_cache.clear();
             self.paragraph_cache_bytes = 0;
             self.table_cache.clear();
@@ -723,8 +784,8 @@ impl Engine {
             self.header_footer_cache.clear();
             self.header_footer_cache_bytes = 0;
         }
-        let context_matches =
-            !fonts_changed && self.paragraph_cache_context.as_ref() == Some(&paragraph_context);
+        let context_matches = !font_context_changed
+            && self.paragraph_cache_context.as_ref() == Some(&paragraph_context);
         self.paragraph_cache_reads_enabled = context_matches;
         self.header_footer_cache_reads_enabled = context_matches;
         self.pending_paragraph_cache = Some(VecDeque::new());
@@ -5758,6 +5819,84 @@ mod tests {
             theme: None,
             fonts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn oversized_caller_aliases_have_one_bounded_reusable_identity() {
+        fn retained_bytes(aliases: &[(String, String)]) -> usize {
+            aliases
+                .iter()
+                .map(|(requested, target)| requested.len() + target.len())
+                .sum()
+        }
+
+        fn assert_compatible_after_bound(
+            input: &LayoutInput,
+            first: &[(String, String)],
+            second: &[(String, String)],
+        ) {
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine.set_caller_font_aliases(first);
+            assert!(engine.caller_font_aliases.len() <= CALLER_ALIAS_MAX_ENTRIES);
+            assert!(retained_bytes(&engine.caller_font_aliases) <= CALLER_ALIAS_MAX_RETAINED_BYTES);
+            engine.layout(input).expect("prime reusable engine");
+            let context = engine
+                .paragraph_cache_context
+                .as_ref()
+                .expect("layout retains its context");
+            assert_eq!(context.caller_font_aliases, engine.caller_font_aliases);
+            assert!(context.caller_font_aliases.len() <= CALLER_ALIAS_MAX_ENTRIES);
+            assert!(
+                retained_bytes(&context.caller_font_aliases) <= CALLER_ALIAS_MAX_RETAINED_BYTES
+            );
+
+            let mut source = Some(engine);
+            assert!(
+                Engine::take_if_compatible_with_caller_aliases(&mut source, input, second)
+                    .is_some(),
+                "aliases discarded by the bounds must not change reusable identity"
+            );
+            assert!(source.is_none());
+        }
+
+        let retained_prefix = (0..CALLER_ALIAS_MAX_ENTRIES)
+            .map(|index| (format!("Document Serif {index}"), "Caladea".to_owned()))
+            .collect::<Vec<_>>();
+        let mut entry_limited_a = retained_prefix.clone();
+        entry_limited_a.push(("discarded entry a".to_owned(), "Caladea".to_owned()));
+        let mut entry_limited_b = retained_prefix;
+        entry_limited_b.push(("discarded entry b".to_owned(), "Carlito".to_owned()));
+        let input = make_input_with_text("bounded caller aliases");
+        let mut boundary_engine = Engine::new_deterministic().expect("bundled fonts load");
+        boundary_engine.set_caller_font_aliases(&entry_limited_a);
+        assert_eq!(
+            boundary_engine.caller_font_aliases.as_slice(),
+            &entry_limited_a[..CALLER_ALIAS_MAX_ENTRIES]
+        );
+        assert_compatible_after_bound(&input, &entry_limited_a, &entry_limited_b);
+
+        let retained_large = ("x".repeat(32_760), String::new());
+        let byte_limited_a = vec![
+            retained_large.clone(),
+            ("discarded bytes a".to_owned(), "Caladea".to_owned()),
+        ];
+        let byte_limited_b = vec![
+            retained_large,
+            ("discarded bytes b".to_owned(), "Carlito".to_owned()),
+        ];
+        boundary_engine.set_caller_font_aliases(&byte_limited_a);
+        assert_eq!(
+            boundary_engine.caller_font_aliases.as_slice(),
+            &byte_limited_a[..1]
+        );
+        assert_compatible_after_bound(&input, &byte_limited_a, &byte_limited_b);
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.set_caller_font_aliases(&[("x".repeat(70_000), "Caladea".to_owned())]);
+        assert!(retained_bytes(&engine.caller_font_aliases) <= CALLER_ALIAS_MAX_RETAINED_BYTES);
+        assert!(engine.caller_font_aliases.is_empty());
+        let context = ReusableEngineContext::for_input(&input, &engine.caller_font_aliases);
+        assert!(retained_bytes(&context.caller_font_aliases) <= CALLER_ALIAS_MAX_RETAINED_BYTES);
     }
 
     fn header_footer_part(text: &str) -> rdocx_oxml::header_footer::CT_HdrFtr {

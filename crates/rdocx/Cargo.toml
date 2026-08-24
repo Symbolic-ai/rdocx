@@ -23,6 +23,7 @@ agile-encryption = ["oxml-opc/agile-encryption"]
 digital-signatures = ["oxml-opc/digital-signatures"]
 
 [dependencies]
+encoding_rs = { workspace = true }
 oxml-chart = { workspace = true }
 oxml-core = { workspace = true }
 oxml-drawing = { workspace = true }

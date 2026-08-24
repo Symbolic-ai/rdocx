@@ -8727,3 +8727,134 @@ declared PDF byte and page changes from F-173 and F-X048.
 **Notes for future sessions.** Stable 0.9.0 is an intentional pre-1.0 Rust
 source boundary. The release does not authorize Python, WASM, npm, PyPI, or
 later stable-family publication.
+
+### F-176, RTF reader
+
+**Sprint.** S54
+**Completed.** 2026-08-24
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::from_rtf_bytes` and `Document::open_rtf` now
+read a bounded Word-compatible RTF subset into the existing typed document
+tree. The reader covers Unicode and legacy code pages, paragraph and run
+formatting, tables, lists, PNG and JPEG pictures, destinations, and stable
+loss diagnostics.
+
+**Non-obvious choices.** The scanner uses bounded parser-owned buffers and
+group state rather than cloning accumulated content. A pinned Microsoft Word
+16.104 conversion defines the structural differential boundary, while the
+live regeneration route remains an ignored human oracle check.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `rtf_reader_matches_the_pinned_word_docx_structure`, the malformed
+and resource-bound parser regressions, the code-page and destination tests,
+and the full `rdocx` suite passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The reader and writer deliberately share one
+RTF module and one typed projection. Unsupported content must remain explicit
+in diagnostics rather than becoming silent loss.
+
+### F-177, RTF writer
+
+**Sprint.** S54
+**Completed.** 2026-08-24
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `Document::to_rtf_bytes` and `Document::save_rtf` now emit
+deterministic bounded RTF for the reader-supported text, formatting, table,
+list, and image subset. The result returns stable diagnostics for each lossy
+source item, and path writes are atomic.
+
+**Non-obvious choices.** A discovery pass allocates stable font, colour, and
+list identifiers before the header is written. Signed UTF-16 controls preserve
+supplementary Unicode, formatting groups reset state explicitly, and list
+identity is kept through RTF list tables and overrides.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `rtf_writer_round_trip_preserves_supported_document_content`, the
+escaping, deterministic-header, table, list, image, diagnostic, resource-bound,
+and atomic-write regressions, and the full `rdocx` suite passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Fidelity is intentionally symmetric with the
+reader subset. Extending either side requires extending the shared projection
+and the structural round-trip gate together.
+
+### F-183, Image export options
+
+**Sprint.** S54
+**Completed.** 2026-08-24
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The shared raster backend now exports selected pages as
+opaque or transparent PNG, quality-controlled JPEG, or one multi-page TIFF.
+Native Word, Python, and both general CLI export paths expose the options while
+the existing PNG entry points retain byte-identical defaults.
+
+**Non-obvious choices.** Separate-page formats retain caller order and stage
+outputs before publication. Multi-page TIFF has explicit output cardinality,
+JPEG composites alpha over white, and authored page backgrounds still paint
+over transparent PNG canvases.
+
+**Deviations from the design plan.** None. Presentation thumbnails remain the
+specialized fixed-PNG path approved during design.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `image_export_options_produce_the_declared_formats_and_exact_pages`,
+the transparency, JPEG quality, legacy PNG parity, range, binding, and CLI
+regressions, both WASM checks, and the golden PNG gate passed.
+
+**Hash harness.** Unchanged, 49 of 49. Golden page-one pixels also remained 7
+of 7.
+
+**Notes for future sessions.** TIFF and JPEG encoding belongs in `oxml-pdf` so
+Word and PresentationML share validation, page selection, and memory behavior.
+
+### F-X051, Honor caller-supplied font family aliases
+
+**Sprint.** S54
+**Completed.** 2026-08-24
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Caller-supplied font bytes can now carry bounded family
+aliases. Resolution tries the embedded face and its aliases before existing
+mapped and generic fallbacks, and reusable layout contexts preserve exact
+warm and cold output identity.
+
+**Non-obvious choices.** Alias state is private, byte-free, deduplicated, and
+bounded by entry and byte ceilings. Cache identity includes the normalized
+alias mapping, so unchanged aliases reuse work while changed aliases invalidate
+only the affected resolution state.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** `document_facing_aliases_share_one_caller_font`, the alias-bound,
+font-priority, changed-context, and warm-cold identity regressions, the
+no-default-features path, and both WASM checks passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Alias labels never duplicate font bytes and
+must remain part of reusable-engine cache identity whenever their normalized
+mapping changes.

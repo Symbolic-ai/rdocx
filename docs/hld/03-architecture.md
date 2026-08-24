@@ -141,9 +141,15 @@ state that can affect cached paragraph work. The native Word facade can move a
 compatible engine between two documents without exposing mutable cache state.
 The facade owns a separate deterministic-base engine for layouts where caller
 fonts override the bundled inventory. Missing families resolve from bundled
-faces without consulting system fonts. Checked transfer includes the exact
-caller-font bytes in the complete retained-work context and keeps the engine
-private.
+faces without consulting system fonts. A caller font label that differs from
+its embedded family is a label-derived alias for that exact caller face. Native
+callers can also install byte-free family aliases. Resolution prefers an exact
+embedded family, then an explicit caller alias, then a label-derived alias,
+before existing mapped and generic fallbacks. Alias state retains a
+deterministic prefix of at most 256 mappings and 64 KiB of complete mapping and
+lookup identity. Checked transfer includes that exact bounded alias identity
+and the exact caller-font bytes in the complete retained-work context and keeps
+the engine private.
 
 **`oxml-pdf` consumes `LayoutResult` and shared image metadata.** It depends on
 `oxml-layout` for the rendering contract and on `oxml-media` for byte sniffing
@@ -151,6 +157,11 @@ and header probing. It has no format-specific workspace dependency. A slide is
 a page with a fixed size, so the same crate serves both formats without knowing
 either exists. The `rdocx` facade renders through this crate directly, while
 `rdocx-pdf` remains an exact deprecated re-export shim.
+The same backend owns raster encoding through `RasterFormat`, `RasterOptions`,
+`RasterOutput` and `render_pages`. PNG, JPEG and TIFF behavior is shared across
+Word, Presentation, Python and CLI consumers, so format semantics and page
+selection validation live at the format-neutral backend rather than in each
+facade.
 
 When the optional document structure is present, `oxml-pdf` alone owns PDF
 marked-content operators, page-local MCIDs, structure elements, list bodies,
@@ -563,6 +574,23 @@ Self-closing Word paragraphs and tables normalize to typed empty values, while
 self-closing final section properties remain outside the item vector. Empty
 foreign and unsupported children remain captured raw rather than being lost.
 
+The `rdocx` facade also owns RTF import and export. The private RTF reader
+parses the Word-written subset for text, run and paragraph formatting, tables,
+lists, and PNG or JPEG pictures directly into the same `Document` ownership
+tree that DOCX opens use. Its scanner and destination stack stay inside
+`rdocx`, while media bytes flow through `oxml-media` for sniffing and intrinsic
+size. The private RTF writer walks the same typed document and package media
+state without flushing or rewriting the DOCX package. It allocates font,
+colour, list, and image references deterministically, emits RTF header tables
+before body content, writes formatting resets at paragraph, run, cell, and row
+boundaries, and serializes non-ASCII text as signed UTF-16 `\uN` code units
+with surrogate pairs where needed. Safe lossy skips return stable
+`RtfDiagnostic` records, malformed reader state fails through the facade error
+enum, and writer output is bounded before retained byte growth or picture hex
+expansion. RTF path saves serialize first, stage a same-directory temporary
+file, sync that file, and publish through the shared portable replacement
+helper.
+
 Revision traversal follows that ownership tree through the main body, tables,
 cells, and content controls. `Document::revisions` reports every valid modeled
 revision once in document order as a borrowed `RevisionRef`. The facade does
@@ -604,6 +632,10 @@ entry points resolve the current package once and return either the shared
 render input and layout or a complete PDF. The corpus example and
 `rpptx-wasm` call that boundary, so neither binding nor development tooling
 maintains a second PresentationML package interpretation path.
+The CLI image paths reuse that resolved layout once per command and pass the
+selected slide order to the shared raster backend. Separate PNG and JPEG files
+are encoded one selected slide at a time, while TIFF remains one multi-page
+stream.
 
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder

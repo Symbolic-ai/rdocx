@@ -1,12 +1,28 @@
 //! CLI command implementations.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use oxml_cli_support::{default_output_path, json_envelope};
-use rdocx::Document;
+use oxml_cli_support::{
+    StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
+};
+use rdocx::{Document, RasterFormat, RasterOptions, RasterOutput};
 use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub struct ImageOptions<'a> {
+    pub pages: Option<&'a str>,
+    pub quality: u8,
+    pub transparent: bool,
+}
+
+pub struct RenderOptions<'a> {
+    pub page: Option<usize>,
+    pub pages: Option<&'a str>,
+    pub format: &'a str,
+    pub quality: u8,
+    pub transparent: bool,
+}
 
 /// Inspect a DOCX file and print structure information.
 pub fn inspect(file: &Path, json: bool) -> Result<()> {
@@ -104,6 +120,7 @@ pub fn convert(
     output: Option<&Path>,
     dpi: u32,
     font_dir: Option<&Path>,
+    image: ImageOptions<'_>,
 ) -> Result<()> {
     let doc = Document::open(file)?;
 
@@ -112,8 +129,13 @@ pub fn convert(
         "html" => "html",
         "md" | "markdown" => "md",
         "png" => "png",
+        "jpg" | "jpeg" => "jpg",
+        "tif" | "tiff" => "tiff",
         other => {
-            return Err(format!("Unknown format: {other}. Supported: pdf, html, md, png").into());
+            return Err(format!(
+                "Unknown format: {other}. Supported: pdf, html, md, png, jpeg, tiff"
+            )
+            .into());
         }
     };
 
@@ -144,27 +166,60 @@ pub fn convert(
             let md = doc.to_markdown();
             std::fs::write(&output_path, md)?;
         }
-        "png" => {
-            let pages = doc.render_all_pages(dpi as f64)?;
-            if pages.len() == 1 {
-                std::fs::write(&output_path, &pages[0])?;
-            } else {
-                let stem = output_path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy();
-                let parent = output_path.parent().unwrap_or(Path::new("."));
-                for (i, page) in pages.iter().enumerate() {
-                    let page_path = parent.join(format!("{stem}_{:03}.png", i + 1));
-                    std::fs::write(&page_path, page)?;
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
+            let (format, extension) = parse_image_format(to, image.quality, image.transparent)?;
+            let layout = doc.layout_deterministic()?;
+            let selected = selected_zero_based_pages(layout.layout.pages.len(), image.pages)?;
+            match format {
+                RasterFormat::Tiff => {
+                    let output = oxml_pdf::render_pages(
+                        &layout.layout,
+                        &selected,
+                        RasterOptions {
+                            dpi: dpi as f64,
+                            format,
+                        },
+                    )?;
+                    let RasterOutput::MultiPageTiff(tiff) = output else {
+                        return Err("TIFF render did not produce one stream".into());
+                    };
+                    stage_and_publish(&[(output_path.clone(), tiff)])?;
+                    println!("Written to {}", output_path.display());
                 }
-                println!(
-                    "Written {} pages to {}/{stem}_NNN.png",
-                    pages.len(),
-                    parent.display()
-                );
-                return Ok(());
+                RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
+                    let output_paths =
+                        convert_separate_output_paths(&output_path, extension, selected.len());
+                    ensure_output_paths_available(&output_paths)?;
+                    let mut staged = StagedOutputSet::new();
+                    for (page_index, path) in selected.iter().zip(output_paths.iter()) {
+                        let image = render_one_raster_page(
+                            &layout.layout,
+                            *page_index,
+                            RasterOptions {
+                                dpi: dpi as f64,
+                                format,
+                            },
+                        )?;
+                        staged.stage_bytes(path, &image)?;
+                    }
+                    staged.publish()?;
+                    if output_paths.len() == 1 {
+                        println!("Written to {}", output_path.display());
+                    } else {
+                        let stem = output_path
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        let parent = output_path.parent().unwrap_or(Path::new("."));
+                        println!(
+                            "Written {} pages to {}/{stem}_NNN.{extension}",
+                            output_paths.len(),
+                            parent.display()
+                        );
+                    }
+                }
             }
+            return Ok(());
         }
         _ => unreachable!(),
     }
@@ -284,44 +339,188 @@ pub fn replace(file: &Path, placeholder: &str, value: &str, output: &Path) -> Re
     Ok(())
 }
 
-/// Render document pages to PNG images.
-pub fn render(file: &Path, output_dir: Option<&Path>, dpi: f64, page: Option<usize>) -> Result<()> {
+/// Render document pages to image files.
+pub fn render(
+    file: &Path,
+    output_dir: Option<&Path>,
+    dpi: f64,
+    options: RenderOptions<'_>,
+) -> Result<()> {
+    validate_dpi(dpi)?;
     let doc = Document::open(file)?;
     let out_dir = output_dir.unwrap_or_else(|| Path::new("."));
-    // Writing into a directory the user named but has not created should not
-    // fail with a bare "No such file or directory".
-    std::fs::create_dir_all(out_dir)?;
-
+    let (format, extension) =
+        parse_image_format(options.format, options.quality, options.transparent)?;
+    let layout = doc.layout_deterministic()?;
+    let selected = selected_render_pages(layout.layout.pages.len(), options.page, options.pages)?;
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+    let legacy_single_page = options.page.is_some();
 
-    if let Some(page_idx) = page {
-        let png = doc
-            .render_page_to_png_deterministic(page_idx, dpi)?
-            .ok_or_else(|| format!("Page {page_idx} not found"))?;
-        let out_path = out_dir.join(format!("{stem}_page{}.png", page_idx + 1));
-        std::fs::write(&out_path, &png)?;
-        println!(
-            "Page {} -> {} ({} bytes)",
-            page_idx + 1,
-            out_path.display(),
-            png.len()
-        );
-    } else {
-        let mut page_count = 0;
-        while let Some(png) = doc.render_page_to_png_deterministic(page_count, dpi)? {
-            let out_path = out_dir.join(format!("{stem}_page{}.png", page_count + 1));
-            std::fs::write(&out_path, &png)?;
+    // Writing into a directory the user named but has not created should not
+    // fail with a bare "No such file or directory". Do it after validation and
+    // encoding so invalid options leave no partial output.
+    match format {
+        RasterFormat::Tiff => {
+            let output =
+                oxml_pdf::render_pages(&layout.layout, &selected, RasterOptions { dpi, format })?;
+            let RasterOutput::MultiPageTiff(tiff) = output else {
+                return Err("TIFF render did not produce one stream".into());
+            };
+            let out_path = out_dir.join(format!("{stem}.tiff"));
+            std::fs::create_dir_all(out_dir)?;
+            let tiff_len = tiff.len();
+            stage_and_publish(&[(out_path.clone(), tiff)])?;
             println!(
-                "Page {} -> {} ({} bytes)",
-                page_count + 1,
+                "Pages {} -> {} ({} bytes)",
+                selected
+                    .iter()
+                    .map(|page| (page + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
                 out_path.display(),
-                png.len()
+                tiff_len
             );
-            page_count += 1;
         }
-        println!("Rendered {page_count} page(s) at {dpi} DPI");
+        RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
+            let output_paths = selected
+                .iter()
+                .map(|page_index| {
+                    let one_based = page_index + 1;
+                    out_dir.join(format!("{stem}_page{one_based}.{extension}"))
+                })
+                .collect::<Vec<_>>();
+            std::fs::create_dir_all(out_dir)?;
+            ensure_output_paths_available(&output_paths)?;
+            let mut staged = StagedOutputSet::new();
+            let mut rendered = Vec::with_capacity(selected.len());
+            for (page_index, out_path) in selected.iter().zip(output_paths.iter()) {
+                let one_based = page_index + 1;
+                let image = render_one_raster_page(
+                    &layout.layout,
+                    *page_index,
+                    RasterOptions { dpi, format },
+                )?;
+                staged.stage_bytes(out_path, &image)?;
+                rendered.push((one_based, out_path.clone(), image.len()));
+            }
+            staged.publish()?;
+            for (one_based, out_path, len) in rendered {
+                println!("Page {one_based} -> {} ({len} bytes)", out_path.display());
+            }
+            if !legacy_single_page {
+                println!("Rendered {} page(s) at {dpi} DPI", selected.len());
+            }
+        }
     }
 
+    Ok(())
+}
+
+fn parse_image_format(
+    format: &str,
+    quality: u8,
+    transparent: bool,
+) -> Result<(RasterFormat, &'static str)> {
+    match format {
+        "png" => Ok((
+            RasterFormat::Png {
+                transparent_background: transparent,
+            },
+            "png",
+        )),
+        "jpg" | "jpeg" => {
+            if !(1..=100).contains(&quality) {
+                return Err(format!("JPEG quality must be 1 through 100, got {quality}").into());
+            }
+            Ok((RasterFormat::Jpeg { quality }, "jpg"))
+        }
+        "tif" | "tiff" => Ok((RasterFormat::Tiff, "tiff")),
+        other => Err(format!("Unknown image format: {other}. Supported: png, jpeg, tiff").into()),
+    }
+}
+
+fn selected_zero_based_pages(page_count: usize, pages: Option<&str>) -> Result<Vec<usize>> {
+    let one_based = match pages {
+        Some(pages) => parse_range(pages)?,
+        None => (1..=page_count).collect(),
+    };
+    if let Some(page) = one_based.iter().copied().find(|page| *page > page_count) {
+        return Err(format!("page {page} is out of range for {page_count} pages").into());
+    }
+    Ok(one_based.into_iter().map(|page| page - 1).collect())
+}
+
+fn selected_render_pages(
+    page_count: usize,
+    page: Option<usize>,
+    pages: Option<&str>,
+) -> Result<Vec<usize>> {
+    match (page, pages) {
+        (Some(_), Some(_)) => Err("--page and --pages cannot be used together".into()),
+        (Some(page), None) => {
+            if page >= page_count {
+                return Err(format!(
+                    "zero-based page {page} is out of range for {page_count} pages"
+                )
+                .into());
+            }
+            Ok(vec![page])
+        }
+        (None, pages) => selected_zero_based_pages(page_count, pages),
+    }
+}
+
+fn convert_separate_output_paths(
+    output_path: &Path,
+    extension: &str,
+    page_count: usize,
+) -> Vec<PathBuf> {
+    if page_count == 1 {
+        return vec![output_path.to_path_buf()];
+    }
+    let stem = output_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let parent = output_path.parent().unwrap_or(Path::new("."));
+    (1..=page_count)
+        .map(|index| parent.join(format!("{stem}_{index:03}.{extension}")))
+        .collect()
+}
+
+fn render_one_raster_page(
+    layout: &oxml_layout::LayoutResult,
+    page_index: usize,
+    options: RasterOptions,
+) -> Result<Vec<u8>> {
+    let output = oxml_pdf::render_pages(layout, &[page_index], options)?;
+    let RasterOutput::SeparatePages(mut pages) = output else {
+        return Err("single-page render did not produce a separate image".into());
+    };
+    if pages.len() != 1 {
+        return Err("single-page render returned the wrong page count".into());
+    }
+    Ok(pages.remove(0))
+}
+
+fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()> {
+    let paths = outputs
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    ensure_output_paths_available(&paths)?;
+    let mut staged = StagedOutputSet::new();
+    for (path, bytes) in outputs {
+        staged.stage_bytes(path, bytes)?;
+    }
+    staged.publish()?;
+    Ok(())
+}
+
+fn validate_dpi(dpi: f64) -> Result<()> {
+    if !dpi.is_finite() || dpi <= 0.0 {
+        return Err("DPI must be a positive finite number".into());
+    }
     Ok(())
 }
 
@@ -472,7 +671,19 @@ mod tests {
         document.add_paragraph("Default path regression");
         document.save(&input).unwrap();
 
-        convert(&input, "md", None, 96, None).unwrap();
+        convert(
+            &input,
+            "md",
+            None,
+            96,
+            None,
+            ImageOptions {
+                pages: None,
+                quality: 90,
+                transparent: false,
+            },
+        )
+        .unwrap();
 
         let converted = std::fs::read_to_string(&expected_output);
         std::fs::remove_file(input).unwrap();

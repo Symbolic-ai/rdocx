@@ -25,6 +25,7 @@ doc = false
 [dependencies]
 clap.workspace = true
 oxml-cli-support.workspace = true
+oxml-layout.workspace = true
 oxml-pdf.workspace = true
 rpptx = { workspace = true, features = ["render"] }
 serde_json.workspace = true

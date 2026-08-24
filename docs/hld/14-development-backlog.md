@@ -1452,14 +1452,31 @@ new front end onto a layout engine that exists.
 level, and every lossy conversion records a diagnostic naming what it dropped.
 
 ### F-176, RTF reader (L)
-The control-word grammar, destinations, code pages and the subset of RTF that
-Word itself writes. Scoped to text, formatting, tables, lists and images.
+The native `rdocx` facade reads the Word-written RTF subset through
+`Document::from_rtf_bytes` and `Document::open_rtf`. The reader owns bounded
+control-word scanning, destination and group state, Unicode fallback handling,
+font and colour tables, list tables and overrides, code-page decoding, table
+rows, and PNG or JPEG picture projection. It converts text, run and paragraph
+formatting, tables, lists, and images into the normal `Document` tree. Safe
+lossy skips return stable diagnostics naming the dropped destination or
+formatting control, while malformed RTF fails closed through `Error::Rtf`.
 **Depends on**: none.
 **Test gate**: differential. An RTF file converted to docx here matches the same
 file opened and saved as docx by the pinned oracle, compared structurally.
 
 ### F-177, RTF writer (M)
-The inverse, at the same scope.
+The native `rdocx` facade writes the F-176 RTF fidelity boundary through
+`Document::to_rtf_bytes` and `Document::save_rtf`. The writer allocates font,
+colour, list, and image references deterministically, emits header tables
+before body content, resets formatting at paragraph, run, cell, and row
+boundaries, and writes non-ASCII text as signed UTF-16 RTF Unicode controls.
+It preserves supported text, run and paragraph formatting, tables, multilevel
+lists, and PNG or JPEG pictures with truncating goal dimensions. Unsupported
+or lossy public properties and retained raw XML produce one stable
+location-aware diagnostic while supported siblings continue. Output growth,
+picture hex expansion, and diagnostics are bounded. Path saves serialize
+first, stage a same-directory temporary file, sync it, and publish with the
+shared portable replacement helper.
 **Depends on**: F-176.
 **Test gate**: round-trip. A document written to RTF and read back preserves
 text, formatting, tables, lists and images.

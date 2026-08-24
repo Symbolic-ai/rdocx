@@ -4,10 +4,11 @@
 //! from the test name alone rather than from a diff.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use rdocx::{
     ChartData, ChartKind, Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length,
-    RenderOptions, RevisionView, RunPosition, RunRange,
+    RasterFormat, RasterOptions, RasterOutput, RenderOptions, RevisionView, RunPosition, RunRange,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
@@ -1289,6 +1290,41 @@ fn default_render_methods_keep_the_accepted_view() {
             document.layout_page_with_options(0, options).unwrap()
         )
     );
+}
+
+#[test]
+fn native_image_export_ranges_are_zero_based_and_keep_selected_order() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_paragraph("second").page_break_before(true);
+    document.add_paragraph("third").page_break_before(true);
+
+    let output = document
+        .render_pages_deterministic(
+            &[2, 0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Jpeg { quality: 80 },
+            },
+        )
+        .expect("selected pages render");
+    let RasterOutput::SeparatePages(pages) = output else {
+        panic!("JPEG output should be separate pages");
+    };
+    assert_eq!(pages.len(), 2);
+    assert!(pages.iter().all(|page| page.starts_with(&[0xff, 0xd8])));
+    assert_ne!(pages[0], pages[1]);
+
+    let duplicate = document.render_pages_deterministic(
+        &[0, 0],
+        RasterOptions {
+            dpi: 72.0,
+            format: RasterFormat::Png {
+                transparent_background: false,
+            },
+        },
+    );
+    assert!(duplicate.is_err());
 }
 
 #[test]
@@ -5644,6 +5680,73 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         "page-behind stamp is covered by cell shading"
     );
     assert_eq!(foreground_pixels, 1_682);
+}
+
+#[test]
+fn document_facing_aliases_share_one_caller_font() {
+    let bundled_bytes = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf").as_slice();
+    let mut caller_bytes = bundled_bytes.to_vec();
+    caller_bytes.push(0);
+    let mut labelled_document = Document::new();
+    labelled_document
+        .add_paragraph("")
+        .add_run("label-derived alias")
+        .font("Document Serif");
+    let labelled = labelled_document
+        .layout_with_fonts(&[("Document Serif", caller_bytes.as_slice())])
+        .expect("caller font label resolves through the strict facade");
+    assert!(
+        labelled.layout.fonts.iter().any(|font| {
+            font.family == "Caladea" && font.data.as_ref() == caller_bytes.as_slice()
+        })
+    );
+
+    let mut document = Document::new();
+    for (family, text) in [
+        ("Document Serif", "first alias"),
+        ("Legacy Serif", "second alias"),
+    ] {
+        document.add_paragraph("").add_run(text).font(family);
+    }
+
+    let result = document
+        .layout_with_fonts_aliases_and_bundled_fallback(
+            &[("Caladea", caller_bytes.as_slice())],
+            &[("Document Serif", "Caladea"), ("Legacy Serif", "Caladea")],
+        )
+        .expect("document-facing aliases resolve");
+
+    let mut alias_fonts = Vec::new();
+    for page in &result.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let oxml_layout::PositionedElement::Text(run) = element else {
+                return;
+            };
+            let font = result
+                .layout
+                .fonts
+                .iter()
+                .find(|font| font.id == run.font_id)
+                .expect("alias run font exists");
+            assert_eq!(font.family, "Caladea");
+            assert_eq!(font.data.as_ref(), caller_bytes.as_slice());
+            assert_ne!(font.data.as_ref(), bundled_bytes);
+            assert!(
+                run.source
+                    .is_some_and(|span| result.source_node(span.node).is_some()),
+                "alias run retains provenance"
+            );
+            alias_fonts.push(Arc::clone(&font.data));
+        });
+    }
+    assert!(alias_fonts.len() >= 2);
+    assert!(
+        alias_fonts
+            .iter()
+            .skip(1)
+            .all(|font| Arc::ptr_eq(&alias_fonts[0], font))
+    );
+    assert!(result.layout.diagnostics.is_empty());
 }
 
 fn redaction_fixture() -> Document {

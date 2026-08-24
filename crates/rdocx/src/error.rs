@@ -19,11 +19,17 @@ pub enum Error {
     #[error("PDF conformance error: {0}")]
     Pdf(#[from] oxml_pdf::PdfError),
 
+    #[error("raster export error: {0}")]
+    Raster(#[from] oxml_pdf::RasterError),
+
     #[error("document has no main document part")]
     NoDocumentPart,
 
     #[error("image dimensions are unavailable for {filename}")]
     UnavailableImageDimensions { filename: String },
+
+    #[error("RTF parse error at byte {offset}: {message}")]
+    Rtf { offset: usize, message: String },
 
     #[error("{0}")]
     Other(String),

@@ -181,6 +181,10 @@ pub struct FontManager {
     db: fontdb::Database,
     /// Database before document-embedded or caller fonts are applied.
     base_db: fontdb::Database,
+    /// Caller labels whose faces are retained in `base_db`.
+    base_caller_aliases: HashMap<String, Vec<fontdb::ID>>,
+    /// Caller embedded families whose faces are retained in `base_db`.
+    base_caller_families: HashMap<String, Vec<fontdb::ID>>,
     /// Map from FontKey to loaded font info.
     cache: HashMap<FontKey, usize>,
     /// Manager-owned bytes for bundled, embedded, and caller-provided faces.
@@ -202,6 +206,16 @@ pub struct FontManager {
     coverage_misses: HashSet<char>,
     /// Exact additional font set currently loaded into `db`.
     additional_fonts: Vec<FontFile>,
+    /// Lowercased caller labels mapped to the exact faces loaded from their
+    /// bytes. Rebuilt together with `additional_fonts`.
+    caller_aliases: HashMap<String, Vec<fontdb::ID>>,
+    /// Exact embedded caller families mapped to their loaded faces, so caller
+    /// bytes take priority over bundled faces with the same family.
+    caller_families: HashMap<String, Vec<fontdb::ID>>,
+    /// Exact caller-declared alias identity for cheap change detection.
+    explicit_aliases: Vec<(String, String)>,
+    /// Lowercased requested family mapped to the caller-declared target.
+    explicit_alias_map: HashMap<String, String>,
     /// Bounded exact-key shaping results.
     shaping_memo: Mutex<ShapingMemo>,
     /// Exact resolution events for one cache-candidate paragraph.
@@ -252,6 +266,42 @@ const COVERAGE_FALLBACK_MAX_ENTRIES: usize = 256;
 const COVERAGE_MISS_MAX_ENTRIES: usize = 4_096;
 const PARAGRAPH_FONT_TRACE_MAX_ENTRIES: usize = 4_096;
 
+/// Maximum caller-declared aliases retained for resolution identity.
+const CALLER_ALIAS_MAX_ENTRIES: usize = 256;
+
+/// Maximum aggregate UTF-8 payload retained by the ordered caller-alias
+/// identity and its lowercased lookup map.
+const CALLER_ALIAS_MAX_RETAINED_BYTES: usize = 64 * 1024;
+
+/// Return the deterministic prefix that fits both caller-alias ceilings.
+///
+/// The byte accounting includes requested and target strings in the ordered
+/// identity plus the normalized requested key and target value in the lookup
+/// map. The first entry that would exceed either ceiling and every later entry
+/// are discarded.
+fn bounded_caller_aliases(aliases: &[(String, String)]) -> Vec<(String, String)> {
+    let mut bounded = Vec::with_capacity(aliases.len().min(CALLER_ALIAS_MAX_ENTRIES));
+    let mut retained_bytes = 0usize;
+    for (requested, target) in aliases {
+        if bounded.len() == CALLER_ALIAS_MAX_ENTRIES {
+            break;
+        }
+        let normalized_requested = requested.to_lowercase();
+        let entry_bytes = requested
+            .len()
+            .saturating_add(target.len())
+            .saturating_add(normalized_requested.len())
+            .saturating_add(target.len());
+        let next_retained_bytes = retained_bytes.saturating_add(entry_bytes);
+        if next_retained_bytes > CALLER_ALIAS_MAX_RETAINED_BYTES {
+            break;
+        }
+        bounded.push((requested.to_owned(), target.to_owned()));
+        retained_bytes = next_retained_bytes;
+    }
+    bounded
+}
+
 impl Default for FontManager {
     fn default() -> Self {
         Self::new()
@@ -262,6 +312,8 @@ impl FontManager {
     fn from_base_database(db: fontdb::Database) -> Self {
         Self {
             base_db: db.clone(),
+            base_caller_aliases: HashMap::new(),
+            base_caller_families: HashMap::new(),
             db,
             cache: HashMap::new(),
             memory_face_data: HashMap::new(),
@@ -270,6 +322,10 @@ impl FontManager {
             coverage_fallbacks: HashMap::new(),
             coverage_misses: HashSet::new(),
             additional_fonts: Vec::new(),
+            caller_aliases: HashMap::new(),
+            caller_families: HashMap::new(),
+            explicit_aliases: Vec::new(),
+            explicit_alias_map: HashMap::new(),
             shaping_memo: Mutex::new(ShapingMemo::new()),
             paragraph_font_trace: None,
             layout_fonts: Vec::new(),
@@ -317,8 +373,16 @@ impl FontManager {
         }
 
         self.db = self.base_db.clone();
+        self.caller_aliases.clone_from(&self.base_caller_aliases);
+        self.caller_families.clone_from(&self.base_caller_families);
         for font_file in font_files {
-            self.db.load_font_data(font_file.data.clone());
+            Self::load_caller_font(
+                &mut self.db,
+                &mut self.caller_aliases,
+                &mut self.caller_families,
+                &font_file.family,
+                font_file.data.clone(),
+            );
         }
         self.cache.clear();
         self.memory_face_data.clear();
@@ -343,10 +407,84 @@ impl FontManager {
     /// where system fonts are not available, such as WASM.
     pub fn new_with_fonts(fonts: Vec<(String, Vec<u8>)>) -> Self {
         let mut db = fontdb::Database::new();
-        for (_name, data) in &fonts {
-            db.load_font_data(data.clone());
+        let mut caller_aliases = HashMap::new();
+        let mut caller_families = HashMap::new();
+        for (family, data) in &fonts {
+            Self::load_caller_font(
+                &mut db,
+                &mut caller_aliases,
+                &mut caller_families,
+                family,
+                data.clone(),
+            );
         }
-        Self::from_base_database(db)
+        let mut manager = Self::from_base_database(db);
+        manager.base_caller_aliases = caller_aliases.clone();
+        manager.base_caller_families = caller_families.clone();
+        manager.caller_aliases = caller_aliases;
+        manager.caller_families = caller_families;
+        manager
+    }
+
+    /// Replace byte-free caller aliases from requested family to loaded family.
+    ///
+    /// An unchanged slice is a no-op. A changed slice invalidates only name
+    /// resolution and coverage state. Loaded faces and shaping entries remain
+    /// valid because their `FontId` values do not change.
+    pub fn set_caller_aliases(&mut self, aliases: &[(String, String)]) -> bool {
+        let aliases = bounded_caller_aliases(aliases);
+        if self.explicit_aliases == aliases {
+            return false;
+        }
+
+        self.explicit_alias_map = aliases
+            .iter()
+            .map(|(requested, target)| (requested.to_lowercase(), target.clone()))
+            .collect();
+        self.explicit_aliases = aliases;
+        self.cache.clear();
+        self.coverage_fallbacks.clear();
+        self.coverage_misses.clear();
+        true
+    }
+
+    fn load_caller_font(
+        db: &mut fontdb::Database,
+        aliases: &mut HashMap<String, Vec<fontdb::ID>>,
+        families: &mut HashMap<String, Vec<fontdb::ID>>,
+        family: &str,
+        data: Vec<u8>,
+    ) {
+        let before = db.len();
+        db.load_font_data(data);
+        let loaded_faces = db
+            .faces()
+            .skip(before)
+            .map(|face| {
+                (
+                    face.id,
+                    face.families
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (id, loaded_families) in &loaded_faces {
+            for loaded_family in loaded_families {
+                families.entry(loaded_family.clone()).or_default().push(*id);
+            }
+        }
+        if !loaded_faces.is_empty()
+            && loaded_faces
+                .iter()
+                .all(|(_, families)| !families.iter().any(|loaded| loaded == family))
+        {
+            aliases
+                .entry(family.to_lowercase())
+                .or_default()
+                .extend(loaded_faces.into_iter().map(|(id, _)| id));
+        }
     }
 
     /// Begin one complete layout attempt's exact font-usage trace.
@@ -653,17 +791,48 @@ impl FontManager {
             return Ok(id);
         }
 
-        // Map common Word font names to metric-compatible alternatives
-        let mapped = map_font_name(family_name);
+        let requested_key = family_name.to_lowercase();
+        let style = if italic {
+            fontdb::Style::Italic
+        } else {
+            fontdb::Style::Normal
+        };
+        let weight = if bold {
+            fontdb::Weight::BOLD
+        } else {
+            fontdb::Weight::NORMAL
+        };
 
-        // Try the requested font, mapped alternatives, then generic fallbacks
-        let mut fallbacks: Vec<&str> = Vec::with_capacity(10);
-        fallbacks.push(family_name);
-        for alt in mapped {
-            if *alt != family_name {
-                fallbacks.push(alt);
+        let query_family = |family: &str| {
+            if let Some(ids) = self.caller_families.get(family)
+                && let Some(id) = best_caller_face(&self.db, ids, weight, style)
+            {
+                return Some(id);
             }
+            let query = fontdb::Query {
+                families: &[fontdb::Family::Name(family)],
+                weight,
+                style,
+                stretch: fontdb::Stretch::Normal,
+            };
+            self.db.query(&query)
+        };
+
+        let mut found_id = query_family(family_name);
+        if found_id.is_none()
+            && let Some(alias) = self.explicit_alias_map.get(&requested_key)
+        {
+            found_id = query_family(alias);
         }
+        if found_id.is_none()
+            && let Some(ids) = self.caller_aliases.get(&requested_key)
+        {
+            found_id = best_caller_face(&self.db, ids, weight, style);
+        }
+
+        // Map common Word font names to metric-compatible alternatives, then
+        // try generic fallbacks.
+        let mut fallbacks: Vec<&str> = map_font_name(family_name).to_vec();
         for generic in &[
             "Carlito",
             "Arial",
@@ -677,27 +846,11 @@ impl FontManager {
             }
         }
 
-        let style = if italic {
-            fontdb::Style::Italic
-        } else {
-            fontdb::Style::Normal
-        };
-        let weight = if bold {
-            fontdb::Weight::BOLD
-        } else {
-            fontdb::Weight::NORMAL
-        };
-
-        let mut found_id = None;
-        for fallback in &fallbacks {
-            let query = fontdb::Query {
-                families: &[fontdb::Family::Name(fallback)],
-                weight,
-                style,
-                stretch: fontdb::Stretch::Normal,
-            };
-
-            if let Some(id) = self.db.query(&query) {
+        if found_id.is_none() {
+            for fallback in &fallbacks {
+                let Some(id) = query_family(fallback) else {
+                    continue;
+                };
                 found_id = Some(id);
                 break;
             }
@@ -988,6 +1141,36 @@ impl FontManager {
     }
 }
 
+fn best_caller_face(
+    db: &fontdb::Database,
+    ids: &[fontdb::ID],
+    weight: fontdb::Weight,
+    style: fontdb::Style,
+) -> Option<fontdb::ID> {
+    const CANDIDATE_FAMILY: &str = "__rdocx_caller_candidate__";
+
+    let mut candidates = fontdb::Database::new();
+    let mut candidate_ids = Vec::with_capacity(ids.len());
+    for id in ids {
+        let mut face = db.face(*id)?.clone();
+        for (family, _) in &mut face.families {
+            CANDIDATE_FAMILY.clone_into(family);
+        }
+        let candidate_id = candidates.push_face_info(face);
+        candidate_ids.push((candidate_id, *id));
+    }
+
+    let selected = candidates.query(&fontdb::Query {
+        families: &[fontdb::Family::Name(CANDIDATE_FAMILY)],
+        weight,
+        style,
+        stretch: fontdb::Stretch::Normal,
+    })?;
+    candidate_ids
+        .into_iter()
+        .find_map(|(candidate, original)| (candidate == selected).then_some(original))
+}
+
 fn bundled_font_database() -> fontdb::Database {
     let mut db = fontdb::Database::new();
     for (_family, data) in crate::bundled_fonts::bundled_font_data() {
@@ -1115,6 +1298,326 @@ fn map_font_name(name: &str) -> &[&str] {
 mod tests {
     use super::*;
     use crate::bundled_fonts::bundled_font_data;
+
+    #[test]
+    fn caller_font_labels_resolve_after_exact_embedded_families() {
+        let caladea = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Caladea")
+            .expect("Caladea is bundled")
+            .1;
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        manager.load_additional_fonts(&[
+            FontFile {
+                family: "Document Serif".to_owned(),
+                data: caladea.to_vec(),
+            },
+            FontFile {
+                family: "Carlito".to_owned(),
+                data: caladea.to_vec(),
+            },
+        ]);
+
+        let aliased = manager
+            .resolve_font(Some("Document Serif"), false, false)
+            .expect("caller label resolves");
+        assert_eq!(
+            manager.fonts[manager.index_of(aliased).unwrap()].family,
+            "Caladea"
+        );
+
+        let exact = manager
+            .resolve_font(Some("Carlito"), false, false)
+            .expect("embedded family resolves exactly");
+        assert_eq!(
+            manager.fonts[manager.index_of(exact).unwrap()].family,
+            "Carlito"
+        );
+
+        manager.set_caller_aliases(&[("Document Serif".to_owned(), "Carlito".to_owned())]);
+        let explicit = manager
+            .resolve_font(Some("Document Serif"), false, false)
+            .expect("explicit alias precedes label-derived alias");
+        assert_eq!(
+            manager.fonts[manager.index_of(explicit).unwrap()].family,
+            "Carlito"
+        );
+
+        manager.load_additional_fonts(&[FontFile {
+            family: "Caladea".to_owned(),
+            data: caladea.to_vec(),
+        }]);
+        assert!(manager.caller_aliases.is_empty());
+
+        manager.set_caller_aliases(&[("Arial".to_owned(), "Caladea".to_owned())]);
+        let caller_alias = manager
+            .resolve_font(Some("Arial"), false, false)
+            .expect("explicit alias resolves before mapped fallback");
+        assert_eq!(
+            manager.fonts[manager.index_of(caller_alias).unwrap()].family,
+            "Caladea"
+        );
+        let generic = manager
+            .resolve_font(Some("Unmapped Document Family"), false, false)
+            .expect("generic fallback remains available");
+        assert_eq!(
+            manager.fonts[manager.index_of(generic).unwrap()].family,
+            "Carlito"
+        );
+    }
+
+    #[test]
+    fn caller_alias_updates_preserve_bytes_and_invalidate_resolution_state() {
+        let caladea = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Caladea")
+            .expect("Caladea is bundled")
+            .1;
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        manager.load_additional_fonts(&[FontFile {
+            family: "Caladea".to_owned(),
+            data: caladea.to_vec(),
+        }]);
+        let aliases = vec![
+            ("Document Serif A".to_owned(), "Caladea".to_owned()),
+            ("Document Serif B".to_owned(), "Caladea".to_owned()),
+        ];
+        assert!(manager.set_caller_aliases(&aliases));
+
+        let first = manager
+            .resolve_font(Some("Document Serif A"), false, false)
+            .expect("first alias resolves");
+        let second = manager
+            .resolve_font(Some("Document Serif B"), false, false)
+            .expect("second alias resolves");
+        let first_data = &manager.fonts[manager.index_of(first).unwrap()].data;
+        let second_data = &manager.fonts[manager.index_of(second).unwrap()].data;
+        assert!(Arc::ptr_eq(first_data, second_data));
+        assert!(!manager.set_caller_aliases(&aliases));
+
+        assert!(
+            manager.set_caller_aliases(&[("Document Serif A".to_owned(), "Carlito".to_owned(),)])
+        );
+        let changed = manager
+            .resolve_font(Some("Document Serif A"), false, false)
+            .expect("changed alias resolves");
+        assert_eq!(
+            manager.fonts[manager.index_of(changed).unwrap()].family,
+            "Carlito"
+        );
+        assert!(
+            manager.index_of(first).is_some(),
+            "loaded faces are retained"
+        );
+    }
+
+    #[test]
+    fn explicit_alias_state_respects_entry_and_retained_byte_ceilings() {
+        let aliases = (0..CALLER_ALIAS_MAX_ENTRIES + 32)
+            .map(|index| (format!("Document Serif {index}"), "Caladea".to_owned()))
+            .collect::<Vec<_>>();
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        manager.set_caller_aliases(&aliases);
+        assert_eq!(
+            manager.explicit_aliases.as_slice(),
+            &aliases[..CALLER_ALIAS_MAX_ENTRIES]
+        );
+        assert!(manager.explicit_aliases.len() <= CALLER_ALIAS_MAX_ENTRIES);
+        assert!(manager.explicit_alias_map.len() <= CALLER_ALIAS_MAX_ENTRIES);
+
+        let retained_large = ("x".repeat(32_760), String::new());
+        let byte_limited = vec![
+            retained_large.clone(),
+            ("discarded bytes".to_owned(), "Caladea".to_owned()),
+        ];
+        manager.set_caller_aliases(&byte_limited);
+        assert_eq!(manager.explicit_aliases, vec![retained_large]);
+
+        let oversized = vec![("x".repeat(40_000), "Caladea".to_owned())];
+        manager.set_caller_aliases(&oversized);
+        let retained_bytes = manager
+            .explicit_aliases
+            .iter()
+            .map(|(requested, target)| requested.len() + target.len())
+            .sum::<usize>()
+            + manager
+                .explicit_alias_map
+                .iter()
+                .map(|(requested, target)| requested.len() + target.len())
+                .sum::<usize>();
+        assert!(retained_bytes <= CALLER_ALIAS_MAX_RETAINED_BYTES);
+        assert!(manager.explicit_aliases.is_empty());
+        assert!(manager.explicit_alias_map.is_empty());
+    }
+
+    #[test]
+    fn label_alias_prefers_caller_bytes_over_bundled_same_family() {
+        let bundled = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Caladea")
+            .expect("Caladea is bundled")
+            .1;
+        let mut caller = bundled.to_vec();
+        caller.push(0);
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        manager.load_additional_fonts(&[FontFile {
+            family: "Document Serif".to_owned(),
+            data: caller.clone(),
+        }]);
+
+        let resolved = manager
+            .resolve_font(Some("Document Serif"), false, false)
+            .expect("caller label resolves");
+        let loaded = &manager.fonts[manager.index_of(resolved).unwrap()];
+        assert_eq!(loaded.family, "Caladea");
+        assert_eq!(loaded.data.as_ref(), caller.as_slice());
+        assert_ne!(loaded.data.as_ref(), bundled);
+    }
+
+    #[test]
+    fn case_only_caller_labels_resolve_to_the_supplied_face() {
+        let bundled = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Caladea")
+            .expect("Caladea is bundled")
+            .1;
+        let mut caller = bundled.to_vec();
+        caller.push(0);
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        manager.load_additional_fonts(&[FontFile {
+            family: "caladea".to_owned(),
+            data: caller.clone(),
+        }]);
+
+        let resolved = manager
+            .resolve_font(Some("caladea"), false, false)
+            .expect("case-only caller label resolves");
+        let loaded = &manager.fonts[manager.index_of(resolved).unwrap()];
+        assert_eq!(loaded.family, "Caladea");
+        assert_eq!(loaded.data.as_ref(), caller.as_slice());
+    }
+
+    #[test]
+    fn constructor_label_alias_survives_additional_font_replacement() {
+        let caladea = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Caladea")
+            .expect("Caladea is bundled")
+            .1;
+        let carlito = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Carlito")
+            .expect("Carlito is bundled")
+            .1;
+        let mut constructor = caladea.to_vec();
+        constructor.push(0);
+        let mut manager =
+            FontManager::new_with_fonts(vec![("Document Serif".to_owned(), constructor.clone())]);
+
+        manager.load_additional_fonts(&[FontFile {
+            family: "Additional Sans".to_owned(),
+            data: carlito.to_vec(),
+        }]);
+
+        let resolved = manager
+            .resolve_font(Some("Document Serif"), false, false)
+            .expect("constructor label still resolves");
+        let loaded = &manager.fonts[manager.index_of(resolved).unwrap()];
+        assert_eq!(loaded.family, "Caladea");
+        assert_eq!(loaded.data.as_ref(), constructor.as_slice());
+    }
+
+    #[test]
+    fn constructor_family_priority_survives_additional_font_replacement() {
+        let caladea = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Caladea")
+            .expect("Caladea is bundled")
+            .1;
+        let mut constructor = caladea.to_vec();
+        constructor.push(0);
+        let mut replacement = caladea.to_vec();
+        replacement.extend_from_slice(&[0, 0]);
+        let mut manager =
+            FontManager::new_with_fonts(vec![("Document Serif".to_owned(), constructor.clone())]);
+
+        manager.load_additional_fonts(&[FontFile {
+            family: "Caladea".to_owned(),
+            data: replacement,
+        }]);
+
+        let resolved = manager
+            .resolve_font(Some("Caladea"), false, false)
+            .expect("constructor family still resolves");
+        let loaded = &manager.fonts[manager.index_of(resolved).unwrap()];
+        assert_eq!(loaded.data.as_ref(), constructor.as_slice());
+    }
+
+    #[test]
+    fn caller_face_selection_matches_fontdb_css_rules() {
+        let caladea = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Caladea")
+            .expect("Caladea is bundled")
+            .1;
+        let mut source = fontdb::Database::new();
+        source.load_font_data(caladea.to_vec());
+        let template = source.faces().next().expect("Caladea has a face").clone();
+        let mut db = fontdb::Database::new();
+        let mut add_face = |weight: u16, stretch: fontdb::Stretch, style: fontdb::Style| {
+            let mut face = template.clone();
+            face.weight = fontdb::Weight(weight);
+            face.stretch = stretch;
+            face.style = style;
+            db.push_face_info(face)
+        };
+
+        let weight_300 = add_face(300, fontdb::Stretch::Normal, fontdb::Style::Normal);
+        let weight_500 = add_face(500, fontdb::Stretch::Normal, fontdb::Style::Normal);
+        let weight_600 = add_face(600, fontdb::Stretch::Normal, fontdb::Style::Normal);
+        let weight_800 = add_face(800, fontdb::Stretch::Normal, fontdb::Style::Normal);
+        let expanded = add_face(400, fontdb::Stretch::SemiExpanded, fontdb::Style::Normal);
+        let condensed = add_face(400, fontdb::Stretch::SemiCondensed, fontdb::Style::Normal);
+        let normal = add_face(400, fontdb::Stretch::Normal, fontdb::Style::Normal);
+        let italic = add_face(400, fontdb::Stretch::Normal, fontdb::Style::Italic);
+
+        assert_eq!(
+            best_caller_face(
+                &db,
+                &[weight_300, weight_500],
+                fontdb::Weight::NORMAL,
+                fontdb::Style::Normal,
+            ),
+            Some(weight_500)
+        );
+        assert_eq!(
+            best_caller_face(
+                &db,
+                &[weight_600, weight_800],
+                fontdb::Weight::BOLD,
+                fontdb::Style::Normal,
+            ),
+            Some(weight_800)
+        );
+        assert_eq!(
+            best_caller_face(
+                &db,
+                &[expanded, condensed],
+                fontdb::Weight::NORMAL,
+                fontdb::Style::Normal,
+            ),
+            Some(condensed)
+        );
+        assert_eq!(
+            best_caller_face(
+                &db,
+                &[normal, italic],
+                fontdb::Weight::NORMAL,
+                fontdb::Style::Oblique,
+            ),
+            Some(italic)
+        );
+    }
 
     fn font_with_family(source: &[u8], family: &str) -> Vec<u8> {
         assert_eq!(family.len(), 7);

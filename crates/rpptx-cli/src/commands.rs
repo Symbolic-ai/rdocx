@@ -1,8 +1,11 @@
 //! CLI command implementations.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use oxml_cli_support::{default_output_path, json_envelope, parse_range};
+use oxml_cli_support::{
+    StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
+};
+use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{Presentation, ShapeRef};
 use serde_json::json;
 
@@ -114,50 +117,84 @@ pub fn text(file: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn convert(file: &Path, format: &str, output: Option<&Path>, dpi: f64) -> Result<()> {
+pub fn convert(
+    file: &Path,
+    format: &str,
+    output: Option<&Path>,
+    dpi: f64,
+    slides: Option<&str>,
+    quality: u8,
+    transparent: bool,
+) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
+    let image_format = parse_image_format(format, quality, transparent);
+    let extension = match (format, image_format.as_ref()) {
+        ("pdf", _) => "pdf",
+        (_, Ok((_, extension))) => extension,
+        (other, Err(_)) => {
+            return Err(format!("Unknown format: {other}. Supported: pdf, png, jpeg, tiff").into());
+        }
+    };
     let output = output
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| default_output_path(file, format));
+        .unwrap_or_else(|| default_output_path(file, extension));
     match format {
         "pdf" => {
             std::fs::write(&output, presentation.to_pdf_deterministic()?)?;
             println!("Written to {}", output.display());
         }
-        "png" => {
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
             if presentation.is_empty() {
-                return Err("cannot convert a presentation with no slides to PNG".into());
+                return Err("cannot convert a presentation with no slides to an image".into());
             }
             let (_, layout) = presentation.render_deterministic()?;
             if layout.pages.len() != presentation.len() {
                 return Err(format!(
-                    "rendered {} PNG pages for {} slides",
+                    "rendered {} image pages for {} slides",
                     layout.pages.len(),
                     presentation.len()
                 )
                 .into());
             }
-            for page in &layout.pages {
+            let selected = selected_zero_based_slides(presentation.len(), slides)?;
+            for index in &selected {
+                let page = &layout.pages[*index];
                 validate_raster_dimensions(page.width, page.height, dpi)?;
             }
-            let page_count = layout.pages.len();
-            let parent = output.parent().unwrap_or_else(|| Path::new("."));
-            let stem = output.file_stem().unwrap_or_default().to_string_lossy();
-            for index in 0..page_count {
-                let png = oxml_pdf::render_page_to_png(&layout, index, dpi)
-                    .ok_or_else(|| format!("slide {} did not rasterize", index + 1))?;
-                if page_count == 1 {
-                    std::fs::write(&output, png)?;
+            let (format, extension) = image_format?;
+            match format {
+                RasterFormat::Tiff => {
+                    let output_bytes =
+                        oxml_pdf::render_pages(&layout, &selected, RasterOptions { dpi, format })?;
+                    let RasterOutput::MultiPageTiff(tiff) = output_bytes else {
+                        return Err("TIFF render did not produce one stream".into());
+                    };
+                    stage_and_publish(&[(output.clone(), tiff)])?;
                     println!("Written to {}", output.display());
-                } else {
-                    let path = parent.join(format!("{stem}_{:03}.png", index + 1));
-                    std::fs::write(&path, png)?;
-                    println!("Slide {} -> {}", index + 1, path.display());
+                }
+                RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
+                    let output_paths =
+                        convert_separate_output_paths(&output, extension, selected.len());
+                    ensure_output_paths_available(&output_paths)?;
+                    let mut staged = StagedOutputSet::new();
+                    let mut rendered = Vec::with_capacity(selected.len());
+                    for (one_based, (index, path)) in
+                        selected.iter().zip(output_paths.iter()).enumerate()
+                    {
+                        let image =
+                            render_one_raster_page(&layout, *index, RasterOptions { dpi, format })?;
+                        staged.stage_bytes(path, &image)?;
+                        rendered.push((one_based + 1, path.clone()));
+                    }
+                    staged.publish()?;
+                    for (one_based, path) in rendered {
+                        println!("Slide {one_based} -> {}", path.display());
+                    }
                 }
             }
         }
-        other => return Err(format!("Unknown format: {other}. Supported: pdf, png").into()),
+        _ => unreachable!(),
     }
     Ok(())
 }
@@ -268,41 +305,64 @@ pub fn validate(file: &Path) -> Result<bool> {
     Ok(issues.is_empty())
 }
 
-pub fn render(file: &Path, output: Option<&Path>, dpi: f64, range: Option<&str>) -> Result<()> {
+pub fn render(
+    file: &Path,
+    output: Option<&Path>,
+    dpi: f64,
+    range: Option<&str>,
+    format: &str,
+    quality: u8,
+    transparent: bool,
+) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
-    let selected = match range {
-        Some(range) => parse_range(range)?,
-        None => (1..=presentation.len()).collect(),
-    };
-    if let Some(index) = selected
-        .iter()
-        .copied()
-        .find(|index| *index > presentation.len())
-    {
-        return Err(format!(
-            "slide {index} is out of range for {} slides",
-            presentation.len()
-        )
-        .into());
-    }
+    let (format, extension) = parse_image_format(format, quality, transparent)?;
+    let selected = selected_zero_based_slides(presentation.len(), range)?;
     let output = output.unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(output)?;
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
     let (_, layout) = presentation.render_deterministic()?;
-    for one_based in &selected {
+    for index in &selected {
         let page = layout
             .pages
-            .get(*one_based - 1)
-            .ok_or_else(|| format!("slide {one_based} has no rendered page"))?;
+            .get(*index)
+            .ok_or_else(|| format!("slide {} has no rendered page", index + 1))?;
         validate_raster_dimensions(page.width, page.height, dpi)?;
     }
-    for one_based in selected {
-        let png = oxml_pdf::render_page_to_png(&layout, one_based - 1, dpi)
-            .ok_or_else(|| format!("slide {one_based} did not rasterize"))?;
-        let path = output.join(format!("{stem}_slide{one_based}.png"));
-        std::fs::write(&path, png)?;
-        println!("Slide {one_based} -> {}", path.display());
+    match format {
+        RasterFormat::Tiff => {
+            let output_bytes =
+                oxml_pdf::render_pages(&layout, &selected, RasterOptions { dpi, format })?;
+            let RasterOutput::MultiPageTiff(tiff) = output_bytes else {
+                return Err("TIFF render did not produce one stream".into());
+            };
+            let path = output.join(format!("{stem}.tiff"));
+            std::fs::create_dir_all(output)?;
+            stage_and_publish(&[(path.clone(), tiff)])?;
+            println!("Written to {}", path.display());
+        }
+        RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
+            let output_paths = selected
+                .iter()
+                .map(|index| {
+                    let one_based = index + 1;
+                    output.join(format!("{stem}_slide{one_based}.{extension}"))
+                })
+                .collect::<Vec<_>>();
+            std::fs::create_dir_all(output)?;
+            ensure_output_paths_available(&output_paths)?;
+            let mut staged = StagedOutputSet::new();
+            let mut rendered = Vec::with_capacity(selected.len());
+            for (index, path) in selected.iter().zip(output_paths.iter()) {
+                let one_based = index + 1;
+                let image = render_one_raster_page(&layout, *index, RasterOptions { dpi, format })?;
+                staged.stage_bytes(path, &image)?;
+                rendered.push((one_based, path.clone()));
+            }
+            staged.publish()?;
+            for (one_based, path) in rendered {
+                println!("Slide {one_based} -> {}", path.display());
+            }
+        }
     }
     Ok(())
 }
@@ -400,6 +460,87 @@ fn validate_dpi(dpi: f64) -> Result<()> {
     if !dpi.is_finite() || dpi <= 0.0 {
         return Err("DPI must be a positive finite number".into());
     }
+    Ok(())
+}
+
+fn parse_image_format(
+    format: &str,
+    quality: u8,
+    transparent: bool,
+) -> Result<(RasterFormat, &'static str)> {
+    match format {
+        "png" => Ok((
+            RasterFormat::Png {
+                transparent_background: transparent,
+            },
+            "png",
+        )),
+        "jpg" | "jpeg" => {
+            if !(1..=100).contains(&quality) {
+                return Err(format!("JPEG quality must be 1 through 100, got {quality}").into());
+            }
+            Ok((RasterFormat::Jpeg { quality }, "jpg"))
+        }
+        "tif" | "tiff" => Ok((RasterFormat::Tiff, "tiff")),
+        other => Err(format!("Unknown image format: {other}. Supported: png, jpeg, tiff").into()),
+    }
+}
+
+fn selected_zero_based_slides(slide_count: usize, range: Option<&str>) -> Result<Vec<usize>> {
+    let selected = match range {
+        Some(range) => parse_range(range)?,
+        None => (1..=slide_count).collect(),
+    };
+    if selected.is_empty() {
+        return Err("no slides selected".into());
+    }
+    if let Some(index) = selected.iter().copied().find(|index| *index > slide_count) {
+        return Err(format!("slide {index} is out of range for {slide_count} slides").into());
+    }
+    Ok(selected.into_iter().map(|index| index - 1).collect())
+}
+
+fn convert_separate_output_paths(
+    output: &Path,
+    extension: &str,
+    page_count: usize,
+) -> Vec<PathBuf> {
+    if page_count == 1 {
+        return vec![output.to_path_buf()];
+    }
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let stem = output.file_stem().unwrap_or_default().to_string_lossy();
+    (1..=page_count)
+        .map(|index| parent.join(format!("{stem}_{index:03}.{extension}")))
+        .collect()
+}
+
+fn render_one_raster_page(
+    layout: &oxml_layout::LayoutResult,
+    page_index: usize,
+    options: RasterOptions,
+) -> Result<Vec<u8>> {
+    let output = oxml_pdf::render_pages(layout, &[page_index], options)?;
+    let RasterOutput::SeparatePages(mut pages) = output else {
+        return Err("single-slide render did not produce a separate image".into());
+    };
+    if pages.len() != 1 {
+        return Err("single-slide render returned the wrong page count".into());
+    }
+    Ok(pages.remove(0))
+}
+
+fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()> {
+    let paths = outputs
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    ensure_output_paths_available(&paths)?;
+    let mut staged = StagedOutputSet::new();
+    for (path, bytes) in outputs {
+        staged.stage_bytes(path, bytes)?;
+    }
+    staged.publish()?;
     Ok(())
 }
 

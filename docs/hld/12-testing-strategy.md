@@ -64,6 +64,27 @@ inputs, formatting pictures, and stable cached-display fallbacks. The oracle
 is test metadata only. It is not a runtime dependency and adds no binary
 fixture.
 
+The RTF reader differential records Microsoft Word 16.104 build
+16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
+covers body order, run and paragraph formatting, tables, list overrides, PNG
+images, diagnostics, and generated-DOCX reopen behavior. The normalized record
+binds run formatting, including all-caps, small-caps, hidden text, breaks, and
+tabs, to the generated and reopened body runs rather than relying on global
+markers. The ignored regeneration gate opens the DOCX saved by that exact Word
+build and compares the same structural record.
+
+The RTF writer round-trip gate builds its document in code, writes RTF through
+the native facade, reads the bytes back through the RTF reader, and compares
+the normalized public structure for text, run formatting, paragraph
+formatting, tables, lists, and PNG and JPEG images. Focused writer regressions
+lock deterministic header table order, signed UTF-16 escaping, formatting
+resets, table cell boundaries, multilevel list emission, truncating EMU to twip
+image dimensions, atomic path saves, output bounds, diagnostic caps, and exact
+location-aware diagnostics for unsupported body, paragraph, run, table, row,
+cell, image, field, note, comment, bookmark, hyperlink, and raw XML cases.
+All fixtures stay in source, and a DOCX preservation regression proves the
+writer does not mutate unmodelled XML in the source package.
+
 The digital-signature regression gate constructs its DOCX and signature XML
 in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
 and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace
@@ -187,6 +208,16 @@ cases prove publication and recovery remain safe. Both WASM targets, the
 package dry run and archive ceiling, and the unchanged 49-entry hash harness
 are required riders.
 
+The `document_facing_aliases_share_one_caller_font` gate uses caller bytes that
+differ from bundled same-family bytes. Multiple document-facing names must
+select that one caller face with exact bytes, diagnostics, provenance, and
+shared ownership. Focused alias regressions cover exact-family precedence,
+case-only labels, constructor metadata retained across changed additional-font
+loads, CSS-like candidate choice, equal-context reuse, changed-context misses,
+checked-transfer rejection, and warm and cold output equality. Entry and byte
+boundary cases require oversized explicit alias slices to produce the same
+deterministic identity in the font manager and reusable engine context.
+
 The relayout-cache gate compares a warm normal-font result with a fresh cold
 engine after editing one safe body paragraph. Pages, font table order and ids,
 font bytes, diagnostics, revision view, and every resolved provenance span must
@@ -256,8 +287,9 @@ retention, and warm deterministic layout and PDF bytes equal a fresh engine.
 
 Boundary tests exercise the exact shaping identity, process font discovery,
 canonical file-byte identity, lock poison recovery, bounded resolution and
-coverage state, bounded and shrunk per-paragraph font traces, and both pending
-and published block queues. Structural byte tests use retained capacities for
+coverage state, the 256-entry and 64 KiB caller-alias identity, bounded and
+shrunk per-paragraph font traces, and both pending and published block queues.
+Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
 must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096
@@ -677,6 +709,11 @@ outcomes as mandatory manual evidence.
   `ca`, while distinct values remain distinct and opaque content emits none.
 - A 50 percent black fill over white produces the exact midpoint pixel in the
   deterministic raster path.
+- Shared raster option tests construct deterministic in-code pages and decode
+  PNG, JPEG and multi-page TIFF output. They prove selected-page order,
+  dimensions, distinct page pixels, transparent PNG behavior, JPEG quality
+  validation, TIFF cardinality and byte-identical opaque PNG compatibility
+  wrappers.
 - Linear and radial path gradients produce type 2 patterns, type 2 or type 3
   shadings, and type 3 stitching functions over interval type 2 functions.
   Structural tests also pin stop normalization, fill and stroke pattern
@@ -788,12 +825,14 @@ text order, embedded paragraph-break normalization, and field-only title
 identity so the title appears exactly once.
 
 The `rdocx` CLI has one integration binary that invokes the compiled executable
-through `CARGO_BIN_EXE_rdocx`. Its seven tests cover `inspect`, `text`,
-`convert`, `diff`, `replace`, `validate`, and `render` with in-code DOCX and
+through `CARGO_BIN_EXE_rdocx`. Its tests cover `inspect`, `text`, `convert`,
+`diff`, `replace`, `validate`, and `render` with in-code DOCX and
 corrupt-package fixtures. The assertions bind schema 1, default paths, exact
 stdout, exit-status verdicts, output validity, replacement persistence,
-document-order text, and bundled-font deterministic render bytes. Process ID
-and an atomic counter isolate temporary workspaces across concurrent runs.
+document-order text, bundled-font deterministic render bytes, legacy
+zero-based `render --page`, one-based `render --pages`, shared image format
+extensions, invalid range rejection and no partial output. Process ID and an
+atomic counter isolate temporary workspaces across concurrent runs.
 
 All 27 workspace packages explicitly declare one distinct README. The root
 README is the high-level `rdocx` guide. Each crate-local document states the
