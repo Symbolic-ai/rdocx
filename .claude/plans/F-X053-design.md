@@ -1,6 +1,6 @@
 # F-X053, Complete layout migration and contribution records
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S55
 **Size**: S
 **Depends on**: F-X051, F-X052
@@ -96,19 +96,19 @@ records only. Any output delta is unrelated and blocks the sprint. Do not edit
 
 ## Implementation checklist
 
-- [ ] Add the recursive `MarkedContent` migration note to the tracked v0.9.0
+- [x] Add the recursive `MarkedContent` migration note to the tracked v0.9.0
       section and package README.
-- [ ] Update the current HLD API guidance without adding change-history prose.
-- [ ] Extend the next-stable contribution inventory for Issues 44 and 46 and
+- [x] Update the current HLD API guidance without adding change-history prose.
+- [x] Extend the next-stable contribution inventory for Issues 44 and 46 and
       PR 45 with authenticated credit.
-- [ ] Render and verify the amended tracked release body.
-- [ ] Replace only the published v0.9.0 GitHub release body and prove exact
+- [x] Render and verify the amended tracked release body.
+- [x] Replace only the published v0.9.0 GitHub release body and prove exact
       equality.
-- [ ] Close Issue 44 and PR 45 as addressed by F-X051 with its implementation
+- [x] Close Issue 44 and PR 45 as addressed by F-X051 with its implementation
       SHA.
-- [ ] Close Issue 46 with the F-X052 SHA, A/B measurements, and migration note.
-- [ ] Confirm Issues 39 and 42 remain closed without duplicate comments.
-- [ ] Run prose, release-notes, package-doc, GitHub-state, and unchanged-harness
+- [x] Close Issue 46 with the F-X052 SHA, A/B measurements, and migration note.
+- [x] Confirm Issues 39 and 42 remain closed without duplicate comments.
+- [x] Run prose, release-notes, package-doc, GitHub-state, and unchanged-harness
       checks.
 
 ## Open questions

@@ -259,7 +259,11 @@ informative `Figure` variants only through existing non-exhaustive enums.
 Existing `InlineItem` and `LineItem` image and group variant fields stay
 unchanged, so direct constructors retain source compatibility. The new figure
 variant lowers to the one backend-neutral marked-content carrier rather than
-creating a second PDF ownership representation.
+creating a second PDF ownership representation. A backend that consumes
+`PageFrame::elements` must recurse through
+`MarkedContent::children` or use `oxml_layout::walk`.
+Wildcard matches remain source compatible but must not discard an unrecognized
+container, because visible content can be nested below it.
 
 When native callers enable the default-off `agile-encryption` feature,
 `Document::open_encrypted`, `Document::from_encrypted_bytes`, and the bounded

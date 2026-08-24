@@ -4146,6 +4146,46 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("hardened equivalent", notes)
         self.assertIn("landed directly", notes)
 
+    def test_release_notes_v0_9_0_include_marked_content_migration(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = workflow.render_release_notes(changelog, "v0.9.0")
+        compatibility = notes.split("### Compatibility\n\n", 1)[1].split(
+            "\n### Contributors", 1
+        )[0]
+        for claim in (
+            "`PositionedElement` remains non-exhaustive",
+            "`PositionedElement::MarkedContent`",
+            "`MarkedContent::children`",
+            "`oxml_layout::walk`",
+            "`PageFrame::elements`",
+        ):
+            self.assertIn(claim, compatibility, claim)
+
+    def test_oxml_layout_readme_names_recursive_page_traversal(self) -> None:
+        readme = (workflow.REPO / "crates/oxml-layout/README.md").read_text(
+            encoding="utf-8"
+        )
+        for claim in (
+            "`PageFrame::elements`",
+            "`PositionedElement::MarkedContent`",
+            "`MarkedContent::children`",
+            "`oxml_layout::walk`",
+        ):
+            self.assertIn(claim, readme, claim)
+
+    def test_next_stable_inventory_credits_layout_follow_up_records(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        unreleased = changelog.split("## Unreleased\n", 1)[1].split(
+            "\n## v0.9.0", 1
+        )[0]
+        for record in (
+            "https://github.com/tensorbee/rdocx/issues/44",
+            "https://github.com/tensorbee/rdocx/pull/45",
+            "https://github.com/tensorbee/rdocx/issues/46",
+        ):
+            self.assertEqual(unreleased.count(record), 2, record)
+        self.assertIn("@emptinessform", unreleased)
+
     def test_readme_archive_gate_rejects_a_missing_local_patch(self) -> None:
         metadata = readme_doctests.cargo_metadata()
         self.assertIsNotNone(metadata)

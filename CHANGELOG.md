@@ -2,7 +2,29 @@
 
 ## Unreleased
 
-No unreleased changes.
+### Fixed
+
+- Honor caller-supplied font family aliases throughout layout, including
+  aliases that match bundled families. This hardened equivalent addresses
+  [Issue 44](https://github.com/tensorbee/rdocx/issues/44) and
+  [PR 45](https://github.com/tensorbee/rdocx/pull/45).
+- Restore bounded reusable layout performance for document load, typing, undo,
+  and table mutation while retaining exact shaping and semantic structure.
+  This addresses [Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+
+### Compatibility
+
+External layout backends must recurse through
+`PositionedElement::MarkedContent` when walking page elements, as described in
+the corrected v0.9.0 compatibility guidance below.
+
+### Contributors
+
+Thanks to `@emptinessform` for the font-alias report and reference work in
+[Issue 44](https://github.com/tensorbee/rdocx/issues/44) and
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and for the editor
+measurements and migration report in
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46).
 
 ## v0.9.0
 
@@ -53,6 +75,13 @@ now uses `Arc<[u8]>`, `LayoutResult.pages` now uses
 typed table styles expose additional preserved and conditional properties.
 Callers that construct these low-level values must update their literals or
 use the provided constructors.
+
+`PositionedElement` remains non-exhaustive. Visible content in
+`PageFrame::elements` can be nested under
+`PositionedElement::MarkedContent`. External backends must recurse through
+`MarkedContent::children` or use `oxml_layout::walk` when visiting page
+elements. A wildcard arm that ignores the wrapper can otherwise produce empty
+output.
 
 The `agile-encryption` and `digital-signatures` features remain default-off.
 The high-level native additions do not expand Python, WASM, or CLI method
