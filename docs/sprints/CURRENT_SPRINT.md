@@ -33,7 +33,7 @@ layout traversal required by tagged content.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-178 | HTML import | L | in-progress | codex |
-| F-179 | ODT reader | L | pending | - |
+| F-179 | ODT reader | L | in-progress | codex |
 | F-X052 | Restore interactive relayout performance | L | in-progress | codex |
 | F-X053 | Complete layout migration and contribution records | S | pending | - |
 
