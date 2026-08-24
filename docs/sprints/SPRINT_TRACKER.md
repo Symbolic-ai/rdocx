@@ -308,6 +308,10 @@ defended.
 | F-X048 | S53 | L | 4 | 1 | 2026-08-23 | Recursive dense-form tables with reviewed one-page geometry |
 | F-X049 | S53 | S | 1 | 1 | 2026-08-23 | Published and verified the complete 15-package rpptx 0.5.0 family |
 | F-X050 | S53 | S | 1 | 1 | 2026-08-23 | Published and verified the seven-package stable rdocx 0.9.0 family |
+| F-176 | S54 | L | 4 | 1 | 2026-08-24 | Bounded RTF reader with Word differential evidence |
+| F-177 | S54 | M | 2 | 1 | 2026-08-24 | Deterministic diagnostic RTF writer and round trip |
+| F-183 | S54 | S | 1 | 1 | 2026-08-24 | Shared PNG, JPEG, TIFF, transparency, and page-range export |
+| F-X051 | S54 | M | 2 | 1 | 2026-08-24 | Bounded caller-font family aliases with exact cache identity |
 
 ## Velocity
 

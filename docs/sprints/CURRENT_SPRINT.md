@@ -26,10 +26,10 @@ duplicating font bytes or weakening reusable-engine cache identity.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-176 | RTF reader | L | in-progress | codex |
-| F-177 | RTF writer | M | in-progress | codex |
-| F-183 | Image export options | S | in-progress | codex |
-| F-X051 | Honor caller-supplied font family aliases | M | in-progress | codex |
+| F-176 | RTF reader | L | done | - |
+| F-177 | RTF writer | M | done | - |
+| F-183 | Image export options | S | done | - |
+| F-X051 | Honor caller-supplied font family aliases | M | done | - |
 
 ## Sequencing note
 
