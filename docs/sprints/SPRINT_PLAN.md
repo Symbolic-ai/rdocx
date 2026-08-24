@@ -749,10 +749,10 @@ should land against a tree the other two have already settled.
 
 v1 shipped at S43 and every implementation milestone closed. S44 repairs the
 gates and the records. From S45 the plan resumes at milestone granularity
-against `14-development-backlog.md` M14 through M20.
+against `14-development-backlog.md` M14 through M22.
 
 The order is deliberate and each boundary is a stopping point. Stopping after
-S46 leaves one chart engine serving both families. Stopping after S49 leaves a
+S45 leaves one chart engine serving both families. Stopping after S51 leaves a
 document-automation product. Stopping after S69 leaves every planned Word and
 PowerPoint capability complete. The advanced spreadsheet programme starts only
 after that boundary and only if its feasibility gate confirms a gap worth
@@ -760,8 +760,8 @@ filling in the Rust ecosystem.
 
 | Sprints | Milestone | Stories | Days |
 |---|---|---|---|
-| S45 to S46 | M15, then M14 opens | 4 plus 5 | 12 plus 15 |
-| S47 to S48 | M14 completes | 4 | 13 |
+| S45 | M15, charts beyond PowerPoint | 4 | 12 |
+| S46 to S48 | M14, Word collaboration layer | 9 | 28 |
 | S49 to S51 | M16, document automation | 15 | 39 |
 | S52 to S53 | M17, security and compliance | 7 | 23 |
 | S54 to S56 | M18, format breadth | 8 | 26 |
@@ -769,6 +769,8 @@ filling in the Rust ecosystem.
 | S59 to S64 | M21, presentation depth | 15 | 60 |
 | S65 to S69 | M22, Word depth | 12 | 44 |
 | S70 to S79 | M19, advanced spreadsheets | 21 | 85 |
+
+### M15, Charts beyond PowerPoint
 
 #### Sprint S45, One chart engine
 
@@ -786,6 +788,8 @@ on the format-neutral side of the crate graph.
 F-156 is a file move and nothing else. The hash harness must be byte-identical
 across it, and folding a behaviour change into it is forbidden. The other three
 are strictly ordered, since each needs the part the one before it writes.
+
+### M14, Word collaboration layer
 
 #### Sprint S46, Comments and content controls
 
@@ -831,6 +835,8 @@ change what.
 
 A short sprint on purpose. It carries the M14 end-of-milestone gate, which
 covers four subsystems built across three sprints.
+
+### M16, Document automation
 
 #### Sprint S49, Fields
 
@@ -889,6 +895,8 @@ because `oxml-chart`, the low-level provenance types, and shared font-cache
 work must exist on crates.io before the stable dependency graph can publish.
 Both release tags retain separate final approval boundaries.
 
+### M17, Security and compliance
+
 #### Sprint S52, Encryption and renderer follow-ups
 
 **Goal**: open the files that currently cannot be opened at all, then close the
@@ -945,6 +953,8 @@ approval boundaries. Incubating 0.5.0 publishes before stable 0.9.0 so every
 stable dependency pin resolves from crates.io. Both reviewed changelog sections
 credit and link every included external issue and pull request, and each record
 receives a maintainer release note for its contributor.
+
+### M18, Format breadth
 
 #### Sprint S54, RTF and caller font aliases
 
@@ -1009,6 +1019,8 @@ at v0.10.0 with reviewed notes, compatibility guidance, direct record links,
 and contributor credit. Each included pull request closes only after the
 published implementation and release body verify.
 
+### M20, Fidelity at scale
+
 #### Sprint S57, The Word corpus
 
 **Goal**: measure the Word renderer against documents nobody here wrote. This is
@@ -1045,6 +1057,8 @@ F-X031 remains at the non-spreadsheet boundary. F-X029 creates the stable
 repository-side `ci-gate` in S44. This operational story makes it a required
 GitHub check after the Word fidelity gates have settled and before the larger
 spreadsheet programme starts.
+
+### M21, Presentation depth
 
 #### Sprint S59, Presentation collaboration and security
 
@@ -1132,6 +1146,8 @@ HTML maps a bounded DOM and CSS subset into shapes. PDF imports either a
 preserved page graphic or the declared editable text, image, path, and link
 subset. Neither path promises arbitrary browser or PDF-engine compatibility.
 
+### M22, Word depth
+
 #### Sprint S65, OfficeMath
 
 **Goal**: author, convert, lay out, and render modern Word equations.
@@ -1195,6 +1211,8 @@ form fields are modeled only where they occur inside modern OOXML packages.
 Flat OPC, DOCM, DOTX, DOTM, and bounded MHTML share the current document model.
 Binary `.doc` and Word 2003 XML remain permanent non-goals. The M22 end gate
 runs only modern package fixtures.
+
+### M19, Advanced spreadsheets
 
 #### Sprint S70, Spreadsheet decision, corpus and core model
 
@@ -1343,6 +1361,27 @@ formula and pivot recalculation, selected Power Query refresh, sandboxed script
 automation, save, reopen, and deterministic PDF rendering. Every unavailable
 execution surface remains preserved and diagnosed. Distribution follows the
 shape M13 established only after that complete lifecycle passes.
+
+## Future release boundaries
+
+These are the planned points where a coherent crate family may publish. They
+do not authorize a tag or publication by themselves. The sprint that reaches a
+boundary adds an explicit release F-ID, selects the exact version from the
+reviewed public API diff, and uses `/release` with its separate final approval
+at the fully verified SHA.
+
+| Boundary | Eligible publication | Why this point is coherent |
+|---|---|---|
+| End of S58, M20 | Stable `rdocx` family. Publish the incubating shared family first only if a shared crate version or stable dependency pin moved. | The Word corpus, shaping, pagination, and incremental layout gates have all settled, so the stable family can describe one measured fidelity boundary. |
+| End of S64, M21 | Incubating `rpptx` family. Publish the stable family too only when the reviewed dependency diff requires new shared pins. | Collaboration, security, timing, media, SmartArt, ODP, handouts, HTML import, and PDF import form one complete presentation-depth boundary. |
+| End of S69, M22 | Stable `rdocx` family. Publish the incubating shared family first only if a shared crate version or stable dependency pin moved. | OfficeMath, fields, dynamic TOC, automation, comparison, embedded content, and modern package variants complete the planned Word-depth boundary. |
+| End of S79, conditional M19 | The new `rxlsx` distribution family defined by F-195, plus only the existing families whose reviewed dependency pins moved. | F-195 is the first point where the conditional spreadsheet programme has a complete facade, CLI, WASM, Python, rendering, and advanced lifecycle gate. |
+
+No intermediate sprint publishes merely because one subsystem compiles. A
+security fix may still justify a separately planned patch release, but ordinary
+feature work waits for the next boundary above. If F-184 archives M19, the S79
+boundary disappears with the programme and no spreadsheet release namespace is
+created.
 
 ## Cross-cutting
 
