@@ -33,11 +33,11 @@ regenerated, never hand-edited.
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
-| M18, Format breadth                            | 8  | 3 | 0 | 5  |
+| M18, Format breadth                            | 8  | 3 | 1 | 4  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | X, Cross-cutting (opportunistic)            | 56 | 52 | 0 | 3  |
-| **Total** | **267** | **239** | **0** | **27** |
+| **Total** | **267** | **239** | **1** | **26** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -352,7 +352,7 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-176 | RTF reader                                   | S54  | L | done |
 | F-177 | RTF writer                                   | S54  | M | done |
-| F-178 | HTML import                                  | S55  | L | pending |
+| F-178 | HTML import                                  | S55  | L | in-progress |
 | F-179 | ODT reader                                   | S55  | L | pending |
 | F-180 | ODT writer                                   | S56  | L | pending |
 | F-181 | EPUB export                                  | S56  | M | pending |
