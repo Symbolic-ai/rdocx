@@ -960,16 +960,26 @@ reader and writer.
 
 #### Sprint S55, HTML and ODT in
 
-**Goal**: the two remaining inbound formats.
+**Goal**: add the two remaining inbound formats, restore the v0.9 editor path
+to the reviewed relayout budget, and close the associated migration and
+contribution records.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-178 | HTML import | L |
 | F-179 | ODT reader | L |
+| F-X052 | Restore interactive relayout performance | L |
+| F-X053 | Complete layout migration and contribution records | S |
 
-Independent of each other. HTML import is the most requested inbound conversion
-in every comparable library's tracker, and ODT is procurement-mandated across
-European public bodies and read by nothing in Rust.
+F-178, F-179, and F-X052 are independent. HTML import is the most requested
+inbound conversion in every comparable library's tracker, and ODT is
+procurement-mandated across European public bodies and read by nothing in
+Rust. F-X052 closes the separate performance residual reported in Issue 46
+without weakening the exact, transactional, bounded cache contract. F-X053
+runs after it, records the `MarkedContent` migration requirement, and closes
+Issue 44, Issue 46, and PR 45 with the exact F-X051 and F-X052 evidence.
+Issues 39 and 42 remain closed because their reporter confirmed that note
+operations recovered and F-X048 fully replaced the dense-form patches.
 
 #### Sprint S56, ODT, EPUB and SVG out
 

@@ -36,8 +36,8 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 3 | 0 | 5  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 54 | 52 | 0 | 1  |
-| **Total** | **265** | **239** | **0** | **25** |
+| X, Cross-cutting (opportunistic)            | 56 | 52 | 0 | 3  |
+| **Total** | **267** | **239** | **0** | **27** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -452,4 +452,6 @@ regenerated, never hand-edited.
 | F-X049 | Tag rpptx-v0.5.0                           | S53 | S | done |
 | F-X050 | Tag v0.9.0                                 | S53 | S | done |
 | F-X051 | Honor caller-supplied font family aliases  | S54 | M | done |
+| F-X052 | Restore interactive relayout performance   | S55 | L | pending |
+| F-X053 | Complete layout migration and contribution records | S55 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
