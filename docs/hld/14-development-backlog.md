@@ -1482,9 +1482,17 @@ shared portable replacement helper.
 text, formatting, tables, lists and images.
 
 ### F-178, HTML import (L)
-HTML and CSS to a Word document, scoped to the subset a browser copy-paste and a
-CMS export actually produce. This is the most requested inbound conversion in
-every library's issue tracker.
+The native Word facade accepts bounded UTF-8 HTML5 documents and fragments from
+strings or paths. Browser-grade tree repair projects source-ordered paragraphs,
+runs, headings, block quotes, preformatted text, hard breaks, nested lists, and
+spanned tables directly into the existing Word model. Inline declarations and
+embedded type, class, id, descendant, and child selectors apply the supported
+font, decoration, colour, alignment, spacing, and indentation subset by
+specificity and source order. Stable path-aware diagnostics report parser
+repairs, unsupported CSS, external resources, and dropped visible constructs.
+Input, retained text, DOM, projection, table, and diagnostic ceilings fail
+closed, and every candidate saves and reopens before publication. No resource
+is fetched and no Python, WASM, or CLI API is added.
 **Depends on**: none.
 **Test gate**: regression. A fixture set of HTML documents produces the expected
 paragraph, run, table and list structure, with unsupported CSS recorded as a

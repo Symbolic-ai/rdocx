@@ -24,8 +24,8 @@ crates/
   rdocx-oxml         WordprocessingML types, re-exports oxml-core
   rdocx-layout       flow engine, paginator, blocks, tables, style resolver
   rdocx-pdf          deprecated shim over oxml-pdf
-  rdocx-html         HTML and Markdown emitter
-  rdocx              the python-docx-shaped facade
+  rdocx-html         outbound HTML and Markdown emitter
+  rdocx              the python-docx-shaped facade and inbound HTML importer
   rdocx-cli  rdocx-wasm  rdocx-py
 
   # PresentationML
@@ -87,6 +87,12 @@ probing, and intrinsic EMU sizing through its local `NativeSize` value. It
 remains a leaf that anything can take cheaply without importing `oxml-core`.
 The `rdocx` facade depends on it directly for collision-free Word media names,
 sniffed package metadata, and byte-first HTML and layout MIME inputs.
+
+**Inbound HTML belongs to the `rdocx` facade.** The private importer uses
+`scraper` for HTML5 document and fragment tree repair, then projects supported
+content directly into the one owned WordprocessingML document model. The edge
+does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
+dependency cycle and avoids a second public intermediate document model.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
 output, font, and line modules hold page frames, positioned elements, glyph
@@ -550,6 +556,14 @@ fields.
 The WASM binding uses that additive facade accessor for its existing `getText`
 method and otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
+
+`Document::from_html` and `Document::open_html` are additive native facade
+constructors. They return the converted document with stable path-aware
+diagnostics for parser repairs, unsupported CSS, dropped resources, and safely
+skipped visible constructs. Input, DOM, projection, text, table, and diagnostic
+limits fail closed before a partial document is published. The importer saves
+and reopens its candidate through the typed Word package model before returning
+it.
 
 The same direct lookup rule covers document tables and paragraphs nested in
 table cells. `Document::table` and `Document::table_mut` are total, and cell

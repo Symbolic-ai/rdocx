@@ -1,6 +1,6 @@
 # F-178, HTML import
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S55
 **Size**: L
 **Depends on**: none
@@ -163,19 +163,19 @@ is unrelated and blocks the sprint. Do not edit `scripts/hash_baseline.json`.
 
 ## Implementation checklist
 
-- [ ] Add the approved private module, browser-grade parser dependency, facade
+- [x] Add the approved private module, browser-grade parser dependency, facade
       error, result, diagnostics, and native constructors.
-- [ ] Bound DOM construction, traversal, projected content, diagnostics, and
+- [x] Bound DOM construction, traversal, projected content, diagnostics, and
       retained text.
-- [ ] Project source-ordered blocks, nested inline formatting, whitespace, and
+- [x] Project source-ordered blocks, nested inline formatting, whitespace, and
       hard breaks.
-- [ ] Project nested lists and spanned tables through the existing Word model.
-- [ ] Apply the supported inline and embedded CSS cascade.
-- [ ] Diagnose parser repairs, unsupported CSS, dropped visible constructs,
+- [x] Project nested lists and spanned tables through the existing Word model.
+- [x] Apply the supported inline and embedded CSS cascade.
+- [x] Diagnose parser repairs, unsupported CSS, dropped visible constructs,
       and external resources without losing supported siblings.
-- [ ] Add source-built unit, regression, save, and reopen coverage to existing
+- [x] Add source-built unit, regression, save, and reopen coverage to existing
       test binaries.
-- [ ] Run scoped facade, MSRV, dependency, packaging, WASM, full verification,
+- [x] Run scoped facade, MSRV, dependency, packaging, WASM, full verification,
       and unchanged-harness checks.
 
 ## Open questions

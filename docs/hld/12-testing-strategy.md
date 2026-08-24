@@ -85,6 +85,20 @@ cell, image, field, note, comment, bookmark, hyperlink, and raw XML cases.
 All fixtures stay in source, and a DOCX preservation regression proves the
 writer does not mutate unmodelled XML in the source package.
 
+The HTML import regression gate uses source-built browser fragments and CMS
+documents in the existing `rdocx` unit, integration, and regression binaries.
+It compares exact paragraph, run, list, table, grid-span, vertical-merge, CSS,
+and diagnostic facts in source order. Focused cases cover HTML5 parser repair,
+collapsed and preformatted whitespace, saved `w:br` line breaks, semantic run
+formatting, embedded and inline cascade precedence, unsupported constructs,
+external resources, separate list identity, nine list levels, row groups,
+multiple cell paragraphs, and nested-table loss diagnostics. Limit tests fail
+closed for input, bounded path reads, retained text, DOM nodes and depth,
+blocks, all Word runs, rows, columns, cells, and diagnostics. The integration
+gate serializes and reopens the generated DOCX before comparing its public
+structure. No binary fixture or sample is added, so all 49 hash entries remain
+unchanged.
+
 The digital-signature regression gate constructs its DOCX and signature XML
 in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
 and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace

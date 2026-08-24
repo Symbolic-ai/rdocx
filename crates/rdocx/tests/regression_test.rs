@@ -13,6 +13,138 @@ use rdocx::{
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
 
+#[test]
+fn unsupported_html_css_is_diagnosed_without_dropping_supported_siblings() {
+    let parsed = Document::from_html(
+        "<!doctype html><html><head><link rel='STYLESHEET' href='external.css'><script>head()</script><style>@media print { p { color: red } } p:hover { color: blue } p { color: rgb(1, 2, 3); made-up: yes }</style></head><body><p>before<blink style='unknown-value: yes'>kept</blink>after<a href='https://example.invalid'>link</a><img alt='picture'><script>ignored()</script><input value='field'><iframe>frame</iframe></p><form>form text</form><p><b><i>repaired</b></p></body></html>",
+    )
+    .expect("recoverable unsupported HTML");
+    assert_eq!(
+        parsed.document.paragraph(0).unwrap().text(),
+        "beforekeptafterlinkpicturefield"
+    );
+    assert_eq!(parsed.document.paragraph(1).unwrap().text(), "form text");
+    assert_eq!(parsed.document.paragraph(2).unwrap().text(), "repaired");
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.property.as_deref() == Some("unknown-value")
+            && diagnostic.location == "html/body/p[1]/blink[1]"
+    }));
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.location == "html/body/p[1]/img[1]" && diagnostic.message.contains("image")
+    }));
+    for expected in [
+        "CSS at-rule",
+        "CSS selector",
+        "CSS color",
+        "CSS property",
+        "external HTML stylesheet",
+        "link target",
+        "script",
+        "form semantics",
+        "form control",
+        "iframe",
+        "parser repair",
+    ] {
+        assert!(
+            parsed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing diagnostic containing {expected}"
+        );
+    }
+}
+
+#[test]
+fn html_import_projects_nested_lists_and_spanned_tables() {
+    let parsed = Document::from_html(
+        "<ol start='3'><li>one<ul><li>nested</li></ul></li></ol><ol><li>restart</li></ol><table><caption>Caption</caption><tr><td rowspan='2'>a</td><td colspan='2'>b</td></tr><tr><td>c<p>d</p><ul><li>f</li></ul></td><td>e</td></tr></table>",
+    )
+    .expect("supported lists and table spans");
+    let first = parsed.document.paragraph(0).unwrap().numbering().unwrap();
+    let nested = parsed.document.paragraph(1).unwrap().numbering().unwrap();
+    let restarted = parsed.document.paragraph(2).unwrap().numbering().unwrap();
+    assert_eq!(first.1, 0);
+    assert_eq!(nested, (first.0, 1));
+    assert_ne!(restarted.0, first.0);
+    assert_eq!(parsed.document.numbering_is_bullet(first.0), Some(false));
+    assert_eq!(parsed.document.numbering_is_bullet(nested.0), Some(false));
+    assert_eq!(parsed.document.paragraph(3).unwrap().text(), "Caption");
+    assert!(
+        parsed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("table caption"))
+    );
+    assert_eq!(parsed.document.table_count(), 1);
+    let table = parsed.document.table(0).unwrap();
+    assert_eq!(table.cell(0, 0).unwrap().text(), "a");
+    assert_eq!(table.cell(0, 1).unwrap().text(), "b");
+    assert_eq!(table.cell(0, 0).unwrap().grid_span(), None);
+    assert!(matches!(
+        table.cell(0, 0).unwrap().v_merge(),
+        Some(rdocx_oxml::table::VMerge::Restart)
+    ));
+    assert_eq!(table.cell(0, 1).unwrap().grid_span(), Some(2));
+    assert!(matches!(
+        table.cell(1, 0).unwrap().v_merge(),
+        Some(rdocx_oxml::table::VMerge::Continue)
+    ));
+    assert_eq!(table.cell(1, 1).unwrap().paragraph_count(), 3);
+    assert_eq!(table.cell(1, 1).unwrap().text(), "c\nd\nf");
+    assert_eq!(
+        table
+            .cell(1, 1)
+            .unwrap()
+            .paragraph(2)
+            .unwrap()
+            .numbering()
+            .unwrap()
+            .1,
+        0
+    );
+    let mut imported = parsed.document;
+    let bytes = imported.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(numbering.contains(r#"<w:start w:val="3"/>"#));
+
+    let mut nine = String::new();
+    let mut tags = Vec::new();
+    for level in 0..9 {
+        let tag = if level % 2 == 0 { "ul" } else { "ol" };
+        tags.push(tag);
+        nine.push_str(&format!("<{tag}><li>"));
+        nine.push_str(&level.to_string());
+    }
+    for tag in tags.into_iter().rev() {
+        nine.push_str(&format!("</li></{tag}>"));
+    }
+    let nine_html = nine;
+    let nine = Document::from_html(&nine_html).expect("nine list levels");
+    for level in 0..9 {
+        assert_eq!(
+            nine.document
+                .paragraph(level)
+                .unwrap()
+                .numbering()
+                .unwrap()
+                .1,
+            level as u32
+        );
+    }
+    let ten = format!("<ul><li>outer{nine_html}</li></ul>");
+    assert!(Document::from_html(&ten).is_err());
+
+    let nested_table =
+        Document::from_html("<ul><li>item<table><tr><td>nested table</td></tr></table></li></ul>")
+            .expect("unsupported nested table is recoverable");
+    assert!(nested_table.diagnostics.iter().any(|diagnostic| {
+        diagnostic.location.contains("table")
+            && diagnostic.message.contains("dropped nested HTML table")
+    }));
+}
+
 fn compatibility_page_elements(
     elements: &[oxml_layout::PositionedElement],
 ) -> Vec<&oxml_layout::PositionedElement> {

@@ -558,3 +558,11 @@ New dependencies are added only with a named consumer. The workspace already
 minimises feature sets deliberately, and the comments in the root manifest
 explaining why `zip` and `fontdb` are trimmed should be preserved rather than
 regenerated.
+
+`scraper` 0.27 has one direct named consumer, the private inbound HTML importer
+inside `rdocx`. Default features are disabled and only `errors` is enabled so
+HTML5 parser repair diagnostics remain available without an unrelated feature
+surface. No `oxml-*`, `rdocx-html`, Presentation, Python, WASM, or CLI crate
+declares the dependency directly. The complete facade graph passes Rust 1.93,
+both wasm32 checks, the workspace dependency policy, and the `rdocx` package
+dry run. The packaged archive remains below the 10 MiB ceiling.

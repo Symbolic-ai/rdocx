@@ -216,6 +216,18 @@ instead of hidden. Malformed RTF returns the facade `Error::Rtf` variant
 without exposing a second document model. Python, WASM, and CLI surfaces do
 not gain RTF entry points implicitly.
 
+Native Rust callers can import HTML5 documents and fragments through
+`Document::from_html` and `Document::open_html`. Both return an
+`HtmlReadResult` containing the converted `Document` and ordered
+`HtmlDiagnostic` values with a DOM location, optional CSS property, and stable
+message. Invalid UTF-8, resource-limit violations, and unrecoverable projection
+failures return `Error::Html` without publishing a partial document. The path
+constructor caps reads at 64 MiB even if the file changes after its metadata is
+read. The importer supports source-ordered paragraphs, runs, nested lists, and
+spanned tables plus the bounded inline and embedded CSS subset. It does not
+fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
+entry point and retain their existing methods and error contracts.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method

@@ -39,6 +39,7 @@ rdocx-html = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
+scraper = { workspace = true }
 
 [dev-dependencies]
 miniz_oxide = { workspace = true }

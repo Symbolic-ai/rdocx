@@ -11,6 +11,64 @@ use rdocx::{
 use rdocx::{Document, PackageReadLimits, RevisionKind};
 
 #[test]
+fn html_import_projects_a_reopenable_word_document() {
+    let parsed = Document::from_html(
+        "<h1>Title</h1><p>A <b>browser</b> fragment.</p><table><tr><th>Head</th></tr><tr><td>Cell<p>Second</p></td></tr></table>",
+    )
+    .expect("supported HTML");
+    let mut document = parsed.document;
+    let bytes = document.to_bytes().expect("generated DOCX");
+    let reopened = Document::from_bytes(&bytes).expect("generated DOCX reopens");
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "Title");
+    assert_eq!(reopened.paragraph(1).unwrap().text(), "A browser fragment.");
+    assert_eq!(
+        reopened.table(0).unwrap().cell(0, 0).unwrap().text(),
+        "Head"
+    );
+    assert_eq!(
+        reopened
+            .table(0)
+            .unwrap()
+            .cell(1, 0)
+            .unwrap()
+            .paragraph_count(),
+        2
+    );
+
+    let root = std::env::temp_dir().join(format!("rdocx-html-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir(&root).unwrap();
+    let html_path = root.join("source.html");
+    std::fs::write(&html_path, "<p>path input</p>").unwrap();
+    let opened = Document::open_html(&html_path).expect("bounded UTF-8 path input");
+    assert_eq!(opened.document.text(), "path input\n");
+
+    let preformatted = Document::from_html("<pre>first\nsecond</pre>").unwrap();
+    let mut preformatted_document = preformatted.document;
+    let preformatted_bytes = preformatted_document.to_bytes().unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(preformatted_bytes)).unwrap();
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(document_xml.contains("<w:br"));
+
+    let invalid_path = root.join("invalid.html");
+    std::fs::write(&invalid_path, [0xff, 0xfe]).unwrap();
+    assert!(matches!(
+        Document::open_html(&invalid_path),
+        Err(rdocx::Error::Html { location, .. }) if location == "input"
+    ));
+
+    let oversized_path = root.join("oversized.html");
+    std::fs::File::create(&oversized_path)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    assert!(Document::open_html(&oversized_path).is_err());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn settings_relationship_target_is_resolved_instead_of_assumed() {
     let settings = br#"<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="comments" w:enforcement="true" w:hash="custom-hash" w:salt="custom-salt"/></w:settings>"#;
     let mut seed = Document::new();
