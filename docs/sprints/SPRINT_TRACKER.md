@@ -313,6 +313,10 @@ defended.
 | F-177 | S54 | M | 2 | 1 | 2026-08-24 | Deterministic diagnostic RTF writer and round trip |
 | F-183 | S54 | S | 1 | 1 | 2026-08-24 | Shared PNG, JPEG, TIFF, transparency, and page-range export |
 | F-X051 | S54 | M | 2 | 1 | 2026-08-24 | Bounded caller-font family aliases with exact cache identity |
+| F-178 | S55 | L | 4 | 1 | 2026-08-24 | Bounded HTML5 and CSS import into the Word document tree |
+| F-179 | S55 | L | 4 | 1 | 2026-08-24 | Bounded ODT reader with pinned LibreOffice structural differential |
+| F-X052 | S55 | L | 4 | 1 | 2026-08-24 | Exact shared-block relayout within the Issue 46 performance budget |
+| F-X053 | S55 | S | 1 | 1 | 2026-08-24 | Published migration guidance and authenticated contribution closures |
 
 ## Velocity
 
@@ -382,6 +386,7 @@ five working days.
 | S52 | 12 | 1 | 60.00 |
 | S53 | 7 | 1 | 35.00 |
 | S54 | 4 | 1 | 20.00 |
+| S55 | 4 | 1 | 20.00 |
 
 ## Escalation record
 
@@ -439,3 +444,4 @@ was done about it. Empty is the expected state.
 | 2026-08-22 | Sprint estimate variance exceeded 30 percent | S52 | Record 1 actual day against 27 estimated. Twelve isolated workers and seven scoped follow-ups from PRs 40 and 41 allowed security, rendering, and cache work to overlap safely. The resulting 60.00 stories per week is not a sustainable forecast, so retain dependency-defined S53 boundaries |
 | 2026-08-23 | Sprint estimate variance exceeded 30 percent | S53 | Record 1 actual day against 16 estimated. Seven isolated workers and established security, PDF, and release workflows allowed independent work to overlap safely. The resulting 35.00 stories per week is not a sustainable forecast, so retain the dependency-defined S54 boundary |
 | 2026-08-24 | Sprint estimate variance exceeded 30 percent | S54 | Record 1 actual day against 9 estimated. Four isolated workers and established RTF, raster, and layout paths allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S55 boundary |
+| 2026-08-24 | Sprint estimate variance exceeded 30 percent | S55 | Record 1 actual day against 13 estimated. Four isolated workers and established import, layout, differential, and contribution workflows allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S56 boundary |

@@ -33,11 +33,11 @@ regenerated, never hand-edited.
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
-| M18, Format breadth                            | 8  | 3 | 2 | 3  |
+| M18, Format breadth                            | 8  | 5 | 0 | 3  |
 | M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 56 | 52 | 2 | 1  |
-| **Total** | **267** | **239** | **4** | **23** |
+| X, Cross-cutting (opportunistic)            | 56 | 54 | 0 | 1  |
+| **Total** | **267** | **243** | **0** | **23** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -352,8 +352,8 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-176 | RTF reader                                   | S54  | L | done |
 | F-177 | RTF writer                                   | S54  | M | done |
-| F-178 | HTML import                                  | S55  | L | in-progress |
-| F-179 | ODT reader                                   | S55  | L | in-progress |
+| F-178 | HTML import                                  | S55  | L | done |
+| F-179 | ODT reader                                   | S55  | L | done |
 | F-180 | ODT writer                                   | S56  | L | pending |
 | F-181 | EPUB export                                  | S56  | M | pending |
 | F-182 | SVG page export                              | S56  | M | pending |
@@ -452,6 +452,6 @@ regenerated, never hand-edited.
 | F-X049 | Tag rpptx-v0.5.0                           | S53 | S | done |
 | F-X050 | Tag v0.9.0                                 | S53 | S | done |
 | F-X051 | Honor caller-supplied font family aliases  | S54 | M | done |
-| F-X052 | Restore interactive relayout performance   | S55 | L | in-progress |
-| F-X053 | Complete layout migration and contribution records | S55 | S | in-progress |
+| F-X052 | Restore interactive relayout performance   | S55 | L | done |
+| F-X053 | Complete layout migration and contribution records | S55 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

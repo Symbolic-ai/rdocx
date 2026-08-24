@@ -32,10 +32,10 @@ layout traversal required by tagged content.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-178 | HTML import | L | in-progress | codex |
-| F-179 | ODT reader | L | in-progress | codex |
-| F-X052 | Restore interactive relayout performance | L | in-progress | codex |
-| F-X053 | Complete layout migration and contribution records | S | in-progress | codex |
+| F-178 | HTML import | L | done | - |
+| F-179 | ODT reader | L | done | - |
+| F-X052 | Restore interactive relayout performance | L | done | - |
+| F-X053 | Complete layout migration and contribution records | S | done | - |
 
 ## Sequencing note
 

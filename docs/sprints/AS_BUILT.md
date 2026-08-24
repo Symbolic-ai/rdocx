@@ -8858,3 +8858,151 @@ no-default-features path, and both WASM checks passed.
 **Notes for future sessions.** Alias labels never duplicate font bytes and
 must remain part of reusable-engine cache identity whenever their normalized
 mapping changes.
+
+### F-178, HTML import
+
+**Sprint.** S55
+**Completed.** 2026-08-24
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::from_html`, `Document::from_html_bytes`, and
+`Document::open_html` now import a bounded HTML5 and CSS subset into the
+existing Word document tree. The importer preserves source order across text,
+paragraphs, nested inline formatting, lists, spanned tables, whitespace, and
+hard breaks, with stable diagnostics for unsupported visible content and CSS.
+
+**Non-obvious choices.** One private module owns HTML parsing, CSS resolution,
+and Word projection. The browser-grade parser performs HTML5 repair, while
+explicit construction and projection bounds prevent repaired or hostile input
+from expanding without limit. External resources are diagnosed rather than
+fetched.
+
+**Deviations from the design plan.** None. Microscope review found seven
+boundedness, preservation, and compatibility defects across two passes. All
+were remediated before the clean third pass.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The six source-built HTML gates cover malformed input, supported
+formatting, nested lists, spanned tables, unsupported CSS with retained
+siblings, file bounds, save, and reopen. The full `rdocx` suite, Rust 1.93,
+WASM, dependency, package, and supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The importer materializes effective formatting
+instead of retaining a second HTML model. New supported CSS must extend the
+diagnostic and source-order gates at the same time.
+
+### F-179, ODT reader
+
+**Sprint.** S55
+**Completed.** 2026-08-24
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::from_odt_bytes`,
+`Document::from_odt_bytes_with_limits`, and `Document::open_odt` now read a
+bounded OpenDocument Text subset into the existing Word document tree. The
+reader covers effective text and paragraph formatting, nested lists, spanned
+tables, and inline package images with stable loss diagnostics.
+
+**Non-obvious choices.** ODT archive handling remains separate from OPC
+because ODT is ZIP-based but not an OOXML package. The complete archive index,
+paths, compression, encryption state, XML depth, projected content, and media
+are validated before publication. A source-built fixture is compared against
+the exact pinned LibreOffice conversion structurally, not byte for byte.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The source-built ODT gates cover archive and XML bounds, effective
+styles, lists, table spans, images, diagnostics, save, and reopen. The exact
+LibreOffice 26.2.5.2 structural differential, full `rdocx` suite, WASM,
+package, and supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Unknown ODT content is diagnosed and consumed
+without dropping supported siblings. It is not smuggled into the DOCX package
+as unowned foreign XML.
+
+### F-X052, Restore interactive relayout performance
+
+**Sprint.** S55
+**Completed.** 2026-08-24
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Reusable Word layout now avoids eager context clones,
+whole-body debug serialization, repeated cache-hit block copies, retained page
+deep copies, and linear exact shaping comparisons for most candidates. Private
+shared paragraph and table blocks carry result-local provenance and semantic
+structure through an overlay, while cache-safe tables participate in restart
+pagination.
+
+**Non-obvious choices.** Fingerprints are prefilters only. Exact typed equality
+still decides every cache hit and transfer. Public layout block APIs remain
+unchanged, cache publication remains transactional, and the 64 MiB aggregate
+budget is preserved with 50, 2, 4, and 8 MiB partitions for paragraph, table,
+header and footer, and restart state.
+
+**Deviations from the design plan.** None. The approved plan already includes
+the evidence-driven 50, 2, 4, and 8 MiB cache partition and the collision-safe
+fingerprint prefilter. Neither changes the aggregate bound or public API.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md` and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The mixed 700-paragraph and 14-table editor gate proves exact warm
+and cold structure, provenance, semantic content, fonts, diagnostics,
+outlines, collision safety, checked transfer, transactionality, and memory
+bounds. The full layout and facade suites, no-default layout, both WASM targets,
+and full workspace verification passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Fresh integrated A/B runs produced 58 pages in
+every case. Native cold and warm ratios topped out at 1.04 and 0.89. Bundled
+fallback cold, typing, checked undo, and table mutation each remained at or
+below 1.14, inside the required 1.25 budget.
+
+### F-X053, Complete layout migration and contribution records
+
+**Sprint.** S55
+**Completed.** 2026-08-24
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The v0.9.0 compatibility record and layout package README
+now tell external backends to recurse through `MarkedContent::children` or use
+`oxml_layout::walk`. The next-stable contribution inventory records Issues 44
+and 46 and PR 45 with authenticated contributor credit.
+
+**Non-obvious choices.** The published v0.9.0 release body was replaced only
+after proving byte equality with the tracked 4,111-byte render. Its tag target
+and empty asset set remained unchanged. Issues 39 and 42 received no duplicate
+comments because their existing acceptance evidence already closed their
+scope.
+
+**Deviations from the design plan.** None. GitHub item 46 is an issue, so the
+related contributor pull request is PR 45 under GitHub's shared numbering.
+
+**Spec sections touched.** `docs/hld/10-bindings-spec.md`.
+
+**Tests.** Release-note rendering, package documentation, three workflow
+regressions, exact published-body equality, authenticated GitHub state, the
+69-test workflow suite, full workspace verification, and both WASM targets
+passed. Issue 44, PR 45, and Issue 46 were closed with exact implementation
+evidence and maintainer-authenticated comments.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The closure comments are retained at
+[Issue 44](https://github.com/tensorbee/rdocx/issues/44#issuecomment-5395173425),
+[PR 45](https://github.com/tensorbee/rdocx/pull/45#issuecomment-5395175132), and
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46#issuecomment-5395176825).
