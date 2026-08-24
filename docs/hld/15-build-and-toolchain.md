@@ -506,8 +506,10 @@ requires exact identity
 `LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb`.
 It installs the explicit Ubuntu NSS, NSPR, D-Bus, Cairo, GLib, X11, CUPS,
 font, and Kerberos runtime-library set needed by that official build. This
-makes the unconditional `oxml-chart` viewer tests self-contained without
-changing the separate macOS Presentation fidelity setup.
+makes the unconditional `oxml-chart` viewer tests and the `rdocx` ODT
+structural differential self-contained without changing the separate macOS
+Presentation fidelity setup. The ODT gate uses an isolated LibreOffice profile
+and rejects any runtime identity other than the exact pinned build.
 
 **A prose and generated-skill job.** It runs `scripts/prose_check.py` and
 `scripts/sync_agent_skills.py --check` as separate steps, so voice-rule or
@@ -566,3 +568,10 @@ surface. No `oxml-*`, `rdocx-html`, Presentation, Python, WASM, or CLI crate
 declares the dependency directly. The complete facade graph passes Rust 1.93,
 both wasm32 checks, the workspace dependency policy, and the `rdocx` package
 dry run. The packaged archive remains below the 10 MiB ceiling.
+
+The existing workspace `zip` 8.1 dependency has one additional direct named
+consumer, the private inbound ODT importer inside `rdocx`. It retains the
+workspace's disabled default features and the existing Deflate, Deflate64, and
+time feature set. No new external package or `oxml-*` dependency edge is added.
+The ODT importer validates bounded archive metadata before parsing and does not
+reuse `OpcPackage` for a non-OPC format.

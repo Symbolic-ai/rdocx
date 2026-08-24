@@ -94,6 +94,13 @@ content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
 
+**Inbound ODT belongs to the `rdocx` facade.** The private importer validates
+the complete bounded ZIP index, parses ODF XML by expanded namespace, and
+projects supported content directly into the one owned WordprocessingML
+document model. ODT is not OPC, so the importer does not enter `oxml-opc` or
+retain an ODT object model. The facade uses the existing workspace `zip`,
+`quick-xml`, and `oxml-media` dependencies for this one-way conversion.
+
 **`oxml-layout` is where the format boundary genuinely falls.** Its
 output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
@@ -564,6 +571,13 @@ skipped visible constructs. Input, DOM, projection, text, table, and diagnostic
 limits fail closed before a partial document is published. The importer saves
 and reopens its candidate through the typed Word package model before returning
 it.
+
+`Document::from_odt_bytes`, `Document::from_odt_bytes_with_limits`, and
+`Document::open_odt` are additive native facade constructors. They return a
+fresh converted document with ordered path-aware diagnostics for safe lossy
+skips. Archive, XML, retained-text, projection, table, and diagnostic limits
+fail closed before a partial document is published. The importer saves and
+reopens its candidate through the typed Word package model before returning it.
 
 The same direct lookup rule covers document tables and paragraphs nested in
 table cells. `Document::table` and `Document::table_mut` are total, and cell

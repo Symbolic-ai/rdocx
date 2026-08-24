@@ -20,6 +20,13 @@ with precomputed CRCs. It keeps the `.crate` payload small and the diffs
 readable. The corpus in the next section is the one deliberate exception, and it
 lives outside the published crates.
 
+The ODT reader differential constructs its ZIP, XML, and PNG input in source,
+then converts the same input with the exact pinned LibreOffice build in an
+isolated profile. The normalized comparison covers body order, effective text
+and paragraph formatting, list kind and level, table grid and spans, and image
+bytes and dimensions. It deliberately ignores package bytes, relationship ids,
+part names, and namespace prefixes.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,

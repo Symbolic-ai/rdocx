@@ -34,6 +34,13 @@ pub enum Error {
     #[error("HTML import error at {location}: {message}")]
     Html { location: String, message: String },
 
+    #[error("ODT import error in {part:?} at byte {offset}: {message}")]
+    Odt {
+        part: Option<String>,
+        offset: u64,
+        message: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }

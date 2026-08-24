@@ -1499,11 +1499,19 @@ paragraph, run, table and list structure, with unsupported CSS recorded as a
 diagnostic.
 
 ### F-179, ODT reader (L)
-OpenDocument Text, which European public-sector procurement frequently mandates
-and which no Rust library reads.
+The native Word facade reads bounded OpenDocument Text ZIP packages and
+projects supported text, formatting, lists, tables, and images into a fresh
+editable document. Archive names, encryption, compression, and expansion are
+validated before namespace-aware XML parsing. Default, named, parent, and
+automatic styles resolve into effective Word formatting. Stable source-path
+diagnostics identify safe lossy skips, and fatal failures expose no partial
+document. ODT remains a private one-way facade conversion rather than an OPC
+package or a retained second document model. Python, WASM, and CLI surfaces do
+not gain ODT entry points.
 **Depends on**: none.
-**Test gate**: differential. An ODT converted here matches the pinned
-LibreOffice conversion structurally.
+**Test gate**: differential. A source-built ODT converted here matches the exact
+pinned LibreOffice conversion by normalized body structure, formatting, lists,
+tables, and image content without comparing package serialization details.
 
 ### F-180, ODT writer (L)
 The inverse.

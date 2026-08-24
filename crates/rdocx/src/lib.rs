@@ -28,6 +28,7 @@ mod document;
 mod error;
 mod field;
 mod html;
+mod odt;
 pub mod paragraph;
 mod redaction;
 mod revision;
@@ -47,6 +48,7 @@ pub use document::{
 pub use error::{Error, Result};
 pub use field::{FieldDateTime, FieldEvaluation, FieldEvaluationContext, FieldOutcome};
 pub use html::{HtmlDiagnostic, HtmlReadResult};
+pub use odt::{OdtDiagnostic, OdtReadResult};
 pub use oxml_chart::{ChartData, ChartKind};
 pub use oxml_core::Length;
 pub use oxml_opc::PackageReadLimits;

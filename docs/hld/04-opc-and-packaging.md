@@ -21,6 +21,15 @@ essentially unchanged from `rdocx-opc`.
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.
 
+ODT input is a ZIP package but not an OPC package. The private `rdocx` ODT
+reader therefore indexes it directly with the workspace `zip` dependency and
+does not create an `OpcPackage`. The index rejects unsafe or duplicate names,
+non-files, unsupported compression, encryption, and configured expansion-limit
+violations before XML parsing. It requires the exact root `mimetype` and
+`content.xml`, checks manifest encryption state, and reads only styles,
+content, manifest, and referenced image parts. The resulting Word document is
+saved and reopened through the normal OPC owner before it is published.
+
 ## Generalising the constructors
 
 The only docx-specific code in the existing crate is two constructors. They are

@@ -228,6 +228,18 @@ spanned tables plus the bounded inline and embedded CSS subset. It does not
 fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
 entry point and retain their existing methods and error contracts.
 
+Native Rust callers can import OpenDocument Text through
+`Document::from_odt_bytes`, `Document::from_odt_bytes_with_limits`, and
+`Document::open_odt`. Each returns an `OdtReadResult` containing a fresh
+converted `Document` and ordered `OdtDiagnostic` values with stable source
+paths. Archive, XML, style, or projection failures return `Error::Odt` with an
+optional package part and byte offset without publishing a partial document.
+The limits overload applies caller-supplied archive entry, part, and total
+expansion bounds. Text, formatting, lists, tables, and supported images are
+projected into the existing Word model. Safe lossy skips are diagnosed.
+Python, WASM, and CLI surfaces gain no ODT import entry point and retain their
+existing methods and error contracts.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method

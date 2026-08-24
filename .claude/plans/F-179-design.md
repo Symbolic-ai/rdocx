@@ -1,6 +1,6 @@
 # F-179, ODT reader
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S55
 **Size**: L
 **Depends on**: none
@@ -187,18 +187,18 @@ blocks integration and the baseline is not re-recorded.
 
 ## Implementation checklist
 
-- [ ] Add the approved private module, direct workspace ZIP edge, facade error,
+- [x] Add the approved private module, direct workspace ZIP edge, facade error,
       result, diagnostics, limits overload, and native constructors.
-- [ ] Validate the complete bounded archive index, required ODT parts, and
+- [x] Validate the complete bounded archive index, required ODT parts, and
       manifest encryption state before parsing content.
-- [ ] Parse namespace-aware styles and body XML with exact bounds and stable
+- [x] Parse namespace-aware styles and body XML with exact bounds and stable
       source paths.
-- [ ] Resolve effective formatting and project text, lists, tables, and images
+- [x] Resolve effective formatting and project text, lists, tables, and images
       into the existing Word ownership tree.
-- [ ] Diagnose every safe lossy skip while retaining supported siblings.
-- [ ] Add source-built unit, integration, save, reopen, and exact pinned
+- [x] Diagnose every safe lossy skip while retaining supported siblings.
+- [x] Add source-built unit, integration, save, reopen, and exact pinned
       LibreOffice structural differential coverage.
-- [ ] Run scoped facade, package, WASM, full verification, and unchanged-harness
+- [x] Run scoped facade, package, WASM, full verification, and unchanged-harness
       checks.
 
 ## Open questions

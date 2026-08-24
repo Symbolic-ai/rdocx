@@ -1185,6 +1185,7 @@ dependencies = [
  "scraper",
  "serde_json",
  "thiserror",
+ "zip",
 ]
 
 [[package]]
