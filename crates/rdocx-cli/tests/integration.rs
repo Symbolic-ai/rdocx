@@ -368,3 +368,247 @@ fn render_uses_the_bundled_font_deterministic_path() {
 
     assert_eq!(fs::read(selected_png).unwrap(), fs::read(all_png).unwrap());
 }
+
+#[test]
+fn render_page_and_pages_flags_keep_legacy_and_range_indexing_separate() {
+    let temp = TempWorkspace::new("render-page-pages");
+    let input = temp.path.join("pages.docx");
+    let page_dir = temp.path.join("page");
+    let pages_dir = temp.path.join("pages");
+    let mut document = fixture_document(&[]);
+    document.add_paragraph("page one");
+    document.add_paragraph("page two").page_break_before(true);
+    document.save(&input).unwrap();
+
+    let expected = Document::open(&input)
+        .unwrap()
+        .render_page_to_png_deterministic(1, 36.0)
+        .unwrap()
+        .unwrap();
+
+    let legacy = cli(&[
+        "render",
+        path_text(&input),
+        "--output-dir",
+        path_text(&page_dir),
+        "--dpi",
+        "36",
+        "--page",
+        "1",
+    ]);
+    assert_success(&legacy, "render zero-based legacy page");
+    let legacy_png = page_dir.join("pages_page2.png");
+    assert_eq!(fs::read(&legacy_png).unwrap(), expected);
+    assert_eq!(
+        String::from_utf8(legacy.stdout).unwrap(),
+        format!(
+            "Page 2 -> {} ({} bytes)\n",
+            legacy_png.display(),
+            expected.len()
+        )
+    );
+
+    let ranged = cli(&[
+        "render",
+        path_text(&input),
+        "--output-dir",
+        path_text(&pages_dir),
+        "--dpi",
+        "36",
+        "--pages",
+        "2",
+    ]);
+    assert_success(&ranged, "render one-based page range");
+    let ranged_png = pages_dir.join("pages_page2.png");
+    assert_eq!(fs::read(&ranged_png).unwrap(), expected);
+    assert_eq!(
+        String::from_utf8(ranged.stdout).unwrap(),
+        format!(
+            "Page 2 -> {} ({} bytes)\nRendered 1 page(s) at 36 DPI\n",
+            ranged_png.display(),
+            expected.len()
+        )
+    );
+
+    let conflict_dir = temp.path.join("conflict");
+    let conflict = cli(&[
+        "render",
+        path_text(&input),
+        "--output-dir",
+        path_text(&conflict_dir),
+        "--page",
+        "0",
+        "--pages",
+        "1",
+    ]);
+    assert!(!conflict.status.success());
+    assert!(
+        String::from_utf8_lossy(&conflict.stderr).contains("cannot be used with"),
+        "unexpected conflict stderr: {}",
+        String::from_utf8_lossy(&conflict.stderr)
+    );
+    assert!(!conflict_dir.exists());
+
+    let bad_page_dir = temp.path.join("bad-page");
+    let rejected = cli(&[
+        "render",
+        path_text(&input),
+        "--output-dir",
+        path_text(&bad_page_dir),
+        "--page",
+        "2",
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!bad_page_dir.exists());
+}
+
+#[test]
+fn image_export_ranges_share_declared_index_conventions() {
+    let temp = TempWorkspace::new("image-options");
+    let input = temp.path.join("pages.docx");
+    let mut document = fixture_document(&[]);
+    document.add_paragraph("page one");
+    document.add_paragraph("page two").page_break_before(true);
+    document.add_paragraph("page three").page_break_before(true);
+    document.save(&input).unwrap();
+
+    let converted = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "jpeg",
+        "--dpi",
+        "72",
+        "--quality",
+        "80",
+        "--pages",
+        "2",
+    ]);
+    assert_success(&converted, "convert selected JPEG");
+    let jpeg = input.with_extension("jpg");
+    let expected = Document::open(&input)
+        .unwrap()
+        .render_pages_deterministic(
+            &[1],
+            rdocx::RasterOptions {
+                dpi: 72.0,
+                format: rdocx::RasterFormat::Jpeg { quality: 80 },
+            },
+        )
+        .unwrap();
+    let rdocx::RasterOutput::SeparatePages(expected) = expected else {
+        panic!("JPEG output should be separate pages");
+    };
+    assert_eq!(fs::read(&jpeg).unwrap(), expected[0]);
+    assert!(!temp.path.join("pages_001.jpg").exists());
+
+    let default_all = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "png",
+        "--dpi",
+        "72",
+        "--output",
+        path_text(&temp.path.join("all.png")),
+    ]);
+    assert_success(&default_all, "convert all deterministic PNG pages");
+    for one_based in 1..=3 {
+        assert!(
+            temp.path.join(format!("all_{one_based:03}.png")).exists(),
+            "missing deterministic default page {one_based}"
+        );
+    }
+
+    let rendered = cli(&[
+        "render",
+        path_text(&input),
+        "--output-dir",
+        path_text(&temp.path.join("tiff-out")),
+        "--format",
+        "tiff",
+        "--dpi",
+        "72",
+        "--pages",
+        "1,3",
+    ]);
+    assert_success(&rendered, "render selected TIFF");
+    assert!(
+        fs::read(temp.path.join("tiff-out/pages.tiff"))
+            .unwrap()
+            .starts_with(b"II*\0")
+    );
+
+    let bad_quality = temp.path.join("bad.jpg");
+    let rejected = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "jpeg",
+        "--output",
+        path_text(&bad_quality),
+        "--quality",
+        "0",
+        "--pages",
+        "1",
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!bad_quality.exists());
+
+    let bad_dir = temp.path.join("bad-range");
+    let rejected = cli(&[
+        "render",
+        path_text(&input),
+        "--output-dir",
+        path_text(&bad_dir),
+        "--pages",
+        "4",
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!bad_dir.exists());
+
+    let commands = include_str!("../src/commands.rs");
+    assert!(
+        !commands.contains("doc.layout()"),
+        "Word CLI image selection must use the deterministic render snapshot, not ambient layout"
+    );
+}
+
+#[test]
+fn multi_file_image_export_preserves_existing_outputs_and_streams_separate_pages() {
+    let temp = TempWorkspace::new("image-streaming");
+    let input = temp.path.join("pages.docx");
+    let output = temp.path.join("export.png");
+    let mut document = fixture_document(&[]);
+    document.add_paragraph("page one");
+    document.add_paragraph("page two").page_break_before(true);
+    document.save(&input).unwrap();
+
+    let preexisting = temp.path.join("export_002.png");
+    fs::write(&preexisting, b"keep me").unwrap();
+    let rejected = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "png",
+        "--output",
+        path_text(&output),
+        "--dpi",
+        "72",
+    ]);
+
+    assert!(!rejected.status.success());
+    assert!(!temp.path.join("export_001.png").exists());
+    assert_eq!(fs::read(preexisting).unwrap(), b"keep me");
+
+    let commands = include_str!("../src/commands.rs");
+    assert!(commands.contains("render_one_raster_page"));
+    assert!(
+        !commands.contains("RasterOutput::SeparatePages(images)"),
+        "separate PNG and JPEG export must not branch on an all-pages image Vec"
+    );
+    assert!(
+        !commands.contains("zip(images.iter())"),
+        "separate PNG and JPEG export must not retain every encoded page"
+    );
+}

@@ -24,7 +24,7 @@ enum Command {
     },
     /// Extract slide text in presentation order
     Text { file: PathBuf },
-    /// Convert a presentation to deterministic PDF or PNG output
+    /// Convert a presentation to deterministic PDF or image output
     Convert {
         file: PathBuf,
         #[arg(long, short = 't')]
@@ -33,6 +33,15 @@ enum Command {
         output: Option<PathBuf>,
         #[arg(long, default_value = "150")]
         dpi: f64,
+        /// One-based slide range for image output, such as 1,3-5
+        #[arg(long)]
+        slides: Option<String>,
+        /// JPEG quality from 1 through 100
+        #[arg(long, default_value = "90")]
+        quality: u8,
+        /// Preserve unpainted PNG pixels as transparent
+        #[arg(long)]
+        transparent: bool,
     },
     /// Compare slide text using a longest-common-subsequence diff
     Diff { file_a: PathBuf, file_b: PathBuf },
@@ -48,7 +57,7 @@ enum Command {
     },
     /// Validate package and PresentationML invariants
     Validate { file: PathBuf },
-    /// Render selected slides to deterministic PNG files
+    /// Render selected slides to deterministic image files
     Render {
         file: PathBuf,
         #[arg(long, short = 'o')]
@@ -57,6 +66,15 @@ enum Command {
         dpi: f64,
         #[arg(long)]
         slide: Option<String>,
+        /// Output format: png, jpeg, tiff
+        #[arg(long, default_value = "png")]
+        format: String,
+        /// JPEG quality from 1 through 100
+        #[arg(long, default_value = "90")]
+        quality: u8,
+        /// Preserve unpainted PNG pixels as transparent
+        #[arg(long)]
+        transparent: bool,
     },
     /// Render slide one as a proportional 320-pixel-wide PNG
     Thumbnail {
@@ -89,7 +107,18 @@ fn main() {
             to,
             output,
             dpi,
-        } => commands::convert(&file, &to, output.as_deref(), dpi),
+            slides,
+            quality,
+            transparent,
+        } => commands::convert(
+            &file,
+            &to,
+            output.as_deref(),
+            dpi,
+            slides.as_deref(),
+            quality,
+            transparent,
+        ),
         Command::Diff { file_a, file_b } => commands::diff(&file_a, &file_b),
         Command::Replace {
             file,
@@ -103,7 +132,18 @@ fn main() {
             output,
             dpi,
             slide,
-        } => commands::render(&file, output.as_deref(), dpi, slide.as_deref()),
+            format,
+            quality,
+            transparent,
+        } => commands::render(
+            &file,
+            output.as_deref(),
+            dpi,
+            slide.as_deref(),
+            &format,
+            quality,
+            transparent,
+        ),
         Command::Thumbnail { file, output } => commands::thumbnail(&file, output.as_deref()),
         Command::Outline { file } => commands::outline(&file),
     };

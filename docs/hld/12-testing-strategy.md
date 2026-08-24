@@ -709,6 +709,11 @@ outcomes as mandatory manual evidence.
   `ca`, while distinct values remain distinct and opaque content emits none.
 - A 50 percent black fill over white produces the exact midpoint pixel in the
   deterministic raster path.
+- Shared raster option tests construct deterministic in-code pages and decode
+  PNG, JPEG and multi-page TIFF output. They prove selected-page order,
+  dimensions, distinct page pixels, transparent PNG behavior, JPEG quality
+  validation, TIFF cardinality and byte-identical opaque PNG compatibility
+  wrappers.
 - Linear and radial path gradients produce type 2 patterns, type 2 or type 3
   shadings, and type 3 stitching functions over interval type 2 functions.
   Structural tests also pin stop normalization, fill and stroke pattern
@@ -820,12 +825,14 @@ text order, embedded paragraph-break normalization, and field-only title
 identity so the title appears exactly once.
 
 The `rdocx` CLI has one integration binary that invokes the compiled executable
-through `CARGO_BIN_EXE_rdocx`. Its seven tests cover `inspect`, `text`,
-`convert`, `diff`, `replace`, `validate`, and `render` with in-code DOCX and
+through `CARGO_BIN_EXE_rdocx`. Its tests cover `inspect`, `text`, `convert`,
+`diff`, `replace`, `validate`, and `render` with in-code DOCX and
 corrupt-package fixtures. The assertions bind schema 1, default paths, exact
 stdout, exit-status verdicts, output validity, replacement persistence,
-document-order text, and bundled-font deterministic render bytes. Process ID
-and an atomic counter isolate temporary workspaces across concurrent runs.
+document-order text, bundled-font deterministic render bytes, legacy
+zero-based `render --page`, one-based `render --pages`, shared image format
+extensions, invalid range rejection and no partial output. Process ID and an
+atomic counter isolate temporary workspaces across concurrent runs.
 
 All 27 workspace packages explicitly declare one distinct README. The root
 README is the high-level `rdocx` guide. Each crate-local document states the

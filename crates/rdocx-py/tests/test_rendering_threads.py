@@ -212,6 +212,30 @@ def test_render_methods_return_png_bytes_and_page_lists():
     assert all(isinstance(page, bytes) and page.startswith(PNG_SIGNATURE) for page in pages)
 
 
+def test_render_pages_accepts_keyword_options_and_zero_based_pages():
+    from rdocx import LayoutError
+
+    document = _nontrivial_document(2)
+
+    png_pages = document.render_pages(
+        format="png", transparent=True, dpi=72.0, pages=[0, 1]
+    )
+    jpeg_pages = document.render_pages(format="jpeg", quality=80, dpi=72.0, pages=[1])
+    tiff = document.render_pages(format="tiff", dpi=72.0, pages=[0, 1])
+
+    assert isinstance(png_pages, list)
+    assert [page[:8] for page in png_pages] == [PNG_SIGNATURE, PNG_SIGNATURE]
+    assert isinstance(jpeg_pages, list)
+    assert len(jpeg_pages) == 1
+    assert jpeg_pages[0].startswith(b"\xff\xd8")
+    assert isinstance(tiff, bytes)
+    assert tiff.startswith((b"II*\x00", b"MM\x00*"))
+    with pytest.raises(LayoutError):
+        document.render_pages(format="jpeg", quality=0, pages=[0])
+    with pytest.raises(TypeError):
+        document.render_pages("jpeg")
+
+
 def test_render_errors_reacquire_and_map_cleanly():
     from rdocx import LayoutError, RdocxError
 

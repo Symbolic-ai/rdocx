@@ -124,6 +124,12 @@ pattern. Bundled font bytes remain available in both modes. The Python, WASM,
 and CLI manifests do not opt in to `agile-encryption`.
 They also do not opt in to `digital-signatures`.
 
+Raster encoding dependencies are intentionally narrow. `jpeg-encoder` and
+`tiff` are direct `oxml-pdf` dependencies with default features disabled,
+because the format-neutral backend is their named consumer. The selected
+versions pass the repository license and advisory policy, compile for the WASM
+target graph, and do not add a format-family dependency edge.
+
 ## Packaging
 
 `oxml-layout` packages its source and bundled font assets through an explicit
@@ -168,7 +174,8 @@ Color Consortium registry and has SHA-256
 `384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a`.
 The adjacent legal file records the ICC distribution terms, source, retrieval
 date, byte size, and digest. The verified package inventory must contain both
-files and the archive remains below the crates.io 10 MiB ceiling.
+files and the shared raster encoder source graph while every generated archive
+stays below the crates.io 10 MiB ceiling.
 
 The publishable `rpptx-cli` binary contains nine commands. Its `thumbnail`
 command uses the deterministic presentation renderer, and its `outline`

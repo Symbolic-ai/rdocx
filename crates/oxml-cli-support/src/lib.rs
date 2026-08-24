@@ -1,6 +1,8 @@
 //! Shared command-line contracts for OOXML tools.
 
 use std::collections::BTreeSet;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -106,6 +108,158 @@ pub fn default_output_path(input: &Path, extension: &str) -> PathBuf {
     output
 }
 
+/// Fails before publication when any requested output already exists.
+pub fn ensure_output_paths_available(paths: &[PathBuf]) -> io::Result<()> {
+    let mut unique = BTreeSet::new();
+    for path in paths {
+        if !unique.insert(path.clone()) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("duplicate output path {}", path.display()),
+            ));
+        }
+        if path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("output already exists: {}", path.display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Stages output files beside their final destinations and publishes them as a set.
+pub struct StagedOutputSet {
+    staged: Vec<StagedOutput>,
+}
+
+struct StagedOutput {
+    final_path: PathBuf,
+    temp_path: PathBuf,
+}
+
+impl StagedOutputSet {
+    pub fn new() -> Self {
+        Self { staged: Vec::new() }
+    }
+
+    pub fn stage_bytes(&mut self, final_path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if self
+            .staged
+            .iter()
+            .any(|staged| staged.final_path == final_path)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("duplicate output path {}", final_path.display()),
+            ));
+        }
+        if final_path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("output already exists: {}", final_path.display()),
+            ));
+        }
+        let (temp_path, mut file) = create_temp_file(final_path)?;
+        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error);
+        }
+        self.staged.push(StagedOutput {
+            final_path: final_path.to_path_buf(),
+            temp_path,
+        });
+        Ok(())
+    }
+
+    pub fn publish(mut self) -> io::Result<()> {
+        let mut published = Vec::new();
+        for staged in &self.staged {
+            match publish_staged_output(staged) {
+                Ok(()) => {
+                    published.push(staged.final_path.clone());
+                }
+                Err(error) => {
+                    for path in published {
+                        let _ = fs::remove_file(path);
+                    }
+                    for staged in &self.staged {
+                        let _ = fs::remove_file(&staged.temp_path);
+                    }
+                    self.staged.clear();
+                    return Err(error);
+                }
+            }
+        }
+        for staged in &self.staged {
+            let _ = fs::remove_file(&staged.temp_path);
+        }
+        self.staged.clear();
+        Ok(())
+    }
+}
+
+impl Default for StagedOutputSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for StagedOutputSet {
+    fn drop(&mut self) {
+        for staged in &self.staged {
+            let _ = fs::remove_file(&staged.temp_path);
+        }
+    }
+}
+
+fn create_temp_file(final_path: &Path) -> io::Result<(PathBuf, File)> {
+    let parent = final_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = final_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    for attempt in 0..1000_u32 {
+        let temp_path = parent.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            attempt
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "could not create a unique temporary file beside {}",
+            final_path.display()
+        ),
+    ))
+}
+
+fn publish_staged_output(staged: &StagedOutput) -> io::Result<()> {
+    let mut input = File::open(&staged.temp_path)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged.final_path)?;
+    if let Err(error) = io::copy(&mut input, &mut output)
+        .and_then(|_| output.sync_all())
+        .map(|_| ())
+    {
+        let _ = fs::remove_file(&staged.final_path);
+        return Err(error);
+    }
+    fs::remove_file(&staged.temp_path)
+}
+
 /// Adds the versioned CLI schema field to an object payload.
 pub fn json_envelope(mut payload: Value) -> Result<Value, Error> {
     let Value::Object(object) = &mut payload else {
@@ -120,11 +274,31 @@ pub fn json_envelope(mut payload: Value) -> Result<Value, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     use serde_json::json;
 
     use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let temp = std::env::temp_dir().join(format!("oxml-cli-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir(&temp).unwrap();
+        temp
+    }
+
+    fn temp_entries(path: &Path) -> Vec<PathBuf> {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".tmp"))
+            })
+            .collect()
+    }
 
     #[test]
     fn range_2_4_through_6_is_the_expected_set() {
@@ -187,5 +361,51 @@ mod tests {
             default_output_path(Path::new("relative/report.final.docx"), "md"),
             Path::new("relative/report.final.md")
         );
+    }
+
+    #[test]
+    fn staged_outputs_roll_back_published_files_when_later_publication_fails() {
+        let temp = temp_dir("staged-rollback");
+        let first = temp.join("first.png");
+        let second = temp.join("second.png");
+        let mut staged = StagedOutputSet::new();
+        staged.stage_bytes(&first, b"first").unwrap();
+        staged.stage_bytes(&second, b"second").unwrap();
+        fs::create_dir(&second).unwrap();
+
+        let error = staged.publish().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(!first.exists());
+        assert!(second.is_dir());
+        assert!(temp_entries(&temp).is_empty());
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn staged_outputs_leave_no_temps_on_success_and_reject_duplicate_targets() {
+        let temp = temp_dir("staged-success");
+        let first = temp.join("first.png");
+        let second = temp.join("second.png");
+        ensure_output_paths_available(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(
+            ensure_output_paths_available(&[first.clone(), first.clone()])
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+
+        let mut staged = StagedOutputSet::new();
+        staged.stage_bytes(&first, b"first").unwrap();
+        assert_eq!(
+            staged.stage_bytes(&first, b"duplicate").unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        staged.stage_bytes(&second, b"second").unwrap();
+        staged.publish().unwrap();
+
+        assert_eq!(fs::read(first).unwrap(), b"first");
+        assert_eq!(fs::read(second).unwrap(), b"second");
+        assert!(temp_entries(&temp).is_empty());
+        fs::remove_dir_all(&temp).unwrap();
     }
 }

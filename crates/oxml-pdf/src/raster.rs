@@ -1,5 +1,11 @@
 //! Page-to-image rendering using tiny-skia software rasterizer.
 
+use std::collections::HashSet;
+use std::error::Error;
+use std::fmt;
+use std::io::Cursor;
+
+use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
 use oxml_layout::{
     Effect, LayoutResult, LineCap, LineJoin, PageFrame, Paint as LayoutPaint, Path as LayoutPath,
     PathCommand, PositionedElement, Stroke as LayoutStroke,
@@ -12,6 +18,95 @@ use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
 
+/// Image container and encoding options for raster output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RasterFormat {
+    /// Encode each selected page as a PNG.
+    Png {
+        /// Leave unpainted pixels transparent instead of compositing on white.
+        transparent_background: bool,
+    },
+    /// Encode each selected page as an opaque JPEG.
+    Jpeg {
+        /// JPEG quality from 1 through 100.
+        quality: u8,
+    },
+    /// Encode selected pages into one opaque, uncompressed, multi-page TIFF.
+    Tiff,
+}
+
+/// Options for raster image export.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RasterOptions {
+    /// Dots per inch. Must be finite and positive.
+    pub dpi: f64,
+    /// Requested image container and format-specific options.
+    pub format: RasterFormat,
+}
+
+/// Encoded raster output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RasterOutput {
+    /// One image per selected page, used for PNG and JPEG.
+    SeparatePages(Vec<Vec<u8>>),
+    /// One multi-directory TIFF stream for every selected page.
+    MultiPageTiff(Vec<u8>),
+}
+
+/// A reason a raster export request could not be completed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RasterError {
+    /// DPI was NaN, infinite, zero, or negative.
+    InvalidDpi,
+    /// No page was selected.
+    EmptyPageSelection,
+    /// A selected zero-based page index does not exist.
+    PageOutOfRange {
+        page_index: usize,
+        page_count: usize,
+    },
+    /// A selected zero-based page index appears more than once.
+    DuplicatePage { page_index: usize },
+    /// JPEG quality must be in the inclusive 1 through 100 range.
+    InvalidJpegQuality { quality: u8 },
+    /// The requested raster dimensions cannot be represented.
+    InvalidDimensions,
+    /// The rendered pixmap could not be encoded into the requested format.
+    EncodeFailed { format: &'static str },
+}
+
+impl fmt::Display for RasterError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidDpi => formatter.write_str("raster DPI must be finite and positive"),
+            Self::EmptyPageSelection => formatter.write_str("at least one raster page is required"),
+            Self::PageOutOfRange {
+                page_index,
+                page_count,
+            } => write!(
+                formatter,
+                "raster page index {page_index} is out of range for {page_count} pages"
+            ),
+            Self::DuplicatePage { page_index } => {
+                write!(
+                    formatter,
+                    "raster page index {page_index} was selected more than once"
+                )
+            }
+            Self::InvalidJpegQuality { quality } => {
+                write!(formatter, "JPEG quality {quality} is outside 1 through 100")
+            }
+            Self::InvalidDimensions => {
+                formatter.write_str("raster dimensions are invalid for the requested format")
+            }
+            Self::EncodeFailed { format } => write!(formatter, "{format} raster encoding failed"),
+        }
+    }
+}
+
+impl Error for RasterError {}
+
 /// Render a single page to PNG bytes.
 ///
 /// # Arguments
@@ -20,7 +115,7 @@ use zune_jpeg::zune_core::options::DecoderOptions;
 /// * `dpi` - Dots per inch (72 = 1:1 with points, 150 = 2x, 300 = 4.17x)
 pub fn render_page_to_png(layout: &LayoutResult, page_index: usize, dpi: f64) -> Option<Vec<u8>> {
     let page = layout.pages.get(page_index)?;
-    let pixmap = render_page_to_pixmap(page, &layout.fonts, dpi)?;
+    let pixmap = render_page_to_pixmap_with_background(page, &layout.fonts, dpi, false)?;
     pixmap.encode_png().ok()
 }
 
@@ -30,17 +125,159 @@ pub fn render_all_pages(layout: &LayoutResult, dpi: f64) -> Vec<Vec<u8>> {
         .pages
         .iter()
         .filter_map(|page| {
-            let pixmap = render_page_to_pixmap(page, &layout.fonts, dpi)?;
+            let pixmap = render_page_to_pixmap_with_background(page, &layout.fonts, dpi, false)?;
             pixmap.encode_png().ok()
         })
         .collect()
 }
 
+/// Render selected zero-based pages to the requested raster image format.
+pub fn render_pages(
+    layout: &LayoutResult,
+    page_indices: &[usize],
+    options: RasterOptions,
+) -> Result<RasterOutput, RasterError> {
+    validate_request(layout, page_indices, options)?;
+
+    match options.format {
+        RasterFormat::Png {
+            transparent_background,
+        } => page_indices
+            .iter()
+            .map(|&page_index| {
+                let pixmap = render_selected_pixmap(
+                    layout,
+                    page_index,
+                    options.dpi,
+                    transparent_background,
+                )?;
+                pixmap
+                    .encode_png()
+                    .map_err(|_| RasterError::EncodeFailed { format: "PNG" })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(RasterOutput::SeparatePages),
+        RasterFormat::Jpeg { quality } => page_indices
+            .iter()
+            .map(|&page_index| {
+                let pixmap = render_selected_pixmap(layout, page_index, options.dpi, false)?;
+                encode_jpeg(&pixmap, quality)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(RasterOutput::SeparatePages),
+        RasterFormat::Tiff => {
+            encode_tiff(layout, page_indices, options.dpi).map(RasterOutput::MultiPageTiff)
+        }
+    }
+}
+
+fn validate_request(
+    layout: &LayoutResult,
+    page_indices: &[usize],
+    options: RasterOptions,
+) -> Result<(), RasterError> {
+    if !options.dpi.is_finite() || options.dpi <= 0.0 {
+        return Err(RasterError::InvalidDpi);
+    }
+    if page_indices.is_empty() {
+        return Err(RasterError::EmptyPageSelection);
+    }
+    if let RasterFormat::Jpeg { quality } = options.format
+        && !(1..=100).contains(&quality)
+    {
+        return Err(RasterError::InvalidJpegQuality { quality });
+    }
+    let page_count = layout.pages.len();
+    let mut seen = HashSet::with_capacity(page_indices.len());
+    for &page_index in page_indices {
+        if page_index >= page_count {
+            return Err(RasterError::PageOutOfRange {
+                page_index,
+                page_count,
+            });
+        }
+        if !seen.insert(page_index) {
+            return Err(RasterError::DuplicatePage { page_index });
+        }
+    }
+    Ok(())
+}
+
+fn render_selected_pixmap(
+    layout: &LayoutResult,
+    page_index: usize,
+    dpi: f64,
+    transparent_background: bool,
+) -> Result<Pixmap, RasterError> {
+    let page = layout
+        .pages
+        .get(page_index)
+        .ok_or(RasterError::InvalidDimensions)?;
+    render_page_to_pixmap_with_background(page, &layout.fonts, dpi, transparent_background)
+        .ok_or(RasterError::InvalidDimensions)
+}
+
+fn encode_jpeg(pixmap: &Pixmap, quality: u8) -> Result<Vec<u8>, RasterError> {
+    let width = u16::try_from(pixmap.width()).map_err(|_| RasterError::InvalidDimensions)?;
+    let height = u16::try_from(pixmap.height()).map_err(|_| RasterError::InvalidDimensions)?;
+    let rgb = opaque_rgb(pixmap);
+    let mut output = Vec::new();
+    JpegEncoder::new(&mut output, quality)
+        .encode(&rgb, width, height, JpegColorType::Rgb)
+        .map_err(|_| RasterError::EncodeFailed { format: "JPEG" })?;
+    Ok(output)
+}
+
+fn encode_tiff(
+    layout: &LayoutResult,
+    page_indices: &[usize],
+    dpi: f64,
+) -> Result<Vec<u8>, RasterError> {
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut cursor)
+            .map_err(|_| RasterError::EncodeFailed { format: "TIFF" })?;
+        for &page_index in page_indices {
+            let pixmap = render_selected_pixmap(layout, page_index, dpi, false)?;
+            let rgb = opaque_rgb(&pixmap);
+            encoder
+                .write_image::<tiff::encoder::colortype::RGB8>(
+                    pixmap.width(),
+                    pixmap.height(),
+                    &rgb,
+                )
+                .map_err(|_| RasterError::EncodeFailed { format: "TIFF" })?;
+        }
+    }
+    Ok(cursor.into_inner())
+}
+
+fn opaque_rgb(pixmap: &Pixmap) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(pixmap.width() as usize * pixmap.height() as usize * 3);
+    for pixel in pixmap.pixels() {
+        let alpha = pixel.alpha();
+        rgb.push(pixel.red().saturating_add(255 - alpha));
+        rgb.push(pixel.green().saturating_add(255 - alpha));
+        rgb.push(pixel.blue().saturating_add(255 - alpha));
+    }
+    rgb
+}
+
 /// Render a page to a Pixmap.
+#[cfg(test)]
 fn render_page_to_pixmap(
     page: &PageFrame,
     fonts: &[oxml_layout::FontData],
     dpi: f64,
+) -> Option<Pixmap> {
+    render_page_to_pixmap_with_background(page, fonts, dpi, false)
+}
+
+fn render_page_to_pixmap_with_background(
+    page: &PageFrame,
+    fonts: &[oxml_layout::FontData],
+    dpi: f64,
+    transparent_background: bool,
 ) -> Option<Pixmap> {
     let scale = dpi / 72.0; // points to pixels
     let width = (page.width * scale).ceil() as u32;
@@ -48,7 +285,9 @@ fn render_page_to_pixmap(
 
     let mut pixmap = Pixmap::new(width, height)?;
 
-    pixmap.fill(tiny_skia::Color::WHITE);
+    if !transparent_background {
+        pixmap.fill(tiny_skia::Color::WHITE);
+    }
 
     let transform = Transform::from_scale(scale as f32, scale as f32);
 
@@ -861,14 +1100,28 @@ fn decode_jpeg_pixmap(data: &[u8], width: u32, height: u32) -> Option<Pixmap> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_jpeg_pixmap, render_page_to_pixmap};
+    use std::io::Cursor;
+
+    use super::{
+        RasterFormat, RasterOptions, RasterOutput, decode_jpeg_pixmap, render_page_to_pixmap,
+        render_pages,
+    };
     use oxml_layout::{
-        Color, Effect, FillRule, GradientStop, GroupElement, MediaId, PageFrame, Paint, Path,
-        PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
+        Color, Effect, FillRule, GradientStop, GroupElement, LayoutResult, MediaId, PageFrame,
+        Paint, Path, PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
     };
 
     fn rgb(pixel: tiny_skia::PremultipliedColorU8) -> (u8, u8, u8) {
         (pixel.red(), pixel.green(), pixel.blue())
+    }
+
+    fn color(r: f32, g: f32, b: f32) -> Color {
+        Color {
+            r: r.into(),
+            g: g.into(),
+            b: b.into(),
+            a: 1.0,
+        }
     }
 
     fn solid_path(path: Path, color: Color) -> PositionedElement {
@@ -881,6 +1134,284 @@ mod tests {
 
     fn page(elements: Vec<PositionedElement>) -> PageFrame {
         PageFrame::new(1, 32.0, 32.0, elements)
+    }
+
+    fn layout(pages: Vec<PageFrame>) -> LayoutResult {
+        LayoutResult::new(
+            pages.into_iter().map(Into::into).collect(),
+            Vec::new(),
+            None,
+            Vec::new(),
+        )
+    }
+
+    fn assert_near_rgb(actual: (u8, u8, u8), expected: (u8, u8, u8), tolerance: u8) {
+        for (actual, expected) in [actual.0, actual.1, actual.2]
+            .into_iter()
+            .zip([expected.0, expected.1, expected.2])
+        {
+            let delta = actual.abs_diff(expected);
+            assert!(
+                delta <= tolerance,
+                "channel {actual} differed from {expected} by {delta}, tolerance {tolerance}"
+            );
+        }
+    }
+
+    fn decode_tiff_pages(bytes: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
+        let mut decoder =
+            tiff::decoder::Decoder::new(Cursor::new(bytes)).expect("decode TIFF header");
+        let mut pages = Vec::new();
+        loop {
+            let (width, height) = decoder.dimensions().expect("TIFF dimensions");
+            let tiff::decoder::DecodingResult::U8(data) =
+                decoder.read_image().expect("read TIFF image")
+            else {
+                panic!("TIFF image should decode as RGB8");
+            };
+            pages.push((width, height, data));
+            if !decoder.more_images() {
+                break;
+            }
+            decoder.next_image().expect("advance TIFF image");
+        }
+        pages
+    }
+
+    #[test]
+    fn image_export_options_produce_the_declared_formats_and_exact_pages() {
+        let layout = layout(vec![
+            page(vec![PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 32.0,
+                    height: 32.0,
+                },
+                color: color(1.0, 0.0, 0.0),
+            }]),
+            page(vec![PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 32.0,
+                    height: 32.0,
+                },
+                color: color(0.0, 1.0, 0.0),
+            }]),
+            page(vec![PositionedElement::FilledRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 32.0,
+                    height: 32.0,
+                },
+                color: color(0.0, 0.0, 1.0),
+            }]),
+        ]);
+
+        let png = render_pages(
+            &layout,
+            &[2, 0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Png {
+                    transparent_background: false,
+                },
+            },
+        )
+        .expect("selected PNG pages render");
+        let RasterOutput::SeparatePages(png_pages) = png else {
+            panic!("PNG renders as separate pages");
+        };
+        assert_eq!(png_pages.len(), 2);
+        let png_page_2 = tiny_skia::Pixmap::decode_png(&png_pages[0]).expect("decode page 2 PNG");
+        let png_page_0 = tiny_skia::Pixmap::decode_png(&png_pages[1]).expect("decode page 0 PNG");
+        assert_eq!((png_page_2.width(), png_page_2.height()), (32, 32));
+        assert_eq!((png_page_0.width(), png_page_0.height()), (32, 32));
+        assert_eq!(rgb(png_page_2.pixel(16, 16).unwrap()), (0, 0, 255));
+        assert_eq!(rgb(png_page_0.pixel(16, 16).unwrap()), (255, 0, 0));
+
+        let jpeg = render_pages(
+            &layout,
+            &[2, 0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Jpeg { quality: 80 },
+            },
+        )
+        .expect("selected JPEG pages render");
+        let RasterOutput::SeparatePages(jpeg_pages) = jpeg else {
+            panic!("JPEG renders as separate pages");
+        };
+        assert_eq!(jpeg_pages.len(), 2);
+        let jpeg_page_2 = decode_jpeg_pixmap(&jpeg_pages[0], 32, 32).expect("decode page 2 JPEG");
+        let jpeg_page_0 = decode_jpeg_pixmap(&jpeg_pages[1], 32, 32).expect("decode page 0 JPEG");
+        assert_ne!(jpeg_pages[0], jpeg_pages[1]);
+        assert_near_rgb(rgb(jpeg_page_2.pixel(16, 16).unwrap()), (0, 0, 255), 8);
+        assert_near_rgb(rgb(jpeg_page_0.pixel(16, 16).unwrap()), (255, 0, 0), 8);
+
+        let tiff = render_pages(
+            &layout,
+            &[2, 0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Tiff,
+            },
+        )
+        .expect("selected TIFF pages render");
+        let RasterOutput::MultiPageTiff(tiff) = tiff else {
+            panic!("TIFF renders as one multi-page stream");
+        };
+        assert!(tiff.starts_with(b"II*\0") || tiff.starts_with(b"MM\0*"));
+        let tiff_pages = decode_tiff_pages(&tiff);
+        assert_eq!(tiff_pages.len(), 2);
+        assert_eq!((tiff_pages[0].0, tiff_pages[0].1), (32, 32));
+        assert_eq!((tiff_pages[1].0, tiff_pages[1].1), (32, 32));
+        let first_center = 3 * (16 * 32 + 16);
+        let second_center = 3 * (16 * 32 + 16);
+        assert_eq!(
+            &tiff_pages[0].2[first_center..first_center + 3],
+            &[0, 0, 255]
+        );
+        assert_eq!(
+            &tiff_pages[1].2[second_center..second_center + 3],
+            &[255, 0, 0]
+        );
+    }
+
+    #[test]
+    fn transparent_png_keeps_clear_pixels_but_authored_background_paints() {
+        let blank = layout(vec![PageFrame::new(1, 1.0, 1.0, Vec::new())]);
+        let transparent = render_pages(
+            &blank,
+            &[0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Png {
+                    transparent_background: true,
+                },
+            },
+        )
+        .expect("transparent PNG renders");
+        let RasterOutput::SeparatePages(pages) = transparent else {
+            panic!("PNG renders as separate pages");
+        };
+        let clear = tiny_skia::Pixmap::decode_png(&pages[0]).expect("decode transparent PNG");
+        assert_eq!(clear.pixel(0, 0).unwrap().alpha(), 0);
+
+        let opaque = render_pages(
+            &blank,
+            &[0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Png {
+                    transparent_background: false,
+                },
+            },
+        )
+        .expect("opaque PNG renders");
+        let RasterOutput::SeparatePages(pages) = opaque else {
+            panic!("PNG renders as separate pages");
+        };
+        let white = tiny_skia::Pixmap::decode_png(&pages[0]).expect("decode opaque PNG");
+        assert_eq!(white.pixel(0, 0).unwrap().alpha(), 255);
+
+        let mut painted = PageFrame::new(1, 1.0, 1.0, Vec::new());
+        painted.background = Some(Paint::Solid(color(0.0, 0.0, 1.0)));
+        let painted = render_pages(
+            &layout(vec![painted]),
+            &[0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Png {
+                    transparent_background: true,
+                },
+            },
+        )
+        .expect("painted transparent PNG renders");
+        let RasterOutput::SeparatePages(pages) = painted else {
+            panic!("PNG renders as separate pages");
+        };
+        let blue = tiny_skia::Pixmap::decode_png(&pages[0]).expect("decode painted PNG");
+        assert_eq!(blue.pixel(0, 0).unwrap().alpha(), 255);
+    }
+
+    #[test]
+    fn jpeg_quality_is_validated_and_changes_the_encoded_result() {
+        let layout = layout(vec![page(vec![PositionedElement::FilledRect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
+            },
+            color: color(1.0, 0.0, 0.0),
+        }])]);
+
+        for quality in [0, 101] {
+            assert!(
+                render_pages(
+                    &layout,
+                    &[0],
+                    RasterOptions {
+                        dpi: 72.0,
+                        format: RasterFormat::Jpeg { quality },
+                    },
+                )
+                .is_err()
+            );
+        }
+
+        let low = render_pages(
+            &layout,
+            &[0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Jpeg { quality: 30 },
+            },
+        )
+        .expect("low-quality JPEG renders");
+        let high = render_pages(
+            &layout,
+            &[0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Jpeg { quality: 90 },
+            },
+        )
+        .expect("high-quality JPEG renders");
+        assert_ne!(low, high);
+    }
+
+    #[test]
+    fn existing_png_entry_points_equal_opaque_option_defaults() {
+        let layout = layout(vec![page(vec![PositionedElement::FilledRect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
+            },
+            color: Color::BLACK,
+        }])]);
+        let old_page = super::render_page_to_png(&layout, 0, 72.0).expect("old page API renders");
+        let new_page = render_pages(
+            &layout,
+            &[0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Png {
+                    transparent_background: false,
+                },
+            },
+        )
+        .expect("new page API renders");
+        let RasterOutput::SeparatePages(pages) = new_page else {
+            panic!("PNG renders as separate pages");
+        };
+        assert_eq!(old_page, pages[0]);
+        assert_eq!(super::render_all_pages(&layout, 72.0), pages);
     }
 
     #[test]

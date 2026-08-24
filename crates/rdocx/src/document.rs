@@ -3487,6 +3487,25 @@ impl Document {
         self.layout_for_options(options, false)
     }
 
+    /// Return the bundled-font-only layout with its Word source map.
+    ///
+    /// Repeated accepted-view calls share the deterministic layout cache. This
+    /// is the same snapshot used by deterministic PDF and raster render helpers.
+    pub fn layout_deterministic(&self) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_deterministic_with_options(RenderOptions::default())
+    }
+
+    /// Return a bundled-font-only layout with the selected revision view.
+    ///
+    /// Accepted-view calls share the deterministic layout cache. Tracked-view
+    /// calls remain uncached because they do not replace the accepted-view cache.
+    pub fn layout_deterministic_with_options(
+        &self,
+        options: RenderOptions,
+    ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        self.layout_for_options(options, true)
+    }
+
     /// Return an uncached layout using user-provided font files.
     ///
     /// User-provided fonts take highest priority in font resolution. The
@@ -3813,6 +3832,58 @@ impl Document {
             page_index,
             dpi,
         ))
+    }
+
+    /// Render selected zero-based pages to the requested image format.
+    pub fn render_pages(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        self.render_pages_with_options(page_indices, raster_options, RenderOptions::default())
+    }
+
+    /// Render selected zero-based pages with the selected revision view.
+    pub fn render_pages_with_options(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+        options: RenderOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_pages(
+            &layout.layout,
+            page_indices,
+            raster_options,
+        )?)
+    }
+
+    /// Render selected zero-based pages using bundled fonts without system font discovery.
+    pub fn render_pages_deterministic(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        self.render_pages_deterministic_with_options(
+            page_indices,
+            raster_options,
+            RenderOptions::default(),
+        )
+    }
+
+    /// Render selected zero-based pages to deterministic images with the selected revision view.
+    pub fn render_pages_deterministic_with_options(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+        options: RenderOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        let layout = self.layout_for_options(options, true)?;
+        Ok(oxml_pdf::render_pages(
+            &layout.layout,
+            page_indices,
+            raster_options,
+        )?)
     }
 
     /// Render all pages of the document to PNG bytes.

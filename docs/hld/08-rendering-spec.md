@@ -44,6 +44,29 @@ is the paragraph node at scalar range `0..0` when provenance is requested and
 carrier does not move later content. PDF font collection and emission skip
 empty no-glyph runs, and raster draws no pixels for them.
 
+The shared raster surface accepts an exact caller-selected page list and a
+concrete output format:
+
+```rust
+pub enum RasterFormat {
+    Png { transparent_background: bool },
+    Jpeg { quality: u8 },
+    Tiff,
+}
+pub struct RasterOptions { pub dpi: f64, pub format: RasterFormat }
+pub enum RasterOutput { SeparatePages(Vec<Vec<u8>>), MultiPageTiff(Vec<u8>) }
+pub fn render_pages(layout: &LayoutResult,
+                    page_indices: &[usize],
+                    options: RasterOptions) -> Result<RasterOutput, RasterError>;
+```
+
+The backend validates finite positive DPI, non-empty selections, duplicate
+indices, bounds and JPEG quality before encoding. Caller order is preserved.
+PNG can keep unpainted pixels transparent, although an authored page background
+still paints normally. The default opaque PNG wrappers remain byte-identical to
+the historical entry points. JPEG composites alpha over white. TIFF is one
+opaque, deterministic and lossless multi-page stream.
+
 **A slide is a page with a fixed size.** Font subsetting, ToUnicode CMaps, JPEG
 passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does

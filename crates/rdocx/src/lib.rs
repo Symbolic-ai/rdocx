@@ -52,6 +52,7 @@ pub use oxml_opc::PackageReadLimits;
 pub use oxml_opc::{
     CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
 };
+pub use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 pub use paragraph::{
     Alignment, BorderStyle, Paragraph, ParagraphBorderRef, ParagraphRef, SectionBreak,
     TabAlignment, TabLeader,

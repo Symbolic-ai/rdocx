@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rdocx::{
     ChartData, ChartKind, Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length,
-    RenderOptions, RevisionView, RunPosition, RunRange,
+    RasterFormat, RasterOptions, RasterOutput, RenderOptions, RevisionView, RunPosition, RunRange,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
@@ -1290,6 +1290,41 @@ fn default_render_methods_keep_the_accepted_view() {
             document.layout_page_with_options(0, options).unwrap()
         )
     );
+}
+
+#[test]
+fn native_image_export_ranges_are_zero_based_and_keep_selected_order() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_paragraph("second").page_break_before(true);
+    document.add_paragraph("third").page_break_before(true);
+
+    let output = document
+        .render_pages_deterministic(
+            &[2, 0],
+            RasterOptions {
+                dpi: 72.0,
+                format: RasterFormat::Jpeg { quality: 80 },
+            },
+        )
+        .expect("selected pages render");
+    let RasterOutput::SeparatePages(pages) = output else {
+        panic!("JPEG output should be separate pages");
+    };
+    assert_eq!(pages.len(), 2);
+    assert!(pages.iter().all(|page| page.starts_with(&[0xff, 0xd8])));
+    assert_ne!(pages[0], pages[1]);
+
+    let duplicate = document.render_pages_deterministic(
+        &[0, 0],
+        RasterOptions {
+            dpi: 72.0,
+            format: RasterFormat::Png {
+                transparent_background: false,
+            },
+        },
+    );
+    assert!(duplicate.is_err());
 }
 
 #[test]

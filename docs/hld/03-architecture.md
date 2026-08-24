@@ -157,6 +157,11 @@ and header probing. It has no format-specific workspace dependency. A slide is
 a page with a fixed size, so the same crate serves both formats without knowing
 either exists. The `rdocx` facade renders through this crate directly, while
 `rdocx-pdf` remains an exact deprecated re-export shim.
+The same backend owns raster encoding through `RasterFormat`, `RasterOptions`,
+`RasterOutput` and `render_pages`. PNG, JPEG and TIFF behavior is shared across
+Word, Presentation, Python and CLI consumers, so format semantics and page
+selection validation live at the format-neutral backend rather than in each
+facade.
 
 When the optional document structure is present, `oxml-pdf` alone owns PDF
 marked-content operators, page-local MCIDs, structure elements, list bodies,
@@ -627,6 +632,10 @@ entry points resolve the current package once and return either the shared
 render input and layout or a complete PDF. The corpus example and
 `rpptx-wasm` call that boundary, so neither binding nor development tooling
 maintains a second PresentationML package interpretation path.
+The CLI image paths reuse that resolved layout once per command and pass the
+selected slide order to the shared raster backend. Separate PNG and JPEG files
+are encoded one selected slide at a time, while TIFF remains one multi-page
+stream.
 
 Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 `Cell` has a non-consuming `set_*` twin because a `mut self -> Self` builder

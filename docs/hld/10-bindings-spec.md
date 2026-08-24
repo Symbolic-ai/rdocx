@@ -465,6 +465,13 @@ raster output, page layout, deterministic rendering, and caller-supplied font
 paths. The existing methods keep their accepted default. Python, WASM, and CLI
 surfaces do not implicitly expose the selector and retain their existing
 rendering behavior.
+Native selected-image rendering adds zero-based page-list entry points that
+share `rdocx::RasterFormat`, `rdocx::RasterOptions` and
+`rdocx::RasterOutput` with `oxml-pdf`. The existing PNG methods remain
+source-compatible opaque defaults. Python exposes the same image controls as
+keyword-only `render_pages` arguments, keeps zero-based page indices, releases
+the GIL for rendering, returns `list[bytes]` for PNG or JPEG, and returns one
+`bytes` value for TIFF.
 
 Native renderers obtain the complete positioned output through
 `Document::layout` and `Document::layout_with_options`. Accepted calls return a
@@ -685,13 +692,14 @@ or tag authority.
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the
 shared schema-1 envelope. `text` emits slide text in presentation order.
-`convert` produces deterministic PDF or PNG output. Multi-slide PNG output uses
-one-based filename suffixes and renders one slide at a time. `diff` compares
-slide text with longest-common-subsequence semantics and rejects matrices above
-one million cells. `replace` delegates to the facade's literal,
-formatting-preserving text replacement. `validate` is dispatched separately so
-its exit status carries the verdict. `render` uses deterministic fonts and the
-shared one-based range grammar.
+`convert` produces deterministic PDF, PNG, JPEG or TIFF output. Multi-slide PNG
+and JPEG output uses one-based filename suffixes and renders one slide at a
+time, while TIFF writes one multi-page stream. `diff` compares slide text with
+longest-common-subsequence semantics and rejects matrices above one million
+cells. `replace` delegates to the facade's literal, formatting-preserving text
+replacement. `validate` is dispatched separately so its exit status carries the
+verdict. `render` uses deterministic fonts and the shared one-based range
+grammar for image output.
 
 PNG rendering is limited to eight million pixels per slide for both `convert`
 and `render`. A zero-slide PNG conversion fails without creating output.
@@ -714,9 +722,13 @@ caller-supplied `schema` field and adds the reserved top-level
 `{"schema": 1, ...}` contract.
 
 `rdocx-cli` uses the shared envelope for inspect JSON and the shared path helper
-for convert defaults. Its flags and zero-based `render --page` compatibility
-contract do not change. The `text` command emits paragraphs and table cells in
+for convert defaults. General image conversion uses one-based `--pages` ranges.
+`render --page` remains the zero-based legacy single-page selector and is
+mutually exclusive with the one-based `render --pages` range. Both flags select
+against the same deterministic layout snapshot that is passed to the shared
+raster backend. The legacy `--page 0` default PNG path and single-line stdout
+remain unchanged. The `text` command emits paragraphs and table cells in
 document order through the facade plain-text representation. Both the selected
-page and all-page `render` paths use the bundled-font deterministic facade.
-The compiled seven-command surface is covered by one integration binary, with
-fixtures constructed in code and no command-only test dependency.
+page and all-page `render` paths use bundled deterministic fonts. The compiled
+seven-command surface is covered by one integration binary, with fixtures
+constructed in code and no command-only test dependency.

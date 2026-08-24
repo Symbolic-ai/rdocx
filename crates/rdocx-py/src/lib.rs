@@ -70,8 +70,8 @@ pub(crate) fn rdocx_to_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
         | rdocx::Error::NoDocumentPart
         | rdocx::Error::UnavailableImageDimensions { .. } => "PackageError",
         rdocx::Error::Oxml(_) => "XmlError",
-        rdocx::Error::Layout(_) => "LayoutError",
-        rdocx::Error::Other(_) => "RdocxError",
+        rdocx::Error::Layout(_) | rdocx::Error::Pdf(_) | rdocx::Error::Raster(_) => "LayoutError",
+        rdocx::Error::Rtf { .. } | rdocx::Error::Other(_) => "RdocxError",
     };
     public_error(py, class_name, error.to_string())
 }

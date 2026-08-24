@@ -1,6 +1,6 @@
 # F-183, Image export options
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S54
 **Size**: S
 **Depends on**: none
@@ -131,14 +131,14 @@ deterministic PNG wrappers. New formats and selection are opt-in. Do not edit
 
 ## Implementation checklist
 
-- [ ] Add concrete raster format, options, output, and error values.
-- [ ] Split pixmap creation from encoding and make initial background explicit.
-- [ ] Encode separate PNG and JPEG pages and one multi-page TIFF.
-- [ ] Validate quality, DPI, selection, and output atomically.
-- [ ] Preserve old PNG APIs as byte-identical wrappers.
-- [ ] Thread options through Word, Python, and both general CLI export paths.
-- [ ] Add in-code deterministic regression and integration coverage.
-- [ ] Run raster, binding, CLI, WASM, package, and unchanged-harness checks.
+- [x] Add concrete raster format, options, output, and error values.
+- [x] Split pixmap creation from encoding and make initial background explicit.
+- [x] Encode separate PNG and JPEG pages and one multi-page TIFF.
+- [x] Validate quality, DPI, selection, and output atomically.
+- [x] Preserve old PNG APIs as byte-identical wrappers.
+- [x] Thread options through Word, Python, and both general CLI export paths.
+- [x] Add in-code deterministic regression and integration coverage.
+- [x] Run raster, binding, CLI, WASM, package, and unchanged-harness checks.
 
 ## Open questions
 

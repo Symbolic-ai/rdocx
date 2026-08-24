@@ -19,6 +19,9 @@ pub enum Error {
     #[error("PDF conformance error: {0}")]
     Pdf(#[from] oxml_pdf::PdfError),
 
+    #[error("raster export error: {0}")]
+    Raster(#[from] oxml_pdf::RasterError),
+
     #[error("document has no main document part")]
     NoDocumentPart,
 
