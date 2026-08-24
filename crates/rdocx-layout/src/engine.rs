@@ -1,7 +1,6 @@
 //! Layout engine orchestrator: ties all phases together.
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::{self, Write as _};
 use std::sync::Arc;
 
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
@@ -19,7 +18,10 @@ use rdocx_oxml::text::{
     BreakType, CT_P, CT_R, Field, FieldArgument, RunContent, hyperlink_revision_index,
 };
 
-use crate::block::{self, LayoutBlock, ParagraphBlock};
+use crate::block::{
+    self, CellBlockSemantics, LayoutBlock, LayoutBlockLike, ParagraphBlock, ParagraphSemantics,
+    SharedLayoutBlock, TableSemantics,
+};
 use crate::convert;
 use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::notes::NoteRegistry;
@@ -56,6 +58,7 @@ enum RawOrder {
 pub(crate) struct SourceRegistry {
     nodes: Vec<WordSourcePath>,
     ids: HashMap<WordSourcePath, SourceNodeId>,
+    body_ids: Vec<Option<SourceNodeId>>,
 }
 
 impl SourceRegistry {
@@ -63,18 +66,25 @@ impl SourceRegistry {
         let mut registry = Self {
             nodes: Vec::new(),
             ids: HashMap::new(),
+            body_ids: Vec::with_capacity(input.document.body.content.len()),
         };
 
         for (body_index, content) in input.document.body.content.iter().enumerate() {
             match content {
-                BodyContent::Paragraph(_) => registry.insert(WordSourcePath {
-                    story: WordStory::Document,
-                    children: vec![body_index],
-                }),
+                BodyContent::Paragraph(_) => {
+                    let id = registry.insert_node(WordSourcePath {
+                        story: WordStory::Document,
+                        children: vec![body_index],
+                    });
+                    registry.body_ids.push(Some(id));
+                }
                 BodyContent::Table(table) => {
+                    registry.body_ids.push(None);
                     registry.collect_table(table, &WordStory::Document, &[body_index])
                 }
-                BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {}
+                BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    registry.body_ids.push(None);
+                }
             }
         }
 
@@ -158,11 +168,20 @@ impl SourceRegistry {
         if self.ids.contains_key(&path) {
             return;
         }
+        let id = self.insert_node(path.clone());
+        self.ids.insert(path, id);
+    }
+
+    fn insert_node(&mut self, path: WordSourcePath) -> SourceNodeId {
         let index = u32::try_from(self.nodes.len() + 1)
             .expect("a layout result cannot contain more than u32::MAX source paragraphs");
         let id = SourceNodeId::new(index).expect("source ids are one based");
-        self.nodes.push(path.clone());
-        self.ids.insert(path, id);
+        self.nodes.push(path);
+        id
+    }
+
+    fn body_id(&self, body_index: usize) -> Option<SourceNodeId> {
+        self.body_ids.get(body_index).copied().flatten()
     }
 
     pub(crate) fn id(&self, story: &WordStory, children: &[usize]) -> Option<SourceNodeId> {
@@ -429,7 +448,17 @@ pub struct Engine {
     header_footer_cache_reads_enabled: bool,
     restart_cache: Option<RestartCache>,
     #[cfg(test)]
+    owned_context_builds: usize,
+    #[cfg(test)]
+    body_debug_work: usize,
+    #[cfg(test)]
+    retained_page_deep_copies: usize,
+    #[cfg(test)]
+    last_restart_candidate_bytes: usize,
+    #[cfg(test)]
     last_rebuilt_page_range: Option<std::ops::Range<usize>>,
+    #[cfg(test)]
+    last_shared_block_counts: (usize, usize),
 }
 
 #[derive(Clone, PartialEq)]
@@ -456,7 +485,20 @@ struct ReusableEngineContext {
 }
 
 impl ReusableEngineContext {
+    #[cfg(test)]
     fn for_input(input: &LayoutInput, caller_font_aliases: &[(String, String)]) -> Self {
+        Self::for_input_with_wrap(
+            input,
+            caller_font_aliases,
+            document_has_wrapping_drawing(input),
+        )
+    }
+
+    fn for_input_with_wrap(
+        input: &LayoutInput,
+        caller_font_aliases: &[(String, String)],
+        has_wrapping_drawing: bool,
+    ) -> Self {
         let mut sections = input
             .document
             .body
@@ -473,7 +515,7 @@ impl ReusableEngineContext {
         sections.extend(input.document.body.sect_pr.iter().cloned());
         Self {
             revision_view: input.revision_view,
-            has_wrapping_drawing: document_has_wrapping_drawing(input),
+            has_wrapping_drawing,
             styles: input.styles.clone(),
             numbering: input.numbering.clone(),
             sections,
@@ -493,6 +535,48 @@ impl ReusableEngineContext {
             background_xml: input.document.background_xml.clone(),
         }
     }
+
+    fn matches_input(
+        &self,
+        input: &LayoutInput,
+        caller_font_aliases: &[(String, String)],
+        has_wrapping_drawing: bool,
+    ) -> bool {
+        let sections_match = self.sections.iter().eq(input
+            .document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    None
+                }
+            })
+            .chain(input.document.body.sect_pr.iter()));
+        self.revision_view == input.revision_view
+            && self.has_wrapping_drawing == has_wrapping_drawing
+            && self.styles == input.styles
+            && self.numbering == input.numbering
+            && sections_match
+            && self.headers == input.headers
+            && self.footers == input.footers
+            && self.images == input.images
+            && self.charts == input.charts
+            && self.chart_theme == input.chart_theme
+            && self.chart_color_map == input.chart_color_map
+            && self.core_properties == input.core_properties
+            && self.hyperlink_urls == input.hyperlink_urls
+            && self.footnotes == input.footnotes
+            && self.endnotes == input.endnotes
+            && self.theme == input.theme
+            && self.fonts == input.fonts
+            && self.caller_font_aliases == caller_font_aliases
+            && self.background_xml == input.document.background_xml
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -505,7 +589,7 @@ struct ParagraphCacheKey {
 struct ParagraphCacheEntry {
     fingerprint: u64,
     key: ParagraphCacheKey,
-    block: ParagraphBlock,
+    block: Arc<ParagraphBlock>,
     diagnostics: Vec<Diagnostic>,
     font_trace: Vec<FontId>,
     bytes: usize,
@@ -520,8 +604,9 @@ struct TableCacheKey {
 }
 
 struct TableCacheEntry {
+    fingerprint: u64,
     key: TableCacheKey,
-    block: table::TableBlock,
+    block: Arc<table::TableBlock>,
     diagnostics: Vec<Diagnostic>,
     font_trace: Vec<FontId>,
     bytes: usize,
@@ -559,7 +644,7 @@ struct HeaderFooterCacheEntry {
 }
 
 struct RestartCache {
-    body: Vec<String>,
+    body: Vec<RestartBodyEntry>,
     with_provenance: bool,
     raw_pages: Vec<Arc<PageFrame>>,
     pages: Vec<Arc<PageFrame>>,
@@ -568,6 +653,68 @@ struct RestartCache {
     checkpoints: Vec<paginator::PaginationCheckpoint>,
     font_trace: Vec<FontId>,
     bytes: usize,
+}
+
+#[derive(Clone)]
+enum RestartBodyEntry {
+    Paragraph {
+        fingerprint: u64,
+        value: Arc<CT_P>,
+        bytes: usize,
+    },
+    Table {
+        fingerprint: u64,
+        value: Arc<CT_Tbl>,
+        bytes: usize,
+    },
+}
+
+impl RestartBodyEntry {
+    fn matches(&self, content: &BodyContent) -> bool {
+        match (self, content) {
+            (
+                Self::Paragraph {
+                    fingerprint, value, ..
+                },
+                BodyContent::Paragraph(paragraph),
+            ) => *fingerprint == paragraph_fingerprint(paragraph) && value.as_ref() == paragraph,
+            (
+                Self::Table {
+                    fingerprint, value, ..
+                },
+                BodyContent::Table(table),
+            ) => *fingerprint == table_fingerprint(table) && value.as_ref() == table,
+            _ => false,
+        }
+    }
+
+    fn for_content(content: &BodyContent) -> Option<Self> {
+        match content {
+            BodyContent::Paragraph(paragraph) => Some(Self::Paragraph {
+                fingerprint: paragraph_fingerprint(paragraph),
+                bytes: arc_allocation_bytes::<CT_P>()
+                    .saturating_add(paragraph_key_retained_bytes(paragraph)),
+                value: Arc::new(paragraph.clone()),
+            }),
+            BodyContent::Table(table) => Some(Self::Table {
+                fingerprint: table_fingerprint(table),
+                bytes: arc_allocation_bytes::<CT_Tbl>()
+                    .saturating_add(table_key_retained_bytes(table)),
+                value: Arc::new(table.clone()),
+            }),
+            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => None,
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Paragraph { bytes, .. } | Self::Table { bytes, .. } => *bytes,
+        }
+    }
+}
+
+const fn arc_allocation_bytes<T>() -> usize {
+    std::mem::size_of::<T>() + 2 * std::mem::size_of::<usize>()
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -583,17 +730,17 @@ struct FieldSubstitutionInputs {
 const CACHE_MAX_ENTRIES: usize = 4_224;
 const CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 4_096;
-const PARAGRAPH_CACHE_MAX_BYTES: usize = 56 * 1024 * 1024;
+const PARAGRAPH_CACHE_MAX_BYTES: usize = 50 * 1024 * 1024;
 const TABLE_CACHE_MAX_ENTRIES: usize = 32;
 const TABLE_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const HEADER_FOOTER_CACHE_MAX_ENTRIES: usize = 64;
 const HEADER_FOOTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const RESTART_CACHE_MAX_ENTRIES: usize = 32;
-const RESTART_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const RESTART_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const CALLER_ALIAS_MAX_ENTRIES: usize = 256;
 const CALLER_ALIAS_MAX_RETAINED_BYTES: usize = 64 * 1024;
 const _: () = assert!(PARAGRAPH_CACHE_MAX_ENTRIES == 4_096);
-const _: () = assert!(PARAGRAPH_CACHE_MAX_BYTES == 56 * 1024 * 1024);
+const _: () = assert!(PARAGRAPH_CACHE_MAX_BYTES == 50 * 1024 * 1024);
 const _: () = assert!(HEADER_FOOTER_CACHE_MAX_ENTRIES == 64);
 const _: () = assert!(HEADER_FOOTER_CACHE_MAX_BYTES == 4 * 1024 * 1024);
 const _: () = assert!(CACHE_MAX_ENTRIES == 4_224);
@@ -691,7 +838,17 @@ impl Engine {
             header_footer_cache_reads_enabled: false,
             restart_cache: None,
             #[cfg(test)]
+            owned_context_builds: 0,
+            #[cfg(test)]
+            body_debug_work: 0,
+            #[cfg(test)]
+            retained_page_deep_copies: 0,
+            #[cfg(test)]
+            last_restart_candidate_bytes: 0,
+            #[cfg(test)]
             last_rebuilt_page_range: None,
+            #[cfg(test)]
+            last_shared_block_counts: (0, 0),
         }
     }
 
@@ -734,13 +891,15 @@ impl Engine {
         caller_font_aliases: &[(String, String)],
     ) -> Option<Self> {
         let caller_font_aliases = bounded_caller_aliases(caller_font_aliases);
+        let has_wrapping_drawing = document_has_wrapping_drawing(input);
         let compatible = source.as_ref().is_some_and(|engine| {
             engine.caller_font_aliases == caller_font_aliases
-                && engine.paragraph_cache_context.as_ref()
-                    == Some(&ReusableEngineContext::for_input(
-                        input,
-                        &caller_font_aliases,
-                    ))
+                && engine
+                    .paragraph_cache_context
+                    .as_ref()
+                    .is_some_and(|context| {
+                        context.matches_input(input, &caller_font_aliases, has_wrapping_drawing)
+                    })
                 && engine.pending_paragraph_cache.is_none()
                 && engine.pending_header_footer_cache.is_none()
         });
@@ -774,8 +933,8 @@ impl Engine {
                 .font_manager
                 .set_caller_aliases(&self.caller_font_aliases);
         self.font_manager.begin_layout();
+        let has_wrapping_drawing = document_has_wrapping_drawing(input);
 
-        let paragraph_context = ReusableEngineContext::for_input(input, &self.caller_font_aliases);
         if font_context_changed {
             self.paragraph_cache.clear();
             self.paragraph_cache_bytes = 0;
@@ -785,7 +944,12 @@ impl Engine {
             self.header_footer_cache_bytes = 0;
         }
         let context_matches = !font_context_changed
-            && self.paragraph_cache_context.as_ref() == Some(&paragraph_context);
+            && self
+                .paragraph_cache_context
+                .as_ref()
+                .is_some_and(|context| {
+                    context.matches_input(input, &self.caller_font_aliases, has_wrapping_drawing)
+                });
         self.paragraph_cache_reads_enabled = context_matches;
         self.header_footer_cache_reads_enabled = context_matches;
         self.pending_paragraph_cache = Some(VecDeque::new());
@@ -804,7 +968,7 @@ impl Engine {
             self.pending_header_footer_cache_peak_bytes = 0;
         }
 
-        let result = self.layout_transaction(input, sources);
+        let result = self.layout_transaction(input, sources, has_wrapping_drawing);
         let pending = self.pending_paragraph_cache.take().unwrap_or_default();
         let pending_tables = self.pending_table_cache.take().unwrap_or_default();
         let pending_header_footers = self.pending_header_footer_cache.take().unwrap_or_default();
@@ -821,7 +985,15 @@ impl Engine {
                 self.table_cache_bytes = 0;
                 self.header_footer_cache.clear();
                 self.header_footer_cache_bytes = 0;
-                self.paragraph_cache_context = Some(paragraph_context);
+                self.paragraph_cache_context = Some(ReusableEngineContext::for_input_with_wrap(
+                    input,
+                    &self.caller_font_aliases,
+                    has_wrapping_drawing,
+                ));
+                #[cfg(test)]
+                {
+                    self.owned_context_builds += 1;
+                }
             }
             for entry in pending {
                 self.publish_paragraph_cache_entry(entry);
@@ -872,6 +1044,7 @@ impl Engine {
         &mut self,
         input: &LayoutInput,
         sources: Option<&SourceRegistry>,
+        document_wraps: bool,
     ) -> Result<LayoutResult> {
         let retained_context_matches = self.paragraph_cache_reads_enabled;
         let styles = &input.styles;
@@ -882,8 +1055,6 @@ impl Engine {
         // Re-breaking a paragraph around a floating drawing needs its line
         // breaking inputs kept alive past layout. Nearly no document has a
         // drawing that wraps, so the state is dropped again unless one does.
-        let document_wraps = document_has_wrapping_drawing(input);
-
         // Get final section properties (body-level sectPr)
         let final_sect_pr = input
             .document
@@ -894,8 +1065,8 @@ impl Engine {
             .unwrap_or_else(CT_SectPr::default_letter);
 
         // Build sections: each section has blocks + geometry + header/footer
-        let mut sections: Vec<paginator::Section> = Vec::new();
-        let mut current_blocks: Vec<LayoutBlock> = Vec::new();
+        let mut sections: Vec<paginator::SharedSection> = Vec::new();
+        let mut current_blocks: Vec<SharedLayoutBlock> = Vec::new();
         let mut current_sect_pr: Option<CT_SectPr> = None; // Will be set from paragraph sect_pr
 
         for (body_index, content) in input.document.body.content.iter().enumerate() {
@@ -910,9 +1081,8 @@ impl Engine {
                         .unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);
 
-                    let source =
-                        sources.and_then(|sources| sources.id(&WordStory::Document, &[body_index]));
-                    let mut para_block = self.layout_body_paragraph(
+                    let source = sources.and_then(|sources| sources.body_id(body_index));
+                    let mut block = self.layout_body_paragraph(
                         para,
                         geometry.content_width(),
                         styles,
@@ -923,18 +1093,38 @@ impl Engine {
                         source,
                     )?;
 
-                    if !document_wraps {
-                        para_block.reflow = None;
-                    }
-
                     // Detect heading style for outline generation
                     if let Some(level) = detect_heading_level(para, styles) {
-                        para_block.heading_level = Some(level);
-                        para_block.heading_text =
-                            Some(projected_paragraph_text(para, input.revision_view));
+                        let heading_text = projected_paragraph_text(para, input.revision_view);
+                        let replacement = match &mut block {
+                            SharedLayoutBlock::Owned(block) => match block.as_mut() {
+                                LayoutBlock::Paragraph(paragraph) => {
+                                    paragraph.heading_level = Some(level);
+                                    paragraph.heading_text = Some(heading_text);
+                                    None
+                                }
+                                LayoutBlock::Table(_) => unreachable!(),
+                            },
+                            SharedLayoutBlock::Paragraph {
+                                block: shared,
+                                semantics,
+                            } => {
+                                let mut paragraph = shared.as_ref().clone();
+                                rebind_paragraph_source(&mut paragraph, semantics.source_node);
+                                paragraph.heading_level = Some(level);
+                                paragraph.heading_text = Some(heading_text);
+                                Some(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(
+                                    paragraph,
+                                ))))
+                            }
+                            SharedLayoutBlock::Table { .. } => unreachable!(),
+                        };
+                        if let Some(replacement) = replacement {
+                            block = replacement;
+                        }
                     }
 
-                    current_blocks.push(LayoutBlock::Paragraph(para_block));
+                    current_blocks.push(block);
 
                     // If this paragraph has sect_pr, it ends a section
                     if let Some(sect_pr) = para_sect_pr {
@@ -950,7 +1140,7 @@ impl Engine {
                             sources,
                         )?;
                         let title_pg = sect_pr.title_pg.unwrap_or(false);
-                        sections.push(paginator::Section {
+                        sections.push(paginator::SharedSection {
                             blocks: std::mem::take(&mut current_blocks),
                             geometry,
                             header_footer,
@@ -976,7 +1166,7 @@ impl Engine {
                         &WordStory::Document,
                         &[body_index],
                     )?;
-                    current_blocks.push(LayoutBlock::Table(table_block));
+                    current_blocks.push(table_block);
                 }
                 _ => {} // Skip RawXml elements during layout
             }
@@ -995,14 +1185,31 @@ impl Engine {
             sources,
         )?;
         let final_title_pg = final_sect_pr.title_pg.unwrap_or(false);
-        sections.push(paginator::Section {
+        sections.push(paginator::SharedSection {
             blocks: current_blocks,
             geometry: final_geometry,
             header_footer: final_hf,
             title_pg: final_title_pg,
             page_number_start: section_page_number_start(&final_sect_pr),
         });
-        let structure = assign_document_structure(&mut sections);
+        let structure = assign_shared_document_structure(&mut sections);
+        #[cfg(test)]
+        {
+            self.last_shared_block_counts = sections
+                .iter()
+                .flat_map(|section| &section.blocks)
+                .fold((0, 0), |(paragraphs, tables), block| match block {
+                    SharedLayoutBlock::Paragraph { block, .. } if Arc::strong_count(block) >= 2 => {
+                        (paragraphs + 1, tables)
+                    }
+                    SharedLayoutBlock::Table { block, .. } if Arc::strong_count(block) >= 2 => {
+                        (paragraphs, tables + 1)
+                    }
+                    SharedLayoutBlock::Owned(_)
+                    | SharedLayoutBlock::Paragraph { .. }
+                    | SharedLayoutBlock::Table { .. } => (paragraphs, tables),
+                });
+        }
 
         // Lay the notes out once per width, before pagination, so the paginator
         // can reserve exactly the height it will later draw. A note is broken to
@@ -1025,13 +1232,6 @@ impl Engine {
             sources,
         )?;
 
-        let mut body = input
-            .document
-            .body
-            .content
-            .iter()
-            .map(|content| format!("{content:?}"))
-            .collect::<Vec<_>>();
         let mut font_trace = self.font_manager.current_layout_fonts().to_vec();
         let restart_record_eligible = sections.len() == 1
             && input.document.background_xml.is_none()
@@ -1039,10 +1239,21 @@ impl Engine {
             && input.endnotes.is_none()
             && !document_wraps
             && sections[0].header_footer.is_none()
-            && input.document.body.content.iter().all(|content| {
-                matches!(content, BodyContent::Paragraph(_) | BodyContent::Table(_))
-            })
-            && sections[0].blocks.iter().all(restart_record_block_is_safe);
+            && input
+                .document
+                .body
+                .content
+                .iter()
+                .zip(&sections[0].blocks)
+                .all(|(content, block)| match content {
+                    BodyContent::Paragraph(_) if block.paragraph().is_some() => {
+                        restart_record_block_is_safe(block)
+                    }
+                    BodyContent::Table(table) if block.table().is_some() => {
+                        table_is_cache_safe(table, styles)
+                    }
+                    _ => false,
+                });
         let restart_eligible =
             restart_record_eligible && sections[0].blocks.iter().all(restart_block_is_safe);
         let reusable_restart_record = restart_record_eligible
@@ -1050,15 +1261,42 @@ impl Engine {
             && self.restart_cache.as_ref().is_some_and(|cache| {
                 cache.font_trace == font_trace
                     && cache.with_provenance == sources.is_some()
-                    && (sources.is_none() || cache.body.len() == body.len())
+                    && (sources.is_none() || cache.body.len() == input.document.body.content.len())
             });
         let reusable_restart = restart_eligible && reusable_restart_record;
+        let body_unchanged = reusable_restart_record
+            && self.restart_cache.as_ref().is_some_and(|cache| {
+                cache.body.len() == input.document.body.content.len()
+                    && input
+                        .document
+                        .body
+                        .content
+                        .iter()
+                        .zip(&cache.body)
+                        .all(|(content, retained)| retained.matches(content))
+            });
         let first_changed = reusable_restart.then(|| {
             let cache = self.restart_cache.as_ref().expect("restart cache exists");
-            body.iter()
+            input
+                .document
+                .body
+                .content
+                .iter()
                 .zip(&cache.body)
-                .position(|(current, previous)| current != previous)
-                .unwrap_or_else(|| body.len().min(cache.body.len()))
+                .position(|(current, previous)| !previous.matches(current))
+                .unwrap_or_else(|| input.document.body.content.len().min(cache.body.len()))
+        });
+        let common_suffix = reusable_restart.then(|| {
+            let cache = self.restart_cache.as_ref().expect("restart cache exists");
+            input
+                .document
+                .body
+                .content
+                .iter()
+                .rev()
+                .zip(cache.body.iter().rev())
+                .take_while(|(current, previous)| previous.matches(current))
+                .count()
         });
         let restart_checkpoint = first_changed.and_then(|first_changed| {
             self.restart_cache
@@ -1072,25 +1310,28 @@ impl Engine {
         });
         let tail_source = restart_checkpoint.and_then(|restart| {
             let cache = self.restart_cache.as_ref().expect("restart cache exists");
-            let common_suffix = body
-                .iter()
-                .rev()
-                .zip(cache.body.iter().rev())
-                .take_while(|(current, previous)| current == previous)
-                .count();
-            let new_tail = body.len() - common_suffix;
+            let common_suffix = common_suffix.expect("reusable restart has an exact suffix");
+            let new_tail = input.document.body.content.len() - common_suffix;
             let old_tail = cache.body.len() - common_suffix;
+            let block_delta = new_tail as isize - old_tail as isize;
             cache
                 .checkpoints
                 .iter()
                 .find(|checkpoint| {
-                    checkpoint.next_block_index == old_tail && new_tail > restart.next_block_index
+                    checkpoint.next_block_index >= old_tail
+                        && checkpoint
+                            .next_block_index
+                            .checked_add_signed(block_delta)
+                            .is_some_and(|next| next > restart.next_block_index)
                 })
                 .copied()
                 .map(|old| {
                     (
                         paginator::PaginationCheckpoint {
-                            next_block_index: new_tail,
+                            next_block_index: old
+                                .next_block_index
+                                .checked_add_signed(block_delta)
+                                .expect("common suffix block index remains in range"),
                             page_count: old.page_count,
                             next_header_page_number: old.next_header_page_number,
                         },
@@ -1100,7 +1341,7 @@ impl Engine {
         });
 
         let (mut pages, mut outlines, mut checkpoints) = if restart_eligible {
-            let recorded = paginator::paginate_single_section_recorded(
+            let mut recorded = paginator::paginate_shared_single_section_recorded(
                 &sections[0],
                 &self.font_manager,
                 &media,
@@ -1108,16 +1349,19 @@ impl Engine {
                 restart_checkpoint,
                 tail_source.map(|(stop, _)| stop),
             );
+            for page in &mut recorded.pages {
+                mark_remaining_artifacts(&mut page.elements);
+            }
             let mut pages = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
                 self.restart_cache
                     .as_ref()
                     .expect("a restart checkpoint belongs to retained pages")
                     .raw_pages[..checkpoint.page_count]
                     .iter()
-                    .map(|page| PageFrame::clone(page))
+                    .map(Arc::clone)
                     .collect()
             });
-            pages.extend(recorded.pages);
+            pages.extend(recorded.pages.into_iter().map(Arc::new));
             let mut outlines = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
                 self.restart_cache
                     .as_ref()
@@ -1146,7 +1390,7 @@ impl Engine {
                 pages.extend(
                     cache.raw_pages[old_tail.page_count..]
                         .iter()
-                        .map(|page| PageFrame::clone(page)),
+                        .map(Arc::clone),
                 );
                 outlines.extend(
                     cache
@@ -1176,26 +1420,27 @@ impl Engine {
             checkpoints.dedup();
             (pages, outlines, checkpoints)
         } else {
-            let (pages, outlines) =
-                paginator::paginate_sections(&sections, &self.font_manager, &media, &notes);
-            (pages, outlines, Vec::new())
+            let (mut pages, outlines) =
+                paginator::paginate_shared_sections(&sections, &self.font_manager, &media, &notes);
+            // Endnotes read at the end of the document, so they follow the last
+            // body page rather than sitting at the foot of their reference's page.
+            paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
+            apply_page_background(&mut pages, input);
+            for page in &mut pages {
+                mark_remaining_artifacts(&mut page.elements);
+            }
+            (
+                pages.into_iter().map(Arc::new).collect(),
+                outlines,
+                Vec::new(),
+            )
         };
-
-        // Endnotes read at the end of the document, so they follow the last
-        // body page rather than sitting at the foot of their reference's page.
-        paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
-
-        apply_page_background(&mut pages, input);
-        for page in &mut pages {
-            mark_remaining_artifacts(&mut page.elements);
-        }
-
-        let mut pages = pages.into_iter().map(Arc::new).collect::<Vec<_>>();
-        if reusable_restart_record && let Some(cache) = self.restart_cache.as_ref() {
+        if body_unchanged
+            && let Some(cache) = self.restart_cache.as_ref()
+            && cache.raw_pages.len() == pages.len()
+        {
             for (page, retained) in pages.iter_mut().zip(&cache.raw_pages) {
-                if page_frames_equal(page, retained) {
-                    *page = Arc::clone(retained);
-                }
+                *page = Arc::clone(retained);
             }
         }
         let mut raw_pages = restart_record_eligible.then(|| pages.clone());
@@ -1282,7 +1527,7 @@ impl Engine {
             let mut rebuilt_start = pages.len();
             let mut rebuilt_end = 0;
             for (page_index, (page, retained)) in pages.iter().zip(&cache.raw_pages).enumerate() {
-                if page_frames_equal(page, retained) {
+                if Arc::ptr_eq(page, retained) {
                     reuse_result_pages[page_index] = true;
                 } else {
                     rebuilt_start = rebuilt_start.min(page_index);
@@ -1367,6 +1612,31 @@ impl Engine {
             && let Some(raw_pages) = raw_pages.as_mut()
             && let Some(retained_pages) = retained_pages.as_mut()
         {
+            let old_body = self
+                .restart_cache
+                .as_ref()
+                .map(|cache| cache.body.as_slice());
+            let prefix = first_changed.unwrap_or(0);
+            let suffix = common_suffix.unwrap_or(0);
+            let new_len = input.document.body.content.len();
+            let old_len = old_body.map_or(0, <[RestartBodyEntry]>::len);
+            let mut body = input
+                .document
+                .body
+                .content
+                .iter()
+                .enumerate()
+                .filter_map(|(index, content)| {
+                    if index < prefix {
+                        return old_body.and_then(|body| body.get(index)).cloned();
+                    }
+                    if index >= new_len.saturating_sub(suffix) {
+                        let old_index = old_len.saturating_sub(new_len - index);
+                        return old_body.and_then(|body| body.get(old_index)).cloned();
+                    }
+                    RestartBodyEntry::for_content(content)
+                })
+                .collect::<Vec<_>>();
             body.shrink_to_fit();
             raw_pages.shrink_to_fit();
             retained_pages.shrink_to_fit();
@@ -1391,6 +1661,10 @@ impl Engine {
                 inputs.font_identity.shrink_to_fit();
             }
             let bytes = restart_cache_bytes(&candidate);
+            #[cfg(test)]
+            {
+                self.last_restart_candidate_bytes = bytes;
+            }
             if bytes <= RESTART_CACHE_MAX_BYTES {
                 candidate.bytes = bytes;
                 self.restart_cache = Some(candidate);
@@ -1417,7 +1691,7 @@ impl Engine {
         numbering: &mut NumberingState,
         diagnostics: &mut Vec<Diagnostic>,
         source_node: Option<SourceNodeId>,
-    ) -> Result<ParagraphBlock> {
+    ) -> Result<SharedLayoutBlock> {
         if !paragraph_is_cache_safe(paragraph, styles) {
             // Traversal-sensitive content can change generated state consumed
             // by later blocks. The conservative boundary is the first such
@@ -1433,7 +1707,8 @@ impl Engine {
                 numbering,
                 diagnostics,
                 source_node,
-            );
+            )
+            .map(|block| SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(block))));
         }
 
         let fingerprint = paragraph_fingerprint(paragraph);
@@ -1445,13 +1720,17 @@ impl Engine {
                     && entry.key.revision_view == input.revision_view
             })
         {
-            let mut block = entry.block.clone();
-            rebind_paragraph_source(&mut block, source_node);
             diagnostics.extend(entry.diagnostics.iter().cloned());
             self.font_manager
                 .replay_layout_font_trace(&entry.font_trace);
             self.paragraph_cache_hits += 1;
-            return Ok(block);
+            return Ok(SharedLayoutBlock::Paragraph {
+                block: Arc::clone(&entry.block),
+                semantics: ParagraphSemantics {
+                    source_node,
+                    structure_id: None,
+                },
+            });
         }
 
         let diagnostics_start = diagnostics.len();
@@ -1479,6 +1758,7 @@ impl Engine {
                 &cached_diagnostics,
                 font_trace.len(),
             );
+            let block = Arc::new(block);
             self.stage_paragraph_cache_entry(ParagraphCacheEntry {
                 fingerprint,
                 key: ParagraphCacheKey {
@@ -1486,15 +1766,24 @@ impl Engine {
                     content_width_bits: content_width.to_bits(),
                     revision_view: input.revision_view,
                 },
-                block: block.clone(),
+                block: Arc::clone(&block),
                 diagnostics: cached_diagnostics,
                 font_trace,
                 bytes,
             });
+            return Ok(SharedLayoutBlock::Paragraph {
+                block,
+                semantics: ParagraphSemantics {
+                    source_node,
+                    structure_id: None,
+                },
+            });
         }
 
         rebind_paragraph_source(&mut block, source_node);
-        Ok(block)
+        Ok(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(
+            block,
+        ))))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1510,7 +1799,7 @@ impl Engine {
         sources: Option<&SourceRegistry>,
         story: &WordStory,
         path: &[usize],
-    ) -> Result<table::TableBlock> {
+    ) -> Result<SharedLayoutBlock> {
         if !table_is_cache_safe(table, styles) {
             self.paragraph_cache_reads_enabled = false;
             return table::layout_table_with_provenance(
@@ -1525,30 +1814,28 @@ impl Engine {
                 sources,
                 story,
                 path,
-            );
+            )
+            .map(|block| SharedLayoutBlock::Owned(Box::new(LayoutBlock::Table(block))));
         }
 
-        let key = TableCacheKey {
-            table: table.clone(),
-            content_width_bits: content_width.to_bits(),
-            revision_view: input.revision_view,
-            with_provenance: sources.is_some(),
-        };
+        let fingerprint = table_fingerprint(table);
         if self.paragraph_cache_reads_enabled
-            && let Some(index) = self.table_cache.iter().position(|entry| entry.key == key)
+            && let Some(entry) = self.table_cache.iter().find(|entry| {
+                entry.fingerprint == fingerprint
+                    && entry.key.table == *table
+                    && entry.key.content_width_bits == content_width.to_bits()
+                    && entry.key.revision_view == input.revision_view
+                    && entry.key.with_provenance == sources.is_some()
+            })
         {
-            let entry = self
-                .table_cache
-                .remove(index)
-                .expect("table cache index exists");
-            let mut block = entry.block.clone();
-            rebind_table_sources(table, &mut block, sources, story, path);
             diagnostics.extend(entry.diagnostics.iter().cloned());
             self.font_manager
                 .replay_layout_font_trace(&entry.font_trace);
-            self.table_cache.push_back(entry);
             self.table_cache_hits += 1;
-            return Ok(block);
+            return Ok(SharedLayoutBlock::Table {
+                block: Arc::clone(&entry.block),
+                semantics: table_semantics(table, entry.block.as_ref(), sources, story, path),
+            });
         }
 
         let diagnostics_start = diagnostics.len();
@@ -1567,22 +1854,35 @@ impl Engine {
             path,
         );
         let font_trace = self.font_manager.finish_paragraph_font_trace();
-        let block = block_result?;
+        let mut block = block_result?;
+        let semantics = table_semantics(table, &block, sources, story, path);
         self.table_cache_builds += 1;
 
         let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
         if let Some(font_trace) = font_trace {
+            canonicalize_table_sources(&mut block);
+            let key = TableCacheKey {
+                table: table.clone(),
+                content_width_bits: content_width.to_bits(),
+                revision_view: input.revision_view,
+                with_provenance: sources.is_some(),
+            };
             let bytes =
                 table_cache_entry_bytes(&key, &block, &cached_diagnostics, font_trace.len());
+            let block = Arc::new(block);
             self.stage_table_cache_entry(TableCacheEntry {
+                fingerprint,
                 key,
-                block: block.clone(),
+                block: Arc::clone(&block),
                 diagnostics: cached_diagnostics,
                 font_trace,
                 bytes,
             });
+            return Ok(SharedLayoutBlock::Table { block, semantics });
         }
-        Ok(block)
+        Ok(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Table(
+            block,
+        ))))
     }
 
     #[cfg(test)]
@@ -1593,6 +1893,16 @@ impl Engine {
     #[cfg(test)]
     fn table_cache_counts(&self) -> (usize, usize) {
         (self.table_cache_hits, self.table_cache_builds)
+    }
+
+    #[cfg(test)]
+    fn owned_context_build_count(&self) -> usize {
+        self.owned_context_builds
+    }
+
+    #[cfg(test)]
+    fn hot_path_work_counts(&self) -> (usize, usize) {
+        (self.body_debug_work, self.retained_page_deep_copies)
     }
 
     fn publish_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
@@ -1975,33 +2285,72 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
         })
 }
 
-fn rebind_table_sources(
+fn table_semantics(
     table: &CT_Tbl,
-    block: &mut table::TableBlock,
+    block: &table::TableBlock,
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     table_path: &[usize],
-) {
-    for (row_index, (row, block_row)) in table.rows.iter().zip(&mut block.rows).enumerate() {
-        for (cell_index, (cell, block_cell)) in
-            row.cells.iter().zip(&mut block_row.cells).enumerate()
-        {
-            let mut block_items = block_cell.blocks.iter_mut();
-            for (content_index, content) in cell.content.iter().enumerate() {
-                let Some(block_item) = block_items.next() else {
-                    break;
-                };
-                let mut source_path = table_path.to_vec();
-                source_path.extend([row_index, cell_index, content_index]);
-                match (content, block_item) {
-                    (CellContent::Paragraph(_), table::CellBlock::Paragraph(paragraph)) => {
-                        let source = sources.and_then(|sources| sources.id(story, &source_path));
-                        rebind_paragraph_source(paragraph, source);
+) -> TableSemantics {
+    let rows = table
+        .rows
+        .iter()
+        .zip(&block.rows)
+        .enumerate()
+        .map(|(row_index, (row, block_row))| {
+            let cells = row
+                .cells
+                .iter()
+                .zip(&block_row.cells)
+                .enumerate()
+                .map(|(cell_index, (cell, block_cell))| {
+                    let blocks = cell
+                        .content
+                        .iter()
+                        .zip(&block_cell.blocks)
+                        .enumerate()
+                        .map(|(content_index, (content, block_item))| {
+                            let mut source_path = table_path.to_vec();
+                            source_path.extend([row_index, cell_index, content_index]);
+                            match (content, block_item) {
+                                (CellContent::Paragraph(_), table::CellBlock::Paragraph(_)) => {
+                                    CellBlockSemantics::Paragraph(ParagraphSemantics {
+                                        source_node: sources
+                                            .and_then(|sources| sources.id(story, &source_path)),
+                                        structure_id: None,
+                                    })
+                                }
+                                (CellContent::Table(table), table::CellBlock::Table(block)) => {
+                                    CellBlockSemantics::Table(table_semantics(
+                                        table,
+                                        block,
+                                        sources,
+                                        story,
+                                        &source_path,
+                                    ))
+                                }
+                                _ => unreachable!("cache-safe table topology stays aligned"),
+                            }
+                        })
+                        .collect();
+                    block::CellSemantics { blocks }
+                })
+                .collect();
+            block::RowSemantics { cells }
+        })
+        .collect();
+    TableSemantics { rows }
+}
+
+fn canonicalize_table_sources(block: &mut table::TableBlock) {
+    for row in &mut block.rows {
+        for cell in &mut row.cells {
+            for block in &mut cell.blocks {
+                match block {
+                    table::CellBlock::Paragraph(paragraph) => {
+                        rebind_paragraph_source(paragraph, Some(CACHE_SOURCE_NODE));
                     }
-                    (CellContent::Table(table), table::CellBlock::Table(block)) => {
-                        rebind_table_sources(table, block, sources, story, &source_path);
-                    }
-                    _ => break,
+                    table::CellBlock::Table(table) => canonicalize_table_sources(table),
                 }
             }
         }
@@ -2026,11 +2375,258 @@ fn table_cache_entry_bytes(
     std::mem::size_of::<TableCacheEntry>()
         .saturating_add(table_key_retained_bytes(&key.table))
         .saturating_add(table_block_retained_bytes(block))
+        .saturating_add(2 * std::mem::size_of::<usize>())
         .saturating_add(font_trace_len.saturating_mul(std::mem::size_of::<FontId>()))
         .saturating_add(diagnostic_bytes)
 }
 
+fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
+    fn option_string_bytes(value: &Option<String>) -> usize {
+        value.as_ref().map_or(0, String::capacity)
+    }
+    fn raw_vectors_bytes(values: &[Vec<u8>]) -> usize {
+        values
+            .len()
+            .saturating_mul(std::mem::size_of::<Vec<u8>>())
+            .saturating_add(
+                values
+                    .iter()
+                    .map(Vec::capacity)
+                    .fold(0usize, usize::saturating_add),
+            )
+    }
+    fn run_properties_bytes(properties: &CT_RPr) -> usize {
+        [
+            &properties.style_id,
+            &properties.font_ascii,
+            &properties.font_hansi,
+            &properties.font_east_asia,
+            &properties.font_cs,
+            &properties.font_ascii_theme,
+            &properties.font_hansi_theme,
+            &properties.color,
+            &properties.color_theme,
+            &properties.vert_align,
+        ]
+        .into_iter()
+        .map(option_string_bytes)
+        .fold(0usize, usize::saturating_add)
+        .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+        .saturating_add(
+            properties
+                .revision_markers
+                .capacity()
+                .saturating_mul(std::mem::size_of::<CT_Revision>()),
+        )
+        .saturating_add(raw_vectors_bytes(&properties.revision_xml))
+        .saturating_add(
+            properties
+                .revision_xml_positions
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(u8, usize)>()),
+        )
+    }
+    fn shading_bytes(shading: &CT_Shd) -> usize {
+        shading
+            .val
+            .capacity()
+            .saturating_add(option_string_bytes(&shading.color))
+            .saturating_add(option_string_bytes(&shading.fill))
+    }
+    fn paragraph_border_bytes(borders: &CT_PBdr) -> usize {
+        [
+            &borders.top,
+            &borders.bottom,
+            &borders.left,
+            &borders.right,
+            &borders.between,
+            &borders.bar,
+        ]
+        .into_iter()
+        .filter_map(Option::as_ref)
+        .map(|edge| option_string_bytes(&edge.color))
+        .fold(0usize, usize::saturating_add)
+    }
+    fn paragraph_properties_bytes(properties: &CT_PPr) -> usize {
+        option_string_bytes(&properties.style_id)
+            .saturating_add(option_string_bytes(&properties.line_rule))
+            .saturating_add(
+                properties
+                    .borders
+                    .as_ref()
+                    .map_or(0, paragraph_border_bytes),
+            )
+            .saturating_add(properties.tabs.as_ref().map_or(0, |tabs| {
+                tabs.tabs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CT_TabStop>())
+            }))
+            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(properties.rpr.as_ref().map_or(0, run_properties_bytes))
+            .saturating_add(raw_vectors_bytes(&properties.numbering_revision_xml))
+            .saturating_add(raw_vectors_bytes(&properties.revision_xml))
+    }
+
+    let run_bytes = paragraph
+        .runs
+        .capacity()
+        .saturating_mul(std::mem::size_of::<CT_R>())
+        .saturating_add(
+            paragraph
+                .runs
+                .iter()
+                .map(|run| {
+                    run.content
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<RunContent>())
+                        .saturating_add(
+                            run.content
+                                .iter()
+                                .map(|content| match content {
+                                    RunContent::Text(text) | RunContent::DeletedText(text) => {
+                                        text.text.capacity()
+                                    }
+                                    RunContent::Tab
+                                    | RunContent::Break(_)
+                                    | RunContent::Drawing(_)
+                                    | RunContent::Field(_)
+                                    | RunContent::FootnoteRef { .. }
+                                    | RunContent::EndnoteRef { .. }
+                                    | RunContent::CommentReference { .. } => 0,
+                                })
+                                .fold(0usize, usize::saturating_add),
+                        )
+                        .saturating_add(run.properties.as_ref().map_or(0, run_properties_bytes))
+                        .saturating_add(raw_vectors_bytes(&run.extra_xml))
+                        .saturating_add(
+                            run.extra_xml_positions
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<usize>()),
+                        )
+                })
+                .fold(0usize, usize::saturating_add),
+        );
+    let paragraph_vectors = paragraph
+        .hyperlinks
+        .capacity()
+        .saturating_mul(std::mem::size_of::<rdocx_oxml::text::HyperlinkSpan>())
+        .saturating_add(
+            paragraph
+                .comment_ranges
+                .capacity()
+                .saturating_mul(std::mem::size_of::<rdocx_oxml::text::CommentRangeMarker>()),
+        )
+        .saturating_add(
+            paragraph
+                .extra_xml
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(usize, Vec<u8>)>()),
+        )
+        .saturating_add(
+            paragraph
+                .extra_xml
+                .iter()
+                .map(|(_, raw)| raw.capacity())
+                .fold(0usize, usize::saturating_add),
+        );
+    run_bytes.saturating_add(paragraph_vectors).saturating_add(
+        paragraph
+            .properties
+            .as_ref()
+            .map_or(0, paragraph_properties_bytes),
+    )
+}
+
 fn table_key_retained_bytes(table: &CT_Tbl) -> usize {
+    fn option_string_bytes(value: &Option<String>) -> usize {
+        value.as_ref().map_or(0, String::capacity)
+    }
+    fn raw_entries_bytes(values: &[(usize, Vec<u8>)], capacity: usize) -> usize {
+        capacity
+            .saturating_mul(std::mem::size_of::<(usize, Vec<u8>)>())
+            .saturating_add(
+                values
+                    .iter()
+                    .map(|(_, raw)| raw.capacity())
+                    .fold(0usize, usize::saturating_add),
+            )
+    }
+    fn raw_vectors_bytes(values: &[Vec<u8>]) -> usize {
+        values
+            .len()
+            .saturating_mul(std::mem::size_of::<Vec<u8>>())
+            .saturating_add(
+                values
+                    .iter()
+                    .map(Vec::capacity)
+                    .fold(0usize, usize::saturating_add),
+            )
+    }
+    fn shading_bytes(shading: &CT_Shd) -> usize {
+        shading
+            .val
+            .capacity()
+            .saturating_add(option_string_bytes(&shading.color))
+            .saturating_add(option_string_bytes(&shading.fill))
+    }
+    fn table_border_bytes(borders: &rdocx_oxml::table::CT_TblBorders) -> usize {
+        [
+            &borders.top,
+            &borders.bottom,
+            &borders.left,
+            &borders.right,
+            &borders.inside_h,
+            &borders.inside_v,
+        ]
+        .into_iter()
+        .filter_map(Option::as_ref)
+        .map(|edge| option_string_bytes(&edge.color))
+        .fold(0usize, usize::saturating_add)
+    }
+    fn width_bytes(width: &rdocx_oxml::table::CT_TblWidth) -> usize {
+        width.width_type.capacity()
+    }
+    fn table_properties_bytes(properties: &rdocx_oxml::table::CT_TblPr) -> usize {
+        option_string_bytes(&properties.style_id)
+            .saturating_add(option_string_bytes(&properties.layout))
+            .saturating_add(properties.width.as_ref().map_or(0, width_bytes))
+            .saturating_add(properties.indent.as_ref().map_or(0, width_bytes))
+            .saturating_add(properties.borders.as_ref().map_or(0, table_border_bytes))
+            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(
+                properties
+                    .look
+                    .as_ref()
+                    .map_or(0, |look| option_string_bytes(&look.val)),
+            )
+            .saturating_add(raw_vectors_bytes(&properties.revision_xml))
+    }
+    fn row_properties_bytes(properties: &rdocx_oxml::table::CT_TrPr) -> usize {
+        option_string_bytes(&properties.height_rule)
+            .saturating_add(option_string_bytes(&properties.cnf_style))
+            .saturating_add(
+                properties
+                    .revision_markers
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CT_Revision>()),
+            )
+            .saturating_add(raw_vectors_bytes(&properties.revision_xml))
+    }
+    fn cell_properties_bytes(properties: &rdocx_oxml::table::CT_TcPr) -> usize {
+        properties
+            .width
+            .as_ref()
+            .map_or(0, width_bytes)
+            .saturating_add(properties.borders.as_ref().map_or(0, table_border_bytes))
+            .saturating_add(properties.shading.as_ref().map_or(0, shading_bytes))
+            .saturating_add(option_string_bytes(&properties.text_direction))
+            .saturating_add(option_string_bytes(&properties.cnf_style))
+            .saturating_add(raw_entries_bytes(
+                &properties.extra_xml,
+                properties.extra_xml.capacity(),
+            ))
+    }
+
     let grid_bytes = table.grid.as_ref().map_or(0, |grid| {
         grid.columns
             .capacity()
@@ -2041,61 +2637,69 @@ fn table_key_retained_bytes(table: &CT_Tbl) -> usize {
         .capacity()
         .saturating_mul(std::mem::size_of::<CT_Row>())
         .saturating_add(grid_bytes)
-        .saturating_add(format!("{table:?}").len())
         .saturating_add(
             table
                 .rows
                 .iter()
                 .map(|row| {
-                    row.cells
-                        .capacity()
-                        .saturating_mul(std::mem::size_of::<CT_Tc>())
+                    row.properties
+                        .as_ref()
+                        .map_or(0, row_properties_bytes)
+                        .saturating_add(raw_entries_bytes(&row.extra_xml, row.extra_xml.capacity()))
+                        .saturating_add(
+                            row.content_controls
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<(usize, usize, CT_Sdt)>()),
+                        )
                         .saturating_add(
                             row.cells
-                                .iter()
-                                .map(|cell| {
-                                    cell.content
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<CT_Tc>())
+                                .saturating_add(
+                                    row.cells
+                                        .iter()
+                                        .map(|cell| {
+                                            cell.properties
+                                        .as_ref()
+                                        .map_or(0, cell_properties_bytes)
+                                        .saturating_add(raw_entries_bytes(
+                                            &cell.extra_xml,
+                                            cell.extra_xml.capacity(),
+                                        ))
+                                        .saturating_add(cell.content
                                         .capacity()
                                         .saturating_mul(std::mem::size_of::<CellContent>())
                                         .saturating_add(
                                             cell.content
                                                 .iter()
                                                 .map(|content| match content {
-                                                    CellContent::Paragraph(paragraph) => paragraph
-                                                        .runs
-                                                        .capacity()
-                                                        .saturating_mul(std::mem::size_of::<CT_R>())
-                                                        .saturating_add(
-                                                            paragraph
-                                                                .runs
-                                                                .iter()
-                                                                .map(|run| {
-                                                                    run.content
-                                                                        .capacity()
-                                                                        .saturating_mul(
-                                                                            std::mem::size_of::<
-                                                                                RunContent,
-                                                                            >(
-                                                                            ),
-                                                                        )
-                                                                })
-                                                                .fold(
-                                                                    0usize,
-                                                                    usize::saturating_add,
-                                                                ),
-                                                        ),
+                                                    CellContent::Paragraph(paragraph) => {
+                                                        paragraph_key_retained_bytes(paragraph)
+                                                    }
                                                     CellContent::Table(table) => {
                                                         table_key_retained_bytes(table)
                                                     }
                                                     CellContent::ContentControl(_) => usize::MAX,
                                                 })
                                                 .fold(0usize, usize::saturating_add),
-                                        )
-                                })
-                                .fold(0usize, usize::saturating_add),
+                                        ))
+                                        })
+                                        .fold(0usize, usize::saturating_add),
+                                ),
                         )
                 })
                 .fold(0usize, usize::saturating_add),
+        )
+        .saturating_add(table.properties.as_ref().map_or(0, table_properties_bytes))
+        .saturating_add(raw_entries_bytes(
+            &table.extra_xml,
+            table.extra_xml.capacity(),
+        ))
+        .saturating_add(
+            table
+                .content_controls
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(usize, usize, CT_Sdt)>()),
         )
 }
 
@@ -2246,42 +2850,44 @@ fn canonicalize_layout_fonts(
     Ok(fonts)
 }
 
-fn restart_block_is_safe(block: &LayoutBlock) -> bool {
-    let LayoutBlock::Paragraph(paragraph) = block else {
-        return false;
-    };
-    restart_record_block_is_safe(block)
-        && paragraph.lines.iter().all(|line| {
-            line.items.iter().all(|item| match item {
-                LineItem::Text(text) | LineItem::Marker(text) => text.field_kind.is_none(),
-                LineItem::Tab {
-                    leader: Some(text), ..
-                } => text.field_kind.is_none(),
-                _ => true,
+fn restart_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
+    if let Some(paragraph) = block.paragraph() {
+        restart_record_block_is_safe(block)
+            && paragraph.lines.iter().all(|line| {
+                line.items.iter().all(|item| match item {
+                    LineItem::Text(text) | LineItem::Marker(text) => text.field_kind.is_none(),
+                    LineItem::Tab {
+                        leader: Some(text), ..
+                    } => text.field_kind.is_none(),
+                    _ => true,
+                })
             })
-        })
+    } else {
+        restart_record_block_is_safe(block)
+    }
 }
 
-fn restart_record_block_is_safe(block: &LayoutBlock) -> bool {
-    let LayoutBlock::Paragraph(paragraph) = block else {
-        return false;
-    };
-    paragraph.anchored.is_empty()
-        && paragraph.lines.len() <= 2
-        && paragraph.heading_level.is_none()
-        && !paragraph.keep_next
-        && !paragraph.keep_lines
-        && paragraph.lines.iter().all(|line| {
-            line.items.iter().all(|item| match item {
-                LineItem::Text(text) | LineItem::Marker(text) => text.note.is_none(),
-                LineItem::Tab {
-                    leader: Some(text), ..
-                } => text.note.is_none(),
-                LineItem::Tab { leader: None, .. } => true,
-                LineItem::Image { .. } | LineItem::Group { .. } => false,
-                _ => false,
+fn restart_record_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
+    if let Some(paragraph) = block.paragraph() {
+        paragraph.anchored.is_empty()
+            && paragraph.lines.len() <= 2
+            && paragraph.heading_level.is_none()
+            && !paragraph.keep_next
+            && !paragraph.keep_lines
+            && paragraph.lines.iter().all(|line| {
+                line.items.iter().all(|item| match item {
+                    LineItem::Text(text) | LineItem::Marker(text) => text.note.is_none(),
+                    LineItem::Tab {
+                        leader: Some(text), ..
+                    } => text.note.is_none(),
+                    LineItem::Tab { leader: None, .. } => true,
+                    LineItem::Image { .. } | LineItem::Group { .. } => false,
+                    _ => false,
+                })
             })
-        })
+    } else {
+        block.table().is_some()
+    }
 }
 
 fn page_has_substitution_state(page: &PageFrame) -> bool {
@@ -2296,19 +2902,11 @@ fn restart_cache_entries(cache: &RestartCache) -> usize {
     cache.raw_pages.len().max(cache.checkpoints.len())
 }
 
-fn page_frames_equal(left: &PageFrame, right: &PageFrame) -> bool {
-    left.page_number == right.page_number
-        && left.width == right.width
-        && left.height == right.height
-        && left.elements == right.elements
-        && left.background == right.background
-}
-
 fn restart_cache_bytes(cache: &RestartCache) -> usize {
     let vector_bytes = cache
         .body
         .capacity()
-        .saturating_mul(std::mem::size_of::<String>())
+        .saturating_mul(std::mem::size_of::<RestartBodyEntry>())
         .saturating_add(
             cache
                 .raw_pages
@@ -2343,7 +2941,7 @@ fn restart_cache_bytes(cache: &RestartCache) -> usize {
     let body_bytes = cache
         .body
         .iter()
-        .map(String::capacity)
+        .map(RestartBodyEntry::bytes)
         .fold(0usize, usize::saturating_add);
     debug_assert_eq!(cache.raw_pages.len(), cache.pages.len());
     let page_bytes = cache
@@ -2356,7 +2954,14 @@ fn restart_cache_bytes(cache: &RestartCache) -> usize {
             } else {
                 page_frame_retained_bytes(substituted)
             };
-            page_frame_retained_bytes(pristine).saturating_add(substituted_bytes)
+            page_frame_retained_bytes(pristine)
+                .saturating_add(2 * std::mem::size_of::<usize>())
+                .saturating_add(substituted_bytes)
+                .saturating_add(if Arc::ptr_eq(pristine, substituted) {
+                    0
+                } else {
+                    2 * std::mem::size_of::<usize>()
+                })
         })
         .fold(0usize, usize::saturating_add);
     let outline_bytes = cache
@@ -2882,6 +3487,7 @@ fn paragraph_cache_entry_bytes(
                 .fold(0usize, usize::saturating_add),
         );
     std::mem::size_of::<ParagraphCacheEntry>()
+        .saturating_add(arc_allocation_bytes::<ParagraphBlock>())
         .saturating_add(paragraph_bytes)
         .saturating_add(line_bytes)
         .saturating_add(reflow_bytes)
@@ -2896,28 +3502,99 @@ fn paragraph_cache_entry_bytes(
         .saturating_add(diagnostic_bytes)
 }
 
-struct StableParagraphFingerprint(u64);
+struct StableFingerprint(u64);
 
-impl StableParagraphFingerprint {
+impl StableFingerprint {
     fn new() -> Self {
         Self(0xcbf2_9ce4_8422_2325)
     }
-}
 
-impl fmt::Write for StableParagraphFingerprint {
-    fn write_str(&mut self, value: &str) -> fmt::Result {
-        for byte in value.bytes() {
-            self.0 ^= u64::from(byte);
+    fn write_bytes(&mut self, value: &[u8]) {
+        for byte in value {
+            self.0 ^= u64::from(*byte);
             self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
         }
-        Ok(())
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.write_bytes(&value.to_le_bytes());
+    }
+
+    fn write_tag(&mut self, value: u8) {
+        self.write_bytes(&[value]);
     }
 }
 
 fn paragraph_fingerprint(paragraph: &CT_P) -> u64 {
-    let mut fingerprint = StableParagraphFingerprint::new();
-    let written = write!(&mut fingerprint, "{paragraph:?}");
-    debug_assert!(written.is_ok());
+    let mut fingerprint = StableFingerprint::new();
+    fingerprint.write_usize(paragraph.runs.len());
+    fingerprint.write_tag(u8::from(paragraph.properties.is_some()));
+    for run in &paragraph.runs {
+        fingerprint.write_tag(u8::from(run.properties.is_some()));
+        fingerprint.write_usize(run.content.len());
+        for content in &run.content {
+            match content {
+                RunContent::Text(text) => {
+                    fingerprint.write_tag(0);
+                    fingerprint.write_bytes(text.text.as_bytes());
+                    fingerprint.write_tag(u8::from(text.preserve_space));
+                }
+                RunContent::DeletedText(text) => {
+                    fingerprint.write_tag(1);
+                    fingerprint.write_bytes(text.text.as_bytes());
+                    fingerprint.write_tag(u8::from(text.preserve_space));
+                }
+                RunContent::Tab => fingerprint.write_tag(2),
+                RunContent::Break(kind) => {
+                    fingerprint.write_tag(3);
+                    fingerprint.write_tag(match kind {
+                        BreakType::Line => 0,
+                        BreakType::Page => 1,
+                        BreakType::Column => 2,
+                    });
+                }
+                RunContent::Drawing(_)
+                | RunContent::Field(_)
+                | RunContent::FootnoteRef { .. }
+                | RunContent::EndnoteRef { .. }
+                | RunContent::CommentReference { .. } => fingerprint.write_tag(4),
+            }
+        }
+    }
+    fingerprint.0
+}
+
+fn table_fingerprint(table: &CT_Tbl) -> u64 {
+    fn write_table(table: &CT_Tbl, fingerprint: &mut StableFingerprint) {
+        fingerprint.write_tag(u8::from(table.properties.is_some()));
+        fingerprint.write_usize(table.grid.as_ref().map_or(0, |grid| grid.columns.len()));
+        fingerprint.write_usize(table.rows.len());
+        for row in &table.rows {
+            fingerprint.write_tag(u8::from(row.properties.is_some()));
+            fingerprint.write_usize(row.cells.len());
+            for cell in &row.cells {
+                fingerprint.write_tag(u8::from(cell.properties.is_some()));
+                fingerprint.write_usize(cell.content.len());
+                for content in &cell.content {
+                    match content {
+                        CellContent::Paragraph(paragraph) => {
+                            fingerprint.write_tag(0);
+                            fingerprint
+                                .write_bytes(&paragraph_fingerprint(paragraph).to_le_bytes());
+                        }
+                        CellContent::Table(table) => {
+                            fingerprint.write_tag(1);
+                            write_table(table, fingerprint);
+                        }
+                        CellContent::ContentControl(_) => fingerprint.write_tag(2),
+                    }
+                }
+            }
+        }
+    }
+
+    let mut fingerprint = StableFingerprint::new();
+    write_table(table, &mut fingerprint);
     fingerprint.0
 }
 
@@ -3072,6 +3749,156 @@ struct ListFrame {
     last_item: Option<StructureId>,
 }
 
+fn assign_shared_document_structure(
+    sections: &mut [paginator::SharedSection],
+) -> DocumentStructure {
+    let mut builder = StructureBuilder { nodes: Vec::new() };
+    let root = builder.add(StructureRole::Document, None);
+
+    for section in sections {
+        let mut lists: Vec<ListFrame> = Vec::new();
+        for block in &mut section.blocks {
+            match block {
+                SharedLayoutBlock::Paragraph { block, semantics } => {
+                    lists.clear();
+                    let paragraph_id = builder.add(StructureRole::Paragraph, Some(root));
+                    semantics.structure_id = Some(paragraph_id);
+                    debug_assert!(block.list.is_none());
+                    debug_assert!(block.anchored.is_empty());
+                }
+                SharedLayoutBlock::Table { block, semantics } => {
+                    lists.clear();
+                    assign_shared_table_structure(&mut builder, block, semantics, root);
+                }
+                SharedLayoutBlock::Owned(block) => match block.as_mut() {
+                    LayoutBlock::Paragraph(paragraph) => {
+                        assign_owned_paragraph_structure(&mut builder, paragraph, root, &mut lists);
+                    }
+                    LayoutBlock::Table(table) => {
+                        lists.clear();
+                        assign_owned_table_structure(&mut builder, table, root);
+                    }
+                },
+            }
+        }
+    }
+
+    DocumentStructure {
+        root,
+        nodes: builder.nodes,
+    }
+}
+
+fn assign_owned_paragraph_structure(
+    builder: &mut StructureBuilder,
+    paragraph: &mut ParagraphBlock,
+    root: StructureId,
+    lists: &mut Vec<ListFrame>,
+) {
+    if let Some((num_id, level)) = paragraph.list {
+        if lists.last().is_some_and(|frame| frame.num_id != num_id) {
+            lists.clear();
+        }
+        while lists.last().is_some_and(|frame| frame.level > level) {
+            lists.pop();
+        }
+        if lists.is_empty() || lists.last().is_some_and(|frame| frame.level < level) {
+            let parent = lists
+                .last()
+                .and_then(|frame| frame.last_item)
+                .unwrap_or(root);
+            let list = builder.add(StructureRole::List, Some(parent));
+            lists.push(ListFrame {
+                num_id,
+                level,
+                list,
+                last_item: None,
+            });
+        }
+        let frame = lists
+            .last_mut()
+            .expect("the requested list level has been allocated");
+        let item = builder.add(StructureRole::ListItem, Some(frame.list));
+        frame.last_item = Some(item);
+        let paragraph_id = builder.add(StructureRole::Paragraph, Some(item));
+        paragraph.structure_id = Some(paragraph_id);
+        assign_paragraph_figures(builder, paragraph, paragraph_id, item);
+    } else {
+        lists.clear();
+        let role = paragraph
+            .heading_level
+            .map(|level| StructureRole::Heading(level.min(6) as u8))
+            .unwrap_or(StructureRole::Paragraph);
+        let paragraph_id = builder.add(role, Some(root));
+        paragraph.structure_id = Some(paragraph_id);
+        assign_paragraph_figures(builder, paragraph, paragraph_id, root);
+    }
+}
+
+fn assign_owned_table_structure(
+    builder: &mut StructureBuilder,
+    table: &mut table::TableBlock,
+    parent: StructureId,
+) {
+    let table_id = builder.add(StructureRole::Table, Some(parent));
+    table.structure_id = Some(table_id);
+    for row in &mut table.rows {
+        let row_id = builder.add(StructureRole::TableRow, Some(table_id));
+        row.structure_id = Some(row_id);
+        for cell in &mut row.cells {
+            let role = if row.is_header {
+                StructureRole::TableHeaderCell
+            } else {
+                StructureRole::TableCell
+            };
+            let cell_id = builder.add(role, Some(row_id));
+            cell.structure_id = Some(cell_id);
+            for block in &mut cell.blocks {
+                assign_cell_block_structure(builder, block, cell_id);
+            }
+        }
+    }
+}
+
+fn assign_shared_table_structure(
+    builder: &mut StructureBuilder,
+    table: &table::TableBlock,
+    semantics: &mut TableSemantics,
+    parent: StructureId,
+) {
+    let table_id = builder.add(StructureRole::Table, Some(parent));
+    for (row, row_semantics) in table.rows.iter().zip(&mut semantics.rows) {
+        let row_id = builder.add(StructureRole::TableRow, Some(table_id));
+        for (cell, cell_semantics) in row.cells.iter().zip(&mut row_semantics.cells) {
+            let role = if row.is_header {
+                StructureRole::TableHeaderCell
+            } else {
+                StructureRole::TableCell
+            };
+            let cell_id = builder.add(role, Some(row_id));
+            for (block, block_semantics) in cell.blocks.iter().zip(&mut cell_semantics.blocks) {
+                match (block, block_semantics) {
+                    (
+                        table::CellBlock::Paragraph(paragraph),
+                        CellBlockSemantics::Paragraph(semantics),
+                    ) => {
+                        let role = paragraph
+                            .heading_level
+                            .map(|level| StructureRole::Heading(level.min(6) as u8))
+                            .unwrap_or(StructureRole::Paragraph);
+                        semantics.structure_id = Some(builder.add(role, Some(cell_id)));
+                    }
+                    (table::CellBlock::Table(table), CellBlockSemantics::Table(semantics)) => {
+                        assign_shared_table_structure(builder, table, semantics, cell_id)
+                    }
+                    _ => unreachable!("shared table semantics stay aligned"),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 fn assign_document_structure(sections: &mut [paginator::Section]) -> DocumentStructure {
     let mut builder = StructureBuilder { nodes: Vec::new() };
     let root = builder.add(StructureRole::Document, None);
@@ -4238,8 +5065,7 @@ fn bookmark_text(input: &LayoutInput, name: &str) -> Option<String> {
 /// for it.
 fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
     fn paragraph_wraps(para: &CT_P, view: RevisionView) -> bool {
-        project_paragraph_runs(para, view).iter().any(|projected| {
-            let run = projected.run;
+        fn run_wraps(run: &CT_R) -> bool {
             run.content
                 .iter()
                 .filter_map(|rc| match rc {
@@ -4253,7 +5079,15 @@ fn document_has_wrapping_drawing(input: &LayoutInput) -> bool {
                         .as_ref()
                         .is_some_and(|anchor| anchor.wrap != WrapType::None)
                 })
-        })
+        }
+
+        if para.revisions.is_empty() && para.content_controls.is_empty() {
+            para.runs.iter().any(run_wraps)
+        } else {
+            project_paragraph_runs(para, view)
+                .iter()
+                .any(|projected| run_wraps(projected.run))
+        }
     }
 
     input
@@ -6564,7 +7398,7 @@ mod tests {
     }
 
     #[test]
-    fn paragraph_fingerprint_collision_requires_typed_equality() {
+    fn paragraph_and_table_fingerprint_collisions_require_typed_equality() {
         let first = make_input_with_text("first collision candidate");
         let second = make_input_with_text("second collision candidate");
         let BodyContent::Paragraph(second_paragraph) = &second.document.body.content[0] else {
@@ -6584,6 +7418,48 @@ mod tests {
         let output = engine.layout(&second).expect("collision layout succeeds");
         assert_eq!(output_text(&output).concat(), "second collision candidate");
         assert_eq!(engine.paragraph_cache_counts(), (0, 2));
+
+        let mut first = make_input_with_text("before first table");
+        first.document.body.add_table(safe_table("first table"));
+        let mut second = make_input_with_text("before first table");
+        second.document.body.add_table(safe_table("second table"));
+        let BodyContent::Table(second_table) = &second.document.body.content[1] else {
+            panic!("body item is a table");
+        };
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&first).expect("first table layout succeeds");
+        let forced_fingerprint = table_fingerprint(second_table);
+        let retained = engine
+            .table_cache
+            .front_mut()
+            .expect("first table is retained");
+        assert_ne!(retained.fingerprint, forced_fingerprint);
+        retained.fingerprint = forced_fingerprint;
+
+        let output = engine
+            .layout(&second)
+            .expect("table collision layout succeeds");
+        assert!(output_text(&output).concat().contains("second table"));
+        assert_eq!(engine.table_cache_counts(), (0, 2));
+    }
+
+    #[test]
+    fn body_only_layout_and_transfer_do_not_rebuild_owned_context() {
+        let input = restart_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("cold layout succeeds");
+        assert_eq!(engine.owned_context_build_count(), 1);
+
+        let mut edited = input.clone();
+        set_body_paragraph_text(&mut edited, 70, "body-only edit");
+        engine.layout(&edited).expect("warm layout succeeds");
+        assert_eq!(engine.owned_context_build_count(), 1);
+
+        let mut source = Some(engine);
+        let transferred = Engine::take_if_compatible(&mut source, &edited)
+            .expect("body-only restore accepts the retained engine");
+        assert_eq!(transferred.owned_context_build_count(), 1);
+        assert!(source.is_none());
     }
 
     #[test]
@@ -6632,6 +7508,121 @@ mod tests {
             rebuilt.end.saturating_sub(rebuilt.start) <= 2,
             "{rebuilt:?}"
         );
+    }
+
+    fn mixed_editor_input() -> LayoutInput {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        for index in 0..700 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("편집 paragraph {index:03} stable line"));
+            input.document.body.add_paragraph(paragraph);
+            if index % 50 == 49 {
+                input
+                    .document
+                    .body
+                    .add_table(safe_table(&format!("table {:02}", index / 50)));
+            }
+        }
+        input
+    }
+
+    fn mixed_editor_paragraph_mut(input: &mut LayoutInput, target: usize) -> &mut CT_P {
+        input
+            .document
+            .body
+            .content
+            .iter_mut()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => Some(paragraph),
+                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    None
+                }
+            })
+            .nth(target)
+            .expect("mixed editor paragraph exists")
+    }
+
+    #[test]
+    fn mixed_editor_relayout_reuses_every_safe_unchanged_block_and_page() {
+        let mut input = mixed_editor_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("mixed cold layout");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 700));
+        assert_eq!(engine.table_cache_counts(), (0, 14));
+        assert_eq!(engine.hot_path_work_counts(), (0, 0));
+
+        mixed_editor_paragraph_mut(&mut input, 350).runs[0].content = vec![RunContent::Text(
+            rdocx_oxml::text::CT_Text::new("편집 paragraph 350 changed line"),
+        )];
+        let warm = engine.layout(&input).expect("mixed warm layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("mixed fresh layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+        assert_eq!(engine.table_cache_counts(), (14, 14));
+        assert_eq!(engine.hot_path_work_counts(), (0, 0));
+        assert_eq!(engine.owned_context_build_count(), 1);
+        let restart = engine.restart_cache.as_ref().unwrap_or_else(|| {
+            panic!(
+                "mixed restart retained for {} pages, candidate {} bytes",
+                initial.pages.len(),
+                engine.last_restart_candidate_bytes
+            )
+        });
+        assert!(restart.bytes <= RESTART_CACHE_MAX_BYTES);
+        assert!(restart.checkpoints.len() <= RESTART_CACHE_MAX_ENTRIES);
+        let rebuilt = engine
+            .last_rebuilt_page_range
+            .clone()
+            .expect("mixed rebuilt range recorded");
+        assert!(
+            warm.pages
+                .iter()
+                .zip(&initial.pages)
+                .take(rebuilt.start)
+                .all(|(current, previous)| Arc::ptr_eq(current, previous))
+        );
+        assert!(
+            warm.pages
+                .iter()
+                .zip(&initial.pages)
+                .skip(rebuilt.end)
+                .all(|(current, previous)| Arc::ptr_eq(current, previous))
+        );
+    }
+
+    #[test]
+    fn mixed_editor_table_mutation_rebuilds_only_the_changed_table() {
+        let mut input = mixed_editor_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("mixed cold layout");
+        let BodyContent::Table(changed) = input
+            .document
+            .body
+            .content
+            .iter_mut()
+            .filter(|content| matches!(content, BodyContent::Table(_)))
+            .nth(7)
+            .expect("eighth mixed table")
+        else {
+            panic!("mixed body item is a table");
+        };
+        changed.rows[0].cells[0].paragraphs_mut()[0].runs[0].content = vec![RunContent::Text(
+            rdocx_oxml::text::CT_Text::new("changed table 07"),
+        )];
+
+        let warm = engine.layout(&input).expect("mixed warm table layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("mixed fresh table layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(engine.paragraph_cache_counts(), (700, 700));
+        assert_eq!(engine.table_cache_counts(), (13, 15));
+        assert_eq!(engine.hot_path_work_counts(), (0, 0));
     }
 
     #[test]
@@ -7051,6 +8042,201 @@ mod tests {
         assert_eq!(engine.paragraph_cache_counts(), (3, 4));
     }
 
+    #[test]
+    fn cached_heading_keeps_result_local_provenance() {
+        fn heading_path(layout: &LayoutResult, sources: &[WordSourcePath]) -> Vec<usize> {
+            layout
+                .pages
+                .iter()
+                .flat_map(|page| compatibility_page_elements(page))
+                .find_map(|element| match element {
+                    PositionedElement::Text(run) if run.text.contains("cached") => run
+                        .source
+                        .map(|source| sources[source.node.get() as usize - 1].children.clone()),
+                    _ => None,
+                })
+                .expect("cached heading keeps a source path")
+        }
+
+        let mut input = make_input_with_text("ordinary first paragraph");
+        let mut heading = CT_P::new();
+        heading.properties = Some(CT_PPr {
+            style_id: Some("Heading1".to_owned()),
+            ..CT_PPr::default()
+        });
+        heading.add_run("cached heading");
+        input.document.body.add_paragraph(heading);
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let cold = engine
+            .layout_with_provenance(&input)
+            .expect("cold heading layout");
+        assert_eq!(heading_path(&cold.0, &cold.1), vec![1]);
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("inserted before heading");
+        input
+            .document
+            .body
+            .content
+            .insert(0, BodyContent::Paragraph(inserted));
+        let warm = engine
+            .layout_with_provenance(&input)
+            .expect("warm heading layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh heading layout");
+
+        assert_layout_results_equal(&warm.0, &fresh.0);
+        assert_eq!(warm.1, fresh.1);
+        assert_eq!(heading_path(&warm.0, &warm.1), vec![2]);
+        assert_eq!(engine.paragraph_cache_counts(), (2, 3));
+    }
+
+    #[test]
+    fn overflowed_table_font_trace_keeps_result_local_provenance() {
+        let mut input = make_input_with_text("before overflow table");
+        let mut table = safe_table("");
+        let paragraph = &mut table.rows[0].cells[0].paragraphs_mut()[0];
+        paragraph.runs.clear();
+        for _ in 0..4_100 {
+            paragraph.runs.push(CT_R::new("x"));
+        }
+        input.document.body.add_table(table);
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (layout, sources) = engine
+            .layout_with_provenance(&input)
+            .expect("overflowed table trace still lays out");
+
+        assert!(engine.table_cache.is_empty());
+        let source = layout
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .find_map(|element| match element {
+                PositionedElement::Text(run) if run.text.contains('x') => run.source,
+                _ => None,
+            })
+            .expect("table glyph keeps provenance after trace overflow");
+        assert_eq!(
+            sources[source.node.get() as usize - 1].children,
+            vec![1, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn restart_body_accounting_charges_cache_safe_property_payloads() {
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            style_id: Some("p".repeat(RESTART_CACHE_MAX_BYTES + 1)),
+            ..CT_PPr::default()
+        });
+        let paragraph_entry = RestartBodyEntry::for_content(&BodyContent::Paragraph(paragraph))
+            .expect("paragraph has restart identity");
+        assert!(paragraph_entry.bytes() > RESTART_CACHE_MAX_BYTES);
+
+        let mut table = safe_table("property accounting");
+        table.properties = Some(rdocx_oxml::table::CT_TblPr {
+            style_id: Some("t".repeat(4_096)),
+            ..rdocx_oxml::table::CT_TblPr::default()
+        });
+        table.rows[0].properties = Some(rdocx_oxml::table::CT_TrPr {
+            height_rule: Some("r".repeat(4_096)),
+            ..rdocx_oxml::table::CT_TrPr::default()
+        });
+        table.rows[0].cells[0].properties = Some(rdocx_oxml::table::CT_TcPr {
+            text_direction: Some("c".repeat(4_096)),
+            ..rdocx_oxml::table::CT_TcPr::default()
+        });
+        let table_entry = RestartBodyEntry::for_content(&BodyContent::Table(table))
+            .expect("table has restart identity");
+        assert!(table_entry.bytes() >= 3 * 4_096);
+    }
+
+    #[test]
+    fn shared_cached_blocks_keep_result_local_semantics_exact() {
+        fn has_semantic_mark(elements: &[PositionedElement]) -> bool {
+            elements.iter().any(|element| match element {
+                PositionedElement::MarkedContent {
+                    structure: Some(_), ..
+                } => true,
+                PositionedElement::MarkedContent { children, .. } => has_semantic_mark(children),
+                PositionedElement::Group(group) => has_semantic_mark(&group.children),
+                _ => false,
+            })
+        }
+
+        let mut input = make_input_with_text("before shared table");
+        input
+            .document
+            .body
+            .add_table(safe_nested_table("outer cell", "nested cell"));
+        let mut after = CT_P::new();
+        after.add_run("after shared table");
+        input.document.body.add_paragraph(after);
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout_with_provenance(&input)
+            .expect("prime shared cache payloads");
+        assert_eq!(engine.last_shared_block_counts, (2, 1));
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("inserted before shared payloads");
+        input
+            .document
+            .body
+            .content
+            .insert(0, BodyContent::Paragraph(inserted));
+        let warm = engine
+            .layout_with_provenance(&input)
+            .expect("warm shared layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh shared comparison");
+
+        assert_layout_results_equal(&warm.0, &fresh.0);
+        assert_eq!(warm.0.structure, fresh.0.structure);
+        assert_eq!(warm.1, fresh.1);
+        assert_eq!(format!("{:?}", warm.0), format!("{:?}", fresh.0));
+        assert_eq!(engine.last_shared_block_counts, (3, 1));
+        assert_eq!(engine.paragraph_cache_counts(), (2, 3));
+        assert_eq!(engine.table_cache_counts(), (1, 1));
+
+        let sourced_runs = warm
+            .0
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some((run.text.as_str(), run.source)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (text, expected_path) in [
+            ("outer ", vec![2, 0, 0, 0]),
+            ("nested ", vec![2, 0, 0, 1, 0, 0, 0]),
+        ] {
+            let source = sourced_runs
+                .iter()
+                .find_map(|(run_text, source)| (*run_text == text).then_some(*source).flatten())
+                .unwrap_or_else(|| panic!("{text:?} keeps result-local provenance"));
+            assert_eq!(
+                warm.1[source.node.get() as usize - 1].children,
+                expected_path
+            );
+        }
+        assert!(
+            warm.0
+                .pages
+                .iter()
+                .any(|page| has_semantic_mark(&page.elements))
+        );
+    }
+
     fn safe_table(text: &str) -> CT_Tbl {
         let mut table = CT_Tbl::new();
         let mut row = CT_Row::new();
@@ -7215,6 +8401,7 @@ mod tests {
             .back()
             .expect("safe table retained")
             .block
+            .as_ref()
             .clone();
         let mut color = String::with_capacity(TABLE_CACHE_MAX_BYTES + 1);
         color.push_str("00");
@@ -7517,7 +8704,7 @@ mod tests {
         }
 
         assert_capacity_rejected("body vector capacity is charged", |cache| {
-            cache.body = Vec::with_capacity(over_limit::<String>());
+            cache.body = Vec::with_capacity(over_limit::<RestartBodyEntry>());
         });
         assert_capacity_rejected("pristine page vector capacity is charged", |cache| {
             cache.raw_pages = Vec::with_capacity(over_limit::<Arc<PageFrame>>());
@@ -7538,10 +8725,12 @@ mod tests {
         assert_capacity_rejected("font trace vector capacity is charged", |cache| {
             cache.font_trace = Vec::with_capacity(over_limit::<FontId>());
         });
-        assert_capacity_rejected("body string capacity is charged", |cache| {
-            cache
-                .body
-                .push(String::with_capacity(RESTART_CACHE_MAX_BYTES + 1));
+        assert_capacity_rejected("body payload capacity is charged", |cache| {
+            cache.body.push(RestartBodyEntry::Paragraph {
+                fingerprint: 0,
+                value: Arc::new(CT_P::new()),
+                bytes: RESTART_CACHE_MAX_BYTES + 1,
+            });
         });
         assert_capacity_rejected("outline title capacity is charged", |cache| {
             cache.outlines.push(oxml_layout::OutlineEntry {
@@ -7661,13 +8850,14 @@ mod tests {
             assert!(engine.restart_cache.is_none(), "{label}");
         };
 
-        let mut table = make_input_with_text("before table");
-        table
-            .document
-            .body
-            .content
-            .push(BodyContent::Table(safe_table("table")));
-        assert_fallback("table", table);
+        let mut table = make_input_with_text("before unsafe table");
+        let mut unsafe_table = safe_table("table");
+        unsafe_table.rows[0].cells[0].paragraphs_mut()[0]
+            .properties
+            .get_or_insert_default()
+            .num_id = Some(1);
+        table.document.body.add_table(unsafe_table);
+        assert_fallback("traversal-sensitive table", table);
 
         let split = make_input_with_text(&"split paragraph content ".repeat(200));
         assert_fallback("split paragraph", split);
@@ -8026,7 +9216,7 @@ mod tests {
         };
         retained.advances = vec![0.0; PARAGRAPH_CACHE_MAX_BYTES / 8 + 1];
 
-        let mut block = template;
+        let mut block = template.as_ref().clone();
         block.reflow = Some(Box::new(block::ParagraphReflow {
             items: vec![InlineItem::Text(retained)],
             params: oxml_layout::LineBreakParams::default(),
@@ -8046,7 +9236,7 @@ mod tests {
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
             },
-            block,
+            block: Arc::new(block),
             diagnostics: Vec::new(),
             font_trace: Vec::new(),
             bytes,
@@ -8096,6 +9286,7 @@ mod tests {
             .front()
             .expect("safe paragraph cached")
             .block
+            .as_ref()
             .clone();
         let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
             panic!("body paragraph");

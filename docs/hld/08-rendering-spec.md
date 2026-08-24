@@ -567,9 +567,16 @@ bundled fonts only. Caller-font managers build from caller bytes only.
 
 Each reusable font manager keeps exact shaping results keyed by `FontId`, owned
 source text, and floating-point size bits. The memo is capped at 2,048 entries
-and 16 MiB. Resolution, coverage misses, coverage fallbacks, and per-paragraph
-font traces also have explicit bounds. Loading a different additional font set
-rebuilds face identity and clears all dependent memo state.
+and 16 MiB. Exact hits search newest to oldest but do not refresh FIFO eviction
+order. Each charged entry carries a 64-bit fingerprint that filters the scan,
+but complete font, size, and text equality remains authoritative after a
+fingerprint match. Shared line breaking shapes each parent text segment once
+to derive its character spacing, then reshapes each exact UAX byte slice with
+that spacing. This preserves exact glyph ownership and Unicode-scalar
+provenance without repeating whole-parent shaping for every break opportunity. Resolution,
+coverage misses, coverage fallbacks, and per-paragraph font traces also have
+explicit bounds. Loading a different additional font set rebuilds face
+identity and clears all dependent memo state.
 
 Caller font labels that differ from their embedded family names create
 label-derived aliases to the exact loaded faces. Native callers can also set
@@ -604,8 +611,14 @@ fields, hyperlinks, relationships, media, generated markers, content controls,
 preserved producer XML, and other traversal-sensitive input
 bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting an earlier note or numbering
-input cannot leave a later generated marker stale. Each entry owns its block,
-diagnostics, and exact bounded font-resolution trace. Header and footer parts
+input cannot leave a later generated marker stale. Cacheable paragraph and
+table entries share one immutable `Arc` block with the active layout
+transaction. A private concrete side overlay holds result-local provenance and
+the paragraph structure ids consumed by paginator emission. Public
+`ParagraphBlock`, `TableBlock`, `LayoutBlock`, and `Section` stay unchanged.
+The overlay preserves exact scalar ranges and the recursive `MarkedContent`
+tree without mutating cached payloads. Each entry owns its diagnostics and
+exact bounded font-resolution trace. Header and footer parts
 with numbering, drawings, fields, hyperlinks, revisions, content controls,
 generated markers, or other traversal-sensitive state bypass reuse. Supported
 VML watermarks remain reusable because the part, complete section geometry,
@@ -613,14 +626,15 @@ resolved media bytes, and reusable context are all authoritative identity
 inputs.
 
 Retained block and restart state share a 4,224-entry and 64 MiB ceiling.
-Paragraph blocks receive 4,096 entries and 56 MiB, table blocks receive 32
+Paragraph blocks receive 4,096 entries and 50 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
-aligned restart page and checkpoint slots receive 32 entries and 2 MiB. The published and
-transaction-pending queues enforce the same partitions using retained-capacity
-accounting for owned keys, resolved part bytes, rows, cells, recursive cell
-blocks, watermark media, diagnostics, font traces, and reflow buffers. Eviction follows
-insertion order without hit-time queue maintenance. Oversized entries bypass
-retention.
+aligned restart page and checkpoint slots receive 32 entries and 8 MiB. The
+published and transaction-pending queues enforce the same partitions using
+retained-capacity accounting for owned keys, resolved part bytes, rows, cells,
+recursive cell blocks, watermark media, diagnostics, font traces, and reflow
+buffers. Shared active references do not duplicate the cache-owned allocation
+in retained-byte accounting. Eviction follows insertion order without hit-time
+queue maintenance. Oversized entries bypass retention.
 
 Cache publication is a whole-layout transaction. A late error publishes none
 of the staged paragraph, table, header, or footer entries. A hit replays
@@ -632,18 +646,19 @@ font ids, font bytes, diagnostics, revision view, and resolved source provenance
 equal.
 
 The engine also records restart checkpoints for one safe section containing
-only one-line or two-line context-independent paragraphs. A checkpoint exists
-only before a complete paragraph at an empty page boundary. It records the next
-block, page count, and displayed header page number. Headers, footers,
-backgrounds, notes, fields, headings, tables, drawings, multi-section content,
-split paragraphs, keep constraints, and any unrepresented state use the full
-paginator. A warm edit restarts at the last checkpoint before its first changed
-block. It stops at an unchanged suffix only when the complete retained context,
-font-resolution trace, page count, displayed header page number, and body
-suffix all match exactly. The old raw pagination tail is then reused, and final
-page frames are shared only after their canonicalized content compares equal.
-If any equality or capacity check fails, pagination continues through the
-normal full path.
+one-line or two-line context-independent paragraphs and cache-safe tables. A
+checkpoint exists only before a complete block at an empty page boundary. The
+paginator never records one inside a table. It records the next block, page
+count, and displayed header page number. Headers, footers, backgrounds, notes,
+fields, headings, drawings, multi-section content, split paragraphs, keep
+constraints, and any unrepresented state use the full paginator. A warm edit
+restarts at the last checkpoint before its first changed block. It stops at the
+first safe page boundary inside an unchanged suffix only when the complete
+retained context, font-resolution trace, page count, displayed header page
+number, and exact typed body suffix all match. Retained prefix and tail page
+frames keep their `Arc` ownership through pagination. Newly paginated pages are
+allocated once. If any equality or capacity check fails, pagination continues
+through the normal full path.
 
 The same restart record retains aligned pristine and field-substituted page
 pairs. PAGE, NUMPAGES, and PAGEREF pages bypass reshaping only when exact page
@@ -653,7 +668,7 @@ view, and every substitution input compare equal. Field-free output shares its
 pristine `Arc` directly. Field-bearing blocks still receive no pagination
 checkpoint, so this optimization cannot widen the restart-safe region. Page
 pairs and checkpoints occupy aligned slots inside the 32-entry partition, and
-all pair payloads and exact inputs count toward its 2 MiB ceiling. A mismatch
+all pair payloads and exact inputs count toward its 8 MiB ceiling. A mismatch
 reshapes the page. A bound failure drops the whole restart record.
 
 `Document::transfer_reusable_layout_from` builds the receiver input before it

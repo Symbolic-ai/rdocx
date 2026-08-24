@@ -521,6 +521,20 @@ fn build_breakable_segments(
                 }
                 // Use unicode-linebreak to find break opportunities within text
                 let breaks = split_text_at_break_opportunities(seg);
+                let spacing =
+                    if breaks.len() == 1 && breaks[0].start == 0 && breaks[0].end == seg.text.len()
+                    {
+                        0.0
+                    } else {
+                        let original = fm.shape_text(seg.font_id, &seg.text, seg.font_size)?;
+                        if original.advances.len() == seg.advances.len()
+                            && !original.advances.is_empty()
+                        {
+                            (seg.width - original.width) / original.advances.len() as f64
+                        } else {
+                            0.0
+                        }
+                    };
 
                 for tb in &breaks {
                     let chunk = &seg.text[tb.start..tb.end];
@@ -534,7 +548,7 @@ fn build_breakable_segments(
                     }
 
                     // Create a sub-segment for just this chunk (not the entire text)
-                    let sub_item = split_text_subsegment(seg, tb.start, tb.end, fm)?;
+                    let sub_item = split_text_subsegment(seg, tb.start, tb.end, spacing, fm)?;
                     current_group.push(sub_item);
 
                     if tb.is_break {
@@ -570,6 +584,7 @@ fn split_text_subsegment(
     seg: &TextSegment,
     byte_start: usize,
     byte_end: usize,
+    spacing: f64,
     fm: &FontManager,
 ) -> Result<InlineItem> {
     // If this is the full segment, just clone it
@@ -579,13 +594,6 @@ fn split_text_subsegment(
 
     let sub_text = seg.text[byte_start..byte_end].to_string();
     let mut shaped = fm.shape_text(seg.font_id, &sub_text, seg.font_size)?;
-    let original = fm.shape_text(seg.font_id, &seg.text, seg.font_size)?;
-    let spacing = if original.advances.len() == seg.advances.len() && !original.advances.is_empty()
-    {
-        (seg.width - original.width) / original.advances.len() as f64
-    } else {
-        0.0
-    };
     for advance in &mut shaped.advances {
         *advance += spacing;
     }

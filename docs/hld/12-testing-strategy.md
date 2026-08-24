@@ -240,7 +240,11 @@ cover actual mutation invalidation, style and theme context changes, unsafe
 numbering, fields, hyperlinks, media, relationships, ordinary and
 `AlternateContent` drawings, nonempty diagnostic replay, late transactional
 failure, paragraph reorder and insertion, caller-font isolation, TTC indices,
-and a legitimate active set larger than 256 faces.
+and a legitimate active set larger than 256 faces. Exact shaping tests require
+newest-first lookup without FIFO refresh, force a fingerprint collision to
+remain a miss until complete key equality, and prove that deriving spacing
+once per parent segment leaves subsegment glyph ids, advances, and
+Unicode-scalar source ranges unchanged.
 
 The editor-scale paragraph-cache regression retains 700 distinct safe
 paragraphs, edits one paragraph, and requires 699 warm hits with only the edit
@@ -249,8 +253,12 @@ restart pagination reports a bounded rebuilt range. A forced fingerprint
 collision still requires exact typed paragraph equality. Focused cases prove
 that note, field, and numbering prefixes disable later reads, a late failure
 publishes nothing, hits preserve insertion order, and FIFO eviction holds at
-the independently pinned 4,096-entry and 56 MiB paragraph limits. Compile-time
-checks also pin the 4,224-entry and 64 MiB combined envelope.
+the independently pinned 4,096-entry and 50 MiB paragraph limits. Cacheable
+active paragraph and table blocks share immutable cache payloads through a
+private representation. Warm and fresh results must retain exact pages,
+structure, provenance, and nested table paths while public block APIs remain
+unchanged. Compile-time checks also pin the 4,224-entry and 64 MiB combined
+envelope.
 
 The restart-pagination regression gate compares warm edits at the start,
 middle, tail, and a retained page boundary with a fresh deterministic engine.
@@ -307,8 +315,9 @@ Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
 must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096
-entries and 56 MiB and header and footer state capped at 64 entries and 4 MiB.
-Oversized entries must bypass retention.
+entries and 50 MiB, table state capped at 32 entries and 2 MiB, header and
+footer state capped at 64 entries and 4 MiB, and restart state capped at 32
+entries and 8 MiB. Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and reviewed 49-entry hash harness are required riders.

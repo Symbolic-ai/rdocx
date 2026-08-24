@@ -65,7 +65,7 @@ struct ShapingKey {
 }
 
 struct ShapingMemo {
-    entries: VecDeque<(ShapingKey, ShapedText, usize)>,
+    entries: VecDeque<(ShapingKey, ShapedText, usize, u64)>,
     bytes: usize,
     #[cfg(test)]
     hits: usize,
@@ -96,7 +96,7 @@ impl ShapingMemo {
     }
 
     fn insert(&mut self, key: ShapingKey, shaped: ShapedText) {
-        let entry_bytes = std::mem::size_of::<(ShapingKey, ShapedText, usize)>()
+        let entry_bytes = std::mem::size_of::<(ShapingKey, ShapedText, usize, u64)>()
             + key.text.len()
             + shaped.glyph_ids.len() * std::mem::size_of::<u16>()
             + shaped.advances.len() * std::mem::size_of::<f64>();
@@ -106,14 +106,26 @@ impl ShapingMemo {
         while self.entries.len() >= SHAPING_CACHE_MAX_ENTRIES
             || self.bytes.saturating_add(entry_bytes) > SHAPING_CACHE_MAX_BYTES
         {
-            let Some((_, _, evicted_bytes)) = self.entries.pop_front() else {
+            let Some((_, _, evicted_bytes, _)) = self.entries.pop_front() else {
                 break;
             };
             self.bytes = self.bytes.saturating_sub(evicted_bytes);
         }
         self.bytes += entry_bytes;
-        self.entries.push_back((key, shaped, entry_bytes));
+        let fingerprint = shaping_fingerprint(key.font_id, &key.text, key.size_bits);
+        self.entries
+            .push_back((key, shaped, entry_bytes, fingerprint));
     }
+}
+
+fn shaping_fingerprint(font_id: FontId, text: &str, size_bits: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    font_id.hash(&mut hasher);
+    text.hash(&mut hasher);
+    size_bits.hash(&mut hasher);
+    hasher.finish()
 }
 
 const SHAPING_CACHE_MAX_ENTRIES: usize = 2_048;
@@ -593,8 +605,8 @@ impl FontManager {
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         memo.entries
-            .retain(|(key, _, _)| current.contains(&key.font_id));
-        memo.bytes = memo.entries.iter().map(|(_, _, bytes)| bytes).sum();
+            .retain(|(key, _, _, _)| current.contains(&key.font_id));
+        memo.bytes = memo.entries.iter().map(|(_, _, bytes, _)| bytes).sum();
     }
 
     /// Resolve a font for `text`, falling back on glyph coverage.
@@ -993,6 +1005,7 @@ impl FontManager {
             text: text.to_owned(),
             size_bits: size_pt.to_bits(),
         };
+        let fingerprint = shaping_fingerprint(key.font_id, &key.text, key.size_bits);
         let mut memo = match self.shaping_memo.lock() {
             Ok(memo) => memo,
             Err(poisoned) => {
@@ -1002,14 +1015,15 @@ impl FontManager {
                 memo
             }
         };
-        if let Some(index) = memo
+        if let Some(shaped) = memo
             .entries
             .iter()
-            .position(|(candidate, _, _)| candidate == &key)
+            .rev()
+            .find(|(candidate, _, _, candidate_fingerprint)| {
+                *candidate_fingerprint == fingerprint && candidate == &key
+            })
+            .map(|(_, shaped, _, _)| shaped.clone())
         {
-            let entry = memo.entries.remove(index).expect("cache index exists");
-            let shaped = entry.1.clone();
-            memo.entries.push_back(entry);
             #[cfg(test)]
             {
                 memo.hits += 1;
@@ -1786,6 +1800,36 @@ mod tests {
         let replacement_id = fm.resolve_font(Some("Carlito"), false, false).unwrap();
         fm.shape_text(replacement_id, "exact text", 11.0).unwrap();
         assert_eq!(fm.shaping_memo_counts().1, 1);
+    }
+
+    #[test]
+    fn shaping_memo_hits_preserve_fifo_order() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let font = fm.resolve_font(Some("Carlito"), false, false).unwrap();
+        fm.shape_text(font, "oldest exact shape", 11.0).unwrap();
+        fm.shape_text(font, "newest exact shape", 11.0).unwrap();
+        fm.shape_text(font, "oldest exact shape", 11.0).unwrap();
+
+        let memo = fm.shaping_memo.lock().unwrap();
+        assert_eq!(memo.hits, 1);
+        assert_eq!(memo.entries.front().unwrap().0.text, "oldest exact shape");
+        assert_eq!(memo.entries.back().unwrap().0.text, "newest exact shape");
+    }
+
+    #[test]
+    fn shaping_memo_fingerprint_collision_requires_exact_key_equality() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let font = fm.resolve_font(Some("Carlito"), false, false).unwrap();
+        fm.shape_text(font, "first collision candidate", 11.0)
+            .unwrap();
+        let forced = shaping_fingerprint(font, "second collision candidate", 11.0f64.to_bits());
+        fm.shaping_memo.lock().unwrap().entries[0].3 = forced;
+
+        fm.shape_text(font, "second collision candidate", 11.0)
+            .unwrap();
+
+        let (hits, misses, entries, _) = fm.shaping_memo_counts();
+        assert_eq!((hits, misses, entries), (0, 2, 2));
     }
 
     #[test]
