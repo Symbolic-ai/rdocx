@@ -34,7 +34,7 @@ compatibility notes and authenticated contributor credit.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-180 | ODT writer | L | pending | - |
+| F-180 | ODT writer | L | in-progress | codex |
 | F-181 | EPUB export | M | pending | - |
 | F-182 | SVG page export | M | pending | - |
 | F-X054 | Integrate PRs 47 through 52 | L | in-progress | codex |

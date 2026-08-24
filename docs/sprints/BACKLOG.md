@@ -33,13 +33,13 @@ regenerated, never hand-edited.
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
-| M18, Format breadth                            | 8  | 5 | 0 | 3  |
+| M18, Format breadth                            | 8  | 5 | 1 | 2  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
 | X, Cross-cutting (opportunistic)            | 58 | 54 | 1 | 2  |
-| **Total** | **305** | **243** | **1** | **60** |
+| **Total** | **305** | **243** | **2** | **59** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -356,7 +356,7 @@ regenerated, never hand-edited.
 | F-177 | RTF writer                                   | S54  | M | done |
 | F-178 | HTML import                                  | S55  | L | done |
 | F-179 | ODT reader                                   | S55  | L | done |
-| F-180 | ODT writer                                   | S56  | L | pending |
+| F-180 | ODT writer                                   | S56  | L | in-progress |
 | F-181 | EPUB export                                  | S56  | M | pending |
 | F-182 | SVG page export                              | S56  | M | pending |
 | F-183 | Image export options                         | S54  | S | done |
