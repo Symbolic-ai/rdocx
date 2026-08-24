@@ -3,7 +3,10 @@
 //! Handles page breaks, widow/orphan control, keep-with-next,
 //! keep-lines-together, and header/footer placement.
 
-use crate::block::{AnchoredContent, AnchoredDrawing, LayoutBlock, ParagraphBlock, ShapePreset};
+use crate::block::{
+    AnchoredContent, AnchoredDrawing, CellBlockSemantics, LayoutBlock, LayoutBlockLike,
+    ParagraphBlock, ParagraphView, ShapePreset, SharedLayoutBlock,
+};
 use std::collections::HashMap;
 
 use oxml_layout::{
@@ -122,6 +125,14 @@ pub struct Section {
     pub page_number_start: Option<usize>,
 }
 
+pub(crate) struct SharedSection {
+    pub blocks: Vec<SharedLayoutBlock>,
+    pub geometry: PageGeometry,
+    pub header_footer: Option<HeaderFooterContent>,
+    pub title_pg: bool,
+    pub page_number_start: Option<usize>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PaginationCheckpoint {
     pub next_block_index: usize,
@@ -204,8 +215,66 @@ pub fn paginate_sections(
     (all_pages, all_outlines)
 }
 
-pub(crate) fn paginate_single_section_recorded(
-    section: &Section,
+pub(crate) fn paginate_shared_sections(
+    sections: &[SharedSection],
+    fm: &FontManager,
+    media: &MediaRegistry,
+    notes: &NoteRegistry,
+) -> (Vec<PageFrame>, Vec<OutlineEntry>) {
+    let media = media.media();
+    if sections.is_empty() {
+        return (
+            vec![PageFrame::new(1, 612.0, 792.0, Vec::new())],
+            Vec::new(),
+        );
+    }
+    if sections.len() == 1 {
+        let section = &sections[0];
+        return paginate_with_media(
+            &section.blocks,
+            section.geometry,
+            section.header_footer.as_ref(),
+            section.title_pg,
+            fm,
+            media,
+            notes,
+            1,
+            section.page_number_start.unwrap_or(1),
+        );
+    }
+
+    let mut pages = Vec::new();
+    let mut outlines = Vec::new();
+    let mut page_offset = 0;
+    let mut next_section_page_number = 1usize;
+    for section in sections {
+        let section_page_number = section
+            .page_number_start
+            .unwrap_or(next_section_page_number);
+        let (mut section_pages, mut section_outlines) = paginate_with_media(
+            &section.blocks,
+            section.geometry,
+            section.header_footer.as_ref(),
+            section.title_pg,
+            fm,
+            media,
+            notes,
+            page_offset + 1,
+            section_page_number,
+        );
+        next_section_page_number = section_page_number.saturating_add(section_pages.len());
+        page_offset += section_pages.len();
+        pages.append(&mut section_pages);
+        outlines.append(&mut section_outlines);
+    }
+    for (index, page) in pages.iter_mut().enumerate() {
+        page.page_number = index + 1;
+    }
+    (pages, outlines)
+}
+
+pub(crate) fn paginate_shared_single_section_recorded(
+    section: &SharedSection,
     fm: &FontManager,
     media: &MediaRegistry,
     notes: &NoteRegistry,
@@ -281,9 +350,9 @@ type ResolvedWraps = HashMap<(usize, usize), (usize, PlacedWrap)>;
 ///
 /// A document without one paginates in a single pass, which is every sample and
 /// every corpus document today.
-fn has_paragraph_relative_wrap(blocks: &[LayoutBlock]) -> bool {
+fn has_paragraph_relative_wrap<B: LayoutBlockLike>(blocks: &[B]) -> bool {
     blocks.iter().any(|block| {
-        let LayoutBlock::Paragraph(para) = block else {
+        let Some(para) = block.paragraph() else {
             return false;
         };
         para.anchored.iter().any(is_paragraph_relative_wrap)
@@ -299,8 +368,8 @@ fn is_paragraph_relative_wrap(anchored: &AnchoredDrawing) -> bool {
         )
 }
 
-fn paginate_with_media(
-    blocks: &[LayoutBlock],
+fn paginate_with_media<B: LayoutBlockLike>(
+    blocks: &[B],
     geometry: PageGeometry,
     header_footer: Option<&HeaderFooterContent>,
     title_pg: bool,
@@ -363,16 +432,16 @@ struct PassContext<'a> {
     first_header_page_number: usize,
 }
 
-fn paginate_pass(
-    blocks: &[LayoutBlock],
+fn paginate_pass<B: LayoutBlockLike>(
+    blocks: &[B],
     context: &PassContext,
     resolved_in: &ResolvedWraps,
 ) -> PassResult {
     paginate_pass_from(blocks, context, resolved_in, 0, true, None)
 }
 
-fn paginate_pass_from(
-    blocks: &[LayoutBlock],
+fn paginate_pass_from<B: LayoutBlockLike>(
+    blocks: &[B],
     context: &PassContext,
     resolved_in: &ResolvedWraps,
     first_block_index: usize,
@@ -412,68 +481,71 @@ fn paginate_pass_from(
             }
         }
 
-        match block {
-            LayoutBlock::Paragraph(para) => {
-                // Record heading outline entry before rendering
-                if let (Some(level), Some(title)) = (para.heading_level, &para.heading_text) {
-                    pager.outlines.push(OutlineEntry {
-                        title: title.clone(),
-                        level,
-                        page_index: pager.page_number - 1,
-                        y_position: pager.geometry.margin_top + pager.cursor_y,
-                    });
-                }
-                paginate_paragraph(para, block_idx, blocks, &mut pager);
-                if pager.stopped_at.is_some() {
-                    break;
-                }
+        if let Some(para) = block.paragraph() {
+            // Record heading outline entry before rendering
+            if let (Some(level), Some(title)) = (para.heading_level, &para.heading_text) {
+                pager.outlines.push(OutlineEntry {
+                    title: title.clone(),
+                    level,
+                    page_index: pager.page_number - 1,
+                    y_position: pager.geometry.margin_top + pager.cursor_y,
+                });
             }
-            LayoutBlock::Table(table) => {
-                let table_x = geometry.margin_left + table.table_indent;
-                let tbl_borders = table.borders.as_ref();
+            paginate_paragraph(para, block_idx, blocks, &mut pager);
+            if pager.stopped_at.is_some() {
+                break;
+            }
+        } else if let Some(table) = block.table() {
+            let table_x = geometry.margin_left + table.table_indent;
+            let tbl_borders = table.borders.as_ref();
 
-                for (row_idx, row) in table.rows.iter().enumerate() {
-                    if pager.cursor_y + row.height > pager.available_height() && pager.has_content()
-                    {
-                        pager.finish_page();
+            for (row_idx, row) in table.rows.iter().enumerate() {
+                let row_semantics = table
+                    .semantics
+                    .and_then(|semantics| semantics.rows.get(row_idx));
+                if pager.cursor_y + row.height > pager.available_height() && pager.has_content() {
+                    pager.finish_page();
 
-                        // Repeat header rows
-                        for &hdr_idx in &table.header_row_indices {
-                            if hdr_idx < row_idx {
-                                let hdr_row = &table.rows[hdr_idx];
-                                render_table_row(
-                                    hdr_row,
-                                    &table.col_widths,
-                                    table_x,
-                                    pager.geometry.margin_top + pager.cursor_y,
-                                    &pager.geometry,
-                                    pager.page_number,
-                                    tbl_borders,
-                                    &mut pager.elements,
-                                    &mut pager.behind_elements,
-                                    pager.media,
-                                );
-                                pager.cursor_y += hdr_row.height;
-                                pager.mark_content();
-                            }
+                    // Repeat header rows
+                    for &hdr_idx in &table.header_row_indices {
+                        if hdr_idx < row_idx {
+                            let hdr_row = &table.rows[hdr_idx];
+                            render_table_row(
+                                hdr_row,
+                                table
+                                    .semantics
+                                    .and_then(|semantics| semantics.rows.get(hdr_idx)),
+                                &table.col_widths,
+                                table_x,
+                                pager.geometry.margin_top + pager.cursor_y,
+                                &pager.geometry,
+                                pager.page_number,
+                                tbl_borders,
+                                &mut pager.elements,
+                                &mut pager.behind_elements,
+                                pager.media,
+                            );
+                            pager.cursor_y += hdr_row.height;
+                            pager.mark_content();
                         }
                     }
-
-                    render_table_row(
-                        row,
-                        &table.col_widths,
-                        table_x,
-                        pager.geometry.margin_top + pager.cursor_y,
-                        &pager.geometry,
-                        pager.page_number,
-                        tbl_borders,
-                        &mut pager.elements,
-                        &mut pager.behind_elements,
-                        pager.media,
-                    );
-                    pager.cursor_y += row.height;
-                    pager.mark_content();
                 }
+
+                render_table_row(
+                    row,
+                    row_semantics,
+                    &table.col_widths,
+                    table_x,
+                    pager.geometry.margin_top + pager.cursor_y,
+                    &pager.geometry,
+                    pager.page_number,
+                    tbl_borders,
+                    &mut pager.elements,
+                    &mut pager.behind_elements,
+                    pager.media,
+                );
+                pager.cursor_y += row.height;
+                pager.mark_content();
             }
         }
     }
@@ -768,7 +840,11 @@ impl<'a> Pager<'a> {
     /// own paragraph has no position until that paragraph is placed, so the
     /// first pass offers nothing for it and the second offers what the first
     /// recorded, for the drawings the first put on the page being built now.
-    fn lookahead_wraps(&self, block_idx: usize, blocks: &[LayoutBlock]) -> Vec<PlacedWrap> {
+    fn lookahead_wraps<B: LayoutBlockLike>(
+        &self,
+        block_idx: usize,
+        blocks: &[B],
+    ) -> Vec<PlacedWrap> {
         let mut out = Vec::new();
         let mut height = self.cursor_y;
 
@@ -778,7 +854,7 @@ impl<'a> Pager<'a> {
             }
             height += block.space_before() + block.content_height() + block.space_after();
 
-            let LayoutBlock::Paragraph(para) = block else {
+            let Some(para) = block.paragraph() else {
                 continue;
             };
             for (anchor_idx, a) in para.anchored.iter().enumerate() {
@@ -1503,7 +1579,17 @@ fn render_shape_text(
     let mut local = Vec::new();
     let mut y = 0.0;
     for para in text {
-        render_paragraph_lines(&para.lines, para, geometry, y, &mut local, media);
+        render_paragraph_lines(
+            &para.lines,
+            ParagraphView {
+                block: para,
+                semantics: None,
+            },
+            geometry,
+            y,
+            &mut local,
+            media,
+        );
         y += para.content_height();
     }
 
@@ -1692,10 +1778,10 @@ fn reflow_around_wraps(
     Some(adjusted)
 }
 
-fn paginate_paragraph(
-    para: &ParagraphBlock,
+fn paginate_paragraph<B: LayoutBlockLike>(
+    para: ParagraphView<'_>,
     block_idx: usize,
-    blocks: &[LayoutBlock],
+    blocks: &[B],
     pager: &mut Pager,
 ) {
     let space_before = if pager.cursor_y == 0.0 {
@@ -1712,9 +1798,12 @@ fn paginate_paragraph(
         let mut wraps = pager.page_wraps.clone();
         wraps.extend(pager.wrap_rects_for(&para.anchored, para_top, para.indent_left));
         wraps.extend(pager.lookahead_wraps(block_idx, blocks));
-        reflow_around_wraps(para, &wraps, para_top, &pager.geometry, pager.fm)
+        reflow_around_wraps(para.block, &wraps, para_top, &pager.geometry, pager.fm)
     };
-    let para = reflowed.as_ref().unwrap_or(para);
+    let para = reflowed.as_ref().map_or(para, |block| ParagraphView {
+        block,
+        semantics: para.semantics,
+    });
 
     // Check if paragraph fits on current page. The note area its references
     // will demand is priced in, but not claimed: the paragraph may yet move to
@@ -1787,10 +1876,15 @@ fn paginate_paragraph(
 
     // Check keep-with-next
     if para.keep_next && block_idx + 1 < blocks.len() {
-        let next_first = match &blocks[block_idx + 1] {
-            LayoutBlock::Paragraph(p) => p.lines.first().map(|l| l.height).unwrap_or(0.0),
-            LayoutBlock::Table(t) => t.rows.first().map(|r| r.height).unwrap_or(0.0),
-        };
+        let next = &blocks[block_idx + 1];
+        let next_first = next.paragraph().map_or_else(
+            || {
+                next.table().map_or(0.0, |table| {
+                    table.rows.first().map_or(0.0, |row| row.height)
+                })
+            },
+            |paragraph| paragraph.lines.first().map_or(0.0, |line| line.height),
+        );
         if pager.cursor_y + space_before + para.content_height() + next_first
             > pager.available_height_for(&para.lines)
             && pager.has_content()
@@ -1851,7 +1945,7 @@ fn paginate_paragraph(
         pager.media,
     );
     render_change_bar(
-        para,
+        para.block,
         pager.cursor_y,
         para.content_height(),
         &pager.geometry,
@@ -1868,7 +1962,7 @@ fn paginate_paragraph(
 /// Split a paragraph at the given line index, rendering first part on current page
 /// and continuing the rest on a new page (recursively if needed).
 fn render_para_split(
-    para: &ParagraphBlock,
+    para: ParagraphView<'_>,
     split_at: usize,
     space_before: f64,
     pager: &mut Pager,
@@ -1892,7 +1986,7 @@ fn render_para_split(
             .map(|line| line.height)
             .sum::<f64>();
     render_change_bar(
-        para,
+        para.block,
         pager.cursor_y,
         first_height,
         &pager.geometry,
@@ -1937,13 +2031,22 @@ fn render_para_split(
                 heading_level: None,
                 heading_text: None,
                 list: para.list,
-                structure_id: para.structure_id,
+                structure_id: para.structure_id(),
                 // The continuation was already reflowed as part of the whole
                 // paragraph, so it must not be reflowed again.
                 reflow: None,
                 content_offset_top: 0.0,
             };
-            render_para_split(&temp_para, lines_that_fit, 0.0, pager, block_idx);
+            render_para_split(
+                ParagraphView {
+                    block: &temp_para,
+                    semantics: para.semantics,
+                },
+                lines_that_fit,
+                0.0,
+                pager,
+                block_idx,
+            );
             return;
         }
     }
@@ -1958,7 +2061,7 @@ fn render_para_split(
         pager.media,
     );
     render_change_bar(
-        para,
+        para.block,
         0.0,
         remaining_height,
         &pager.geometry,
@@ -1974,7 +2077,7 @@ fn render_para_split(
 /// Render paragraph lines as positioned elements.
 fn render_paragraph_lines(
     lines: &[LayoutLine],
-    para: &ParagraphBlock,
+    para: ParagraphView<'_>,
     geometry: &PageGeometry,
     start_y: f64,
     elements: &mut Vec<PositionedElement>,
@@ -2063,7 +2166,13 @@ fn render_paragraph_lines(
                         glyph_ids: seg.glyph_ids.clone(),
                         advances,
                         text: seg.text.clone(),
-                        source: seg.source,
+                        source: match para.source_node() {
+                            Some(source_node) => seg.source.and_then(|mut source| {
+                                source.node = source_node?;
+                                Some(source)
+                            }),
+                            None => seg.source,
+                        },
                         color: seg.color,
                         bold: seg.bold,
                         italic: seg.italic,
@@ -2275,7 +2384,7 @@ fn render_paragraph_lines(
         y += line.height;
     }
 
-    if let Some(structure_id) = para.structure_id {
+    if let Some(structure_id) = para.structure_id() {
         let produced = elements.split_off(first_element);
         elements.extend(produced.into_iter().map(|element| match &element {
             PositionedElement::Text(run) if !(run.text.is_empty() && run.glyph_ids.is_empty()) => {
@@ -2361,7 +2470,17 @@ fn render_hf_blocks(
 ) {
     let mut y = start_y - geometry.margin_top; // Convert to relative
     for para in blocks {
-        render_paragraph_lines(&para.lines, para, geometry, y, elements, media);
+        render_paragraph_lines(
+            &para.lines,
+            ParagraphView {
+                block: para,
+                semantics: None,
+            },
+            geometry,
+            y,
+            elements,
+            media,
+        );
         render_change_bar(
             para,
             y,
@@ -2377,6 +2496,7 @@ fn render_hf_blocks(
 /// Render a table row.
 fn render_table_row(
     row: &crate::table::TableRow,
+    row_semantics: Option<&crate::block::RowSemantics>,
     _col_widths: &[f64],
     table_x: f64,
     row_y: f64,
@@ -2391,6 +2511,7 @@ fn render_table_row(
     let num_cells = row.cells.len();
 
     for (cell_idx, cell) in row.cells.iter().enumerate() {
+        let cell_semantics = row_semantics.and_then(|row| row.cells.get(cell_idx));
         if cell.is_vmerge_continue {
             cell_x += cell.width;
             continue;
@@ -2442,9 +2563,14 @@ fn render_table_row(
             _ => 0.0,
         };
         let mut content_y = row_y - geometry.margin_top + cell.margin_top + v_offset;
-        for block in &cell.blocks {
+        for (block_index, block) in cell.blocks.iter().enumerate() {
+            let block_semantics = cell_semantics.and_then(|cell| cell.blocks.get(block_index));
             match block {
                 crate::table::CellBlock::Paragraph(paragraph) => {
+                    let semantics = match block_semantics {
+                        Some(CellBlockSemantics::Paragraph(semantics)) => Some(semantics),
+                        _ => None,
+                    };
                     let cell_geometry = PageGeometry {
                         margin_left: cell_x + cell.margin_left,
                         margin_right: 0.0,
@@ -2453,7 +2579,10 @@ fn render_table_row(
                     };
                     render_paragraph_lines(
                         &paragraph.lines,
-                        paragraph,
+                        ParagraphView {
+                            block: paragraph,
+                            semantics,
+                        },
                         &cell_geometry,
                         content_y,
                         elements,
@@ -2479,11 +2608,16 @@ fn render_table_row(
                     );
                 }
                 crate::table::CellBlock::Table(table) => {
+                    let semantics = match block_semantics {
+                        Some(CellBlockSemantics::Table(semantics)) => Some(semantics),
+                        _ => None,
+                    };
                     let nested_x = cell_x + cell.margin_left + table.table_indent;
                     let mut nested_y = geometry.margin_top + content_y;
-                    for nested_row in &table.rows {
+                    for (nested_row_index, nested_row) in table.rows.iter().enumerate() {
                         render_table_row(
                             nested_row,
+                            semantics.and_then(|semantics| semantics.rows.get(nested_row_index)),
                             &table.col_widths,
                             nested_x,
                             nested_y,
@@ -2966,7 +3100,10 @@ mod tests {
 
         render_paragraph_lines(
             &paragraph.lines,
-            &paragraph,
+            ParagraphView {
+                block: &paragraph,
+                semantics: None,
+            },
             &PageGeometry::default(),
             0.0,
             &mut elements,
@@ -3914,6 +4051,7 @@ mod tests {
         let mut elements = Vec::new();
         render_table_row(
             &row,
+            None,
             &[40.0],
             10.0,
             20.0,

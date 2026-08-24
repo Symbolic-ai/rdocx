@@ -1482,20 +1482,36 @@ shared portable replacement helper.
 text, formatting, tables, lists and images.
 
 ### F-178, HTML import (L)
-HTML and CSS to a Word document, scoped to the subset a browser copy-paste and a
-CMS export actually produce. This is the most requested inbound conversion in
-every library's issue tracker.
+The native Word facade accepts bounded UTF-8 HTML5 documents and fragments from
+strings or paths. Browser-grade tree repair projects source-ordered paragraphs,
+runs, headings, block quotes, preformatted text, hard breaks, nested lists, and
+spanned tables directly into the existing Word model. Inline declarations and
+embedded type, class, id, descendant, and child selectors apply the supported
+font, decoration, colour, alignment, spacing, and indentation subset by
+specificity and source order. Stable path-aware diagnostics report parser
+repairs, unsupported CSS, external resources, and dropped visible constructs.
+Input, retained text, DOM, projection, table, and diagnostic ceilings fail
+closed, and every candidate saves and reopens before publication. No resource
+is fetched and no Python, WASM, or CLI API is added.
 **Depends on**: none.
 **Test gate**: regression. A fixture set of HTML documents produces the expected
 paragraph, run, table and list structure, with unsupported CSS recorded as a
 diagnostic.
 
 ### F-179, ODT reader (L)
-OpenDocument Text, which European public-sector procurement frequently mandates
-and which no Rust library reads.
+The native Word facade reads bounded OpenDocument Text ZIP packages and
+projects supported text, formatting, lists, tables, and images into a fresh
+editable document. Archive names, encryption, compression, and expansion are
+validated before namespace-aware XML parsing. Default, named, parent, and
+automatic styles resolve into effective Word formatting. Stable source-path
+diagnostics identify safe lossy skips, and fatal failures expose no partial
+document. ODT remains a private one-way facade conversion rather than an OPC
+package or a retained second document model. Python, WASM, and CLI surfaces do
+not gain ODT entry points.
 **Depends on**: none.
-**Test gate**: differential. An ODT converted here matches the pinned
-LibreOffice conversion structurally.
+**Test gate**: differential. A source-built ODT converted here matches the exact
+pinned LibreOffice conversion by normalized body structure, formatting, lists,
+tables, and image content without comparing package serialization details.
 
 ### F-180, ODT writer (L)
 The inverse.
@@ -2661,6 +2677,67 @@ retain priority, and unmapped requests keep the existing fallback order.
 Unchanged aliases reuse safe work, changed aliases miss the affected caches,
 warm and cold pages, fonts, diagnostics, and provenance are equal, both WASM
 targets pass, and the deterministic hash harness remains unchanged.
+
+### F-X052, Restore interactive relayout performance (L)
+
+Close Issue 46 on the hardened reusable layout engine. A generated 700
+paragraph, 14 table mixed Korean and Latin document must no longer pay
+whole-document `Debug` formatting, deep copies of unchanged page frames, or
+full retained-context cloning on each body-only edit. Restart and paragraph
+identities may use cheap stable prefilters, but exact typed equality remains
+the collision authority. Unchanged raw and substituted page frames retain
+their shared ownership across restart and tail attachment.
+
+Checked transfer must accept a restored document whose body changed while its
+styles, numbering, sections, related stories, theme, fonts, caller aliases,
+revision view, and other retained-work inputs remain equal. It must still
+reject every real context change without consuming either engine. The faster
+path keeps transactional publication, complete invalidation, bounded memory,
+diagnostic replay, current provenance, deterministic font isolation, and the
+semantic `MarkedContent` structure introduced by F-173.
+
+Use the Issue 46 workload and the `svg-poc-0.8` reference implementation as an
+interleaved A/B oracle. The gate covers document load, a mid-document typing
+edit, checked undo transfer, and table mutation through native and bundled
+fallback paths. Credit `@emptinessform` for the report, measurements, and
+candidate-build verification in the next release containing the correction.
+
+**Depends on**: F-X039, F-X040, F-X043, F-X044, F-X045, F-X046, F-173,
+F-X048, F-X051.
+**Test gate**: regression. Instrumented tests prove a one-paragraph edit does
+no whole-document debug serialization or deep copy of unchanged prefix and
+tail pages, reports cache hits for every unchanged safe block, rebuilds only
+the affected restart region, and accepts an exactly compatible restored-body
+transfer. Warm output remains exactly equal to a fresh engine in pages,
+structure, fonts, diagnostics, provenance, numbering, notes, fields, and
+outlines. Retained and pending memory remain bounded, both WASM targets pass,
+and interleaved release measurements for load, typing, undo, and table mutation
+are no more than 1.25 times the reference on the same machine and workload.
+
+### F-X053, Complete layout migration and contribution records (S)
+
+Finish the documentation and GitHub record work left by Issues 44 and 46 and
+PR 45. Amend the v0.9.0 compatibility section and its published GitHub release
+body to state that `PositionedElement` is non-exhaustive and visible content is
+nested under `MarkedContent`. External backends must recurse through
+`MarkedContent::children` or use `oxml_layout::walk` when consuming
+`PageFrame::elements`.
+
+After F-X052 passes, close Issue 44 and PR 45 as addressed by the hardened
+F-X051 implementation rather than merged, and close Issue 46 with both the
+performance correction and migration-note evidence. Preserve authenticated
+`@emptinessform` credit and all three record links for the next stable release
+that contains F-X051 and F-X052. The confirmation comments on Issues 39 and 42
+are acceptance evidence only. The note-operation regression is gone and the
+dense-form corpus is covered, so neither closed issue gains duplicate scope.
+
+**Depends on**: F-X051, F-X052.
+**Test gate**: integration. The tracked v0.9.0 changelog section and published
+release body are byte-identical after the compatibility correction, the note
+names both supported recursive traversal choices, Issue 44 and PR 45 cite the
+F-X051 implementation, Issue 46 cites F-X052 and the migration correction,
+Issues 39 and 42 remain closed, and the next stable contribution inventory
+retains the authenticated reporter and contributor credit.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

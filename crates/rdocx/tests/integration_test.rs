@@ -10,6 +10,296 @@ use rdocx::{
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind};
 
+const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+
+#[derive(Debug, PartialEq)]
+struct OdtStructuralRecord {
+    body_order: Vec<String>,
+    paragraphs: Vec<OdtParagraphRecord>,
+    tables: Vec<OdtTableRecord>,
+    images: Vec<(i64, i64)>,
+    media: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, PartialEq)]
+struct OdtParagraphRecord {
+    text: String,
+    alignment: String,
+    numbering: Option<(bool, u32)>,
+    runs: Vec<(String, bool, bool, Option<String>)>,
+}
+
+#[derive(Debug, PartialEq)]
+struct OdtTableRecord {
+    rows: usize,
+    columns: usize,
+    cells: Vec<(String, Option<u32>, Option<String>)>,
+}
+
+fn source_built_odt() -> Vec<u8> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipWriter};
+
+    let content = br##"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" office:version="1.3">
+<office:automatic-styles>
+<style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:text-align="center"/></style:style>
+<style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic" fo:color="#123456"/></style:style>
+<text:list-style style:name="L1"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style>
+</office:automatic-styles>
+<office:body><office:text>
+<text:p text:style-name="P1">Alpha <text:span text:style-name="T1">formatted</text:span></text:p>
+<text:list text:style-name="L1"><text:list-item><text:p>one</text:p></text:list-item></text:list>
+<table:table table:name="Table1"><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell table:number-columns-spanned="2"><text:p>wide</text:p><text:p>second</text:p></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row><table:table-cell><text:p>left</text:p></table:table-cell><table:table-cell><text:p>right</text:p></table:table-cell></table:table-row></table:table>
+<text:p><draw:frame draw:name="Picture1" svg:width="1in" svg:height="0.5in"><draw:image xlink:href="Pictures/pixel.png" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame></text:p>
+</office:text></office:body></office:document-content>"##;
+    let styles = br#"<?xml version="1.0" encoding="UTF-8"?><office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:default-style></office:styles></office:document-styles>"#;
+    let manifest = br#"<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="Pictures/pixel.png" manifest:media-type="image/png"/></manifest:manifest>"#;
+
+    let mut output = std::io::Cursor::new(Vec::new());
+    let mut archive = ZipWriter::new(&mut output);
+    for (name, bytes, method) in [
+        (
+            "mimetype",
+            b"application/vnd.oasis.opendocument.text".as_slice(),
+            CompressionMethod::Stored,
+        ),
+        (
+            "content.xml",
+            content.as_slice(),
+            CompressionMethod::Deflated,
+        ),
+        ("styles.xml", styles.as_slice(), CompressionMethod::Deflated),
+        (
+            "META-INF/manifest.xml",
+            manifest.as_slice(),
+            CompressionMethod::Deflated,
+        ),
+        (
+            "Pictures/pixel.png",
+            PNG_2_BY_3,
+            CompressionMethod::Deflated,
+        ),
+    ] {
+        archive
+            .start_file(
+                name,
+                SimpleFileOptions::default().compression_method(method),
+            )
+            .unwrap();
+        archive.write_all(bytes).unwrap();
+    }
+    archive.finish().unwrap();
+    output.into_inner()
+}
+
+fn odt_structural_record(mut document: Document) -> OdtStructuralRecord {
+    let body_order = document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => format!("p:{}", paragraph.text()),
+            BodyItemRef::Table(table) => {
+                format!("table:{}x{}", table.row_count(), table.column_count())
+            }
+            BodyItemRef::ContentControl(_) => "content-control".to_string(),
+            BodyItemRef::UnsupportedXml(_) => "unsupported".to_string(),
+        })
+        .collect();
+    let paragraphs = document
+        .paragraphs()
+        .into_iter()
+        .map(|paragraph| {
+            let paragraph_style = document.resolve_paragraph_properties(paragraph.style_id());
+            let alignment = paragraph
+                .alignment()
+                .map(|value| format!("{value:?}"))
+                .or_else(|| paragraph_style.jc.map(|value| format!("{value:?}")))
+                .unwrap_or_else(|| "Left".to_string());
+            let numbering = paragraph.numbering().and_then(|(id, level)| {
+                document
+                    .numbering_is_bullet(id)
+                    .map(|bullet| (bullet, level))
+            });
+            let runs = (0..paragraph.run_count())
+                .filter_map(|index| paragraph.run(index))
+                .filter(|run| !run.text().is_empty())
+                .map(|run| {
+                    let resolved =
+                        document.resolve_run_properties(paragraph.style_id(), run.style_id());
+                    (
+                        run.text(),
+                        run.bold_value().or(resolved.bold).unwrap_or(false),
+                        run.italic_value().or(resolved.italic).unwrap_or(false),
+                        Some(
+                            run.color()
+                                .map(str::to_string)
+                                .or(resolved.color)
+                                .unwrap_or_else(|| "000000".to_string()),
+                        ),
+                    )
+                })
+                .collect();
+            OdtParagraphRecord {
+                text: paragraph.text(),
+                alignment,
+                numbering,
+                runs,
+            }
+        })
+        .collect();
+    let tables = (0..document.table_count())
+        .map(|index| {
+            let table = document.table(index).unwrap();
+            let mut cells = Vec::new();
+            for row_index in 0..table.row_count() {
+                let row = table.row(row_index).unwrap();
+                for cell_index in 0..row.cell_count() {
+                    let cell = row.cell(cell_index).unwrap();
+                    cells.push((
+                        cell.text(),
+                        cell.grid_span(),
+                        cell.v_merge().map(|value| format!("{value:?}")),
+                    ));
+                }
+            }
+            OdtTableRecord {
+                rows: table.row_count(),
+                columns: table.column_count(),
+                cells,
+            }
+        })
+        .collect();
+    let images = document
+        .images()
+        .into_iter()
+        .map(|image| (image.width_emu, image.height_emu))
+        .collect();
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let mut media: Vec<(String, Vec<u8>)> = package
+        .parts
+        .iter()
+        .filter(|(name, _)| name.starts_with("/word/media/"))
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect();
+    media.sort_by(|left, right| left.0.cmp(&right.0));
+    OdtStructuralRecord {
+        body_order,
+        paragraphs,
+        tables,
+        images,
+        media: media.into_iter().map(|(_, bytes)| bytes).collect(),
+    }
+}
+
+#[test]
+fn odt_reader_matches_pinned_libreoffice_structure() {
+    let version = std::process::Command::new("soffice")
+        .arg("--version")
+        .output()
+        .expect("pinned LibreOffice is installed");
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout).trim(),
+        ODT_ORACLE_VERSION
+    );
+
+    let root = std::env::temp_dir().join(format!(
+        "rdocx-odt-oracle-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let output = root.join("output");
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::create_dir_all(&profile).unwrap();
+    let source = root.join("source.odt");
+    let odt = source_built_odt();
+    std::fs::write(&source, &odt).unwrap();
+
+    let status = std::process::Command::new("soffice")
+        .arg("--headless")
+        .arg(format!(
+            "-env:UserInstallation=file://{}",
+            profile.display()
+        ))
+        .arg("--convert-to")
+        .arg("docx")
+        .arg("--outdir")
+        .arg(&output)
+        .arg(&source)
+        .status()
+        .expect("LibreOffice conversion starts");
+    assert!(status.success());
+
+    let ours = Document::from_odt_bytes(&odt).unwrap().document;
+    let oracle = Document::open(output.join("source.docx")).unwrap();
+    let ours = odt_structural_record(ours);
+    let oracle = odt_structural_record(oracle);
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(ours, oracle);
+}
+
+#[test]
+fn html_import_projects_a_reopenable_word_document() {
+    let parsed = Document::from_html(
+        "<h1>Title</h1><p>A <b>browser</b> fragment.</p><table><tr><th>Head</th></tr><tr><td>Cell<p>Second</p></td></tr></table>",
+    )
+    .expect("supported HTML");
+    let mut document = parsed.document;
+    let bytes = document.to_bytes().expect("generated DOCX");
+    let reopened = Document::from_bytes(&bytes).expect("generated DOCX reopens");
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "Title");
+    assert_eq!(reopened.paragraph(1).unwrap().text(), "A browser fragment.");
+    assert_eq!(
+        reopened.table(0).unwrap().cell(0, 0).unwrap().text(),
+        "Head"
+    );
+    assert_eq!(
+        reopened
+            .table(0)
+            .unwrap()
+            .cell(1, 0)
+            .unwrap()
+            .paragraph_count(),
+        2
+    );
+
+    let root = std::env::temp_dir().join(format!("rdocx-html-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir(&root).unwrap();
+    let html_path = root.join("source.html");
+    std::fs::write(&html_path, "<p>path input</p>").unwrap();
+    let opened = Document::open_html(&html_path).expect("bounded UTF-8 path input");
+    assert_eq!(opened.document.text(), "path input\n");
+
+    let preformatted = Document::from_html("<pre>first\nsecond</pre>").unwrap();
+    let mut preformatted_document = preformatted.document;
+    let preformatted_bytes = preformatted_document.to_bytes().unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(preformatted_bytes)).unwrap();
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(document_xml.contains("<w:br"));
+
+    let invalid_path = root.join("invalid.html");
+    std::fs::write(&invalid_path, [0xff, 0xfe]).unwrap();
+    assert!(matches!(
+        Document::open_html(&invalid_path),
+        Err(rdocx::Error::Html { location, .. }) if location == "input"
+    ));
+
+    let oversized_path = root.join("oversized.html");
+    std::fs::File::create(&oversized_path)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    assert!(Document::open_html(&oversized_path).is_err());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn settings_relationship_target_is_resolved_instead_of_assumed() {
     let settings = br#"<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="comments" w:enforcement="true" w:hash="custom-hash" w:salt="custom-salt"/></w:settings>"#;

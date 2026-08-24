@@ -31,6 +31,16 @@ pub enum Error {
     #[error("RTF parse error at byte {offset}: {message}")]
     Rtf { offset: usize, message: String },
 
+    #[error("HTML import error at {location}: {message}")]
+    Html { location: String, message: String },
+
+    #[error("ODT import error in {part:?} at byte {offset}: {message}")]
+    Odt {
+        part: Option<String>,
+        offset: u64,
+        message: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }

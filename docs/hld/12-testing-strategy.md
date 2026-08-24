@@ -20,6 +20,13 @@ with precomputed CRCs. It keeps the `.crate` payload small and the diffs
 readable. The corpus in the next section is the one deliberate exception, and it
 lives outside the published crates.
 
+The ODT reader differential constructs its ZIP, XML, and PNG input in source,
+then converts the same input with the exact pinned LibreOffice build in an
+isolated profile. The normalized comparison covers body order, effective text
+and paragraph formatting, list kind and level, table grid and spans, and image
+bytes and dimensions. It deliberately ignores package bytes, relationship ids,
+part names, and namespace prefixes.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
@@ -84,6 +91,20 @@ location-aware diagnostics for unsupported body, paragraph, run, table, row,
 cell, image, field, note, comment, bookmark, hyperlink, and raw XML cases.
 All fixtures stay in source, and a DOCX preservation regression proves the
 writer does not mutate unmodelled XML in the source package.
+
+The HTML import regression gate uses source-built browser fragments and CMS
+documents in the existing `rdocx` unit, integration, and regression binaries.
+It compares exact paragraph, run, list, table, grid-span, vertical-merge, CSS,
+and diagnostic facts in source order. Focused cases cover HTML5 parser repair,
+collapsed and preformatted whitespace, saved `w:br` line breaks, semantic run
+formatting, embedded and inline cascade precedence, unsupported constructs,
+external resources, separate list identity, nine list levels, row groups,
+multiple cell paragraphs, and nested-table loss diagnostics. Limit tests fail
+closed for input, bounded path reads, retained text, DOM nodes and depth,
+blocks, all Word runs, rows, columns, cells, and diagnostics. The integration
+gate serializes and reopens the generated DOCX before comparing its public
+structure. No binary fixture or sample is added, so all 49 hash entries remain
+unchanged.
 
 The digital-signature regression gate constructs its DOCX and signature XML
 in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
@@ -226,7 +247,11 @@ cover actual mutation invalidation, style and theme context changes, unsafe
 numbering, fields, hyperlinks, media, relationships, ordinary and
 `AlternateContent` drawings, nonempty diagnostic replay, late transactional
 failure, paragraph reorder and insertion, caller-font isolation, TTC indices,
-and a legitimate active set larger than 256 faces.
+and a legitimate active set larger than 256 faces. Exact shaping tests require
+newest-first lookup without FIFO refresh, force a fingerprint collision to
+remain a miss until complete key equality, and prove that deriving spacing
+once per parent segment leaves subsegment glyph ids, advances, and
+Unicode-scalar source ranges unchanged.
 
 The editor-scale paragraph-cache regression retains 700 distinct safe
 paragraphs, edits one paragraph, and requires 699 warm hits with only the edit
@@ -235,8 +260,12 @@ restart pagination reports a bounded rebuilt range. A forced fingerprint
 collision still requires exact typed paragraph equality. Focused cases prove
 that note, field, and numbering prefixes disable later reads, a late failure
 publishes nothing, hits preserve insertion order, and FIFO eviction holds at
-the independently pinned 4,096-entry and 56 MiB paragraph limits. Compile-time
-checks also pin the 4,224-entry and 64 MiB combined envelope.
+the independently pinned 4,096-entry and 50 MiB paragraph limits. Cacheable
+active paragraph and table blocks share immutable cache payloads through a
+private representation. Warm and fresh results must retain exact pages,
+structure, provenance, and nested table paths while public block APIs remain
+unchanged. Compile-time checks also pin the 4,224-entry and 64 MiB combined
+envelope.
 
 The restart-pagination regression gate compares warm edits at the start,
 middle, tail, and a retained page boundary with a fresh deterministic engine.
@@ -293,8 +322,9 @@ Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
 must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096
-entries and 56 MiB and header and footer state capped at 64 entries and 4 MiB.
-Oversized entries must bypass retention.
+entries and 50 MiB, table state capped at 32 entries and 2 MiB, header and
+footer state capped at 64 entries and 4 MiB, and restart state capped at 32
+entries and 8 MiB. Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and reviewed 49-entry hash harness are required riders.

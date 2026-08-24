@@ -27,6 +27,8 @@ mod content_control;
 mod document;
 mod error;
 mod field;
+mod html;
+mod odt;
 pub mod paragraph;
 mod redaction;
 mod revision;
@@ -45,6 +47,8 @@ pub use document::{
 };
 pub use error::{Error, Result};
 pub use field::{FieldDateTime, FieldEvaluation, FieldEvaluationContext, FieldOutcome};
+pub use html::{HtmlDiagnostic, HtmlReadResult};
+pub use odt::{OdtDiagnostic, OdtReadResult};
 pub use oxml_chart::{ChartData, ChartKind};
 pub use oxml_core::Length;
 pub use oxml_opc::PackageReadLimits;
@@ -71,6 +75,49 @@ pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
 #[cfg(test)]
 mod tests {
     use super::Length;
+
+    #[test]
+    fn html_import_collapses_whitespace_without_losing_inline_order() {
+        let parsed = crate::Document::from_html(
+            "direct <p> one  <strong>two</strong><br>three </p><pre> a  b\n c </pre>",
+        )
+        .expect("recoverable HTML");
+        assert_eq!(
+            parsed.document.text(),
+            "direct\none two\nthree\n a  b\n c \n"
+        );
+    }
+
+    #[test]
+    fn html_import_restores_nested_inline_and_css_formatting() {
+        let parsed = crate::Document::from_html(
+            r#"<style>
+                span { color: red }
+                p.note > span#target { color: green; font-family: 'Arial'; font-size: 20px; font-weight: bold; font-style: italic; text-decoration: underline line-through; background-color: #abc }
+            </style>
+            <p class="note" style="text-align: center; margin-top: 6pt; margin-bottom: 8px; margin-left: 12pt; margin-right: 4pt; text-indent: -3pt">
+                <span id="target" style="color: #123456">x</span><strong style="font-weight: normal">y</strong><sup>z</sup>
+            </p>"#,
+        )
+        .expect("supported CSS");
+        let paragraph = parsed.document.paragraph(0).unwrap();
+        let run = paragraph.run(0).unwrap();
+        assert_eq!(run.color(), Some("123456"));
+        assert_eq!(run.bold_value(), Some(true));
+        assert_eq!(run.italic_value(), Some(true));
+        assert_eq!(run.strike_value(), Some(true));
+        assert_eq!(run.underline_code_value(), Some(1));
+        assert_eq!(run.font_name(), Some("Arial"));
+        assert_eq!(run.size(), Some(15.0));
+        assert_eq!(run.highlight(), Some("AABBCC".to_string()));
+        assert_eq!(paragraph.run(1).unwrap().bold_value(), Some(false));
+        assert_eq!(paragraph.alignment(), Some(crate::Alignment::Center));
+        assert_eq!(paragraph.space_before(), Some(crate::Length::pt(6.0)));
+        assert_eq!(paragraph.space_after(), Some(crate::Length::pt(6.0)));
+        assert_eq!(paragraph.indent_left(), Some(crate::Length::pt(12.0)));
+        assert_eq!(paragraph.indent_right(), Some(crate::Length::pt(4.0)));
+        assert_eq!(paragraph.first_line_indent(), Some(crate::Length::pt(-3.0)));
+    }
 
     #[test]
     fn public_length_is_the_shared_type() {

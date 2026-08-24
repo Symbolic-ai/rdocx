@@ -216,6 +216,30 @@ instead of hidden. Malformed RTF returns the facade `Error::Rtf` variant
 without exposing a second document model. Python, WASM, and CLI surfaces do
 not gain RTF entry points implicitly.
 
+Native Rust callers can import HTML5 documents and fragments through
+`Document::from_html` and `Document::open_html`. Both return an
+`HtmlReadResult` containing the converted `Document` and ordered
+`HtmlDiagnostic` values with a DOM location, optional CSS property, and stable
+message. Invalid UTF-8, resource-limit violations, and unrecoverable projection
+failures return `Error::Html` without publishing a partial document. The path
+constructor caps reads at 64 MiB even if the file changes after its metadata is
+read. The importer supports source-ordered paragraphs, runs, nested lists, and
+spanned tables plus the bounded inline and embedded CSS subset. It does not
+fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
+entry point and retain their existing methods and error contracts.
+
+Native Rust callers can import OpenDocument Text through
+`Document::from_odt_bytes`, `Document::from_odt_bytes_with_limits`, and
+`Document::open_odt`. Each returns an `OdtReadResult` containing a fresh
+converted `Document` and ordered `OdtDiagnostic` values with stable source
+paths. Archive, XML, style, or projection failures return `Error::Odt` with an
+optional package part and byte offset without publishing a partial document.
+The limits overload applies caller-supplied archive entry, part, and total
+expansion bounds. Text, formatting, lists, tables, and supported images are
+projected into the existing Word model. Safe lossy skips are diagnosed.
+Python, WASM, and CLI surfaces gain no ODT import entry point and retain their
+existing methods and error contracts.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method
@@ -235,7 +259,11 @@ informative `Figure` variants only through existing non-exhaustive enums.
 Existing `InlineItem` and `LineItem` image and group variant fields stay
 unchanged, so direct constructors retain source compatibility. The new figure
 variant lowers to the one backend-neutral marked-content carrier rather than
-creating a second PDF ownership representation.
+creating a second PDF ownership representation. A backend that consumes
+`PageFrame::elements` must recurse through
+`MarkedContent::children` or use `oxml_layout::walk`.
+Wildcard matches remain source compatible but must not discard an unrecognized
+container, because visible content can be nested below it.
 
 When native callers enable the default-off `agile-encryption` feature,
 `Document::open_encrypted`, `Document::from_encrypted_bytes`, and the bounded

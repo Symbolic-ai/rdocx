@@ -2,12 +2,15 @@
 
 use crate::table::TableBlock;
 use oxml_layout::{
-    Align, Color, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId, StructureId,
+    Align, Color, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId, SourceNodeId,
+    StructureId,
 };
 use rdocx_oxml::borders::CT_PBdr;
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, ST_RelativeFromH, ST_RelativeFromV, WrapType,
 };
+use std::ops::Deref;
+use std::sync::Arc;
 
 /// A floating drawing anchored to a paragraph.
 ///
@@ -100,6 +103,158 @@ impl ShapePreset {
 pub enum LayoutBlock {
     Paragraph(ParagraphBlock),
     Table(TableBlock),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParagraphSemantics {
+    pub source_node: Option<SourceNodeId>,
+    pub structure_id: Option<StructureId>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CellBlockSemantics {
+    Paragraph(ParagraphSemantics),
+    Table(TableSemantics),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CellSemantics {
+    pub blocks: Vec<CellBlockSemantics>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RowSemantics {
+    pub cells: Vec<CellSemantics>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TableSemantics {
+    pub rows: Vec<RowSemantics>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SharedLayoutBlock {
+    Owned(Box<LayoutBlock>),
+    Paragraph {
+        block: Arc<ParagraphBlock>,
+        semantics: ParagraphSemantics,
+    },
+    Table {
+        block: Arc<TableBlock>,
+        semantics: TableSemantics,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ParagraphView<'a> {
+    pub block: &'a ParagraphBlock,
+    pub semantics: Option<&'a ParagraphSemantics>,
+}
+
+impl Deref for ParagraphView<'_> {
+    type Target = ParagraphBlock;
+
+    fn deref(&self) -> &Self::Target {
+        self.block
+    }
+}
+
+impl ParagraphView<'_> {
+    pub fn source_node(self) -> Option<Option<SourceNodeId>> {
+        self.semantics.map(|semantics| semantics.source_node)
+    }
+
+    pub fn structure_id(self) -> Option<StructureId> {
+        self.semantics
+            .map_or(self.block.structure_id, |semantics| semantics.structure_id)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TableView<'a> {
+    pub block: &'a TableBlock,
+    pub semantics: Option<&'a TableSemantics>,
+}
+
+impl Deref for TableView<'_> {
+    type Target = TableBlock;
+
+    fn deref(&self) -> &Self::Target {
+        self.block
+    }
+}
+
+pub(crate) trait LayoutBlockLike {
+    fn paragraph(&self) -> Option<ParagraphView<'_>>;
+    fn table(&self) -> Option<TableView<'_>>;
+
+    fn content_height(&self) -> f64 {
+        self.paragraph().map_or_else(
+            || self.table().unwrap().content_height(),
+            |p| p.content_height(),
+        )
+    }
+
+    fn space_before(&self) -> f64 {
+        self.paragraph()
+            .map_or(0.0, |paragraph| paragraph.space_before)
+    }
+
+    fn space_after(&self) -> f64 {
+        self.paragraph()
+            .map_or(0.0, |paragraph| paragraph.space_after)
+    }
+
+    fn page_break_before(&self) -> bool {
+        self.paragraph()
+            .is_some_and(|paragraph| paragraph.page_break_before)
+    }
+}
+
+impl LayoutBlockLike for LayoutBlock {
+    fn paragraph(&self) -> Option<ParagraphView<'_>> {
+        match self {
+            Self::Paragraph(block) => Some(ParagraphView {
+                block,
+                semantics: None,
+            }),
+            Self::Table(_) => None,
+        }
+    }
+
+    fn table(&self) -> Option<TableView<'_>> {
+        match self {
+            Self::Paragraph(_) => None,
+            Self::Table(block) => Some(TableView {
+                block,
+                semantics: None,
+            }),
+        }
+    }
+}
+
+impl LayoutBlockLike for SharedLayoutBlock {
+    fn paragraph(&self) -> Option<ParagraphView<'_>> {
+        match self {
+            Self::Owned(block) => block.paragraph(),
+            Self::Paragraph { block, semantics } => Some(ParagraphView {
+                block,
+                semantics: Some(semantics),
+            }),
+            Self::Table { .. } => None,
+        }
+    }
+
+    fn table(&self) -> Option<TableView<'_>> {
+        match self {
+            Self::Owned(block) => block.table(),
+            Self::Paragraph { .. } => None,
+            Self::Table { block, semantics } => Some(TableView {
+                block,
+                semantics: Some(semantics),
+            }),
+        }
+    }
 }
 
 impl LayoutBlock {
