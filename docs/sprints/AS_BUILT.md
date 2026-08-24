@@ -8865,9 +8865,9 @@ mapping changes.
 **Completed.** 2026-08-24
 **Size.** L, estimated 4 days, actual 1 day
 
-**What was built.** `Document::from_html`, `Document::from_html_bytes`, and
-`Document::open_html` now import a bounded HTML5 and CSS subset into the
-existing Word document tree. The importer preserves source order across text,
+**What was built.** `Document::from_html` and `Document::open_html` now import
+a bounded HTML5 and CSS subset into the existing Word document tree. The
+importer preserves source order across text,
 paragraphs, nested inline formatting, lists, spanned tables, whitespace, and
 hard breaks, with stable diagnostics for unsupported visible content and CSS.
 
