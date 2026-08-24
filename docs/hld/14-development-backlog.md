@@ -30,24 +30,30 @@ came in far under their estimates whenever a story arrived with its cause
 already written up by the sprint that filed it, and the escalation record
 carries the variance for each.
 
-### Post-v1, M14 through M20
+### Post-v1, M14 through M22
 
-**56 stories, roughly 190 developer-days**, or about 38 weeks solo. By
-milestone, in days: M14 28, M15 12, M16 31, M17 23, M18 26, M19 44, M20 27.
+**93 stories, roughly 336 developer-days**, or about 67 weeks solo. By
+milestone, in days: M14 28, M15 12, M16 31, M17 23, M18 26, M19 85, M20 27,
+M21 60, M22 44.
 
-M19 is 44 of those 190 and supersedes a recorded permanent non-goal, so it is
-the one milestone that is a business decision rather than a scheduling one. The
-roadmap is ordered so that everything before it stands alone: stopping after M18
-leaves a coherent product, and so does stopping after M15.
+M19 is 85 of those 336 and may supersede a recorded permanent non-goal, so it
+is the one milestone that remains a business decision rather than a scheduling
+one. M20, M21, and M22 run before M19. Stopping after M22 leaves every planned
+Word and PowerPoint capability complete. The spreadsheet programme starts last
+and proceeds only if F-184 confirms a material gap in the Rust ecosystem.
 
-Three ways to compress, all available without reworking the order:
+Three stopping and compression choices remain without reworking completed
+milestones:
 
-- **M15 first.** Twelve days, and it is the only milestone whose engine already
-  exists and already sits on the format-neutral side of the crate graph.
-- **Drop M18.** Format breadth is the least coupled block. Nothing else depends
-  on it.
-- **A second developer.** M14, M17 and M19 barely touch each other. M16 depends
-  on M14 and M20 depends on nothing.
+- **Stop after M22.** S69 completes every planned non-spreadsheet capability.
+  M19 can wait without carrying any Word or PowerPoint work.
+- **Stop M19 after S64.** That boundary leaves a loss-aware xlsx reader,
+  writer, calculation engine, charts, worksheet features, and locally
+  refreshable pivots. Power Query and Office Scripts remain preserved but not
+  executed until the later sprints land.
+- **Parallelise after the core model.** Rendering and distribution can proceed
+  separately from the Power Query and automation runtimes once their shared
+  workbook, calculation, chart, and pivot contracts are reviewed.
 
 ---
 
@@ -1541,36 +1547,70 @@ range selects exactly the requested pages.
 
 ---
 
-## Milestone 19, Spreadsheets (about 10 weeks)
+## Milestone 19, Advanced spreadsheets (about 17 weeks)
 
-**Goal**: `rxlsx`, the third family.
+**Goal**: `rxlsx`, a loss-aware, headless spreadsheet lifecycle engine rather
+than another cell reader or report writer.
 
-**This milestone supersedes a recorded permanent non-goal.**
+**This milestone may supersede a recorded permanent non-goal only after its
+go or no-go gate.**
 `docs/hld/02-scope-and-non-goals.md` states that `oxml-sml` is not a spreadsheet
 library and must not grow into one without a separate decision. F-184 is that
-decision, and nothing else in this milestone may start before it lands.
+decision, and nothing else in this milestone may start before an affirmative
+decision lands.
 
-The economics changed after v1 shipped. OPC, DrawingML, the chart engine, the
-layout engine and the PDF backend all exist and are format-neutral. Of the three
-Office formats, xlsx carries the highest volume in data engineering, and Rust's
-coverage is fragmented: `calamine` reads, `rust_xlsxwriter` writes, neither
-renders, and `umya-spreadsheet` does both thinly. Nothing in any language reads,
-writes, recalculates and renders on one foundation.
+OPC, DrawingML, the chart engine, the layout engine and the PDF backend all
+exist and are format-neutral, which lowers the cost of a third family. That is
+not sufficient reason to build one. F-184 must reassess the Rust ecosystem when
+S70 begins. M19 proceeds only if no credible maintained crate provides the
+combined lifecycle required here: open an existing advanced workbook, preserve
+what is not executed, edit typed features, recalculate formulas and local
+pivots, refresh a declared Power Query subset, automate it through an Office
+Scripts-compatible surface, save it, and render it without Excel.
 
-**End-of-milestone gate**: a workbook round-trips, its formulas recalculate to
-the values Excel computes, and a sheet renders to PDF.
+Support is always classified as preserve, model and edit, or execute and
+refresh. Unsupported execution never destroys the stored workbook state or
+silently substitutes a result. Power Pivot and OLAP models, proprietary cloud
+connectors, VBA, XLM, custom functions, Python cells, and Microsoft-hosted
+Office Scripts storage remain preservation and diagnostic boundaries in this
+milestone.
 
-### F-184, Supersede the spreadsheet non-goal (S)
-The decision record. Amend `02-scope-and-non-goals.md`, state what changed and
-why, and define the boundary between `oxml-sml` as chart support and `rxlsx` as
-a library.
+**End-of-milestone gate**: a representative advanced workbook round-trips
+without losing unsupported parts, formulas and worksheet-backed pivots
+recalculate to the pinned Excel values, selected Power Query M transformations
+refresh through allowed connectors, an Office Scripts-compatible automation
+fixture edits the workbook in a sandbox, and the resulting sheets and charts
+render to PDF.
+
+### F-184, Advanced spreadsheet go or no-go (S)
+The go or no-go decision record. Reassess the maintained Rust spreadsheet
+ecosystem at S70, state whether the combined lifecycle gap still exists, and
+archive M19 if it does not. If it does, amend `02-scope-and-non-goals.md`, define
+the boundary between `oxml-sml` as chart support and `rxlsx` as a library, and
+publish the preserve, model, and execute classification for every advanced
+feature in this milestone. Compare the planned boundary with `calamine`,
+`rust_xlsxwriter`, `umya-spreadsheet`, `xls`, and any credible successor without
+claiming that simple read or write support is a differentiator.
 **Depends on**: none.
-**Test gate**: regression. The scope document states the superseding decision,
-and a test asserts the two statements do not contradict each other.
+**Test gate**: regression. The scope document and capability matrix state one
+non-contradictory boundary, and every scheduled spreadsheet story maps to a
+declared preserve, model, or execute outcome.
+
+### F-204, Spreadsheet corpus and compatibility matrix (M)
+A pinned, licensed corpus of ordinary and advanced xlsx workbooks covering
+formulas, tables, charts, conditional formats, validation, pivots, slicers,
+Power Query metadata, external connections, script associations, and preserved
+unsupported extensions. Record Excel and LibreOffice identity and expected
+cached results separately.
+**Depends on**: F-184.
+**Test gate**: regression. The fetcher verifies every checksum and licence,
+refuses an unpinned workbook, and reports the declared capability class for
+every advanced part in the corpus.
 
 ### F-185, Workbook and worksheet model (L)
 Workbook, sheets, rows, columns, cells, cell types, merged ranges and defined
-names.
+names. The ownership model keeps unsupported package parts attached to their
+relationships so an edit does not turn into a lossy rewrite.
 **Depends on**: F-184.
 **Test gate**: round-trip. Every element survives a load and save unchanged.
 
@@ -1582,18 +1622,6 @@ plus custom number format codes.
 **Test gate**: round-trip. A workbook with every built-in format and twenty
 custom ones preserves each cell's displayed value.
 
-### F-187, Reader (L)
-Streaming read of the sheet XML, because a spreadsheet is the one Office format
-that is routinely too large to hold in memory as a tree.
-**Depends on**: F-186.
-**Test gate**: regression. A 100 MB fixture reads within a bounded memory
-ceiling, asserted rather than assumed.
-
-### F-188, Writer (L)
-Streaming write, with the same ceiling.
-**Depends on**: F-187.
-**Test gate**: round-trip. A generated workbook opens in Excel without repair.
-
 ### F-189, Formula parser (L)
 The A1 and R1C1 grammars, operators, ranges, cross-sheet and cross-workbook
 references, and the shared-formula compression Excel writes.
@@ -1601,10 +1629,42 @@ references, and the shared-formula compression Excel writes.
 **Test gate**: unit. Every formula in the corpus parses and re-serialises
 identically.
 
+### F-205, Excel tables and structured references (L)
+Typed worksheet tables, totals rows, calculated columns, table styles,
+autofilters, sorting, and structured formula references. Table growth and
+column mutation update dependent ranges without rewriting unrelated worksheet
+content.
+**Depends on**: F-186, F-189.
+**Test gate**: differential. Table edits, filters, totals, and structured
+references save to the same effective values and ranges as the pinned Excel
+oracle.
+
+### F-206, Advanced worksheet objects (L)
+Comments, hyperlinks, rich text cells, images, drawings, row and column groups,
+hidden state, freeze panes, page breaks, sparklines, and modern image cells.
+External content follows an explicit offline-by-default policy with allowed
+schemes, limits, and diagnostics.
+**Depends on**: F-186.
+**Test gate**: round-trip. Every supported object remains typed and editable,
+unsupported siblings remain byte-preserved, and external content is never
+fetched without an explicit policy.
+
+### F-187, Reader (L)
+Streaming read of the sheet XML, because a spreadsheet is the one Office format
+that is routinely too large to hold in memory as a tree.
+**Depends on**: F-186, F-206.
+**Test gate**: regression. A 100 MB fixture reads within a bounded memory
+ceiling, asserted rather than assumed.
+
+### F-188, Writer (L)
+Streaming write, with the same ceiling.
+**Depends on**: F-187, F-205.
+**Test gate**: round-trip. A generated workbook opens in Excel without repair.
+
 ### F-190, Calculation engine (L)
 Dependency graph, evaluation order, cycle detection, and the function set that
 covers the overwhelming majority of real sheets: maths, statistics, text,
-logical, date and lookup.
+logical, date, lookup, dynamic arrays, spill ranges, and structured references.
 **Depends on**: F-189.
 **Test gate**: differential. Recalculated values match the values Excel stored
 in a pinned corpus, cell for cell, with unsupported functions listed rather than
@@ -1622,25 +1682,94 @@ round-trip fidelity.
 **Test gate**: round-trip. Every rule type survives with its ranges and
 priorities.
 
-### F-193, Pivot table preservation (M)
-Preserve the pivot cache and definition verbatim, and report the pivot's source
-range and fields. Recalculating a pivot is out of scope and stated as such.
-**Depends on**: F-185.
-**Test gate**: round-trip. A workbook with three pivots saves byte-identical in
-the pivot parts and reports each pivot's source.
+### F-193, Pivot cache and table model (L)
+Typed pivot definitions, cache definitions, cache records, row, column, data,
+and filter fields, grouping, calculated fields, layouts, and worksheet or table
+sources. External and OLAP sources remain attached and preserved when they
+cannot be executed locally.
+**Depends on**: F-188, F-190.
+**Test gate**: round-trip. A workbook with worksheet, external, and OLAP pivots
+preserves every source and cache, exposes the supported local model, and never
+claims that an unavailable source refreshed.
+
+### F-207, Pivot recalculation engine (L)
+Refresh worksheet and table-backed pivot caches, aggregate supported fields,
+apply filters and grouping, and regenerate the transient output cells after
+source edits. Unsupported aggregation or source kinds retain their last cached
+result with a diagnostic.
+**Depends on**: F-193.
+**Test gate**: differential. Mutating each source fixture and refreshing its
+pivot produces the same fields, aggregates, filters, cache records, and visible
+cells as the pinned Excel oracle.
+
+### F-208, Slicers, pivot charts, and Data Model boundary (L)
+Model and edit slicer caches, slicers, timelines, and pivot-chart relationships
+over supported local pivots. Preserve and inspect Power Pivot and Data Model
+parts, relationships, and measures without promising VertiPaq or DAX execution.
+**Depends on**: F-191, F-207.
+**Test gate**: differential. Slicer selections and pivot charts follow a local
+pivot refresh, while Data Model parts remain relationship-complete and
+byte-preserved after unrelated edits.
+
+### F-209, Power Query package and M language (L)
+Preserve and model workbook queries, connections, load destinations, refresh
+metadata, and M source. Parse and evaluate the bounded M language core needed
+for tables, records, lists, functions, `let` expressions, joins, grouping,
+filtering, projection, and type conversion.
+**Depends on**: F-188, F-190.
+**Test gate**: differential. Corpus M programs parse and reserialize without
+semantic drift, and pure transformations produce the pinned Power Query tables
+or an explicit unsupported-function diagnostic.
+
+### F-210, Power Query execution and connectors (L)
+Execute an allowlisted first connector set for workbook tables, CSV, JSON, and
+HTTP. Enforce credential isolation, privacy levels, source-combination rules,
+timeouts, byte and row limits, deterministic caching, and offline operation.
+Query folding is limited to connectors whose contract is explicitly tested.
+**Depends on**: F-209.
+**Test gate**: differential. Source-built refresh scenarios match the pinned
+Power Query outputs, unsafe source combinations fail closed, and the same
+fixture is deterministic when the network is disabled and cached input is
+provided.
+
+### F-211, Office Scripts artifacts and ExcelScript surface (L)
+Model external `.osts` source and workbook associations without pretending the
+script lives inside xlsx. Provide an explicitly versioned compatibility surface
+for workbook, worksheet, range, table, chart, pivot, and query operations.
+Microsoft OneDrive, SharePoint, Power Automate, and tenant identity remain
+external services rather than hidden runtime dependencies.
+**Depends on**: F-191, F-192, F-207, F-209.
+**Test gate**: regression. Typed automation examples compile against the
+declared compatibility surface, associations survive round-trip, and missing
+external scripts produce diagnostics without modifying the workbook.
+
+### F-212, Sandboxed Office Scripts runtime (L)
+Execute the supported TypeScript and JavaScript subset against the same Rust
+workbook model with CPU, memory, call-count, and output limits. Network access
+is denied by default and uses the same explicit policy boundary as Power Query
+when enabled.
+**Depends on**: F-210, F-211.
+**Test gate**: differential. Representative Office Scripts that edit ranges,
+tables, charts, pivots, and query results match Excel's resulting workbook
+state, while infinite loops, excessive allocation, unavailable APIs, and
+unapproved external calls fail without partial mutation.
 
 ### F-194, Sheet rendering (L)
 Page setup, print areas, repeating rows and columns, scaling, and the grid
-itself, through the existing layout and PDF backends.
-**Depends on**: F-186, F-191.
+itself, through the existing layout and PDF backends. Rendered output includes
+supported conditional formats, drawings, charts, refreshed pivots, and print
+objects.
+**Depends on**: F-191, F-192, F-206, F-208.
 **Test gate**: golden. A rendered sheet matches the pinned oracle render within
 the recorded SSIM threshold.
 
 ### F-195, rxlsx distribution (L)
 The facade, `rxlsx-cli`, `rxlsx-wasm` and the Python wheel, following the shape
 M13 established for the other two families.
-**Depends on**: F-188, F-194.
-**Test gate**: regression. The parity suite passes on every target platform.
+**Depends on**: F-188, F-194, F-212.
+**Test gate**: regression. The parity suite passes on every target platform,
+and each target reports the same unsupported feature and execution-policy
+diagnostics.
 
 ---
 
@@ -1720,6 +1849,243 @@ element after a round trip.
 **Test gate**: regression. Foreign `tcW` XML remains unmodelled and
 byte-identical, and an `isLgl` raw child stays before `suff` after parse and
 write.
+
+---
+
+## Milestone 21, Presentation depth (about 12 weeks)
+
+**Goal**: take the existing PowerPoint family beyond static business slides
+while preserving a bounded, testable rendering contract.
+
+The milestone covers modern PresentationML capabilities that already share the
+OPC, DrawingML, chart, layout, media, security, and rendering foundations. It
+does not add the legacy binary `.ppt` format. Executable VBA, ActiveX controls,
+and arbitrary embedded objects remain inventory and preservation surfaces.
+
+**End-of-milestone gate**: one representative modern deck round-trips its
+comments, sections, SmartArt, media, animation timeline, signatures, and package
+variant without repair. Its static frames, animated export, notes, and handouts
+match the pinned PowerPoint oracle at their declared fidelity boundaries.
+
+### F-213, Animation and transition timing model (L)
+Typed timing nodes, sequences, parallel groups, triggers, entrance and exit
+effects, motion paths, transitions, and morph metadata. Unsupported timing
+extensions remain relationship-complete raw XML.
+**Test gate**: round-trip. The corpus timeline parses into the declared model,
+serializes in schema order, and preserves every unsupported sibling.
+
+### F-214, Timeline evaluation and transition rendering (L)
+Evaluate supported timing trees into deterministic frame states and render
+entrance, exit, emphasis, motion-path, ordinary transition, and bounded morph
+effects without changing static slide rendering.
+**Depends on**: F-213.
+**Test gate**: differential. Pinned timestamps match the PowerPoint frame oracle
+within the declared geometric and pixel tolerances.
+
+### F-215, Audio and video package model (L)
+Read, write, add, replace, extract, and remove linked or embedded audio and
+video with poster frames, trim ranges, volume, looping, and playback triggers.
+Unsupported codecs remain packaged and diagnosable.
+**Test gate**: round-trip. Media bytes, relationships, playback settings, and
+unsupported metadata survive save and reopen without duplication.
+
+### F-216, Media poster and playback rendering (M)
+Render poster frames and deterministic media placeholders in static output,
+then expose synchronized media events to animated exporters. The library does
+not decode a codec unless a named bounded backend supports it.
+**Depends on**: F-214, F-215.
+**Test gate**: golden. Static poster output and timestamped playback state match
+the source-built oracle fixtures.
+
+### F-217, Presentation collaboration and navigation model (L)
+Typed comments and replies, slide sections, slide numbers, dates, footers,
+notes headers, and handout settings with ordered mutation and preservation.
+**Test gate**: round-trip. Every collaboration and navigation object survives
+reordering, mutation, save, and reopen with its relationships intact.
+
+### F-218, Embedded object and macro inventory (L)
+Safe inventory, extraction, replacement, and removal for OLE objects, ActiveX
+controls, and VBA projects. Executable content is never run, and signatures
+are invalidated or preserved according to an explicit mutation policy.
+**Test gate**: regression. Inventory reports exact hashes and relationships,
+safe removal leaves a valid deck, and ordinary edits do not alter retained
+payload bytes.
+
+### F-219, SmartArt typed model (L)
+Model diagram data, layout, style, colour, text, and relationship ownership for
+the bounded SmartArt corpus while preserving unsupported algorithms.
+**Test gate**: round-trip. Supported nodes remain editable and unsupported
+diagram parts remain byte-preserved after unrelated mutations.
+
+### F-220, SmartArt layout and rendering (L)
+Resolve supported list, hierarchy, cycle, relationship, matrix, and pyramid
+layouts through the shared DrawingML and text engines.
+**Depends on**: F-219.
+**Test gate**: differential. The supported corpus renders within the declared
+PowerPoint geometry and SSIM thresholds.
+
+### F-221, Presentation encryption and signatures (M)
+Expose password-based read and write plus signature inspection, verification,
+creation, and invalidation policy through the Presentation facade by reusing
+the shared package security implementation.
+**Depends on**: F-169, F-170, F-171, F-172.
+**Test gate**: integration. Pinned PowerPoint opens encrypted output, signature
+verification matches the trusted certificate fixtures, and mutation never
+leaves a signature falsely reported as valid.
+
+### F-222, ODP read and write (L)
+Import and export the supported presentation structure, text, tables, images,
+charts, notes, and animation metadata through a declared OpenDocument fidelity
+boundary with stable diagnostics.
+**Depends on**: F-214, F-215, F-217, F-220.
+**Test gate**: differential. Source-built ODP and PPTX conversions match the
+pinned LibreOffice structural and render records in both directions.
+
+### F-223, Modern presentation package variants (M)
+Support macro-enabled presentations and templates, ordinary templates, and
+slide-show packages without collapsing their content types or startup mode.
+Binary `.ppt` remains out of scope.
+**Depends on**: F-218.
+**Test gate**: round-trip. PPTM, POTX, POTM, PPSX, and PPSM fixtures reopen in
+their original package class with preserved executable payloads.
+
+### F-224, HTML slide content import (L)
+Project a bounded HTML and CSS presentation subset into editable slide shapes,
+text, tables, images, and links with explicit layout and unsupported-style
+diagnostics.
+**Depends on**: F-110, F-112.
+**Test gate**: differential. Source-built HTML matches the browser reference at
+the declared shape, text, and pixel boundary after save and reopen.
+
+### F-225, PDF page content import (L)
+Import PDF pages as either preserved page graphics or a bounded editable subset
+of text, raster images, paths, and links. Font substitution and unsupported PDF
+operators remain explicit diagnostics.
+**Depends on**: F-109, F-110, F-111.
+**Test gate**: differential. Pinned PDF pages preserve page geometry and match
+the source render, while the editable subset retains text and link mappings.
+
+### F-226, Notes and handout export (M)
+Render speaker notes, notes pages, audience handouts, slide numbers, dates, and
+headers or footers to PDF and images using the declared master hierarchy.
+**Depends on**: F-217.
+**Test gate**: golden. Notes and handout pages match the pinned PowerPoint
+export in order, geometry, text, and repeated metadata.
+
+### F-227, Animated GIF and video export (L)
+Sample deterministic timeline states into animated GIF and a bounded video
+backend with explicit frame rate, duration, resolution, transition, and media
+fallback policy.
+**Depends on**: F-214, F-216.
+**Test gate**: golden. Frame hashes, timestamps, loop behavior, and output
+dimensions match the reviewed manifest on two machines.
+
+---
+
+## Milestone 22, Word depth (about 9 weeks)
+
+**Goal**: complete the modern WordprocessingML features already identified as
+valuable without opening a legacy document-format programme.
+
+The milestone deepens modern DOCX, DOCM, DOTX, and DOTM workflows. Binary
+`.doc`, Word 2003 XML, and other pre-OOXML formats remain permanent non-goals.
+Macro projects and embedded executable content are preserved and inspectable,
+never executed.
+
+**End-of-milestone gate**: a representative modern document authors and renders
+equations, rebuilds fields and a table of contents, performs advanced merge and
+comparison, inventories embedded content, and round-trips its modern package
+variant without losing unsupported XML or executable payloads.
+
+### F-228, OfficeMath model and authoring (L)
+Typed OfficeMath equations, runs, fractions, scripts, radicals, matrices,
+limits, n-ary operators, delimiters, accents, and equation properties with
+schema-ordered authoring.
+**Test gate**: round-trip. The equation corpus parses, mutates, saves, and
+reopens without losing supported or raw sibling content.
+
+### F-229, OfficeMath layout and PDF rendering (M)
+Lay out supported equations through the shared font and page-frame boundary
+with baseline, stretch, delimiter, and operator sizing.
+**Depends on**: F-228.
+**Test gate**: golden. Equation baselines and glyph geometry match the pinned
+Word PDF oracle within the declared tolerance.
+
+### F-230, MathML and LaTeX conversion (M)
+Import and export the supported OfficeMath subset through MathML and LaTeX with
+stable diagnostics for constructs that cannot round-trip.
+**Depends on**: F-228.
+**Test gate**: differential. Supported source-built equations preserve their
+normalized expression tree through both conversion directions.
+
+### F-231, Extended field evaluation (L)
+Evaluate TOC, TC, formula, mail-merge control, and barcode fields while
+retaining unavailable field instructions and cached results.
+**Depends on**: F-161, F-162.
+**Test gate**: differential. Supported field results match the pinned Word
+values, and unsupported instructions remain intact with diagnostics.
+
+### F-232, Dynamic table of contents rebuild (L)
+Rebuild an existing TOC from headings, custom styles, outline levels, TC
+entries, bookmarks, and page numbers without replacing its unrelated field
+formatting.
+**Depends on**: F-154, F-231.
+**Test gate**: differential. Heading, style, and TC mutations produce the same
+entries, links, levels, and page numbers as the pinned Word update.
+
+### F-233, Advanced mail merge (L)
+Add merge regions, nested records, multiple named data sources, images,
+document fragments, and caller-provided formatting hooks to the existing merge
+engine.
+**Depends on**: F-166.
+**Test gate**: regression. Nested source-built records generate the expected
+ordered paragraphs, lists, tables, images, and formatting without stale fields.
+
+### F-234, Full-story document comparison (L)
+Extend comparison through headers, footers, comments, fields, text boxes,
+footnotes, endnotes, and formatting while preserving story order and source
+mappings.
+**Depends on**: F-167.
+**Test gate**: differential. The pinned document pairs produce the same
+insertions, deletions, moves, and story placement as Word at the declared
+boundary.
+
+### F-235, Comparison granularity and ignore policy (M)
+Add character and word granularity plus explicit ignore rules for formatting,
+whitespace, fields, comments, and selected stories.
+**Depends on**: F-234.
+**Test gate**: regression. Each policy changes only the declared comparison
+records and remains deterministic under repeated runs.
+
+### F-236, Embedded object and macro inventory (L)
+Inventory, extract, replace, and remove embedded objects, VBA projects, and
+their signatures without executing payloads or weakening package preservation.
+**Depends on**: F-171, F-172.
+**Test gate**: regression. Inventory hashes and relationship paths remain
+stable, safe removal leaves a valid document, and unrelated edits preserve
+payload bytes.
+
+### F-237, Forms, glossary, and building blocks (L)
+Typed inventory and bounded mutation for legacy form fields stored inside
+modern OOXML, glossary entries, AutoText, and building blocks. This does not
+add a binary `.doc` reader.
+**Test gate**: round-trip. Supported entries remain editable and every
+unsupported subtree survives unrelated document edits.
+
+### F-238, Flat OPC and modern Word package variants (M)
+Read and write Flat OPC plus DOCM, DOTX, and DOTM while preserving package
+identity, macros, templates, relationships, and content types. Word 2003 XML
+and binary `.doc` remain out of scope.
+**Depends on**: F-236.
+**Test gate**: round-trip. Each modern package class reopens without repair and
+retains its executable payload and template semantics.
+
+### F-239, MHTML import and export (M)
+Convert the supported modern Word document surface to and from bounded MHTML
+with safe resource resolution and stable diagnostics.
+**Depends on**: F-178.
+**Test gate**: differential. Source-built MHTML and DOCX conversions preserve
+body order, formatting, tables, lists, images, links, and declared loss records.
 
 ---
 
@@ -2207,11 +2573,11 @@ stable preflight asserts.
 
 F-X029 creates an always-reporting `ci-gate` that represents the result of the
 path-filtered CI graph. S44 deliberately stops at the tracked workflow because
-changing GitHub branch protection is an external repository mutation. The gate
-names and planned product surface continue to evolve through the roadmap, so
-the required-check configuration is parked at its final boundary.
+changing GitHub branch protection is an external repository mutation. S58 is
+the reviewed operational boundary before the two depth milestones begin. Later
+jobs continue to report through the same stable aggregate check.
 
-In S62, inspect the reviewed workflow at the sprint head, confirm that
+In S58, inspect the reviewed workflow at the sprint head, confirm that
 `ci-gate` is still the one stable aggregate check, and configure the repository
 ruleset or classic branch protection to require that exact check. Do not remove
 existing protections without an explicit reviewed decision. Bind the evidence
@@ -2738,6 +3104,90 @@ names both supported recursive traversal choices, Issue 44 and PR 45 cite the
 F-X051 implementation, Issue 46 cites F-X052 and the migration correction,
 Issues 39 and 42 remain closed, and the next stable contribution inventory
 retains the authenticated reporter and contributor credit.
+
+### F-X054, Integrate PRs 47 through 52 (L)
+
+Audit the six open reader contributions from authenticated contributor
+`@pedroassumpcao` against current main, then land each supported outcome either
+directly or as a hardened equivalent. PRs 47, 48, and 49 expose ordered cell,
+run, hyperlink, and paragraph children without flattening nested tables,
+content controls, revisions, fields, notes, comments, bookmarks, drawings, or
+preserved XML. PR 50 exposes stable facts for unsupported body content without
+inventing raw bytes for modeled constructs. PR 51 preserves producer-defined
+numbering formats, and PR 52 rejects undecodable visible text instead of
+silently substituting an empty string.
+
+The ordered iterators must remain borrowed, source ordered, bounded by retained
+document state, and namespace aware. Open-ended public item enums are
+non-exhaustive before the eventual 1.0 boundary. Unsupported XML classification
+must use the existing XML parser and in-scope namespace declarations rather
+than a new ad hoc byte scanner. The PR 51 public `ST_NumberFormat` change
+removes `Copy` and adds retained producer values, so its source incompatibility
+is deliberate and must be explicit in the next pre-1.0 compatibility notes.
+Every deviation
+from an original patch is recorded with the reason, and all six direct
+pull-request links and specific contribution outcomes remain in the v0.10.0
+inventory.
+
+Do not merge the GitHub pull requests merely to claim attribution. Integrate
+the reviewed code through the repository lifecycle. After v0.10.0 publishes and
+its body verifies, post one release-bound maintainer comment to each pull
+request stating whether it landed directly or through a hardened equivalent,
+thank `@pedroassumpcao`, and close the record without a merge if that is the
+truth.
+
+**Depends on**: F-X033.
+**Test gate**: regression. Source-built documents prove exact direct ordering
+for body, cell, paragraph, hyperlink, and run children across every supported
+typed variant and preserved XML boundary. Prefix aliases, inherited namespace
+scope, modeled unsupported facts, producer-defined numbering formats,
+undecodable ordinary and deleted text, save and reopen equality, exhaustive
+public documentation, and the unchanged legacy flattened accessors all pass.
+The full stable API diff identifies the intentional PR 51 incompatibility and
+no unreviewed breaking change.
+
+### F-X055, Tag v0.10.0 (S)
+
+Prepare and publish the exact seven-package stable family at v0.10.0 after the
+M18 writers and F-X054 are complete. The family remains in its pre-1.0 beta
+train. Before 1.0, public API additions or incompatibilities and internal-only
+new functionality use a minor release, while repair-only compatible behavior
+uses a patch release. At and after 1.0, incompatible public API changes require
+a major release, compatible additions require a minor release, and compatible
+fixes require a patch release. S56 adds public ODT, EPUB, SVG, and ordered
+reader APIs, while PR 51 also removes a public `Copy` guarantee and extends an
+exhaustive public enum. The next stable version is therefore 0.10.0, with the
+source incompatibility named in the compatibility section rather than hidden
+or used to claim premature 1.0 stability. The incubating family remains at its
+published 0.5.0 boundary unless a separately reviewed public dependency change
+proves another family release is required.
+
+The reviewed changelog section covers only the stable family and contains
+meaningful highlights, additions, fixes, compatibility guidance, and
+contributor credit. Its selected-family inventory includes Issue 44, PR 45,
+and Issue 46 for the S54 and S55 caller-font, performance, and migration work,
+plus PRs 47 through 52 for the reader work. It links every record directly and
+credits authenticated contributors `@emptinessform` and `@pedroassumpcao` for
+their specific outcomes. Direct and hardened-equivalent classifications must
+match the reviewed implementation. Python, WASM, npm, PyPI, and incubating
+publication remain unauthorized.
+
+Publication requires a fresh explicit approval at the exact reviewed SHA.
+After the stable crates, GitHub tag, and byte-identical release body verify,
+post the prepared release-bound comment to every included record. F-X054
+explicitly authorizes closing PRs 47 through 52 at that point with their true
+integration status. Earlier approval to plan or implement S56 does not satisfy
+the final release boundary.
+
+**Depends on**: F-180, F-181, F-182, F-X051, F-X052, F-X053, F-X054.
+**Test gate**: release. The stable metadata and public API regressions, full
+verification, exact 22-package dry run, archive inventory, supply-chain gate,
+binding and WASM isolation, release-note validation, selected-family
+contribution inventory, and declared hash result pass at one reviewed SHA.
+After separate final approval, all seven stable crates resolve from crates.io
+at 0.10.0, the GitHub release body is byte-identical to the reviewed v0.10.0
+changelog section, and every included issue and pull request has a verified
+release comment URL.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

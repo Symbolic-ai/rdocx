@@ -1,12 +1,13 @@
 # Sprint Plan
 
-Sprint-by-sprint roadmap for the oxml extraction and the rpptx build. Sprints
-are dependency and review boundaries, not fixed two-week containers. Sprint
-clocks start at the first `/start-feature` of that sprint, not at a fixed
+Sprint-by-sprint roadmap for the shared OOXML infrastructure, the Word and
+PowerPoint families, and the conditional advanced spreadsheet programme.
+Sprints are dependency and review boundaries, not fixed two-week containers.
+Sprint clocks start at the first `/start-feature` of that sprint, not at a fixed
 calendar date.
 
-40 numbered sprints plus two deferred cutover sprints across 13 milestones,
-roughly 390 developer-days. The sizing rationale and compression options are in
+The active roadmap runs through S79, with earlier deferred cutover boundaries
+retained in place. The sizing rationale and compression options are in
 `docs/hld/14-development-backlog.md`.
 
 M1 to M5 stage the extraction without changing released rdocx dependencies.
@@ -752,8 +753,10 @@ against `14-development-backlog.md` M14 through M20.
 
 The order is deliberate and each boundary is a stopping point. Stopping after
 S46 leaves one chart engine serving both families. Stopping after S49 leaves a
-document-automation product. Stopping after S57 leaves everything except
-spreadsheets. Nothing later is a prerequisite for anything earlier.
+document-automation product. Stopping after S69 leaves every planned Word and
+PowerPoint capability complete. The advanced spreadsheet programme starts only
+after that boundary and only if its feasibility gate confirms a gap worth
+filling in the Rust ecosystem.
 
 | Sprints | Milestone | Stories | Days |
 |---|---|---|---|
@@ -762,8 +765,10 @@ spreadsheets. Nothing later is a prerequisite for anything earlier.
 | S49 to S51 | M16, document automation | 15 | 39 |
 | S52 to S53 | M17, security and compliance | 7 | 23 |
 | S54 to S56 | M18, format breadth | 8 | 26 |
-| S57 to S60 | M19, spreadsheets | 12 | 44 |
-| S61 to S62 | M20, fidelity at scale | 7 | 27 |
+| S57 to S58 | M20, fidelity at scale | 7 | 27 |
+| S59 to S64 | M21, presentation depth | 15 | 60 |
+| S65 to S69 | M22, Word depth | 12 | 44 |
+| S70 to S79 | M19, advanced spreadsheets | 21 | 85 |
 
 #### Sprint S45, One chart engine
 
@@ -983,75 +988,28 @@ operations recovered and F-X048 fully replaced the dense-form patches.
 
 #### Sprint S56, ODT, EPUB and SVG out
 
-**Goal**: close M18.
+**Goal**: close M18, integrate the six pending reader contributions, and
+publish the stable family at its next pre-1.0 beta boundary.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-180 | ODT writer | L |
 | F-181 | EPUB export | M |
 | F-182 | SVG page export | M |
+| F-X054 | Integrate PRs 47 through 52 | L |
+| F-X055 | Tag v0.10.0 | S |
 
 F-181 and F-182 both fall out of work that exists: EPUB from the outline API,
 SVG from the same `PageFrame` the PDF and PNG backends already consume.
+F-X054 audits the ordered reader APIs and parser fidelity changes proposed by
+PRs 47 through 52 against current main, retaining six distinct contribution
+records and authenticated credit to `@pedroassumpcao`. F-X055 runs only after
+all four implementation stories complete. It publishes the exact stable family
+at v0.10.0 with reviewed notes, compatibility guidance, direct record links,
+and contributor credit. Each included pull request closes only after the
+published implementation and release body verify.
 
-#### Sprint S57, The spreadsheet decision and the model
-
-**Goal**: take the decision M19 requires, then build the model it unlocks.
-
-| F-ID | Title | Size |
-|------|-------|------|
-| F-184 | Supersede the spreadsheet non-goal | S |
-| F-185 | Workbook and worksheet model | L |
-| F-186 | Shared strings, styles and number formats | L |
-
-**F-184 gates everything after it in this milestone.** It is a one-day story
-that amends `02-scope-and-non-goals.md` and states the boundary between
-`oxml-sml` as chart support and `rxlsx` as a library. Nothing else in M19 may
-start before it lands.
-
-#### Sprint S58, Streaming read and write
-
-**Goal**: the one Office format that is routinely too large to hold as a tree.
-
-| F-ID | Title | Size |
-|------|-------|------|
-| F-187 | Reader | L |
-| F-188 | Writer | L |
-
-Both carry an asserted memory ceiling rather than a hoped-for one. A 100 MB
-fixture is the gate, not a smoke test.
-
-#### Sprint S59, Formulas
-
-**Goal**: the capability that separates a spreadsheet library from a file
-parser. Nothing in Rust recalculates.
-
-| F-ID | Title | Size |
-|------|-------|------|
-| F-189 | Formula parser | L |
-| F-190 | Calculation engine | L |
-
-F-190's gate is differential against the values Excel itself stored in a pinned
-corpus, cell for cell, with unsupported functions listed rather than silently
-wrong. That is the only honest way to measure a calculation engine.
-
-#### Sprint S60, Sheet features, rendering and distribution
-
-**Goal**: close M19.
-
-| F-ID | Title | Size |
-|------|-------|------|
-| F-191 | Charts in spreadsheets | M |
-| F-192 | Conditional formatting and data validation | M |
-| F-193 | Pivot table preservation | M |
-| F-194 | Sheet rendering | L |
-| F-195 | rxlsx distribution | L |
-
-F-191 uses `oxml-chart` for the third time, which is the return on S45. F-195
-follows the shape M13 established, so it is a known quantity rather than a new
-problem.
-
-#### Sprint S61, The Word corpus
+#### Sprint S57, The Word corpus
 
 **Goal**: measure the Word renderer against documents nobody here wrote. This is
 the largest untested surface in the workspace.
@@ -1066,9 +1024,10 @@ PowerPoint has 50 fetched decks and an SSIM harness. Word has seven samples this
 project generates itself, so it can only catch a regression against its own
 output and can never catch a disagreement with Word.
 
-#### Sprint S62, Text shaping and incremental layout
+#### Sprint S58, Text shaping and incremental layout
 
-**Goal**: close M20, and with it the roadmap.
+**Goal**: close M20 and finish every planned non-spreadsheet capability before
+the advanced spreadsheet programme begins.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1082,10 +1041,308 @@ F-198 changes line breaking and therefore every line after the first hyphenated
 one, so it lands after the corpus exists to measure it. Expect a declared hash
 harness delta, and expect it to be large.
 
-F-X031 is deliberately parked at the roadmap boundary. F-X029 creates the
-stable repository-side `ci-gate` in S44. This final operational story makes it
-a required GitHub check only after the planned product work and gate names have
-settled.
+F-X031 remains at the non-spreadsheet boundary. F-X029 creates the stable
+repository-side `ci-gate` in S44. This operational story makes it a required
+GitHub check after the Word fidelity gates have settled and before the larger
+spreadsheet programme starts.
+
+#### Sprint S59, Presentation collaboration and security
+
+**Goal**: deepen the package and collaboration surfaces before adding dynamic
+rendering behavior.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-217 | Presentation collaboration and navigation model | L |
+| F-221 | Presentation encryption and signatures | M |
+
+The sprint adds comments, replies, sections, footer metadata, protected package
+handling, and signature policy. Executable payloads are preserved and
+inspectable, never run. Binary `.ppt` remains out of scope.
+
+#### Sprint S60, Animation and transitions
+
+**Goal**: turn preserved timing XML into deterministic, bounded behavior.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-213 | Animation and transition timing model | L |
+| F-214 | Timeline evaluation and transition rendering | L |
+
+Static rendering remains unchanged. The new timeline path evaluates supported
+entrance, exit, emphasis, motion, transition, and morph behavior at explicit
+timestamps, with unsupported extensions preserved and diagnosed.
+
+#### Sprint S61, Audio, video and animated export
+
+**Goal**: complete the media timeline from package relationships to output.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-215 | Audio and video package model | L |
+| F-216 | Media poster and playback rendering | M |
+| F-227 | Animated GIF and video export | L |
+
+Codec handling is bounded to reviewed backends. Unsupported media remains
+extractable and visible through poster frames and diagnostics rather than being
+dropped.
+
+#### Sprint S62, SmartArt and embedded content
+
+**Goal**: model the two major opaque PresentationML surfaces without executing
+untrusted content.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-218 | Embedded object and macro inventory | L |
+| F-219 | SmartArt typed model | L |
+| F-220 | SmartArt layout and rendering | L |
+
+OLE, ActiveX, and VBA remain inventory, extraction, replacement, removal, and
+preservation surfaces. SmartArt gains typed editing and rendering only for the
+bounded corpus algorithms.
+
+#### Sprint S63, ODP, notes and handouts
+
+**Goal**: broaden modern presentation interchange and complete the presenter
+and audience output surfaces.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-222 | ODP read and write | L |
+| F-223 | Modern presentation package variants | M |
+| F-226 | Notes and handout export | M |
+
+ODP uses a declared LibreOffice differential boundary. Notes pages and handouts
+reuse the existing master hierarchy and shared PDF and image backends. Modern
+macro, template, and slide-show variants build on the embedded-content inventory
+from S62.
+
+#### Sprint S64, HTML and PDF slide import
+
+**Goal**: turn common modern content sources into editable or explicitly
+preserved slide content.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-224 | HTML slide content import | L |
+| F-225 | PDF page content import | L |
+
+HTML maps a bounded DOM and CSS subset into shapes. PDF imports either a
+preserved page graphic or the declared editable text, image, path, and link
+subset. Neither path promises arbitrary browser or PDF-engine compatibility.
+
+#### Sprint S65, OfficeMath
+
+**Goal**: author, convert, lay out, and render modern Word equations.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-228 | OfficeMath model and authoring | L |
+| F-229 | OfficeMath layout and PDF rendering | M |
+| F-230 | MathML and LaTeX conversion | M |
+
+The equation model preserves unsupported siblings and remains independent of
+legacy Equation Editor objects.
+
+#### Sprint S66, Fields and dynamic tables of contents
+
+**Goal**: update the field-driven structures real reports depend on.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-231 | Extended field evaluation | L |
+| F-232 | Dynamic table of contents rebuild | L |
+
+TOC, TC, formula, mail-merge control, and barcode fields retain unsupported
+instructions and cached results rather than substituting guessed values.
+
+#### Sprint S67, Advanced automation and comparison
+
+**Goal**: deepen the two flagship document-automation workflows.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-233 | Advanced mail merge | L |
+| F-234 | Full-story document comparison | L |
+| F-235 | Comparison granularity and ignore policy | M |
+
+Mail merge gains nested regions, multiple data sources, images, fragments, and
+format hooks. Comparison expands across related stories and adds explicit word,
+character, and ignore policies.
+
+#### Sprint S68, Embedded content, forms and building blocks
+
+**Goal**: expose modern package content that is currently preserved but opaque.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-236 | Embedded object and macro inventory | L |
+| F-237 | Forms, glossary, and building blocks | L |
+
+Executable objects and macros remain non-executing inventory surfaces. Legacy
+form fields are modeled only where they occur inside modern OOXML packages.
+
+#### Sprint S69, Modern Word package and web variants
+
+**Goal**: close Word depth without opening a legacy `.doc` programme.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-238 | Flat OPC and modern Word package variants | M |
+| F-239 | MHTML import and export | M |
+
+Flat OPC, DOCM, DOTX, DOTM, and bounded MHTML share the current document model.
+Binary `.doc` and Word 2003 XML remain permanent non-goals. The M22 end gate
+runs only modern package fixtures.
+
+#### Sprint S70, Spreadsheet decision, corpus and core model
+
+**Goal**: decide whether a material Rust ecosystem gap still exists, then build
+the ownership model only if that decision is affirmative.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-184 | Advanced spreadsheet go or no-go | S |
+| F-204 | Spreadsheet corpus and compatibility matrix | M |
+| F-185 | Workbook and worksheet model | L |
+
+F-184 is a true go or no-go gate. It reassesses Calamine,
+`rust_xlsxwriter`, `umya-spreadsheet`, `xls`, and any credible successor at S70,
+then classifies each proposed feature as preserved, modeled and editable, or
+executable. If the ecosystem provides the complete required lifecycle by then,
+M19 is archived rather than implemented.
+
+#### Sprint S71, Styles, tables and structured references
+
+**Goal**: model the indexed formatting and structured data semantics that
+ordinary business workbooks rely on.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-186 | Shared strings, styles and number formats | L |
+| F-189 | Formula parser | L |
+| F-205 | Excel tables and structured references | L |
+
+F-189 lands here because structured table references are part of the formula
+grammar rather than a string convention. The sprint does not yet calculate
+formulas.
+
+#### Sprint S72, Advanced worksheet objects
+
+**Goal**: cover the visible and interactive worksheet surface before the
+streaming package boundary freezes it.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-206 | Advanced worksheet objects | L |
+
+This includes comments, hyperlinks, rich text, drawings, grouping, panes,
+sparklines, page breaks, and modern image cells. External content stays offline
+unless an explicit bounded policy allows retrieval.
+
+#### Sprint S73, Streaming read and write
+
+**Goal**: prove that advanced workbooks remain bounded at the package boundary.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-187 | Reader | L |
+| F-188 | Writer | L |
+
+Both carry an asserted memory ceiling rather than a hoped-for one. A 100 MB
+fixture is the gate, not a smoke test. Unsupported package parts and
+relationships remain attached through unrelated typed edits.
+
+#### Sprint S74, Calculation and sheet features
+
+**Goal**: calculate ordinary and modern formulas, then expose the features that
+depend on their results.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-190 | Calculation engine | L |
+| F-191 | Charts in spreadsheets | M |
+| F-192 | Conditional formatting and data validation | M |
+
+F-190 is differential against the values Excel stored in the pinned corpus,
+including dynamic arrays, spill ranges, and structured references. Unsupported
+functions retain cached values with diagnostics. F-191 reuses `oxml-chart`
+rather than creating a spreadsheet-only chart engine.
+
+#### Sprint S75, Pivots and the Data Model boundary
+
+**Goal**: move PivotTables from opaque preservation to typed local refresh and
+define the boundary around proprietary analytical models.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-193 | Pivot cache and table model | L |
+| F-207 | Pivot recalculation engine | L |
+| F-208 | Slicers, pivot charts, and Data Model boundary | L |
+
+Worksheet and table-backed pivots refresh locally and regenerate their cache
+and visible cells. Slicers and pivot charts follow that refresh. OLAP, Power
+Pivot, VertiPaq, and DAX state is preserved and inspectable but is not executed
+under this milestone.
+
+#### Sprint S76, Power Query language and package model
+
+**Goal**: understand and evaluate M independently of external data access.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-209 | Power Query package and M language | L |
+
+The package model preserves queries, connections, load destinations, and
+refresh metadata. The language boundary covers the pure transformations needed
+by the corpus before credentials, connectors, or network policy enter the
+runtime.
+
+#### Sprint S77, Power Query execution
+
+**Goal**: refresh a bounded, useful connector set without weakening privacy or
+offline determinism.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-210 | Power Query execution and connectors | L |
+
+The first allowlist covers workbook tables, CSV, JSON, and HTTP. Credentials,
+privacy levels, source combination, timeouts, byte limits, caching, and query
+folding are explicit contracts. Proprietary and tenant-bound connectors remain
+preserved with diagnostics.
+
+#### Sprint S78, Office Scripts-compatible automation
+
+**Goal**: automate the same workbook model through a versioned and sandboxed
+TypeScript surface.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-211 | Office Scripts artifacts and ExcelScript surface | L |
+| F-212 | Sandboxed Office Scripts runtime | L |
+
+Scripts remain external artifacts associated with workbooks. The runtime does
+not pretend to provide OneDrive, SharePoint, Power Automate, or Microsoft tenant
+identity. It does provide bounded workbook, range, table, chart, pivot, and
+query automation with atomic failure.
+
+#### Sprint S79, Rendering, distribution and advanced end gate
+
+**Goal**: close M19 as a headless advanced spreadsheet engine rather than a
+file-format crate.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-194 | Sheet rendering | L |
+| F-195 | rxlsx distribution | L |
+
+The end gate runs one representative advanced workbook through read, edit,
+formula and pivot recalculation, selected Power Query refresh, sandboxed script
+automation, save, reopen, and deterministic PDF rendering. Every unavailable
+execution surface remains preserved and diagnosed. Distribution follows the
+shape M13 established only after that complete lifecycle passes.
 
 ## Cross-cutting
 
@@ -1096,7 +1353,7 @@ F-X013 through F-X016 carry the surviving half of the external PR 2 rendering
 contribution, whose anchored-drawing placement was overtaken by the M7 anchor
 work before it could land.
 F-X031 carries the external branch-protection mutation deferred from F-X029 to
-the final planned sprint.
+the Word fidelity boundary before the two depth milestones begin.
 
 ## Future ideas
 
@@ -1104,72 +1361,24 @@ These are discovery candidates, not scheduled work. They have no F-IDs, sizes,
 dependency promises or delivery order. Each candidate needs a scope decision,
 design plan and acceptance boundary before it can enter the backlog.
 
-### Presentation depth
-
-- Model and render animation timelines, entrance and exit effects, motion paths
-  and slide transitions, including morph transitions.
-- Read, write and render linked or embedded audio and video while preserving
-  unsupported media settings.
-- Add typed access to presentation comments, replies, slide sections, slide
-  numbers, dates, footers and handout settings.
-- Add safe inventory, extraction, replacement and removal APIs for OLE objects,
-  ActiveX controls and VBA projects. Preservation and inspection should come
-  before authoring executable content.
-- Expand SmartArt from relationship-safe preservation to typed inspection,
-  mutation and rendering where a bounded model is possible.
-- Add presentation passwords, encryption and signature handling on top of the
-  shared package security work.
-- Explore ODP input and output, macro-enabled presentation variants, templates
-  and slide-show packages.
-- Consider HTML and PDF content import, notes and handout export, animated GIF
-  generation and video frame generation as separate conversion stories.
-
-### Word depth
-
-- Add a shared OfficeMath model with equation authoring, layout, PDF rendering
-  and optional MathML or LaTeX export.
-- Extend field evaluation to TOC and TC fields, formula fields, mail-merge
-  control fields and barcode fields. Keep unsupported field results intact.
-- Rebuild existing tables of contents from headings, custom styles and TC
-  entries instead of limiting the API to creating a new static table.
-- Extend mail merge with regions, nested records, multiple named data sources,
-  images, document fragments and caller-provided formatting hooks.
-- Expand document comparison to headers, footers, comments, fields, text boxes,
-  footnotes and formatting. Add character and word granularity plus explicit
-  ignore options.
-- Add public inventory and extraction for embedded objects, macros, legacy form
-  fields, glossary entries and building blocks without weakening raw package
-  preservation.
-- Explore Flat OPC, Word 2003 XML, MHTML and macro-enabled Word packages before
-  deciding whether legacy binary DOC justifies its implementation cost.
-
 ### Spreadsheet breadth
 
-- Extend the first spreadsheet milestone with CSV, TSV, JSON and ODS input and
-  output before considering legacy XLS or XLSB.
-- Add comments, images, drawings, hyperlinks, rich text cells, filters, sorting,
-  grouping, hidden rows and columns, freeze panes and page breaks.
+- Extend the advanced spreadsheet milestone with CSV, TSV, JSON and ODS output
+  and broader structured-data import. Legacy binary XLS remains permanently
+  excluded. XLSB requires its own future demand and architecture decision.
 - Add worksheet copy and move operations, advanced paste options, named-range
   mutation and structured data import and export.
-- Add sparklines and broaden chart manipulation after the shared chart path is
-  proven in spreadsheets.
-- Move pivot tables from preservation and inspection to mutation and refresh
-  only after a dependable calculation engine and corpus exist.
 - Treat VBA and XLM as compatibility surfaces. Preserve, inventory, extract and
-  optionally remove their projects and signatures without executing them. Do
-  not build a new authoring or execution runtime without a named user need.
+  optionally remove their projects and signatures without executing them.
+- Consider DAX and VertiPaq execution only after the M19 Data Model preservation
+  boundary has a licensed representative corpus and a separate security and
+  performance decision.
+- Add OLAP pivot refresh, proprietary Power Query connectors, custom connector
+  SDK support, and broader query folding only against named consumers and
+  reproducible service fixtures.
 
 ### Modern spreadsheet extensibility
 
-- Add a companion model for Office Scripts as external TypeScript artefacts.
-  Inspect and validate script metadata and source without treating scripts as
-  embedded workbook content or executing them.
-- Preserve and report workbook associations and worksheet buttons that refer to
-  externally stored scripts. Detect missing associations without deleting or
-  rewriting their package metadata.
-- Consider an optional TypeScript emitter that translates a bounded set of
-  explicit workbook operations into Office Scripts. Keep this separate from the
-  workbook reader and writer.
 - Preserve and inspect web-extension, task-pane and content-add-in parts,
   manifests, permissions and external resource locations. HTML, CSS and
   JavaScript assets should remain external web application content.
@@ -1179,20 +1388,21 @@ design plan and acceptance boundary before it can enter the backlog.
 - Preserve Python cell formulas, source, result previews and service metadata.
   Keep cloud execution outside the core library and expose the dependency as a
   diagnostic.
-- Model modern cell values such as formatted values, entity cards, linked
-  entities, web images and local images with their basic fallback values.
-- Support the IMAGE function, in-cell pictures, alternative text and explicit
-  external-content policy for remote image retrieval.
-- Make every network-backed feature opt-in with allowed schemes, size limits,
-  timeouts, caching controls and an offline fallback.
+- Broaden the Office Scripts-compatible API only through versioned conformance
+  fixtures. Microsoft-hosted script storage, tenant identity, Power Automate,
+  and administrative policy remain integrations rather than local runtime
+  claims.
+- Add trusted custom-function hosts only after a separate capability and
+  isolation design. Until then, retain namespaced formulas and cached results
+  and report the unavailable function.
 
 ### Conversion and output
 
 - Define a format-priority decision that weighs corpus prevalence, procurement
   needs, implementation risk and maintenance cost before adding another reader
   or writer.
-- Consider XPS, PCL and older binary Office formats only when named users or a
-  representative corpus justify them.
+- Consider XPS and PCL only when named users or a representative corpus justify
+  them. Legacy binary Office formats remain excluded.
 - Add a platform-neutral print-layout contract before considering operating
   system printer integration. PDF and image output should remain the portable
   default.
