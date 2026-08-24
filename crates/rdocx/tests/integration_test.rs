@@ -180,6 +180,13 @@ fn rtf_writer_round_trip_preserves_supported_document_content() {
         Length::emu(12_700),
         Length::emu(25_400),
     );
+    let jpeg = tiny_jpeg();
+    document.add_picture(
+        &jpeg,
+        "three-by-two.jpg",
+        Length::emu(38_100),
+        Length::emu(50_800),
+    );
 
     let written = document.to_rtf_bytes().unwrap();
     assert!(written.diagnostics.is_empty());
@@ -251,11 +258,20 @@ fn rtf_writer_round_trip_preserves_supported_document_content() {
         "right"
     );
     let images = reparsed.images();
-    assert_eq!(images.len(), 1);
+    assert_eq!(images.len(), 2);
     assert_eq!(
         (images[0].width_emu, images[0].height_emu),
         (12_700, 25_400)
     );
+    assert_eq!(
+        reparsed.image_data(&images[0].embed_id).unwrap(),
+        PNG_2_BY_3
+    );
+    assert_eq!(
+        (images[1].width_emu, images[1].height_emu),
+        (38_100, 50_800)
+    );
+    assert_eq!(reparsed.image_data(&images[1].embed_id).unwrap(), jpeg);
     assert!(
         normalize_word_rtf_oracle(&mut reparsed)
             .document_markers

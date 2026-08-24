@@ -470,6 +470,36 @@ fn convert_rejects_zero_slide_png_without_creating_output() {
 }
 
 #[test]
+fn render_rejects_zero_slide_image_formats_without_creating_output() {
+    let temp = TempWorkspace::new("render-empty");
+    let deck = temp.path.join("empty.pptx");
+    let presentation = Presentation::new().unwrap();
+    assert!(presentation.is_empty());
+    presentation.save(&deck).unwrap();
+
+    for format in ["png", "jpeg", "tiff"] {
+        let output = temp.path.join(format!("empty-{format}"));
+        let result = cli(&[
+            "render",
+            deck.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--format",
+            format,
+        ]);
+
+        assert!(!result.status.success(), "{format} unexpectedly succeeded");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("no slides selected"),
+            "unexpected {format} error: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.stdout.is_empty());
+        assert!(!output.exists());
+    }
+}
+
+#[test]
 fn convert_and_render_write_deterministic_pdf_and_png_outputs() {
     let temp = TempWorkspace::new("render");
     let deck = temp.path.join("rendered.pptx");

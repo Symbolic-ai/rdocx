@@ -491,6 +491,9 @@ fn selected_zero_based_slides(slide_count: usize, range: Option<&str>) -> Result
         Some(range) => parse_range(range)?,
         None => (1..=slide_count).collect(),
     };
+    if selected.is_empty() {
+        return Err("no slides selected".into());
+    }
     if let Some(index) = selected.iter().copied().find(|index| *index > slide_count) {
         return Err(format!("slide {index} is out of range for {slide_count} slides").into());
     }
