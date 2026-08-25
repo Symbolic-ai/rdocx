@@ -1534,11 +1534,33 @@ primitive. Python, WASM, and CLI surfaces do not gain ODT export methods.
 **Test gate**: round-trip. Text, formatting, tables, lists and images survive.
 
 ### F-181, EPUB export (M)
-Reflowable EPUB 3 from the document outline, which the heading and outline APIs
-already produce.
+The native Word facade exports bounded deterministic EPUB 3 bytes and atomic
+path saves with stable lossy-conversion diagnostics. Outline roots split the
+source-ordered spine. Pre-heading content becomes front matter, nested headings
+remain nested navigation entries, and a document without headings produces one
+item. The private writer packages semantic XHTML, shared CSS, metadata, and
+relationship-resolved core PNG, JPEG, and GIF images through the existing `zip`
+dependency. Media eligibility requires byte sniffing and structural validation,
+never a filename fallback. SVG and malformed media are diagnosed and omitted.
+Standard ordered marker formats remain semantic list styles. Stable diagnostics
+cover unsupported marker details, table-cell list flattening, paragraph style
+effects, deep headings, revision flattening, and dropped document metadata.
+Numbered headings remain semantic headings inside their list items. Supported
+image descriptions become alternative text, while other simplified drawing and
+text-spacing properties are diagnosed. Page breaks are emitted as conforming
+flow content, column breaks are diagnosed as simplified, and supported absolute
+links pass an RFC 3986 syntax check before emission.
+Heading labels exclude dropped content-control trees. Final section properties,
+style-derived deep headings, non-basic underline styles, patterned or invalid
+shading, table-cell shading, document backgrounds, visible default paragraph
+style and document-default effects, and both preserved deleted-text losses have
+stable diagnostics. Revision, change, and raw-only defaults are inert. Indexed
+PNG palettes must fit the IHDR bit-depth capacity, and HTTP user information
+accepts only RFC 3986 user-information characters.
+Python, WASM, and CLI surfaces remain unchanged.
 **Depends on**: none.
-**Test gate**: regression. A generated EPUB passes epubcheck and its spine
-matches the document outline.
+**Test gate**: regression. A source-built generated EPUB passes exact
+EPUBCheck 5.3.0 and its spine matches the document outline.
 
 ### F-182, SVG page export (M)
 A rendered page as SVG, from the same `PageFrame` the PDF and PNG backends

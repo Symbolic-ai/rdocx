@@ -1,6 +1,6 @@
 # F-181, EPUB export
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S56
 **Size**: M
 **Depends on**: none
@@ -132,13 +132,13 @@ Any delta blocks integration and the baseline is not re-recorded.
 
 ## Implementation checklist
 
-- [ ] Add bounded deterministic EPUB archive and XML emission.
-- [ ] Split reflowable content and navigation at approved outline boundaries.
-- [ ] Reuse outbound HTML semantics, escaping, media, and hyperlink resolution.
-- [ ] Add diagnostic-bearing byte output and atomic path output.
-- [ ] Pin and run EPUBCheck 5.3.0 without adding a runtime dependency.
-- [ ] Add source-built regression, integration, determinism, and failure tests.
-- [ ] Run public API packaging, dependency, full verify, and unchanged-harness checks.
+- [x] Add bounded deterministic EPUB archive and XML emission.
+- [x] Split reflowable content and navigation at approved outline boundaries.
+- [x] Reuse outbound HTML semantics, escaping, media, and hyperlink resolution.
+- [x] Add diagnostic-bearing byte output and atomic path output.
+- [x] Pin and run EPUBCheck 5.3.0 without adding a runtime dependency.
+- [x] Add source-built regression, integration, determinism, and failure tests.
+- [x] Run public API packaging, dependency, full verify, and unchanged-harness checks.
 
 ## Open questions
 

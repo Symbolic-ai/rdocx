@@ -116,6 +116,61 @@ gate serializes and reopens the generated DOCX before comparing its public
 structure. No binary fixture or sample is added, so all 49 hash entries remain
 unchanged.
 
+The EPUB regression gate builds the complete publication in source. It checks
+the stored first `mimetype` entry, fixed timestamps and metadata, byte-identical
+repeated output, front matter, outline-root spine splitting, nested navigation,
+semantic XHTML, distinct and unmarked lists, bounded list depth, exact image
+attribute correlation, referenced-only image bytes, absolute URI validation,
+XML 1.0 character rejection, stable typed and raw loss diagnostics, and atomic
+destination replacement. Projection limit cases cover source text, styles,
+numbering, relationships, media bytes, and image occurrences before export
+cloning or expansion. Focused cases cover uncloned table grids, named style and
+deep-heading diagnostics, retained Roman and letter list formats, custom marker
+losses, marker alignment, table-cell list diagnostics, interrupted-list
+continuation, nested-list restarts, numbered heading elements and anchors,
+bounded hyperlink spans, explicit no-underline formatting, image alternative
+text and drawing-property diagnostics, alternate drawings, preserved text
+spacing, column breaks, page breaks in formatted runs and field displays, IPv6
+and IPvFuture hosts, malformed authority and fragment delimiters,
+namespace-aware revision diagnostic deduplication, and every dropped custom
+document property. Recovery cases also cover direct-only bounded heading text,
+paragraph-local Word and foreign namespace aliases at one raw boundary with a
+conflicting document-root binding, rejected extension-only and active SVG media,
+duplicate PNG headers, invalid chunk type codes, illegal critical-chunk order,
+indexed palettes beyond the declared bit-depth capacity, structurally validated
+raster media, repeated JPEG start markers, scans before JPEG frames, baseline
+and progressive JPEG controls, invalid GIF LZW minimum code sizes, empty GIF
+image data, zero-sized GIF image descriptors, style-derived deep headings,
+final section properties,
+document backgrounds, visible and inert document defaults and default paragraph
+styles, revision-only inert defaults, invalid HTTP user information, non-basic
+underline styles, patterned, foreground, and invalid paragraph, run, and cell
+shading, and the two distinct losses on preserved deleted text. The external test remains
+ignored in ordinary local runs. The tracked CI test job downloads the reviewed release,
+verifies the archive and JAR digests, sets `EPUBCHECK_JAR`, and invokes the exact
+ignored test as a required gate. That gate requires exact
+EPUBCheck 5.3.0 from the W3C release and accepts no validation error. The
+reviewed distribution ZIP has SHA-256
+`6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5`.
+The gate also verifies the extracted validator JAR has SHA-256
+`f7f96617c929371821609b88c8484d6dc9f24fe916499863c46094c5fb778a65`
+before execution. One source-built oracle fixture combines front matter,
+multiple outline roots, nested headings and lists, and media while asserting
+source-ordered spine and navigation entries. It also includes a page break so
+the external validator covers the lifted XHTML structure, plus an interrupted
+ordered list, a numbered heading, a table-cell list projection, explicit
+no-underline text, image alternative text, rejected active SVG, a style-derived
+deep heading, non-basic underline and patterned shading diagnostics, preserved
+deleted text, final section and background diagnostics, a visible default
+paragraph style and visible document defaults, patterned cell shading, rejected
+duplicate-IHDR and oversized indexed-palette PNGs, an invalid HTTP
+user-information target, invalid PNG, JPEG, and GIF structures, valid baseline
+and progressive JPEG and GIF controls, and paragraph-local Word and foreign
+revision aliases under a conflicting root binding.
+The writer does not mutate the source document, and a save and reopen check
+proves retained unmodelled XML remains byte-preserved. No binary EPUB fixture
+or runtime oracle dependency is added.
+
 The digital-signature regression gate constructs its DOCX and signature XML
 in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
 and precomputed RSA-SHA256 signatures cover both `ds` and `sig` namespace

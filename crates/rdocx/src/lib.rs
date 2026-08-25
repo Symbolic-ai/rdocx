@@ -25,6 +25,7 @@ mod comments;
 mod comparison;
 mod content_control;
 mod document;
+mod epub;
 mod error;
 mod field;
 mod html;
@@ -46,6 +47,7 @@ pub use document::{
     AccessibilityIssue, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
     ListNumberFormat, OutlineNode, RenderOptions,
 };
+pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
 pub use field::{FieldDateTime, FieldEvaluation, FieldEvaluationContext, FieldOutcome};
 pub use html::{HtmlDiagnostic, HtmlReadResult};

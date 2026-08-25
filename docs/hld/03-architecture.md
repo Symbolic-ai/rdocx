@@ -103,6 +103,22 @@ manifest, and image entries. ODT is not OPC, so neither direction enters
 `oxml-opc` or retains an ODT object model. The facade uses the existing
 workspace `zip`, `quick-xml`, and `oxml-media` dependencies for conversion.
 
+**Outbound EPUB belongs to the `rdocx` facade.** The private writer projects
+the owned Word document through the established outbound HTML semantics, then
+packages deterministic EPUB 3 metadata, navigation, reflowable XHTML, shared
+CSS, and body-referenced relationship images. It builds bounded render-only
+style and numbering projections instead of cloning preservation trees.
+The render projection copies only supported paragraphs, runs, hyperlinks,
+tables, rows, and cells. Content-control subtrees and table grids are diagnosed
+from the source and never cloned into the render document. Fields are reduced
+to bounded cached display values, and drawings are rebuilt without preserved
+raw drawing subtrees. Paragraph, run, table, row, and cell properties are
+rebuilt from the bounded values consumed by XHTML rather than cloning typed
+revision trees.
+Top-level outline entries split the spine, while pre-heading content becomes
+front matter. EPUB is not OPC, so the writer uses the existing workspace `zip`
+dependency directly and does not add a second publication object model.
+
 **`oxml-layout` is where the format boundary genuinely falls.** Its
 output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document

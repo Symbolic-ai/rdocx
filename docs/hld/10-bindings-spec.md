@@ -249,6 +249,46 @@ portable replacement primitive. A failure cannot truncate an existing
 destination. Export does not mutate the source document. Python, WASM, and CLI
 surfaces gain no ODT export entry point and retain their existing contracts.
 
+Native Rust callers can export EPUB 3 through `Document::to_epub_bytes` and
+`Document::save_epub`. The byte API returns `EpubWriteResult`, which carries
+the bounded deterministic publication and ordered location-aware
+`EpubDiagnostic` values. The path API serializes first, stages beside the
+destination, publishes atomically, and returns the same diagnostics. Outline
+roots define spine items, content before the first root becomes front matter,
+and a document without headings produces one item. Metadata uses stable title
+and author fallbacks, while supported text, lists, tables, hyperlinks, and
+images retain the established outbound HTML semantics. List identity, restart
+values, nested levels, no-marker levels, and standard Roman and letter marker
+formats remain distinct. An interrupted ordered list with the same numbering
+identity continues from its next value, while nested numbering restarts for a
+new parent. A numbered heading remains a heading inside its list item and owns
+the navigation anchor. Custom marker text, marker styling, marker alignment,
+and list semantics inside a table cell are diagnosed when EPUB list semantics
+cannot preserve them. Supported image descriptions become XHTML alternative
+text. Heading and navigation labels use only bounded direct projected runs.
+Only structurally validated byte-sniffed PNG, JPEG, and GIF media referenced by
+surviving body drawings is packaged. Extension fallback is forbidden, and SVG
+is diagnosed and omitted. Drawing names, extents, preserved drawing XML,
+alternate drawings, preserved Word text spacing, and simplified column breaks
+receive stable loss diagnostics. Explicit no-underline formatting remains
+non-underlined. Non-basic underline styles, patterned, foreground, or invalid
+paragraph, run, and table-cell shading, style-derived deep headings, final
+section properties, and document backgrounds are diagnosed at their source
+locations. A paragraph without an explicit style receives a diagnostic when
+document defaults or its effective default paragraph style carry active
+paragraph formatting, or when active run formatting affects direct projected
+text. Revision, change, and raw-only default state does not produce noise.
+Preserved deleted text reports both spacing normalization and revision
+flattening exactly once. Each dropped modeled item,
+raw item, field semantic, relationship occurrence, or simplified property has
+an ordered source-location diagnostic. This includes dropped named paragraph
+style effects, reduced heading levels, and unconsumed document metadata. Typed
+and raw views of one revision wrapper produce one diagnostic even when Word and
+foreign namespace aliases share a paragraph boundary. Paragraph-local namespace
+shadows override document-root bindings during that correlation. Python,
+WASM, and CLI surfaces gain no EPUB entry point and retain their existing error
+contracts.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method

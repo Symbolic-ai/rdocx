@@ -37,6 +37,38 @@ names exactly the root, content, and emitted images. Ordered style allocation,
 fixed namespace prefixes, fixed ZIP metadata, and bounded retained output make
 two writes of one document byte-identical.
 
+EPUB output is also ZIP but not OPC. The private `rdocx` writer emits the
+uncompressed `mimetype` entry first, followed by the container, package,
+navigation, stylesheet, source-ordered spine items, and deduplicated media.
+Entry names, order, compression, timestamps, identifiers, XML attributes, and
+metadata fallbacks are deterministic. Output is bounded while ZIP seeks and
+writes. Input, auxiliary projections, relationships, media, list depth, and
+intermediate XHTML are bounded before their export allocations. Generated XML
+rejects forbidden XML 1.0 characters, and external hyperlink targets require a
+syntactically valid allowlisted absolute URI. A path save publishes fully
+serialized bytes through a same-directory atomic replacement.
+Heading labels are assembled only from bounded direct runs that survive the
+projection, so dropped content-control text cannot enter navigation or spine
+metadata. Referenced media is accepted only when byte sniffing and structural
+validation agree on core PNG, JPEG, or GIF. PNG validation requires four-letter
+ASCII chunk type codes with an uppercase reserved byte, one first IHDR, legal
+critical-chunk order and counts, contiguous IDAT chunks, and one terminal IEND.
+An indexed PNG palette cannot exceed the capacity declared by its IHDR bit
+depth. JPEG validation permits exactly one leading SOI marker, requires a valid
+frame before the first scan, and requires a terminal EOI. Baseline and
+progressive frame types are accepted. GIF image descriptors require nonzero
+width and height. GIF image data requires an LZW minimum code size from 2
+through 8 and at least one non-empty data sub-block. Extension fallback is not
+used. SVG and every malformed or unsupported image are diagnosed and omitted.
+Heading-to-spine assignment and source-anchor lookup are linear in the accepted
+source size. Ordered-list counters retain their numbering identity across
+ordinary block interruptions, while deeper counters restart when a parent item
+advances. Hyperlink spans are validated against their paragraph before the HTML
+projection can expand them.
+Page-break elements are lifted out of paragraph and inline formatting before
+the XHTML documents are packaged, so spine items retain conforming flow
+content.
+
 ## Generalising the constructors
 
 The only docx-specific code in the existing crate is two constructors. They are

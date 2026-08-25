@@ -542,12 +542,14 @@ artifact.
 dependencies have the named
 default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
 Python, WASM, or CLI graphs.
-Ring, SHA-256, base64, and X.509 parsing have the named default-off
+Ring, SHA-256, and X.509 parsing have the named default-off
 `oxml-opc/digital-signatures` consumer. They do not enter ordinary, Python,
-WASM, or CLI graphs. The creator uses operating-system randomness for strict
-RSA-SHA256 signing and requires a matching embedded public key. The verifier
-authenticates with that embedded key. Certificate-chain trust requires caller
-policy and no ambient trust-store dependency is part of the workspace graph.
+WASM, or CLI graphs. That feature also uses `base64`, whose ordinary runtime
+consumer and binding-graph consequences are described below. The creator uses
+operating-system randomness for strict RSA-SHA256 signing and requires a
+matching embedded public key. The verifier authenticates with that embedded
+key. Certificate-chain trust requires caller policy and no ambient trust-store
+dependency is part of the workspace graph.
 
 PDF/A conformance adds no crate dependency. The sRGB2014 bytes are a
 crate-local compile-time asset, and veraPDF remains external test
@@ -565,9 +567,11 @@ regenerated.
 The private native Word SVG renderer is the direct runtime consumer of
 `base64`, which embeds exact layout font bytes and page image bytes into
 self-contained data URLs. No `oxml-*`, Presentation, Python, WASM, or CLI crate
-adds a direct edge. Exact resvg 0.48.1 is an `rdocx` development dependency for
-the 150 dpi SSIM oracle only. It receives explicit layout fonts, never system
-fonts, and does not enter the runtime graph or generated `rdocx` archive.
+adds a direct edge. The Python, WASM, and CLI graphs inherit `base64`
+transitively through their ordinary `rdocx` dependency. Exact resvg 0.48.1 is
+an `rdocx` development dependency for the 150 dpi SSIM oracle only. It receives
+explicit layout fonts, never system fonts, and does not enter the runtime graph
+or generated `rdocx` archive.
 
 `scraper` 0.27 has one direct named consumer, the private inbound HTML importer
 inside `rdocx`. Default features are disabled and only `errors` is enabled so
@@ -586,3 +590,15 @@ metadata before parsing. The writer fixes entry order, compression,
 permissions, the 1980-01-01 timestamp, and other metadata while bounding XML,
 media, entries, and total retained output. Neither direction reuses
 `OpcPackage` for a non-OPC format.
+
+The private EPUB writer inside `rdocx` is another named consumer of that same
+workspace `zip` dependency. It adds no runtime package. EPUBCheck 5.3.0 remains
+external development and CI validation infrastructure. The reviewed W3C
+release ZIP SHA-256 is
+`6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5`,
+and the extracted validator JAR SHA-256 is
+`f7f96617c929371821609b88c8484d6dc9f24fe916499863c46094c5fb778a65`.
+The tracked test job downloads that exact release, verifies both identities,
+exports the verified JAR path, and runs the source-built EPUB oracle as a
+required CI step before the full workspace suite. The validator is not included
+in any crate archive.

@@ -253,6 +253,33 @@ class SprintWorkflowTests(unittest.TestCase):
             ),
         )
 
+    def test_epubcheck_ci_gate_pins_artifact_and_invokes_exact_oracle(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        test_job = self.yaml_block(ci, "  test:")
+        install = self.yaml_step(test_job, "Install pinned EPUBCheck 5.3.0")
+        gate = self.yaml_step(test_job, "Run pinned EPUBCheck gate")
+        self.assertIn(
+            "https://github.com/w3c/epubcheck/releases/download/v5.3.0/"
+            "epubcheck-5.3.0.zip",
+            install,
+        )
+        self.assertIn(
+            "6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5",
+            install,
+        )
+        self.assertIn(
+            "f7f96617c929371821609b88c8484d6dc9f24fe916499863c46094c5fb778a65",
+            install,
+        )
+        self.assertIn("EPUBCHECK_JAR=$jar", install)
+        self.assertIn(
+            "epubcheck_5_3_0_accepts_the_source_built_publication", gate
+        )
+        self.assertIn("--ignored --nocapture", gate)
+        self.assertNotIn("continue-on-error", install + gate)
+
     def test_docs_only_changes_skip_expensive_jobs_and_still_report_the_ci_gate(
         self,
     ) -> None:
