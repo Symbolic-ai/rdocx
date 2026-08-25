@@ -3834,6 +3834,42 @@ impl Document {
         ))
     }
 
+    /// Render one zero-based page as a self-contained searchable SVG document.
+    ///
+    /// An index beyond the laid-out document returns `None`. Layout diagnostics
+    /// precede path-specific SVG lowering diagnostics in the returned result.
+    pub fn render_page_to_svg(&self, page_index: usize) -> Result<Option<crate::SvgRenderResult>> {
+        self.render_page_to_svg_with_options(page_index, RenderOptions::default())
+    }
+
+    /// Render one page as SVG with the selected revision view.
+    pub fn render_page_to_svg_with_options(
+        &self,
+        page_index: usize,
+        options: RenderOptions,
+    ) -> Result<Option<crate::SvgRenderResult>> {
+        let layout = self.layout_with_options(options)?;
+        Ok(crate::svg::render_page(&layout.layout, page_index))
+    }
+
+    /// Render one page as SVG using bundled fonts without system font discovery.
+    pub fn render_page_to_svg_deterministic(
+        &self,
+        page_index: usize,
+    ) -> Result<Option<crate::SvgRenderResult>> {
+        self.render_page_to_svg_deterministic_with_options(page_index, RenderOptions::default())
+    }
+
+    /// Render one revision view as deterministic SVG using bundled fonts.
+    pub fn render_page_to_svg_deterministic_with_options(
+        &self,
+        page_index: usize,
+        options: RenderOptions,
+    ) -> Result<Option<crate::SvgRenderResult>> {
+        let layout = self.layout_for_options(options, true)?;
+        Ok(crate::svg::render_page(&layout.layout, page_index))
+    }
+
     /// Render selected zero-based pages to the requested image format.
     pub fn render_pages(
         &self,

@@ -44,9 +44,10 @@ database and likewise cannot observe bundled or system fonts.
 
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
-`Document::render_page_to_png_deterministic()` and
-`Document::to_pdf_deterministic()`. Both reuse the separate cached
-bundled-font-only layout. The PDF facade passes that layout directly to
+`Document::render_page_to_png_deterministic()`,
+`Document::to_pdf_deterministic()`, and deterministic SVG page export. All
+three reuse the separate cached bundled-font-only layout. The PDF facade passes
+that layout directly to
 `oxml_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
 input without changing the normal PDF API. Existing constructors and rendering
 methods still load system fonts for library users.
@@ -560,6 +561,13 @@ New dependencies are added only with a named consumer. The workspace already
 minimises feature sets deliberately, and the comments in the root manifest
 explaining why `zip` and `fontdb` are trimmed should be preserved rather than
 regenerated.
+
+The private native Word SVG renderer is the direct runtime consumer of
+`base64`, which embeds exact layout font bytes and page image bytes into
+self-contained data URLs. No `oxml-*`, Presentation, Python, WASM, or CLI crate
+adds a direct edge. Exact resvg 0.48.1 is an `rdocx` development dependency for
+the 150 dpi SSIM oracle only. It receives explicit layout fonts, never system
+fonts, and does not enter the runtime graph or generated `rdocx` archive.
 
 `scraper` 0.27 has one direct named consumer, the private inbound HTML importer
 inside `rdocx`. Default features are disabled and only `errors` is enabled so

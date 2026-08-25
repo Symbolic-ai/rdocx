@@ -6333,3 +6333,30 @@ fn raw_zip_scan_finds_no_redacted_value() {
     assert_eq!(report.total(), 2);
     assert_raw_package_has_no_selector(&document.to_bytes().unwrap(), "secret");
 }
+
+#[test]
+fn svg_facade_options_share_the_existing_layout_paths_and_bounds_contract() {
+    let mut document = Document::new();
+    document.add_paragraph("SVG facade");
+    let options = RenderOptions::default();
+
+    assert_eq!(
+        document.render_page_to_svg(0).unwrap(),
+        document
+            .render_page_to_svg_with_options(0, options)
+            .unwrap()
+    );
+    assert_eq!(
+        document.render_page_to_svg_deterministic(0).unwrap(),
+        document
+            .render_page_to_svg_deterministic_with_options(0, options)
+            .unwrap()
+    );
+    assert!(document.render_page_to_svg(usize::MAX).unwrap().is_none());
+    assert!(
+        document
+            .render_page_to_svg_deterministic(usize::MAX)
+            .unwrap()
+            .is_none()
+    );
+}

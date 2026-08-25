@@ -1,7 +1,8 @@
 # 08, Rendering spec
 
-Owners: `oxml-layout` for the types, `oxml-pdf` for the backends,
-`rpptx-render` for the slide pipeline.
+Owners: `oxml-layout` for the types, `oxml-pdf` for the shared PDF and raster
+backends, `rdocx` for native Word SVG, and `rpptx-render` for the slide
+pipeline.
 
 ## The seam that makes this cheap
 
@@ -333,6 +334,47 @@ device-scale box blur, offsets and tints the result, then composites the
 unchanged group content above it. Resolved colour alpha is part of the shadow.
 Group opacity applies once to the shadow and content together. PDF group
 effects remain unsupported.
+
+## The SVG backend
+
+The private `rdocx` SVG backend consumes one zero-based page from an immutable
+`LayoutResult`. It shares the normal and deterministic Word layout caches with
+PDF and raster, does not re-layout or mutate the source document, and returns
+`None` for an out-of-range page. The root uses point dimensions and the page's
+top-left, y-down view box. A white page default precedes any authored
+background.
+
+Lowering is recursive through groups and marked content. Child order, affine
+composition, local clips, opacity, paths, rectangles, lines, images, links,
+paint, and effects stay in traversal order. Definitions use deterministic
+depth-first identifiers and contain only used resources. Images and font bytes
+are embedded as base64 data URLs, with no scripts, network references, ambient
+font lookup, or filesystem references. Links accept relative targets and the
+reviewed `http`, `https`, and `mailto` schemes only. XML-invalid text or
+attribute scalars are diagnosed and cannot enter the document.
+
+Text remains searchable `<text>`. Each used layout `FontId` receives one stable
+synthetic family backed by its exact embedded bytes. Scalar positions use
+cumulative shaped advances when scalar and glyph counts agree. Complex shaping
+retains the Unicode text, constrains total advance, and emits one positioning
+approximation diagnostic. Missing fonts and TTC face selection are diagnosed
+at exact first use while deterministic definitions remain ordered.
+
+Solid and gradient paint share the backend-neutral stop normalization rule.
+Tile paint remains diagnosed because its carrier has no media bytes. Outer
+shadows use one user-space filter whose independent shadow branches merge below
+the unchanged source. Local clipping applies inside the filtered source so it
+does not clip the outer shadow. Invertible transforms derive exact page-mapped
+filter bounds. Singular transforms retain effects when supported geometry
+proves conservative bounds, including mitered strokes and shadow extents. A
+singular subtree containing nonempty text keeps the searchable source and its
+siblings but omits the unprovable effect with one stable path diagnostic.
+Non-uniform or skewed transforms retain the SVG blur and diagnose its
+anisotropic difference from the raster backend's average-scale isotropic blur.
+
+Existing layout diagnostics precede SVG diagnostics. Lowering diagnostics are
+path-specific and follow element traversal, so unsupported paint, effect, link,
+font, or text content never silently drops a supported sibling.
 
 ## Preset geometry
 

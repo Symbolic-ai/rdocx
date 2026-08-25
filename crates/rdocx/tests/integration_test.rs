@@ -21,6 +21,61 @@ struct OdtStructuralRecord {
     media: Vec<Vec<u8>>,
 }
 
+#[test]
+fn svg_export_preserves_searchable_text_geometry_fonts_images_links_and_clips() {
+    let mut document = Document::new();
+    document.add_paragraph("Searchable SVG text");
+    document.append_hyperlink("safe link", "https://example.test/?a=1&b=2");
+    document.add_picture(
+        PNG_2_BY_3,
+        "two-by-three.png",
+        Length::emu(914_400),
+        Length::emu(1_371_600),
+    );
+    {
+        let mut table = document.add_table(1, 1);
+        table.cell(0, 0).unwrap().set_text("clipped cell");
+        table.row(0).unwrap().set_height_exact(Length::pt(8.0));
+    }
+
+    let source_before_render = document.to_bytes().unwrap();
+    let result = document
+        .render_page_to_svg_deterministic(0)
+        .expect("deterministic SVG layout")
+        .expect("page zero");
+    assert_eq!(document.to_bytes().unwrap(), source_before_render);
+    let mut reader = quick_xml::Reader::from_str(&result.svg);
+    loop {
+        if matches!(
+            reader.read_event().expect("generated SVG is parseable XML"),
+            quick_xml::events::Event::Eof
+        ) {
+            break;
+        }
+    }
+    assert!(
+        result
+            .svg
+            .starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\"")
+    );
+    assert!(result.svg.contains("viewBox=\"0 0 612 792\""));
+    assert!(result.svg.contains(">Searchable </text>"));
+    assert!(result.svg.contains(">SVG </text>"));
+    assert!(result.svg.contains(">text</text>"));
+    assert!(result.svg.contains("@font-face"));
+    assert!(result.svg.contains("data:font/ttf;base64,"));
+    assert!(result.svg.contains("data:image/png;base64,"));
+    assert!(result.svg.contains("clip-path=\"url(#rdocx-def-"));
+    assert!(
+        result
+            .svg
+            .contains("href=\"https://example.test/?a=1&amp;b=2\"")
+    );
+    assert!(!result.svg.contains("file://"));
+    assert!(!result.svg.contains("href=\"http://"));
+    assert!(!result.svg.contains("url('http"));
+}
+
 #[derive(Debug, PartialEq)]
 struct OdtParagraphRecord {
     text: String,

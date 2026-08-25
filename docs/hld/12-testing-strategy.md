@@ -425,6 +425,26 @@ suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
 pixel comparison is unconditional, failure-propagating, and bound to the
 reviewed rasteriser identity.
 
+## The SVG page golden gate
+
+`svg_page_rasterises_like_the_png_backend` constructs one representative page
+entirely in code. It includes exact-font searchable text, an embedded image, a
+path and normalized gradient, three recursive groups with noncommuting scale,
+rotation, and skew, a clip, opacity, nonzero shadow blur, a safe link, marked
+content, and a diagnosed paint fallback. The PNG side uses deterministic
+bundled layout at 150 dpi. The SVG side is rasterised at the same exact 300 by
+300 dimensions by development-only resvg 0.48.1, whose font database receives
+only the layout result's explicit font bytes and exact face identities.
+
+The comparison composites both RGBA buffers over white and requires global
+luminance SSIM of at least 0.99. A one-point view-box perturbation must score
+below 0.99, which proves the calibrated threshold rejects a visible placement
+regression. No PNG, SVG, or font fixture is committed. Focused regressions also
+cover deterministic definition order, searchable complex text, XML and link
+safety, recursive sibling preservation, transform composition order, singular
+effect omission for unprovable text ink, and non-clipping singular geometry
+bounds.
+
 Revision-view rendering has a separate deterministic two-view golden gate. An
 in-code Word fixture renders accepted and tracked views with bundled fonts at a
 fixed DPI. Accepted pixels must equal the same document after `accept_all`

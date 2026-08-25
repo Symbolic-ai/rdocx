@@ -35,6 +35,7 @@ mod revision;
 mod rtf;
 pub mod run;
 pub mod style;
+mod svg;
 pub mod table;
 mod template;
 
@@ -70,6 +71,7 @@ pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{Run, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
+pub use svg::{SvgDiagnostic, SvgRenderResult};
 pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
 
 #[cfg(test)]

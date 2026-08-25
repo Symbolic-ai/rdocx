@@ -1,6 +1,6 @@
 # F-182, SVG page export
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S56
 **Size**: M
 **Depends on**: none
@@ -185,14 +185,14 @@ the PDF and PNG paths are not modified. Any delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add the approved private SVG module and additive native results and APIs.
-- [ ] Emit deterministic geometry, definitions, escaping, fonts, and images.
-- [ ] Recurse through every page element, marked content, transform, clip, opacity, background, paint, effect, and link.
-- [ ] Keep text as text with exact placement when representable and diagnostics otherwise.
-- [ ] Preserve siblings and merge layout and lowering diagnostics in stable order.
-- [ ] Add approved base64 and pinned resvg dependencies.
-- [ ] Add source-built unit, integration, security, determinism, and calibrated golden coverage in existing binaries.
-- [ ] Run deterministic-font, oracle, WASM, package, supply-chain, full verify, and unchanged-harness gates.
+- [x] Add the approved private SVG module and additive native results and APIs.
+- [x] Emit deterministic geometry, definitions, escaping, fonts, and images.
+- [x] Recurse through every page element, marked content, transform, clip, opacity, background, paint, effect, and link.
+- [x] Keep text as text with exact placement when representable and diagnostics otherwise.
+- [x] Preserve siblings and merge layout and lowering diagnostics in stable order.
+- [x] Add approved base64 and pinned resvg dependencies.
+- [x] Add source-built unit, integration, security, determinism, and calibrated golden coverage in existing binaries.
+- [x] Run deterministic-font, oracle, WASM, package, supply-chain, full verify, and unchanged-harness gates.
 
 ## Open questions
 

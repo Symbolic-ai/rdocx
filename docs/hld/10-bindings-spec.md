@@ -501,6 +501,15 @@ keyword-only `render_pages` arguments, keeps zero-based page indices, releases
 the GIL for rendering, returns `list[bytes]` for PNG or JPEG, and returns one
 `bytes` value for TIFF.
 
+Native Word SVG adds `SvgDiagnostic`, `SvgRenderResult`, and four additive
+`Document` methods. `render_page_to_svg` and
+`render_page_to_svg_with_options` reuse normal layout. Their deterministic
+counterparts reuse bundled-font-only layout. Every method takes a zero-based
+page index and returns `None` beyond the laid-out document. The result contains
+self-contained searchable SVG plus layout-first, path-specific lowering
+diagnostics. Python, WASM, CLI, Presentation, and public `oxml-pdf` APIs do not
+gain SVG methods or values.
+
 Native renderers obtain the complete positioned output through
 `Document::layout` and `Document::layout_with_options`. Accepted calls return a
 shared `Arc<WordLayoutResult>` from the normal-font cache, including pages,

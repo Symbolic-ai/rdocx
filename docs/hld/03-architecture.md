@@ -108,9 +108,9 @@ format.
 
 Completed layout results share each immutable page frame and each font byte
 buffer through `Arc`. Word and Presentation producers establish that ownership
-at their format boundary. PDF, raster, facade page access, diagnostics, and
-provenance consumers borrow the shared values without gaining a format-specific
-dependency.
+at their format boundary. PDF, raster, SVG, facade page access, diagnostics,
+and provenance consumers borrow the shared values without gaining a
+format-specific dependency.
 
 `SourceNodeId` and `SourceSpan` are the format-neutral provenance carriers at
 this boundary. A text segment and its positioned glyph run can hold one
@@ -175,6 +175,15 @@ The same backend owns raster encoding through `RasterFormat`, `RasterOptions`,
 Word, Presentation, Python and CLI consumers, so format semantics and page
 selection validation live at the format-neutral backend rather than in each
 facade.
+
+**Native Word SVG belongs to the `rdocx` facade.** Its private renderer consumes
+the same immutable `LayoutResult` used by PDF and raster without moving the
+surface into the already published `oxml-pdf` family. It preserves searchable
+text, embeds used fonts and images, and recursively lowers the complete page
+element tree. Stable path diagnostics make every unsupported or approximate
+lowering visible while preserving supported siblings. The production edge adds
+only `base64` for self-contained data URLs. Exact resvg 0.48.1 is development
+test infrastructure and does not enter the runtime graph or package archive.
 
 When the optional document structure is present, `oxml-pdf` alone owns PDF
 marked-content operators, page-local MCIDs, structure elements, list bodies,
@@ -563,6 +572,13 @@ fields.
 The WASM binding uses that additive facade accessor for its existing `getText`
 method and otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
+
+`Document::render_page_to_svg`, its option-taking counterpart, and their two
+deterministic variants expose one zero-based page as self-contained searchable
+SVG. Out-of-range pages return `None`. `SvgRenderResult` carries the SVG and
+ordered `SvgDiagnostic` values, with layout diagnostics before recursive
+lowering diagnostics. These additive methods are native Rust only. Python,
+WASM, CLI, Presentation, and the public `oxml-pdf` surface remain unchanged.
 
 `Document::from_html` and `Document::open_html` are additive native facade
 constructors. They return the converted document with stable path-aware
