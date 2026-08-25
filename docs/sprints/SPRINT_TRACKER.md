@@ -318,6 +318,10 @@ defended.
 | F-179 | S55 | L | 4 | 1 | 2026-08-24 | Bounded ODT reader with pinned LibreOffice structural differential |
 | F-X052 | S55 | L | 4 | 1 | 2026-08-24 | Exact shared-block relayout within the Issue 46 performance budget |
 | F-X053 | S55 | S | 1 | 1 | 2026-08-24 | Published migration guidance and authenticated contribution closures |
+| F-180 | S56 | L | 4 | 1 | 2026-08-25 | Deterministic diagnostic ODT writer with structural round trip |
+| F-181 | S56 | M | 2 | 1 | 2026-08-25 | Deterministic EPUB 3 export with pinned EPUBCheck acceptance |
+| F-182 | S56 | M | 2 | 1 | 2026-08-25 | Searchable self-contained SVG page export with calibrated pixel parity |
+| F-X054 | S56 | L | 4 | 1 | 2026-08-25 | Hardened ordered reader and parser outcomes from PRs 47 through 52 |
 
 ## Velocity
 

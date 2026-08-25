@@ -356,9 +356,9 @@ regenerated, never hand-edited.
 | F-177 | RTF writer                                   | S54  | M | done |
 | F-178 | HTML import                                  | S55  | L | done |
 | F-179 | ODT reader                                   | S55  | L | done |
-| F-180 | ODT writer                                   | S56  | L | in-progress |
-| F-181 | EPUB export                                  | S56  | M | in-progress |
-| F-182 | SVG page export                              | S56  | M | in-progress |
+| F-180 | ODT writer                                   | S56  | L | done |
+| F-181 | EPUB export                                  | S56  | M | done |
+| F-182 | SVG page export                              | S56  | M | done |
 | F-183 | Image export options                         | S54  | S | done |
 <!-- AUTOGEN:backlog-M18 END -->
 
@@ -506,6 +506,6 @@ regenerated, never hand-edited.
 | F-X051 | Honor caller-supplied font family aliases  | S54 | M | done |
 | F-X052 | Restore interactive relayout performance   | S55 | L | done |
 | F-X053 | Complete layout migration and contribution records | S55 | S | done |
-| F-X054 | Integrate PRs 47 through 52                | S56 | L | in-progress |
+| F-X054 | Integrate PRs 47 through 52                | S56 | L | done |
 | F-X055 | Tag v0.10.0                               | S56 | S | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

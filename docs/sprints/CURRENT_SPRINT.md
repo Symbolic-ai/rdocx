@@ -34,10 +34,10 @@ compatibility notes and authenticated contributor credit.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-180 | ODT writer | L | in-progress | codex |
-| F-181 | EPUB export | M | in-progress | codex |
-| F-182 | SVG page export | M | in-progress | codex |
-| F-X054 | Integrate PRs 47 through 52 | L | in-progress | codex |
+| F-180 | ODT writer | L | done | |
+| F-181 | EPUB export | M | done | |
+| F-182 | SVG page export | M | done | |
+| F-X054 | Integrate PRs 47 through 52 | L | done | |
 | F-X055 | Tag v0.10.0 | S | in-progress | codex |
 
 ## Sequencing note

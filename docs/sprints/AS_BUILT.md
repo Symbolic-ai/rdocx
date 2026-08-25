@@ -9006,3 +9006,165 @@ evidence and maintainer-authenticated comments.
 [Issue 44](https://github.com/tensorbee/rdocx/issues/44#issuecomment-5395173425),
 [PR 45](https://github.com/tensorbee/rdocx/pull/45#issuecomment-5395175132), and
 [Issue 46](https://github.com/tensorbee/rdocx/issues/46#issuecomment-5395176825).
+
+### F-180, ODT writer
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::to_odt_bytes` and `Document::save_odt` now write
+a deterministic bounded ODF 1.3 package from the native Word tree. The writer
+projects supported effective paragraph and text formatting, nested lists,
+table spans, and inline images, and returns stable path-aware diagnostics for
+every unsupported or simplified source fact.
+
+**Non-obvious choices.** ODT remains a private `rdocx` facade concern rather
+than an OPC mode. The package writes an uncompressed first `mimetype` entry,
+schema-ordered XML, deterministic automatic styles and media names, and an
+exact manifest. Byte serialization completes before failure-atomic path
+replacement, and write limits are expressed in the units the F-179 reader
+will observe after reopening.
+
+**Deviations from the design plan.** None. Review expanded the conformance and
+loss matrices, limit proofs, inherited numbering coverage, and exact F-179
+piece-to-run accounting without changing the approved public boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Twenty-nine focused writer tests and the public structural round-trip
+gate passed. The exact LibreOffice 26.2.5.2 differential, full workspace suite,
+WASM, package, documentation, and supply-chain gates also passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-179 and F-180 share one declared fidelity
+boundary. Extending either direction requires extending the structural record,
+loss diagnostics, and bounded package checks together.
+
+### F-181, EPUB export
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now exports deterministic EPUB 3
+bytes and files with ordered spine and navigation documents, structured
+headings, nested lists, tables, safe hyperlinks, validated raster media, and
+bounded metadata. Unsupported or simplified document facts remain visible as
+stable diagnostics.
+
+**Non-obvious choices.** EPUB projection is private to `rdocx` and reuses the
+existing document tree rather than introducing a second retained model. Media
+must pass byte-level PNG, JPEG, or GIF structure validation before packaging.
+Heading anchors remain source-correlated, list continuation remains explicit,
+and every XHTML, navigation, media, and diagnostic budget is checked before
+unbounded expansion.
+
+**Deviations from the design plan.** None. Review strengthened bounded
+projection, URI and media validation, style and numbering loss reporting,
+table-cell lists, metadata diagnostics, and exact source correlation.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Thirty-three focused exporter tests passed. The source-built
+publication passed the exact checksum-pinned EPUBCheck 5.3.0 oracle. Full
+workspace, WASM, package, documentation, and supply-chain gates also passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** EPUB output owns document semantics and reading
+order rather than fixed-page geometry. New media or XHTML support must extend
+the strict validator, bounded preflight, and EPUBCheck fixture together.
+
+### F-182, SVG page export
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now exports one deterministic,
+self-contained SVG string from a selected `PageFrame`. Text stays searchable,
+fonts and raster images are embedded, safe links remain active, and recursive
+geometry, gradients, clipping, opacity, marked content, and supported shadows
+retain shared layout order.
+
+**Non-obvious choices.** The backend lives privately in stable `rdocx` because
+the shared PDF family remains at its published incubating boundary. Definition
+IDs and diagnostics follow deterministic first use. Complex text remains text
+with an approximation diagnostic when exact scalar positioning is impossible,
+and an unprovable singular-transform effect is omitted without dropping its
+source content or siblings.
+
+**Deviations from the design plan.** None. Review replaced the initial narrow
+golden with representative text, image, gradient, clip, shadow, link, and
+three-level noncommuting transform coverage, and tightened font, XML, gradient,
+and filter behavior.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Nineteen focused SVG tests passed, including the calibrated 150 dpi
+resvg 0.48.1 SSIM gate and its perturbation control. Full workspace,
+no-default-font, WASM, package, documentation, and supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** SVG consumes immutable layout output. It must
+not grow Word format knowledge or silently flatten searchable text into
+outlines.
+
+### F-X054, Integrate PRs 47 through 52
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Borrowed ordered readers now expose direct body, cell,
+paragraph, hyperlink, and run children while established flattened accessors
+remain unchanged. Unsupported XML facts retain qualified names, resolved
+namespaces, child facts, and optional exact bytes. Producer-defined numbering
+values survive in `ST_NumberFormat::Other(String)`, and undecodable ordinary or
+deleted Word text fails closed.
+
+**Non-obvious choices.** The six external proposals landed as hardened
+equivalents rather than direct merges. Public item enums are non-exhaustive,
+modeled unsupported facts do not fabricate raw bytes, namespace facts come
+from parser scope, and namespace replay uses declaration-dependent logical
+owner identity with safe unchanged-byte preservation and fail-closed mutation.
+Exporters never invent decimal markers for producer-defined numbering.
+
+**Deviations from the design plan.** All six outcomes are hardened equivalents.
+The implementation adds current namespace, non-exhaustive API, bounded
+allocation, exact raw-boundary, and diagnostic protections beyond the proposed
+patches. The S55 Python `Html` and `Odt` error reconciliation was recorded
+separately from the numbering outcome.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The complete ordered-reader and namespace regression suite passed
+168 tests before integration, and the integrated suite passed 169. The pinned
+Python 3.12.9 and maturin 1.13.3 binding environment passed all 37 tests. Full
+workspace, package, documentation, WASM, and supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The included outcomes came from
+[PR 47](https://github.com/tensorbee/rdocx/pull/47),
+[PR 48](https://github.com/tensorbee/rdocx/pull/48),
+[PR 49](https://github.com/tensorbee/rdocx/pull/49),
+[PR 50](https://github.com/tensorbee/rdocx/pull/50),
+[PR 51](https://github.com/tensorbee/rdocx/pull/51), and
+[PR 52](https://github.com/tensorbee/rdocx/pull/52), with specific credit to
+`@pedroassumpcao`. F-X055 owns their release-bound comments and closure after
+v0.10.0 publication verifies.
