@@ -1016,10 +1016,12 @@ SVG from the same `PageFrame` the PDF and PNG backends already consume.
 F-X054 audits the ordered reader APIs and parser fidelity changes proposed by
 PRs 47 through 52 against current main, retaining six distinct contribution
 records and authenticated credit to `@pedroassumpcao`. F-X055 runs only after
-all four implementation stories complete. It publishes the exact stable family
-at v0.10.0 with reviewed notes, compatibility guidance, direct record links,
-and contributor credit. Each included pull request closes only after the
-published implementation and release body verify.
+all four implementation stories complete. Its immutable v0.10.0 attempt
+published only `rdocx-opc` and `rdocx-oxml` before package verification
+stopped. F-X057 owns the complete stable publication at v0.10.1 with reviewed
+notes, compatibility guidance, direct record links, and contributor credit.
+It also owns all nine notifications and the six authorized pull-request
+closures after the complete publication and release body verify.
 
 The immutable v0.10.0 attempt published `rdocx-opc` and `rdocx-oxml`, then
 proved that the stable source graph requires shared layout APIs newer than the

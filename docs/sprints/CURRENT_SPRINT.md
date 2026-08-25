@@ -53,13 +53,16 @@ F-180 depends on the F-179 reader completed in S55, so its round-trip boundary
 is available at sprint entry. F-181, F-182, and F-X054 have no implementation
 dependency on F-180 or on each other. The four stories may proceed in parallel
 while keeping exclusive ownership of ODT packaging, EPUB structure, stable SVG
-entry points, and the contributed reader surface respectively. F-X055 runs
-last, after every implementation and contribution record is complete.
+entry points, and the contributed reader surface respectively. F-X055 ended as
+the immutable partial v0.10.0 attempt after every implementation and
+contribution record was complete.
 
 The v0.10.0 tag remains immutable after its partial publication failure.
 F-X056 publishes the shared family first because F-X057 cannot verify stable
 packages against unpublished shared APIs. F-X057 starts only after all 15
-incubating registry entries and their release body verify.
+incubating registry entries and their release body verify. F-X057 owns the
+complete v0.10.1 stable publication, all nine contribution notifications, and
+the six authorized pull-request closures.
 
 ## Definition of done for this sprint
 
