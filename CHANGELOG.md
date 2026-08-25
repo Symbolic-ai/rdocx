@@ -2,7 +2,62 @@
 
 ## Unreleased
 
-No changes have been recorded since the v0.10.0 preparation.
+No changes have been recorded since the rpptx-v0.6.0 preparation.
+
+## rpptx-v0.6.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family adds caller-controlled font aliases,
+bounded reusable layout work, deterministic page image output, and common CLI
+page selection. This release publishes the shared APIs required by the stable
+Word family before its separate v0.10.1 recovery release.
+
+### Added
+
+- Configure bounded caller font family aliases through the shared font manager
+  without repeating font bytes or changing deterministic fallback.
+- Render exact selected pages as transparent or opaque PNG, quality-controlled
+  JPEG, or deterministic multi-page TIFF through the shared raster backend.
+- Select page ranges and image output options through the common CLI support
+  layer and the PowerPoint CLI.
+
+### Fixed
+
+- Honor caller-supplied family aliases through deterministic fallback and
+  bounded caches. This hardened equivalent addresses
+  [Issue 44](https://github.com/tensorbee/rdocx/issues/44) and the reference
+  implementation in [PR 45](https://github.com/tensorbee/rdocx/pull/45).
+- Restore bounded reusable layout performance for document load, typing, undo,
+  and table mutation while retaining exact shaping, source mappings, and page
+  structure. This hardened equivalent addresses
+  [Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+
+### Compatibility
+
+All 15 crates.io packages in the shared OOXML and PowerPoint family move
+together from 0.5.0 to 0.6.0. This is an intentional pre-1.0 minor boundary.
+Callers that build a `FontManager` directly can use the new caller-alias
+configuration. Existing callers that do not configure aliases retain the same
+deterministic fallback behavior.
+
+The stable Word family remains at its prepared 0.10.0 source boundary while
+this incubating family publishes. `rpptx-wasm` is prepared at 0.6.0 but remains
+unpublished on crates.io. Python, WASM, npm, and PyPI publication authority is
+unchanged.
+
+### Contributors
+
+Atul Sharma maintained the release. Thanks to `@emptinessform` for the caller
+font-alias report and reference implementation in
+[Issue 44](https://github.com/tensorbee/rdocx/issues/44) and
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and for the editor
+performance measurements and migration evidence in
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+
+No named external patch landed directly. Each named report or proposal landed
+through the hardened equivalent described above so that the current bounded
+cache, deterministic fallback, and reusable layout contracts remain intact.
 
 ## v0.10.0
 

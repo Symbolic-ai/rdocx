@@ -987,20 +987,19 @@ docs job and canonical non-fast verification call this same runner.
 The stable 0.10.0 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the incubating family remains at its
-published 0.5.0 boundary and `rpptx-wasm` remains unpublished.
+README requirement. It also proves the incubating family is prepared at 0.6.0
+and `rpptx-wasm` remains unpublished.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.5.0. It separately proves the stable
+15-package publication preflight at 0.6.0. It separately proves the stable
 workspace remains at its prepared 0.10.0 boundary and `rpptx-wasm` remains
 unpublished.
-The published 0.5.0 gate also verifies every selected registry entry and
-owner, the annotated tag target, and byte-identical GitHub release notes before
-the release story completes.
-The stable 0.10.0 release gate verifies every selected registry entry and owner,
-the annotated tag target, byte-identical GitHub release notes, and every
-reviewed record notification before the release story completes.
+The 0.6.0 release gate verifies every selected registry entry and owner, the
+annotated tag target, byte-identical GitHub release notes, and selected record
+notifications before the release story completes. The failed stable 0.10.0
+attempt is not a passing release gate because only two packages published and
+no GitHub release was created.
 
 ## What CI runs
 

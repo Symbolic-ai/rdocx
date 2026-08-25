@@ -894,7 +894,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "oxml-chart"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-cli-support"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde_json",
  "thiserror",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "quick-xml",
  "thiserror",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-drawing"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oxml-core",
  "oxml-opc",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-layout"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "fontdb 0.23.0",
  "harfrust",
@@ -944,11 +944,11 @@ dependencies = [
 
 [[package]]
 name = "oxml-media"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "oxml-opc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aes",
  "base64",
@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-pdf"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "jpeg-encoder",
  "miniz_oxide 0.9.1",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-sml"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oxml-opc",
  "quick-xml",
@@ -1453,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "oxml-chart",
@@ -1472,14 +1472,14 @@ dependencies = [
 
 [[package]]
 name = "rpptx-chart"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oxml-chart",
 ]
 
 [[package]]
 name = "rpptx-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "clap",
  "oxml-cli-support",
@@ -1492,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-layout"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oxml-chart",
  "oxml-drawing",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-oxml"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oxml-core",
  "oxml-drawing",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-render"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "oxml-drawing",
  "oxml-layout",
@@ -1536,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "rpptx-wasm"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "js-sys",
  "oxml-opc",

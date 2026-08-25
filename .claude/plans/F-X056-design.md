@@ -36,10 +36,12 @@ that stable packages consume.
 ## Approach
 
 Move all 15 publishable incubating manifests and the unpublished
-`rpptx-wasm` preparation member from 0.5.0 to 0.6.0. Move the 16 incubating
-workspace pins, lockfile records, README requirements, CI literals, WASM
+`rpptx-wasm` preparation member from 0.5.0 to 0.6.0. Move the 15 incubating
+workspace pins, 16 lockfile records, README requirements, CI literals, WASM
 package metadata, release regressions, publish preflight name, and reviewed
-changelog section in the same prepared commit. Keep the stable workspace and
+changelog section in the same prepared commit. Correct repository guidance
+that otherwise describes the partial v0.10.0 attempt as a complete release.
+Keep the stable workspace and
 all stable pins at 0.10.0 for this release SHA.
 
 The reviewed `rpptx-v0.6.0` notes cover only selected-family changes since
@@ -65,15 +67,14 @@ does F-X057 change stable carriers or dependency pins.
   attempt and is forbidden.
 - Re-running the failed workflow would stop on duplicate stable versions before
   reaching the missing dependency.
-- Bumping stable packages at the same SHA would make the retained
-  `oxml-drawing` dependency require an unpublished stable version during the
-  incubating release.
+- Bumping stable packages at the same SHA would combine two independently
+  approved family releases and destroy the registry boundary F-X057 must test.
 
 ## Test plan
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | `test_incubating_release_family_is_prepared_at_0_6_0` | All 16 incubating manifests and pins, lock entries, README requirements, WASM metadata, publication flags, and CI literals agree at 0.6.0 while stable remains 0.10.0. |
+| regression | `test_incubating_release_family_is_prepared_at_0_6_0` | All 15 publishable manifests and workspace pins plus the unpublished WASM preparation manifest, lock entries, README requirements, publication flags, and CI literals agree at 0.6.0 while stable remains 0.10.0. |
 | workflow | `python3 -m unittest scripts.test_sprint_workflow` | Exact family allowlists, dependency order, release-note selection, contribution inventory, notifications, and tag authority remain mutation-tested. |
 | release notes | `release-notes rpptx-v0.6.0 --check` and `--render` | One deterministic selected-family section contains complete highlights, additions, fixes, compatibility guidance, and authenticated credit. |
 | metadata | `cargo metadata --no-deps` | Exactly 15 incubating packages are publishable at 0.6.0, the preparation-only member remains unpublished, and stable stays at 0.10.0. |
@@ -118,11 +119,11 @@ only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Preserve the failed v0.10.0 tag and record its exact partial registry state.
-- [ ] Move every incubating manifest, pin, lock record, README, WASM and CI literal, release regression, and workflow preflight to 0.6.0.
-- [ ] Prepare and validate the selected-family `rpptx-v0.6.0` notes and three-record contribution inventory.
-- [ ] Verify metadata, dependency order, binding isolation, package contents, archive limits, and supply chain.
-- [ ] Run the full workspace gate, deterministic hash harness, and all risk riders.
+- [x] Preserve the failed v0.10.0 tag and record its exact partial registry state.
+- [x] Move every incubating manifest, pin, lock record, README, WASM and CI literal, release regression, and workflow preflight to 0.6.0.
+- [x] Prepare and validate the selected-family `rpptx-v0.6.0` notes and three-record contribution inventory.
+- [x] Verify metadata, dependency order, binding isolation, package contents, archive limits, and supply chain.
+- [x] Run the full workspace gate, deterministic hash harness, and all risk riders.
 - [ ] Reach a clean microscope and sprint review at the exact prepared SHA.
 - [ ] Stop at `/release rpptx-v0.6.0` for separate final approval.
 - [ ] After approval, verify 15 registry entries, owners, tag, release body, and three notification URLs without changing record states.

@@ -3228,12 +3228,12 @@ graph uses shared layout APIs added after the immutable 0.5.0 registry
 boundary. `rdocx-layout` therefore cannot verify against crates.io until the
 current shared family has its own reviewed release.
 
-Move all 15 publishable incubating manifests, the 16 workspace pins and
-preparation members, lockfile records, README requirements, WASM metadata, CI
+Move all 15 publishable incubating manifests, the 15 workspace pins, the
+sixteenth preparation-only manifest, lockfile records, README requirements,
+WASM metadata, CI
 literals, release regressions, and the reviewed changelog section to 0.6.0.
-Keep the stable family at 0.10.0 while this tag publishes because
-`oxml-drawing` retains its reviewed dependency on the already published
-`rdocx-oxml@0.10.0`. The exact registry set, owners, annotated tag, release body,
+Keep the stable family at 0.10.0 while this separate tag publishes. The exact
+registry set, owners, annotated tag, release body,
 and selected-family contribution notifications verify before F-X057 starts.
 
 **Depends on**: F-X051, F-X052, F-X053, F-X054.

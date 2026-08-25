@@ -326,7 +326,7 @@ jobs:
           }
 
           verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" "0.10.0" "rdocx_wasm"
-          verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" "0.5.0" "rpptx_wasm"
+          verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" "0.6.0" "rpptx_wasm"
 
   release-regressions:
     name: Release regressions
