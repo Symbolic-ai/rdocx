@@ -8,7 +8,7 @@ layout models already established. Write the supported ODT fidelity boundary,
 export reflowable EPUB 3 from document structure, and export searchable SVG
 pages from the shared `PageFrame` contract with explicit diagnostics for every
 lossy conversion. Audit PRs 47 through 52 against the current reader and
-preservation contracts, then publish the stable family at v0.10.0 with reviewed
+preservation contracts, then publish the stable family at v0.10.1 with reviewed
 compatibility notes and authenticated contributor credit. The partial v0.10.0
 publication proved that the current stable source graph needs shared layout
 changes made after incubating 0.5.0. Complete the recovery by publishing the
@@ -43,7 +43,7 @@ incubating family at 0.6.0, then the stable family at 0.10.1.
 | F-X054 | Integrate PRs 47 through 52 | L | done | |
 | F-X055 | Tag v0.10.0 | S | archived | |
 | F-X056 | Tag rpptx-v0.6.0 | S | done | |
-| F-X057 | Tag v0.10.1 | S | pending | - |
+| F-X057 | Tag v0.10.1 | S | in-progress | codex |
 
 ## Sequencing note
 

@@ -121,13 +121,13 @@ and dependency versions only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Verify F-X056 registry entries, owners, tag, and release body before changing stable carriers.
-- [ ] Move every stable version carrier, binding literal, README, lock entry, test expectation, and workflow preflight to 0.10.1.
-- [ ] Pin every shared dependency requirement to the published 0.6.0 family.
-- [ ] Add the unpatched registry dependency proof that reproduces and closes the v0.10.0 failure.
-- [ ] Prepare and validate the complete `v0.10.1` notes and nine-record contribution inventory.
-- [ ] Verify metadata, binding isolation, package contents, archive limits, and supply chain.
-- [ ] Run the full workspace gate, deterministic hash harness, and all risk riders.
+- [x] Verify F-X056 registry entries, owners, tag, and release body before changing stable carriers.
+- [x] Move every stable version carrier, binding literal, README, lock entry, test expectation, and workflow preflight to 0.10.1.
+- [x] Pin every shared dependency requirement to the published 0.6.0 family.
+- [x] Add the unpatched registry dependency proof that reproduces and closes the v0.10.0 failure.
+- [x] Prepare and validate the complete `v0.10.1` notes and nine-record contribution inventory.
+- [x] Verify metadata, binding isolation, package contents, archive limits, and supply chain.
+- [x] Run the full workspace gate, deterministic hash harness, and all risk riders.
 - [ ] Reach a clean microscope and sprint review at the exact prepared SHA.
 - [ ] Stop at `/release v0.10.1` for separate final approval.
 - [ ] After approval, verify seven registry entries, owners, tag, release body, nine notification URLs, and six authorized PR closures.

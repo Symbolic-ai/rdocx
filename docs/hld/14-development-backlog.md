@@ -3179,46 +3179,27 @@ no unreviewed breaking change.
 
 ### F-X055, Tag v0.10.0 (S)
 
-Prepare and publish the exact seven-package stable family at v0.10.0 after the
-M18 writers and F-X054 are complete. The family remains in its pre-1.0 beta
-train. Before 1.0, public API additions or incompatibilities and internal-only
-new functionality use a minor release, while repair-only compatible behavior
-uses a patch release. At and after 1.0, incompatible public API changes require
-a major release, compatible additions require a minor release, and compatible
-fixes require a patch release. S56 adds public ODT, EPUB, SVG, and ordered
-reader APIs, while PR 51 also removes a public `Copy` guarantee and extends an
-exhaustive public enum. The next stable version is therefore 0.10.0, with the
-source incompatibility named in the compatibility section rather than hidden
-or used to claim premature 1.0 stability. The incubating family remains at its
-published 0.5.0 boundary unless a separately reviewed public dependency change
-proves another family release is required.
+The immutable v0.10.0 attempt prepared the exact seven-package stable family
+after the M18 writers and F-X054, with the intentional pre-1.0 compatibility
+boundary documented in its reviewed notes. The annotated tag was created at
+the reviewed S56 SHA, and the workflow published `rdocx-opc` and `rdocx-oxml`.
+Package verification then stopped at `rdocx-layout` because its source used a
+shared layout API newer than the published 0.5.0 shared family. The other five
+stable packages and the GitHub release were not published.
 
-The reviewed changelog section covers only the stable family and contains
-meaningful highlights, additions, fixes, compatibility guidance, and
-contributor credit. Its selected-family inventory includes Issue 44, PR 45,
-and Issue 46 for the S54 and S55 caller-font, performance, and migration work,
-plus PRs 47 through 52 for the reader work. It links every record directly and
-credits authenticated contributors `@emptinessform` and `@pedroassumpcao` for
-their specific outcomes. Direct and hardened-equivalent classifications must
-match the reviewed implementation. Python, WASM, npm, PyPI, and incubating
-publication remain unauthorized.
-
-Publication requires a fresh explicit approval at the exact reviewed SHA.
-After the stable crates, GitHub tag, and byte-identical release body verify,
-post the prepared release-bound comment to every included record. F-X054
-explicitly authorizes closing PRs 47 through 52 at that point with their true
-integration status. Earlier approval to plan or implement S56 does not satisfy
-the final release boundary.
+The v0.10.0 tag and two registry entries remain immutable. No contribution
+notification or PR 47 through 52 closure is attributed to that partial
+attempt. F-X056 publishes the required shared family at 0.6.0, and F-X057 owns
+the coherent seven-package stable recovery at 0.10.1, including the reviewed
+notes, contributor notifications, and authorized PR closures. Python, WASM,
+npm, PyPI, and incubating publication were not authorized by the v0.10.0 tag.
 
 **Depends on**: F-180, F-181, F-182, F-X051, F-X052, F-X053, F-X054.
-**Test gate**: release. The stable metadata and public API regressions, full
-verification, exact 22-package dry run, archive inventory, supply-chain gate,
-binding and WASM isolation, release-note validation, selected-family
-contribution inventory, and declared hash result pass at one reviewed SHA.
-After separate final approval, all seven stable crates resolve from crates.io
-at 0.10.0, the GitHub release body is byte-identical to the reviewed v0.10.0
-changelog section, and every included issue and pull request has a verified
-release comment URL.
+**Test gate**: release. Preparation, full verification, package dry runs,
+binding isolation, notes, inventory, and the declared hash result passed at the
+reviewed SHA. Publication did not complete because the shared registry graph
+could not verify `rdocx-layout`. The immutable partial result is the input to
+the F-X056 and F-X057 recovery gates, not a completed stable-family release.
 
 ### F-X056, Tag rpptx-v0.6.0 (S)
 
@@ -3246,10 +3227,10 @@ package publishes from this tag.
 
 ### F-X057, Tag v0.10.1 (S)
 
-Recover the stable family after the immutable partial v0.10.0 attempt. Move the
-workspace version, all seven stable packages, stable workspace pins, binding
+The stable workspace, all seven stable packages, stable workspace pins, binding
 metadata, README requirements, CI literals, lockfile records, release
-regressions, and reviewed notes to 0.10.1. Pin every shared dependency to the
+regressions, and reviewed notes are prepared at 0.10.1 after the immutable
+partial v0.10.0 attempt. Every shared dependency is pinned to the
 verified incubating 0.6.0 family from F-X056.
 
 The 0.10.1 notes describe the complete stable outcome and the v0.10.0 partial

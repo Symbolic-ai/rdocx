@@ -1644,7 +1644,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.10.0" "rdocx_wasm"',
+            '"0.10.1" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.6.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -3986,8 +3986,92 @@ class SprintWorkflowTests(unittest.TestCase):
             with self.subTest(credit=credit), self.assertRaises(AssertionError):
                 self.assert_stable_collaboration_release_notes_contract(mutated)
 
-    def test_stable_release_family_is_prepared_at_0_10_0(self) -> None:
-        expected_version = "0.10.0"
+    def assert_v0_10_1_release_notes_truth_contract(self, changelog: str) -> str:
+        notes = workflow.render_release_notes(changelog, "v0.10.1")
+        for record in (
+            "https://github.com/tensorbee/rdocx/issues/44",
+            "https://github.com/tensorbee/rdocx/pull/45",
+            "https://github.com/tensorbee/rdocx/issues/46",
+            "https://github.com/tensorbee/rdocx/pull/47",
+            "https://github.com/tensorbee/rdocx/pull/48",
+            "https://github.com/tensorbee/rdocx/pull/49",
+            "https://github.com/tensorbee/rdocx/pull/50",
+            "https://github.com/tensorbee/rdocx/pull/51",
+            "https://github.com/tensorbee/rdocx/pull/52",
+        ):
+            self.assertEqual(notes.count(record), 2, record)
+        for contributor in ("@emptinessform", "@pedroassumpcao"):
+            self.assertGreaterEqual(notes.count(contributor), 1, contributor)
+
+        highlights = notes.split("### Highlights\n\n", 1)[1].split(
+            "\n### Added", 1
+        )[0]
+        highlight_paragraphs = [
+            " ".join(paragraph.split()) for paragraph in highlights.split("\n\n")
+        ]
+        self.assertEqual(
+            highlight_paragraphs[1],
+            "This patch release recovers the complete stable family after v0.10.0 "
+            "published only `rdocx-opc` and `rdocx-oxml`, then stopped during "
+            "`rdocx-layout` package verification. Version 0.10.1 is the first "
+            "complete stable family carrying the S56 outcome.",
+        )
+
+        compatibility = notes.split("### Compatibility\n\n", 1)[1].split(
+            "\n### Contributors", 1
+        )[0]
+        compatibility_paragraphs = [
+            " ".join(paragraph.split())
+            for paragraph in compatibility.split("\n\n")
+        ]
+        self.assertEqual(
+            compatibility_paragraphs[1],
+            "The immutable v0.10.0 attempt contains only `rdocx-opc` and "
+            "`rdocx-oxml`. Callers should select 0.10.1 for a coherent "
+            "seven-package stable graph. No v0.10.0 tag or registry entry was "
+            "moved, replaced, or reused.",
+        )
+
+        contributor_paragraphs = [
+            " ".join(paragraph.split())
+            for paragraph in notes.split("### Contributors\n\n", 1)[1].split(
+                "\n\n"
+            )
+        ]
+        self.assertEqual(
+            contributor_paragraphs[0],
+            "Atul Sharma maintained the release. Thanks to `@emptinessform` "
+            "for the caller font-alias report and "
+            "reference implementation in [Issue "
+            "44](https://github.com/tensorbee/rdocx/issues/44) and [PR "
+            "45](https://github.com/tensorbee/rdocx/pull/45), and for the editor "
+            "performance measurements and migration evidence in [Issue "
+            "46](https://github.com/tensorbee/rdocx/issues/46).",
+        )
+        self.assertEqual(
+            contributor_paragraphs[1],
+            "Thanks to `@pedroassumpcao` for the ordered cell, run, paragraph, "
+            "and hyperlink reader designs in [PR "
+            "47](https://github.com/tensorbee/rdocx/pull/47), [PR "
+            "48](https://github.com/tensorbee/rdocx/pull/48), and [PR "
+            "49](https://github.com/tensorbee/rdocx/pull/49), the unsupported "
+            "XML facts in [PR 50](https://github.com/tensorbee/rdocx/pull/50), "
+            "producer-defined numbering preservation in [PR "
+            "51](https://github.com/tensorbee/rdocx/pull/51), and fail-closed "
+            "text decoding in [PR 52](https://github.com/tensorbee/rdocx/pull/52).",
+        )
+        direct_classification = (
+            "No named external patch landed directly. Each named report or "
+            "proposal landed through the hardened equivalent described above so "
+            "that current namespace, non-exhaustive API, bounded-allocation, "
+            "diagnostic, and compatibility contracts remain intact."
+        )
+        self.assertEqual(contributor_paragraphs[2], direct_classification)
+        self.assertEqual(" ".join(contributor_paragraphs).count("landed directly"), 1)
+        return notes
+
+    def test_stable_release_family_is_prepared_at_0_10_1(self) -> None:
+        expected_version = "0.10.1"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -4111,13 +4195,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.10.0"', 'version = "0.10.0"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.10.0'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.10.0"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.10.0"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.10.0"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.10.0"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.10.0"',),
+            "README.md": ('rdocx = "0.10.1"', 'version = "0.10.1"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.10.1'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.10.1"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.10.1"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.10.1"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.10.1"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.10.1"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -4151,49 +4235,56 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             publish.count(
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_10_0"
+                "test_stable_release_family_is_prepared_at_0_10_1"
             ),
             1,
         )
 
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        notes = workflow.render_release_notes(changelog, "v0.10.0")
-        for record in (
-            "https://github.com/tensorbee/rdocx/issues/44",
-            "https://github.com/tensorbee/rdocx/pull/45",
-            "https://github.com/tensorbee/rdocx/issues/46",
-            "https://github.com/tensorbee/rdocx/pull/47",
-            "https://github.com/tensorbee/rdocx/pull/48",
-            "https://github.com/tensorbee/rdocx/pull/49",
-            "https://github.com/tensorbee/rdocx/pull/50",
-            "https://github.com/tensorbee/rdocx/pull/51",
-            "https://github.com/tensorbee/rdocx/pull/52",
-        ):
-            self.assertEqual(notes.count(record), 2, record)
-        for contributor in ("@emptinessform", "@pedroassumpcao"):
-            self.assertGreaterEqual(notes.count(contributor), 1, contributor)
-        self.assertIn("hardened equivalent", notes)
-        self.assertIn("landed directly", notes)
+        notes = self.assert_v0_10_1_release_notes_truth_contract(changelog)
+        self.assertIn("published at 0.6.0", notes)
 
-    def test_release_notes_v0_10_0_reconcile_release_inventory(self) -> None:
+    def test_rdocx_layout_verifies_against_published_shared_family(self) -> None:
+        root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            root["workspace"]["dependencies"]["oxml-layout"]["version"],
+            "0.6.0",
+        )
+        command = (
+            "cargo",
+            "publish",
+            "-p",
+            "rdocx-layout",
+            "--dry-run",
+            "--allow-dirty",
+            "--config",
+            'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"',
+        )
+        self.assertFalse(any("patch.crates-io.oxml-layout" in arg for arg in command))
+        with tempfile.TemporaryDirectory(prefix="rdocx-layout-registry-") as temp:
+            env = os.environ.copy()
+            env["CARGO_HOME"] = str(Path(temp) / "cargo-home")
+            completed = subprocess.run(
+                command,
+                cwd=workflow.REPO,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+        self.assertIn(
+            "rdocx-layout v0.10.1",
+            completed.stdout + completed.stderr,
+        )
+
+    def test_release_notes_v0_10_1_reconcile_release_inventory(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        notes = workflow.render_release_notes(changelog, "v0.10.0")
-        for record in (
-            "https://github.com/tensorbee/rdocx/issues/44",
-            "https://github.com/tensorbee/rdocx/pull/45",
-            "https://github.com/tensorbee/rdocx/issues/46",
-            "https://github.com/tensorbee/rdocx/pull/47",
-            "https://github.com/tensorbee/rdocx/pull/48",
-            "https://github.com/tensorbee/rdocx/pull/49",
-            "https://github.com/tensorbee/rdocx/pull/50",
-            "https://github.com/tensorbee/rdocx/pull/51",
-            "https://github.com/tensorbee/rdocx/pull/52",
-        ):
-            self.assertEqual(notes.count(record), 2, record)
-        for contributor in ("@emptinessform", "@pedroassumpcao"):
-            self.assertGreaterEqual(notes.count(contributor), 1, contributor)
-        self.assertIn("hardened equivalent", notes)
-        self.assertIn("landed directly", notes)
+        notes = self.assert_v0_10_1_release_notes_truth_contract(changelog)
         normalized_notes = " ".join(notes.split())
         for addition in (
             "exact selected pages",
@@ -4204,6 +4295,47 @@ class SprintWorkflowTests(unittest.TestCase):
             "Word and PowerPoint CLI paths",
         ):
             self.assertIn(addition, normalized_notes, addition)
+
+    def test_release_notes_v0_10_1_reject_reversed_landing_truth(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        stable_notes = workflow.render_release_notes(changelog, "v0.10.1")
+        mutated_notes = stable_notes.replace(
+            "No named external patch landed directly.",
+            "A named external patch landed directly.",
+            1,
+        )
+        self.assertNotEqual(mutated_notes, stable_notes)
+        mutated = changelog.replace(stable_notes, mutated_notes, 1)
+        with self.assertRaises(AssertionError):
+            self.assert_v0_10_1_release_notes_truth_contract(mutated)
+
+    def test_release_notes_v0_10_1_reject_expanded_partial_inventory(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        stable_notes = workflow.render_release_notes(changelog, "v0.10.1")
+        mutated_notes = stable_notes.replace(
+            "contains only `rdocx-opc` and `rdocx-oxml`.",
+            "contains only `rdocx-opc`, `rdocx-oxml`, and `rdocx-layout`.",
+            1,
+        )
+        self.assertNotEqual(mutated_notes, stable_notes)
+        mutated = changelog.replace(stable_notes, mutated_notes, 1)
+        with self.assertRaises(AssertionError):
+            self.assert_v0_10_1_release_notes_truth_contract(mutated)
+
+    def test_release_notes_v0_10_1_reject_swapped_contributor_credits(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        stable_notes = workflow.render_release_notes(changelog, "v0.10.1")
+        mutated_notes = stable_notes.replace(
+            "@emptinessform", "@credit-swap", 1
+        ).replace(
+            "@pedroassumpcao", "@emptinessform", 1
+        ).replace(
+            "@credit-swap", "@pedroassumpcao", 1
+        )
+        self.assertNotEqual(mutated_notes, stable_notes)
+        mutated = changelog.replace(stable_notes, mutated_notes, 1)
+        with self.assertRaises(AssertionError):
+            self.assert_v0_10_1_release_notes_truth_contract(mutated)
 
     def test_release_notes_v0_9_0_include_marked_content_migration(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -4334,7 +4466,7 @@ class SprintWorkflowTests(unittest.TestCase):
         preparation_packages = (*incubating_packages, "rpptx-wasm")
         expected_version = "0.6.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.10.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.10.1")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -5420,7 +5552,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_10_0",
+                "test_stable_release_family_is_prepared_at_0_10_1",
                 1,
             ),
             "job-condition": ci.replace(
@@ -5656,20 +5788,25 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_10_0"
+            "test_stable_release_family_is_prepared_at_0_10_1"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
             "test_incubating_release_family_is_prepared_at_0_6_0"
         )
+        registry_check = (
+            "scripts.test_sprint_workflow.SprintWorkflowTests."
+            "test_rdocx_layout_verifies_against_published_shared_family"
+        )
         metadata_command = (
             "python3 -m unittest "
-            f"{stable_check} {incubating_check}"
+            f"{stable_check} {registry_check} {incubating_check}"
         )
 
         self.assert_publish_preflight_contract(publish)
         self.assertEqual(publish.count(metadata_command), 1)
-        self.assertLess(publish.index(stable_check), publish.index(incubating_check))
+        self.assertLess(publish.index(stable_check), publish.index(registry_check))
+        self.assertLess(publish.index(registry_check), publish.index(incubating_check))
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
             publish.index(metadata_command),
@@ -6097,7 +6234,7 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace(
-                    "prepared at\n  0.10.0",
+                    "prepared at\n  0.10.1",
                     "prepared at\n  0.2.0",
                     1,
                 ),

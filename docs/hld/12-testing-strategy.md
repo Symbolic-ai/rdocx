@@ -984,7 +984,7 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.10.0 regression pins all eleven inherited version
+The stable 0.10.1 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the incubating family is prepared at 0.6.0
@@ -993,8 +993,12 @@ The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
 15-package publication preflight at 0.6.0. It separately proves the stable
-workspace remains at its prepared 0.10.0 boundary and `rpptx-wasm` remains
+workspace remains at its prepared 0.10.1 boundary and `rpptx-wasm` remains
 unpublished.
+The stable dependency recovery gate packages and verifies `rdocx-layout`
+against registry `oxml-layout@0.6.0` while patching only the not-yet-published
+stable `rdocx-oxml@0.10.1` dependency to local source. It therefore exercises
+the exact unpatched shared edge that stopped v0.10.0.
 The 0.6.0 release gate verified every selected registry entry and owner, the
 annotated tag target, byte-identical GitHub release notes, and selected record
 notifications at reviewed SHA

@@ -233,7 +233,7 @@ no crates.io publication path.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.10.0, nine internal pins, eleven
+stable regression requires workspace 0.10.1, nine internal pins, eleven
 inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
 set. The incubating regression requires the exact 0.6.0 versions, pins,
@@ -311,7 +311,7 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group and its two Python
-project versions and rdocx WASM contract literals remain prepared at 0.10.0.
+project versions and rdocx WASM contract literals are prepared at 0.10.1.
 The immutable v0.10.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed. The remaining five packages and GitHub
 release were not published. The last complete stable family is 0.9.0 from the
