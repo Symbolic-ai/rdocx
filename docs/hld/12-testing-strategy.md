@@ -640,6 +640,38 @@ destination only after its digest matches. `--check` verifies the complete
 directory without changing it. The primary workspace-test and MSRV jobs fetch
 both pinned corpora before running Cargo tests.
 
+## The Word render fidelity gate
+
+The five-document Word corpus is rendered at 150 dpi through the production
+`rdocx-cli render` command and its bundled-font deterministic layout. Exact
+LibreOffice Writer 26.2.5.2 build
+`cd7284b4cbbfeb507e630c1aac019f4157393acb` opens an accepted copy through an
+isolated profile and exports `writer_pdf_Export`. The copy is prepared through
+the existing `rdocx::Document::accept_all` API by a locked, offline, untracked
+helper. The harness reopens it and rejects remaining modeled revisions before
+Writer runs. Exact pdftoppm 26.01.0 rasterises every oracle page at 150 dpi.
+
+The harness scores the union of page indices through the larger Rust or oracle
+page count for each document. It composites unequal dimensions at the top left
+of a shared white canvas sized to the maximum width and height. A page missing
+from one side receives a blank white counterpart. The TSV records document,
+category, page index, both original dimensions, normalization action, SSIM, and
+both paths. JSON evidence records per-document Rust, oracle, and union page
+counts plus dimension mismatch and unmatched-page totals.
+
+The reviewed calibration contains 18 Rust pages and 16 oracle pages across 18
+union indices. Fourteen paired pages need one-pixel white-canvas normalization,
+and two Rust-only pages use blank oracle counterparts. One of 18 pages reaches
+0.95 SSIM. Coverage is 0.055555556, minimum is 0.020380485, median is
+0.067698319, and maximum is 0.974913551. These results expose current fidelity
+and do not change the advisory target.
+
+**Trend reference: at least 0.95 SSIM on at least 80 percent of pages. Hard
+automatic gate: the exact corpus and tool identities match, both renderers
+succeed with nonzero output, and the expected TSV and JSON artifacts exist and
+are nonempty.** Page-count differences, dimension differences, and a missed
+trend are scored evidence rather than orchestration failures.
+
 ## The M11 cross-viewer acceptance gate
 
 The M11 gate uses one deterministic ten-slide deck built from the checked-in
@@ -1047,7 +1079,7 @@ parallel, or failure-swallowing invocation.
 
 | Job | Command |
 |---|---|
-| changes | On pushes and pull requests, classify changed paths for the eight filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
+| changes | On pushes and pull requests, classify changed paths for the nine filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
 | test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch both pinned corpora, run the exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
@@ -1055,6 +1087,7 @@ parallel, or failure-swallowing invocation.
 | release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
+| word-fidelity | Fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
@@ -1066,12 +1099,12 @@ parallel, or failure-swallowing invocation.
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
 
 The `changes` job routes `test`, `msrv`, `wasm`, `python-bindings`,
-`presentation-fidelity`, `hash-harness`, `supply-chain`, and `prose` through
-inline fail-safe path filters. Every filter selects `ci.yml`, so a routing edit
-cannot suppress its own gate. Product and toolchain paths include each job's
-transitive workspace inputs. A documentation-only HLD change selects `prose`
-and skips the filtered product jobs. The supply-chain job also runs on the
-weekly schedule without change detection.
+`presentation-fidelity`, `word-fidelity`, `hash-harness`, `supply-chain`, and
+`prose` through inline fail-safe path filters. Every filter selects `ci.yml`,
+so a routing edit cannot suppress its own gate. Product and toolchain paths
+include each job's transitive workspace inputs. A documentation-only HLD
+change selects `prose` and skips the filtered product jobs. The supply-chain
+job also runs on the weekly schedule without change detection.
 
 `ci-gate` has `if: always()` and depends on the detector plus every filtered
 job. It accepts only `success` for a selected job and only `skipped` for an

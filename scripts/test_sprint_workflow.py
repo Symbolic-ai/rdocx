@@ -166,6 +166,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm",
             "python_bindings",
             "presentation_fidelity",
+            "word_fidelity",
             "hash_harness",
             "supply_chain",
             "prose",
@@ -208,6 +209,10 @@ class SprintWorkflowTests(unittest.TestCase):
             ),
             "presentation_fidelity": (
                 "scripts/pptx-corpus-manifest.tsv",
+                "docs/hld/00-vision.md",
+            ),
+            "word_fidelity": (
+                "scripts/docx_ssim_harness.py",
                 "docs/hld/00-vision.md",
             ),
             "hash_harness": (
@@ -361,6 +366,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm",
             "python-bindings",
             "presentation-fidelity",
+            "word-fidelity",
             "hash-harness",
             "prose",
         ):
@@ -397,6 +403,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm",
             "python-bindings",
             "presentation-fidelity",
+            "word-fidelity",
             "hash-harness",
             "supply-chain",
             "prose",
@@ -419,6 +426,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 "PYTHON_BINDINGS_RESULT: ${{ needs['python-bindings'].result }}",
                 "PRESENTATION_FIDELITY_SELECTED: ${{ needs.changes.outputs.presentation_fidelity }}",
                 "PRESENTATION_FIDELITY_RESULT: ${{ needs['presentation-fidelity'].result }}",
+                "WORD_FIDELITY_SELECTED: ${{ needs.changes.outputs.word_fidelity }}",
+                "WORD_FIDELITY_RESULT: ${{ needs['word-fidelity'].result }}",
                 "HASH_HARNESS_SELECTED: ${{ needs.changes.outputs.hash_harness }}",
                 "HASH_HARNESS_RESULT: ${{ needs['hash-harness'].result }}",
                 "SUPPLY_CHAIN_SELECTED: ${{ needs.changes.outputs.supply_chain }}",
@@ -550,7 +559,12 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn('os.environ.get("GITHUB_PATH")', installer)
 
     def assert_libreoffice_consumers_contract(self, ci: str) -> None:
-        for job_name in ("test", "msrv"):
+        consumers = {
+            "test": "Run full workspace suite",
+            "msrv": "Run full workspace suite",
+            "word-fidelity": "Run all-page Word SSIM trend and completeness gate",
+        }
+        for job_name, use_step in consumers.items():
             job = self.yaml_block(ci, f"  {job_name}:")
             self.assertIn("runs-on: ubuntu-24.04", job)
             install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
@@ -558,17 +572,18 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.yaml_direct_lines(install, 8),
                 ("run: python3 scripts/install_pinned_libreoffice.py",),
             )
-            test_step = self.yaml_step(job, "Run full workspace suite")
+            test_step = self.yaml_step(job, use_step)
             self.assertLess(job.index(install), job.index(test_step))
             self.assertNotIn("continue-on-error", install)
             self.assert_no_success_short_circuit(self.operative_lines(install))
-        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 2)
+        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 3)
 
     def assert_poppler_consumers_contract(self, ci: str) -> None:
         consumers = {
             "test": "cargo test --workspace",
             "python-bindings": "Run full Python binding suite",
             "presentation-fidelity": "Run all-slide SSIM trend and completeness gate",
+            "word-fidelity": "Run all-page Word SSIM trend and completeness gate",
             "msrv": "cargo test --workspace",
         }
         for job_name, use_marker in consumers.items():
@@ -588,9 +603,91 @@ class SprintWorkflowTests(unittest.TestCase):
                     for line in self.operative_lines(job)
                 )
             )
-        self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 4)
+        self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 5)
         self.assertNotIn("brew install poppler", ci)
         self.assertNotIn("apt-get install poppler-utils", ci)
+
+    def assert_word_fidelity_ci_contract(self, ci: str) -> None:
+        job = self.yaml_block(ci, "  word-fidelity:")
+        self.assertIn("runs-on: ubuntu-24.04", self.yaml_direct_lines(job, 4))
+        steps = self.yaml_steps(job)
+        self.assertEqual(
+            self.yaml_step_actions(steps[0]),
+            ("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",),
+        )
+        self.assertEqual(
+            self.yaml_step_actions(steps[1]),
+            ("dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",),
+        )
+        self.assertIn("toolchain: 1.97.1", self.operative_lines(steps[1]))
+        fetch = self.yaml_step(job, "Fetch pinned Word corpus")
+        gate = self.yaml_step(
+            job, "Run all-page Word SSIM trend and completeness gate"
+        )
+        upload = self.yaml_step(job, "Retain Word fidelity evidence")
+        self.assertEqual(
+            self.yaml_direct_lines(fetch, 8),
+            ("run: python3 scripts/fetch_docx_corpus.py",),
+        )
+        self.assertEqual(
+            self.operative_lines(gate),
+            (
+                "- name: Run all-page Word SSIM trend and completeness gate",
+                "run: >-",
+                "python3 scripts/docx_ssim_harness.py --check",
+                '--output-dir "${RUNNER_TEMP}/word-fidelity"',
+            ),
+        )
+        self.assertIn("if: always()", self.operative_lines(upload))
+        self.assertIn(
+            "${{ runner.temp }}/word-fidelity/gate-evidence.json", upload
+        )
+        self.assertIn("${{ runner.temp }}/word-fidelity/ssim-results.tsv", upload)
+        self.assertIn("if-no-files-found: error", self.operative_lines(upload))
+        self.assertNotIn("continue-on-error", job)
+        self.assertLess(job.index(fetch), job.index(gate))
+        self.assertLess(job.index(gate), job.index(upload))
+
+    def test_word_fidelity_ci_gate_rejects_weakened_invocations(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_word_fidelity_ci_contract(ci)
+        job = self.yaml_block(ci, "  word-fidelity:")
+        gate = self.yaml_step(
+            job, "Run all-page Word SSIM trend and completeness gate"
+        )
+        upload = self.yaml_step(job, "Retain Word fidelity evidence")
+        mutations = {
+            "missing-gate": ci.replace(gate, "", 1),
+            "self-test-only": ci.replace(
+                gate, gate.replace("--check", "--self-test", 1), 1
+            ),
+            "no-evidence-output": ci.replace(
+                '          --output-dir "${RUNNER_TEMP}/word-fidelity"\n', "", 1
+            ),
+            "swallowed": ci.replace(
+                gate,
+                gate.replace(
+                    "        run: >-\n",
+                    "        continue-on-error: true\n        run: >-\n",
+                    1,
+                ),
+                1,
+            ),
+            "missing-json": ci.replace(
+                "            ${{ runner.temp }}/word-fidelity/gate-evidence.json\n",
+                "",
+                1,
+            ),
+            "warning-artifact": ci.replace(
+                upload, upload.replace("if-no-files-found: error", "if-no-files-found: warn"), 1
+            ),
+        }
+        for label, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, label)
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_word_fidelity_ci_contract(mutated)
 
     def assert_workspace_oracle_environment_contract(self, ci: str) -> None:
         setup_action = (
@@ -873,7 +970,7 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_libreoffice_consumers_contract(ci)
-        for job_name in ("test", "msrv"):
+        for job_name in ("test", "msrv", "word-fidelity"):
             job = self.yaml_block(ci, f"  {job_name}:")
             install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
             for label, mutated_install in {
@@ -1187,7 +1284,13 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_poppler_consumers_contract(ci)
-        for job_name in ("test", "python-bindings", "presentation-fidelity", "msrv"):
+        for job_name in (
+            "test",
+            "python-bindings",
+            "presentation-fidelity",
+            "word-fidelity",
+            "msrv",
+        ):
             marker = f"  {job_name}:"
             job = self.yaml_block(ci, marker)
             step = self.yaml_step(job, "Install pinned Poppler 26.01.0")

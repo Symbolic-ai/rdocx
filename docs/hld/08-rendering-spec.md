@@ -617,6 +617,18 @@ peak and at or above 1,000 pages per second. Layout and PDF timings are separate
 The gate runs in release mode as one exact ignored test with one test thread on
 the pinned Ubuntu 24.04 CI runner.
 
+The Word fidelity harness exercises the production deterministic PNG boundary
+through `rdocx-cli render` at 150 dpi. It compares the union of Rust and oracle
+page indices for each document. Unequal dimensions are composited at the top
+left of a shared white canvas sized to the larger width and height. A page
+present on only one side is compared with a blank white counterpart of the
+same canvas size. Page-count and dimension differences therefore remain visible
+as scored rendering outcomes without changing pagination or raster production.
+Before the external Writer render, the harness uses the existing
+`Document::accept_all` API to create an untracked accepted copy. It reopens that
+copy and rejects remaining modeled revisions, then gives only the accepted copy
+to the isolated LibreOffice profile. The pinned source corpus is never changed.
+
 Each reusable font manager keeps exact shaping results keyed by `FontId`, owned
 source text, and floating-point size bits. The memo is capped at 2,048 entries
 and 16 MiB. Exact hits search newest to oldest but do not refresh FIFO eviction

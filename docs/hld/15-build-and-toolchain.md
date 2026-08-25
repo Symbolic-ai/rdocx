@@ -61,6 +61,11 @@ different TTC indices share one byte buffer. Both process caches are compiled
 only with `system-fonts`, and poisoned file-cache locks recover by rebuilding
 the requested entry.
 
+The Word SSIM harness reaches that deterministic path through the production
+`rdocx-cli render` command. Oracle-only normalization happens after both raster
+trees exist. It cannot alter layout, pagination, font selection, or renderer
+dimensions.
+
 Tagged Word PDFs use the same deterministic layout and writer path. Structure
 node references, page-local MCIDs, parent-tree keys, conditional PDF/UA
 metadata, and XMP bytes are derived only from ordered layout input. A
@@ -395,8 +400,8 @@ repository-specific gates:
 `dorny/paths-filter` v4.0.3 at immutable reviewed commit
 `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d`. Its inline filters cover the full
 inputs of `test`, `msrv`, `wasm`, `python-bindings`,
-`presentation-fidelity`, `hash-harness`, `supply-chain`, and `prose`. Every
-filter also covers the CI workflow itself. The detector alone receives
+`presentation-fidelity`, `word-fidelity`, `hash-harness`, `supply-chain`, and
+`prose`. Every filter also covers the CI workflow itself. The detector alone receives
 `pull-requests: read` in addition to repository content read.
 
 The `ci-gate` job always runs and depends on change detection plus every
@@ -505,9 +510,10 @@ It caps the download at 8 MiB and streams at most 2,048 safe archive members
 with at most 64 MiB of expanded content. A populated prefix fails closed, so a
 successful invocation cannot substitute unrelated binaries that print the
 right version. All three finished tools must report exact 26.01.0 identities.
-Test, MSRV, both Python binding rows, and Presentation fidelity use this single
-unconditional step before any oracle-dependent command. Package managers may
-install build prerequisites but do not install Poppler itself.
+Test, MSRV, both Python binding rows, Presentation fidelity, and Word fidelity
+use this single unconditional step before any oracle-dependent command.
+Package managers may install build prerequisites but do not install Poppler
+itself.
 
 **Pinned corpus-test runtime.** Test and MSRV install uv 0.10.2 with official
 `astral-sh/setup-uv` commit
@@ -518,8 +524,9 @@ pin makes the python-pptx oracle executable available on a clean Ubuntu host.
 The stack budget is scoped to these two corpus-heavy jobs and does not alter
 product runtime behavior.
 
-The same two clean Ubuntu 24.04 jobs install LibreOffice 26.2.5.2 from the official
-Linux x86-64 Debian archive before the workspace suite. The archive SHA-256 is
+The same two clean Ubuntu 24.04 jobs and the Word fidelity job install
+LibreOffice 26.2.5.2 from the official Linux x86-64 Debian archive before the
+oracle-dependent command. The archive SHA-256 is
 `2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e`.
 The installer streams under fixed download, member, and expanded-byte bounds,
 rejects unsafe entries and any populated `/opt/libreoffice26.2` prefix, then
@@ -553,6 +560,21 @@ corpus coverage, renderer or oracle failure, missing output, dimension mismatch,
 or a dropped bounded shape, but not solely on a missed SSIM trend. The job
 retains the gate JSON, render manifest, and per-slide score TSV as its evidence
 artifact.
+
+**A dedicated Word fidelity job** runs on Ubuntu 24.04 with exact Rust 1.97.1,
+LibreOffice Writer 26.2.5.2, and Poppler 26.01.0. It fetches and verifies the
+five-document corpus, runs `scripts/docx_ssim_harness.py --check`, and retains
+the required JSON and TSV evidence. The harness rejects corpus or tool drift,
+renderer or oracle failure, zero output, and a missing or empty evidence
+artifact. It records page-count and dimension differences through union-index
+SSIM scoring and does not fail solely because the 0.95 on 80 percent trend is
+missed. The aggregate CI gate requires success when the path filter selects the
+job.
+The harness prepares each Writer input through a locked, offline helper that
+calls the existing `rdocx::Document::accept_all` API. It reopens the resulting
+untracked copy and rejects remaining modeled revisions before the isolated
+Writer profile exports it. This helper shares the workspace Cargo lock and
+target directory and adds no published dependency or production entry point.
 
 ## Dependency policy
 
