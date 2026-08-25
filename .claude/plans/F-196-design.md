@@ -1,6 +1,6 @@
 # F-196, Word corpus
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S57
 **Size**: M
 **Depends on**: none
@@ -85,14 +85,14 @@ not OOXML, layout, PDF, PNG, or the seven generated samples.
 
 ## Implementation checklist
 
-- [ ] Approve the exact corpus inventory, licence allowlist, and category map.
-- [ ] Add the strict manifest and atomic fetcher.
-- [ ] Reject checksum, membership, path, URL, licence, and category failures.
-- [ ] Add focused standard-library regressions.
-- [ ] Fetch the Word corpus in the test and MSRV jobs.
-- [ ] Update CI contract regressions and the ignored-corpus comment.
-- [ ] Run a live fetch, `--check`, the focused tests, and full verification.
-- [ ] Update exactly the listed HLD files.
+- [x] Approve the exact corpus inventory, licence allowlist, and category map.
+- [x] Add the strict manifest and atomic fetcher.
+- [x] Reject checksum, membership, path, URL, licence, and category failures.
+- [x] Add focused standard-library regressions.
+- [x] Fetch the Word corpus in the test and MSRV jobs.
+- [x] Update CI contract regressions and the ignored-corpus comment.
+- [x] Run a live fetch, `--check`, the focused tests, and full verification.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

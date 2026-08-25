@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import fetch_docx_corpus
 from scripts import readme_doctests
 from scripts import install_pinned_libreoffice
 from scripts import install_pinned_poppler
@@ -1272,6 +1273,133 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     self.yaml_direct_lines(fetch, 8),
                     ("run: python3 scripts/fetch_pptx_corpus.py",),
+                )
+                test_steps = tuple(
+                    step
+                    for step in self.yaml_steps(job)
+                    if "cargo test --workspace" in step
+                )
+                self.assertEqual(len(test_steps), 1)
+                self.assertLess(job.index(fetch), job.index(test_steps[0]))
+                self.assertNotIn("continue-on-error", fetch)
+
+    def test_word_corpus_fetcher_verifies_every_checksum_and_refuses_a_mismatch(
+        self,
+    ) -> None:
+        content = {
+            category: f"{category} content".encode()
+            for category in sorted(fetch_docx_corpus.EXPECTED_CATEGORIES)
+        }
+        entries = [
+            (
+                f"{category}.docx",
+                category,
+                "test-producer",
+                "Apache-2.0",
+                fetch_docx_corpus.LICENCE_URLS["Apache-2.0"],
+                hashlib.sha256(content[category]).hexdigest(),
+                f"https://example.com/{category}.docx",
+            )
+            for category in sorted(fetch_docx_corpus.EXPECTED_CATEGORIES)
+        ]
+        with tempfile.TemporaryDirectory(dir=workflow.REPO) as directory:
+            corpus = Path(directory)
+            for entry in entries:
+                (corpus / entry[0]).write_bytes(content[entry[1]])
+            fetch_docx_corpus.verify_directory(corpus, entries)
+            for entry in entries:
+                source = corpus / entry[0]
+                source.write_bytes(b"changed")
+                with self.subTest(checksum=entry[0]), self.assertRaisesRegex(
+                    ValueError, "digest mismatch"
+                ):
+                    fetch_docx_corpus.verify_directory(corpus, entries)
+                source.write_bytes(content[entry[1]])
+
+            destination = corpus / entries[-1][0]
+            destination.write_bytes(b"stale")
+            temporary = corpus / f".{entries[-1][0]}.download"
+            with contextlib.redirect_stdout(io.StringIO()):
+                with patch.object(
+                    fetch_docx_corpus.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(b"wrong download"),
+                ), self.assertRaisesRegex(ValueError, "digest mismatch"):
+                    fetch_docx_corpus.fetch(corpus, entries)
+            self.assertEqual(destination.read_bytes(), b"stale")
+            self.assertFalse(temporary.exists())
+
+    def test_word_corpus_fetcher_refuses_missing_extra_and_unlicensed_inputs(
+        self,
+    ) -> None:
+        header = (
+            "path\tcategory\tproducer\tlicence\tlicence_url\tsha256\turl\n"
+        )
+        lines = [
+            "\t".join(
+                (
+                    f"{category}.docx",
+                    category,
+                    "test-producer",
+                    "Apache-2.0",
+                    fetch_docx_corpus.LICENCE_URLS["Apache-2.0"],
+                    hashlib.sha256(category.encode()).hexdigest(),
+                    f"https://example.com/{category}.docx",
+                )
+            )
+            for category in sorted(fetch_docx_corpus.EXPECTED_CATEGORIES)
+        ]
+        valid = header + "\n".join(lines) + "\n"
+        with tempfile.TemporaryDirectory(dir=workflow.REPO) as directory:
+            root = Path(directory)
+            manifest = root / "manifest.tsv"
+            manifest.write_text(valid, encoding="utf-8")
+            entries = fetch_docx_corpus.load_manifest(manifest)
+
+            corpus = root / "corpus"
+            corpus.mkdir()
+            for entry in entries:
+                (corpus / entry[0]).write_bytes(entry[1].encode())
+            (corpus / entries[0][0]).unlink()
+            with self.assertRaisesRegex(ValueError, "corpus is missing"):
+                fetch_docx_corpus.verify_directory(corpus, entries)
+            (corpus / entries[0][0]).write_bytes(entries[0][1].encode())
+            (corpus / "extra.docx").write_bytes(b"extra")
+            with self.assertRaisesRegex(ValueError, "unmanifested files"):
+                fetch_docx_corpus.verify_directory(corpus, entries)
+
+            mutations = {
+                "unsafe": valid.replace("business-letter.docx", "../unsafe.docx", 1),
+                "unlicensed": valid.replace("Apache-2.0", "GPL-3.0-only", 1),
+                "incomplete": valid.replace("\tmulti-script\t", "\treport\t", 1),
+                "insecure-source": valid.replace(
+                    "https://example.com/business-letter.docx",
+                    "http://example.com/business-letter.docx",
+                    1,
+                ),
+                "unapproved-licence-url": valid.replace(
+                    fetch_docx_corpus.LICENCE_URLS["Apache-2.0"],
+                    "https://example.com/LICENSE",
+                    1,
+                ),
+            }
+            for label, mutated in mutations.items():
+                with self.subTest(mutation=label):
+                    manifest.write_text(mutated, encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        fetch_docx_corpus.load_manifest(manifest)
+
+    def test_workspace_test_jobs_fetch_the_pinned_word_corpus(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for job_name in ("test", "msrv"):
+            with self.subTest(job=job_name):
+                job = self.yaml_block(ci, f"  {job_name}:")
+                fetch = self.yaml_step(job, "Fetch pinned Word corpus")
+                self.assertEqual(
+                    self.yaml_direct_lines(fetch, 8),
+                    ("run: python3 scripts/fetch_docx_corpus.py",),
                 )
                 test_steps = tuple(
                     step

@@ -153,9 +153,16 @@ archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
 published 0.1.2 package, while the release workflow remains the authority for
 every later publication.
 
-The same treatment applies to `crates/rpptx/assets/default.pptx`. **An asset
-must live under its own crate's directory**: a workspace-root `assets/` compiles
-locally but is not collected into the published tarball.
+The external PowerPoint and Word corpora remain outside every published crate
+under the ignored `corpus/` directory. Their tracked manifests pin immutable
+source URLs and SHA-256 values. The Word manifest also pins one of each required
+category plus the reviewed `Apache-2.0` or `MIT` licence identity and immutable
+licence URL.
+
+A separate crate-local packaging rule applies to
+`crates/rpptx/assets/default.pptx`. **An asset must live under its own crate's
+directory**: a workspace-root `assets/` compiles locally but is not collected
+into the published tarball.
 
 Public API changes in published crates run the verified workspace packaging
 dry run against local patches for every internal crate. Every generated
@@ -497,10 +504,11 @@ install build prerequisites but do not install Poppler itself.
 **Pinned corpus-test runtime.** Test and MSRV install uv 0.10.2 with official
 `astral-sh/setup-uv` commit
 `20cfd1bf945f4377ade1205e4dbc17946fc9a30d`. Each job disables the action cache,
-uses only its runner-temporary uv cache, and runs the broad workspace suite with
-`RUST_MIN_STACK=8388608`. The pin makes the python-pptx oracle executable
-available on a clean Ubuntu host. The stack budget is scoped to these two
-corpus-heavy jobs and does not alter product runtime behavior.
+uses only its runner-temporary uv cache, fetches and verifies both pinned
+corpora, and runs the broad workspace suite with `RUST_MIN_STACK=8388608`. The
+pin makes the python-pptx oracle executable available on a clean Ubuntu host.
+The stack budget is scoped to these two corpus-heavy jobs and does not alter
+product runtime behavior.
 
 The same two clean Ubuntu 24.04 jobs install LibreOffice 26.2.5.2 from the official
 Linux x86-64 Debian archive before the workspace suite. The archive SHA-256 is
