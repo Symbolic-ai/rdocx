@@ -507,5 +507,5 @@ regenerated, never hand-edited.
 | F-X052 | Restore interactive relayout performance   | S55 | L | done |
 | F-X053 | Complete layout migration and contribution records | S55 | S | done |
 | F-X054 | Integrate PRs 47 through 52                | S56 | L | in-progress |
-| F-X055 | Tag v0.10.0                               | S56 | S | pending |
+| F-X055 | Tag v0.10.0                               | S56 | S | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

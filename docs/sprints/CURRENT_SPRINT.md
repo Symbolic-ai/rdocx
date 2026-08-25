@@ -38,7 +38,7 @@ compatibility notes and authenticated contributor credit.
 | F-181 | EPUB export | M | in-progress | codex |
 | F-182 | SVG page export | M | in-progress | codex |
 | F-X054 | Integrate PRs 47 through 52 | L | in-progress | codex |
-| F-X055 | Tag v0.10.0 | S | pending | - |
+| F-X055 | Tag v0.10.0 | S | in-progress | codex |
 
 ## Sequencing note
 
