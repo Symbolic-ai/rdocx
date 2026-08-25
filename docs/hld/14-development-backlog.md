@@ -3220,6 +3220,52 @@ at 0.10.0, the GitHub release body is byte-identical to the reviewed v0.10.0
 changelog section, and every included issue and pull request has a verified
 release comment URL.
 
+### F-X056, Tag rpptx-v0.6.0 (S)
+
+Publish the complete 15-package incubating family at 0.6.0 before retrying the
+stable release. The v0.10.0 publication attempt proved that the stable source
+graph uses shared layout APIs added after the immutable 0.5.0 registry
+boundary. `rdocx-layout` therefore cannot verify against crates.io until the
+current shared family has its own reviewed release.
+
+Move all 15 publishable incubating manifests, the 16 workspace pins and
+preparation members, lockfile records, README requirements, WASM metadata, CI
+literals, release regressions, and the reviewed changelog section to 0.6.0.
+Keep the stable family at 0.10.0 while this tag publishes because
+`oxml-drawing` retains its reviewed dependency on the already published
+`rdocx-oxml@0.10.0`. The exact registry set, owners, annotated tag, release body,
+and selected-family contribution notifications verify before F-X057 starts.
+
+**Depends on**: F-X051, F-X052, F-X053, F-X054.
+**Test gate**: release. All 15 incubating registry entries resolve at 0.6.0 from
+the reviewed SHA, their owners match the authenticated registry inventory, the
+GitHub release body is byte-identical to the reviewed notes, every included
+external record receives its reviewed notification, and no stable 0.10.1
+package publishes from this tag.
+
+### F-X057, Tag v0.10.1 (S)
+
+Recover the stable family after the immutable partial v0.10.0 attempt. Move the
+workspace version, all seven stable packages, stable workspace pins, binding
+metadata, README requirements, CI literals, lockfile records, release
+regressions, and reviewed notes to 0.10.1. Pin every shared dependency to the
+verified incubating 0.6.0 family from F-X056.
+
+The 0.10.1 notes describe the complete stable outcome and the v0.10.0 partial
+publication accurately. The two registry packages already present at 0.10.0
+remain immutable. After all seven 0.10.1 packages and the byte-identical GitHub
+release verify, post the stable release comments to Issue 44, PR 45, Issue 46,
+and PRs 47 through 52. Close PRs 47 through 52 only after those comments are
+verified, as F-X054 authorized.
+
+**Depends on**: F-180, F-181, F-182, F-X051, F-X052, F-X053, F-X054, F-X056.
+**Test gate**: release. All seven stable registry entries resolve at 0.10.1
+against incubating 0.6.0 dependencies, their owners match the authenticated
+registry inventory, the annotated tag targets the reviewed SHA, the GitHub
+release body is byte-identical, all nine stable contribution notifications are
+verified, and PRs 47 through 52 close with their reviewed hardened-equivalent
+status.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

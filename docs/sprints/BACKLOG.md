@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 58 | 54 | 1 | 2  |
-| **Total** | **305** | **243** | **4** | **57** |
+| X, Cross-cutting (opportunistic)            | 60 | 54 | 0 | 4  |
+| **Total** | **307** | **243** | **3** | **59** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -507,5 +507,7 @@ regenerated, never hand-edited.
 | F-X052 | Restore interactive relayout performance   | S55 | L | done |
 | F-X053 | Complete layout migration and contribution records | S55 | S | done |
 | F-X054 | Integrate PRs 47 through 52                | S56 | L | done |
-| F-X055 | Tag v0.10.0                               | S56 | S | in-progress |
+| F-X055 | Tag v0.10.0                               | S56 | S | archived |
+| F-X056 | Tag rpptx-v0.6.0                          | S56 | S | pending |
+| F-X057 | Tag v0.10.1                               | S56 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

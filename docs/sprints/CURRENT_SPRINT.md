@@ -9,7 +9,10 @@ export reflowable EPUB 3 from document structure, and export searchable SVG
 pages from the shared `PageFrame` contract with explicit diagnostics for every
 lossy conversion. Audit PRs 47 through 52 against the current reader and
 preservation contracts, then publish the stable family at v0.10.0 with reviewed
-compatibility notes and authenticated contributor credit.
+compatibility notes and authenticated contributor credit. The partial v0.10.0
+publication proved that the current stable source graph needs shared layout
+changes made after incubating 0.5.0. Complete the recovery by publishing the
+incubating family at 0.6.0, then the stable family at 0.10.1.
 
 ## Spec references
 
@@ -38,7 +41,9 @@ compatibility notes and authenticated contributor credit.
 | F-181 | EPUB export | M | done | |
 | F-182 | SVG page export | M | done | |
 | F-X054 | Integrate PRs 47 through 52 | L | done | |
-| F-X055 | Tag v0.10.0 | S | in-progress | codex |
+| F-X055 | Tag v0.10.0 | S | archived | |
+| F-X056 | Tag rpptx-v0.6.0 | S | pending | - |
+| F-X057 | Tag v0.10.1 | S | pending | - |
 
 ## Sequencing note
 
@@ -50,6 +55,11 @@ dependency on F-180 or on each other. The four stories may proceed in parallel
 while keeping exclusive ownership of ODT packaging, EPUB structure, stable SVG
 entry points, and the contributed reader surface respectively. F-X055 runs
 last, after every implementation and contribution record is complete.
+
+The v0.10.0 tag remains immutable after its partial publication failure.
+F-X056 publishes the shared family first because F-X057 cannot verify stable
+packages against unpublished shared APIs. F-X057 starts only after all 15
+incubating registry entries and their release body verify.
 
 ## Definition of done for this sprint
 
@@ -83,5 +93,9 @@ last, after every implementation and contribution record is complete.
 - After publication verifies, PRs 47 through 52 receive release-bound
   maintainer comments and close with their direct or hardened-equivalent status
   stated accurately.
-- All five story gates, the full workspace gate, package checks, and the
+- The complete incubating family publishes at 0.6.0 before any stable 0.10.1
+  package, and each registry dependency resolves without local patches.
+- The complete stable family publishes at 0.10.1 from one reviewed SHA, with
+  the failed partial v0.10.0 attempt described accurately and left immutable.
+- All seven story gates, the full workspace gate, package checks, and the
   deterministic hash harness pass without an unexplained baseline change.

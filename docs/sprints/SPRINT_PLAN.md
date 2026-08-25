@@ -1008,6 +1008,8 @@ publish the stable family at its next pre-1.0 beta boundary.
 | F-182 | SVG page export | M |
 | F-X054 | Integrate PRs 47 through 52 | L |
 | F-X055 | Tag v0.10.0 | S |
+| F-X056 | Tag rpptx-v0.6.0 | S |
+| F-X057 | Tag v0.10.1 | S |
 
 F-181 and F-182 both fall out of work that exists: EPUB from the outline API,
 SVG from the same `PageFrame` the PDF and PNG backends already consume.
@@ -1018,6 +1020,15 @@ all four implementation stories complete. It publishes the exact stable family
 at v0.10.0 with reviewed notes, compatibility guidance, direct record links,
 and contributor credit. Each included pull request closes only after the
 published implementation and release body verify.
+
+The immutable v0.10.0 attempt published `rdocx-opc` and `rdocx-oxml`, then
+proved that the stable source graph requires shared layout APIs newer than the
+published incubating 0.5.0 family. F-X055 is retained as an archived failed
+release attempt. F-X056 publishes the complete shared and Presentation family
+at 0.6.0 while stable packages remain at 0.10.0. F-X057 then publishes the
+complete stable family at 0.10.1 against those verified shared dependencies.
+Each tag retains its own reviewed SHA, notes, full gate, and separate final
+approval.
 
 ### M20, Fidelity at scale
 
