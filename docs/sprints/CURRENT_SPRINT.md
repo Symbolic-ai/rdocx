@@ -29,7 +29,7 @@ thousand-page document before S58 changes shaping and line breaking.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-196 | Word corpus | M | in-progress | codex |
-| F-201 | Large document performance | L | pending | - |
+| F-201 | Large document performance | L | in-progress | codex |
 | F-197 | Word SSIM harness | L | pending | - |
 
 ## Sequencing note
