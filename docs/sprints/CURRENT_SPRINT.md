@@ -1,61 +1,67 @@
-# Current Sprint, S57
+# Current Sprint, S58
 
 **Milestone**: M20 Fidelity at scale.
 
-**Goal**: measure the Word renderer against documents nobody in this project
-wrote. Establish a pinned external Word corpus, compare every rendered page
-against a reviewed oracle, and set explicit memory and throughput limits for a
-thousand-page document before S58 changes shaping and line breaking.
+**Goal**: close M20 and finish every planned non-spreadsheet capability before
+the advanced spreadsheet programme begins. Use the corpus, SSIM, and
+large-document gates established in S57 to measure language-aware line
+breaking, complex-script and directional layout, and bounded incremental
+relayout. Finish by making the stable aggregate CI check a required repository
+protection at the reviewed sprint SHA.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the Word facade, paginator, shared layout
-  boundary, cache ownership, and dependency direction exercised by corpus and
-  performance runs.
-- `docs/hld/08-rendering-spec.md`, for deterministic `LayoutResult` and
-  `PageFrame` output, fixed-page rendering behavior, and the pixel comparison
-  boundary used by the Word SSIM harness.
-- `docs/hld/12-testing-strategy.md`, for the external-corpus exception,
-  deterministic-font requirement, source and oracle discipline, SSIM trend
-  references, hard gates, and complete-coverage failure policy.
-- `docs/hld/14-development-backlog.md`, for the M20 fidelity goal and the exact
-  F-196 corpus, F-197 SSIM, and F-201 large-document performance contracts.
-- `docs/hld/15-build-and-toolchain.md`, for pinned test runtimes, deterministic
-  fonts, fetched-corpus CI ownership, dependency policy, and package-wide
-  verification.
+- `docs/hld/03-architecture.md`, for dependency direction, shared line-breaking
+  ownership, Word pagination, and the facade and engine cache boundary that
+  incremental layout must preserve.
+- `docs/hld/08-rendering-spec.md`, for Unicode line-break discovery, exact
+  shaping and source-span behavior, vertical-text lowering, deterministic
+  layout, and bounded paragraph and shaping reuse.
+- `docs/hld/12-testing-strategy.md`, for external-oracle discipline, golden and
+  SSIM evidence, deliberate render sensitivity, performance regression gates,
+  and the always-reporting `ci-gate` contract.
+- `docs/hld/14-development-backlog.md`, for the exact F-198, F-199, F-200,
+  F-202, and F-X031 dependencies and acceptance gates.
+- `docs/hld/15-build-and-toolchain.md`, for bundled-font deterministic output,
+  cache ceilings, pinned corpus and oracle runtimes, the CI matrix, and the
+  separation between tracked workflow state and repository protection state.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-196 | Word corpus | M | done | |
-| F-201 | Large document performance | L | done | |
-| F-197 | Word SSIM harness | L | done | |
+| F-198 | Hyphenation | L | pending | - |
+| F-199 | Complex script shaping | L | pending | - |
+| F-202 | Incremental layout | L | pending | - |
+| F-200 | Vertical and bidirectional text | M | pending | - |
+| F-X031 | Require the CI gate in branch protection | S | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-196 and F-201 have no dependencies and may proceed independently with
-exclusive ownership of corpus acquisition and performance measurement. F-197
-depends on F-196 because its page comparisons require the verified corpus and
-its provenance records. The completed F-197 gate protects S58, where
-hyphenation and complex-script shaping may intentionally move rendered pixels.
+F-198, F-199, and F-202 may begin independently because their S57
+prerequisites are complete. F-200 follows F-199 so directional layout builds on
+the completed complex-script shaping contract. F-X031 is the final operational
+step because the stable `ci-gate`, reviewed workflow, and sprint SHA must have
+settled before repository protection is changed. F-198 is expected to move
+rendered output, so its hash delta must be isolated and declared.
 
 ## Definition of done for this sprint
 
-- The Word corpus fetcher retrieves the reviewed business-letter, report,
-  form, legal-revision, and multi-script documents, verifies every checksum,
-  and refuses missing, changed, or unlicensed inputs.
-- Every corpus page renders in deterministic font mode and is compared against
-  the pinned oracle with complete coverage, per-page SSIM reporting, a reviewed
-  trend reference, and an explicit hard-gate policy.
-- A deliberate layout perturbation moves the SSIM result enough to prove the
-  harness detects visible regressions.
-- A source-built thousand-page document paginates and renders within the
-  declared memory ceiling and throughput floor without unbounded retained
-  state.
-- Corpus, oracle, and performance inputs remain outside published crate
-  archives, and no new reverse dependency enters the workspace graph.
-- The full workspace gate, package checks, and deterministic hash harness pass
-  without an unexplained baseline change.
+- Language-specific hyphenation produces the reviewed oracle line breaks and
+  carries a declared deterministic hash delta.
+- Arabic, Indic, Thai, and CJK text follow their shaping and line-breaking
+  rules within the recorded corpus threshold.
+- Mixed-direction runs and supported vertical text render in the correct visual
+  order without losing preserved source content.
+- Editing one paragraph of the thousand-page document re-lays out a bounded
+  number of pages while the established memory and throughput limits remain
+  green.
+- The exact stable `ci-gate` becomes required for the protected branch without
+  removing existing protections. A documentation-only pull request succeeds
+  with expensive jobs skipped, and a selected failing job makes the aggregate
+  gate fail. Evidence names the repository, branch pattern, protection
+  identifier, and reviewed sprint SHA.
+- The full workspace, corpus, fidelity, performance, package, and deterministic
+  hash gates pass with only reviewed and declared output changes.
