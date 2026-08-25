@@ -94,12 +94,30 @@ content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
 
-**Inbound ODT belongs to the `rdocx` facade.** The private importer validates
+**ODT conversion belongs to the `rdocx` facade.** The private importer validates
 the complete bounded ZIP index, parses ODF XML by expanded namespace, and
 projects supported content directly into the one owned WordprocessingML
-document model. ODT is not OPC, so the importer does not enter `oxml-opc` or
-retain an ODT object model. The facade uses the existing workspace `zip`,
-`quick-xml`, and `oxml-media` dependencies for this one-way conversion.
+document model. The private writer walks that same tree and its package media,
+materializes effective formatting, and writes deterministic ODF 1.3 content,
+manifest, and image entries. ODT is not OPC, so neither direction enters
+`oxml-opc` or retains an ODT object model. The facade uses the existing
+workspace `zip`, `quick-xml`, and `oxml-media` dependencies for conversion.
+
+**Outbound EPUB belongs to the `rdocx` facade.** The private writer projects
+the owned Word document through the established outbound HTML semantics, then
+packages deterministic EPUB 3 metadata, navigation, reflowable XHTML, shared
+CSS, and body-referenced relationship images. It builds bounded render-only
+style and numbering projections instead of cloning preservation trees.
+The render projection copies only supported paragraphs, runs, hyperlinks,
+tables, rows, and cells. Content-control subtrees and table grids are diagnosed
+from the source and never cloned into the render document. Fields are reduced
+to bounded cached display values, and drawings are rebuilt without preserved
+raw drawing subtrees. Paragraph, run, table, row, and cell properties are
+rebuilt from the bounded values consumed by XHTML rather than cloning typed
+revision trees.
+Top-level outline entries split the spine, while pre-heading content becomes
+front matter. EPUB is not OPC, so the writer uses the existing workspace `zip`
+dependency directly and does not add a second publication object model.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
 output, font, and line modules hold page frames, positioned elements, glyph
@@ -108,9 +126,9 @@ format.
 
 Completed layout results share each immutable page frame and each font byte
 buffer through `Arc`. Word and Presentation producers establish that ownership
-at their format boundary. PDF, raster, facade page access, diagnostics, and
-provenance consumers borrow the shared values without gaining a format-specific
-dependency.
+at their format boundary. PDF, raster, SVG, facade page access, diagnostics,
+and provenance consumers borrow the shared values without gaining a
+format-specific dependency.
 
 `SourceNodeId` and `SourceSpan` are the format-neutral provenance carriers at
 this boundary. A text segment and its positioned glyph run can hold one
@@ -176,6 +194,15 @@ Word, Presentation, Python and CLI consumers, so format semantics and page
 selection validation live at the format-neutral backend rather than in each
 facade.
 
+**Native Word SVG belongs to the `rdocx` facade.** Its private renderer consumes
+the same immutable `LayoutResult` used by PDF and raster without moving the
+surface into the already published `oxml-pdf` family. It preserves searchable
+text, embeds used fonts and images, and recursively lowers the complete page
+element tree. Stable path diagnostics make every unsupported or approximate
+lowering visible while preserving supported siblings. The production edge adds
+only `base64` for self-contained data URLs. Exact resvg 0.48.1 is development
+test infrastructure and does not enter the runtime graph or package archive.
+
 When the optional document structure is present, `oxml-pdf` alone owns PDF
 marked-content operators, page-local MCIDs, structure elements, list bodies,
 the parent tree, conditional PDF/UA metadata, and catalog accessibility
@@ -222,6 +249,13 @@ text, properties, tables, styles, numbering, borders, headers and footers,
 footnotes, comments, settings, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
+
+The low-level text reader decodes visible `w:t` and `w:delText` content
+fallibly and rejects malformed encoded values instead of publishing partial
+text. The numbering grammar retains producer-defined `w:numFmt` tokens in
+`ST_NumberFormat::Other(String)`. Its writer emits those tokens unchanged,
+while render and export consumers decline to invent a marker for an unknown
+format.
 
 The settings model owns the separate `w:settings` root and read-only
 projections for `w:documentProtection` and valid `w:docVars` entries. It reports
@@ -480,18 +514,21 @@ an endnote sharing a number.
 
 The 15 shared and PowerPoint publication candidates use the explicit common
 incubating version in their manifests and workspace pins. All 15 candidates
-are published together at 0.5.0 from the annotated `rpptx-v0.5.0` tag at
-reviewed SHA `343388e19bce21b3d83f17e8cc0e5418861a94cb`. The unpublished
-`rpptx-wasm` preparation member is also at 0.5.0 but has no crates.io
+are published together at 0.6.0 from the annotated `rpptx-v0.6.0` tag at
+reviewed SHA `55fb2f54caf91d7dedc8936b4c7b116354590628`. The unpublished
+`rpptx-wasm` preparation member is also at 0.6.0 but has no crates.io
 publication path. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates use the
 separate workspace version. That stable workspace and its exact seven-package
-crates.io family are published coherently at 0.9.0 from the annotated
-`v0.9.0` tag at reviewed SHA
-`e27e519c94c90cd5be340fe5bf8e431cf542ac51`. The workspace includes nine
-internal pins, eleven inherited lockfile packages, two Python project
-versions, and the unpublished `rdocx-wasm` package at 0.9.0. Earlier immutable
+crates.io family are published coherently at 0.10.1 from the annotated
+`v0.10.1` tag at reviewed SHA
+`ae0dcb162a7805e59e5890464b226765645ad547`. The immutable v0.10.0
+attempt published `rdocx-opc` and `rdocx-oxml`, then stopped before the other
+five packages and GitHub release when `rdocx-layout` proved it needed the newer
+shared layout API. The last complete stable family is 0.10.1. The workspace
+includes nine internal pins, eleven inherited lockfile packages, two Python project
+versions, and the unpublished `rdocx-wasm` package at 0.10.1. Earlier immutable
 registry releases remain available. Version preparation and manifest
 eligibility do not authorize any later publication. `oxml-cli-support` is the
 format-neutral owner of range parsing,
@@ -564,6 +601,13 @@ The WASM binding uses that additive facade accessor for its existing `getText`
 method and otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
 
+`Document::render_page_to_svg`, its option-taking counterpart, and their two
+deterministic variants expose one zero-based page as self-contained searchable
+SVG. Out-of-range pages return `None`. `SvgRenderResult` carries the SVG and
+ordered `SvgDiagnostic` values, with layout diagnostics before recursive
+lowering diagnostics. These additive methods are native Rust only. Python,
+WASM, CLI, Presentation, and the public `oxml-pdf` surface remain unchanged.
+
 `Document::from_html` and `Document::open_html` are additive native facade
 constructors. They return the converted document with stable path-aware
 diagnostics for parser repairs, unsupported CSS, dropped resources, and safely
@@ -601,6 +645,17 @@ recursive `paragraphs()` and `tables()` accessors keep their existing behavior.
 Self-closing Word paragraphs and tables normalize to typed empty values, while
 self-closing final section properties remain outside the item vector. Empty
 foreign and unsupported children remain captured raw rather than being lost.
+
+The same ordered compatibility view extends through `CellRef::items`,
+`ParagraphRef::items`, `HyperlinkRef::items`, and `RunRef::items`. Their
+non-exhaustive borrowed item enums retain each typed child and unsupported raw
+subtree at its direct source boundary, including borrowed drawing and field
+facts. Existing flattened run, paragraph, table, and body accessors keep their
+established semantics. `Document::body_content` reports unsupported modeled
+content through `UnsupportedXmlRef` name, namespace, and child-content facts,
+while exposing raw bytes only when the facade owns an actual preserved raw
+subtree. Save replays the namespace scope required by retained raw content and
+fails closed when a safe prefix binding cannot be maintained.
 
 The `rdocx` facade also owns RTF import and export. The private RTF reader
 parses the Word-written subset for text, run and paragraph formatting, tables,

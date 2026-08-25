@@ -1,77 +1,104 @@
-# Current Sprint, S55
+# Current Sprint, S56
 
-**Milestone**: M18 Format breadth.
+**Milestone**: M18 Format breadth, plus cross-cutting contribution and release
+work.
 
-**Goal**: add the two remaining inbound formats in M18 while closing the
-residual v0.9 editor work reported by the community. Import the practical HTML
-and CSS subset produced by browser copy-paste and CMS exports, read
-OpenDocument Text through a structural boundary pinned against LibreOffice,
-restore the reviewed interactive relayout budget, and document the recursive
-layout traversal required by tagged content.
+**Goal**: close M18 by adding the outbound formats that reuse the document and
+layout models already established. Write the supported ODT fidelity boundary,
+export reflowable EPUB 3 from document structure, and export searchable SVG
+pages from the shared `PageFrame` contract with explicit diagnostics for every
+lossy conversion. Audit PRs 47 through 52 against the current reader and
+preservation contracts, then publish the stable family at v0.10.1 with reviewed
+compatibility notes and authenticated contributor credit. The partial v0.10.0
+publication proved that the current stable source graph needs shared layout
+changes made after incubating 0.5.0. Complete the recovery by publishing the
+incubating family at 0.6.0, then the stable family at 0.10.1.
 
 ## Spec references
 
-- `docs/hld/03-architecture.md`, for the Word facade's single typed document
-  ownership tree and format-boundary dependency rules.
-- `docs/hld/04-opc-and-packaging.md`, for bounded archive handling, normalized
-  part paths, media ownership, and deterministic package behavior.
-- `docs/hld/08-rendering-spec.md`, for exact reusable layout context, bounded
-  transactional caches, restart-safe pagination, semantic marked content, and
-  warm versus cold equality.
-- `docs/hld/10-bindings-spec.md`, for additive native Word entry points,
-  conversion results with diagnostics, and unchanged binding boundaries.
-- `docs/hld/12-testing-strategy.md`, for named regression fixtures,
-  differential oracle discipline, structural comparison, and source-built
-  test inputs.
+- `docs/hld/03-architecture.md`, for the single Word document ownership tree,
+  format-neutral layout boundary, and dependency direction for new exporters.
+- `docs/hld/04-opc-and-packaging.md`, for deterministic archive output, safe
+  package paths, media ownership, and the boundary between ODT ZIP and OPC.
+- `docs/hld/08-rendering-spec.md`, for the shared `LayoutResult`, `PageFrame`,
+  text, font, image, background, and recursive element contracts consumed by
+  SVG output.
+- `docs/hld/10-bindings-spec.md`, for additive native facade methods and the
+  rule that Python, WASM, and CLI surfaces change only when explicitly scoped.
+- `docs/hld/12-testing-strategy.md`, for source-built fixtures, structural
+  round trips, named regressions, pixel goldens, and external oracle discipline.
 - `docs/hld/14-development-backlog.md`, for the M18 fidelity rule and the exact
-  HTML import and ODT reader scopes and gates.
-- `docs/hld/15-build-and-toolchain.md`, for dependency policy, package checks,
-  and the unchanged deterministic verification contract.
+  ODT writer, EPUB export, and SVG page export scopes and gates.
+- `docs/hld/15-build-and-toolchain.md`, for dependency policy, pinned external
+  tools, package checks, release-family publication, and the unchanged
+  deterministic verification contract.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-178 | HTML import | L | done | - |
-| F-179 | ODT reader | L | done | - |
-| F-X052 | Restore interactive relayout performance | L | done | - |
-| F-X053 | Complete layout migration and contribution records | S | done | - |
+| F-180 | ODT writer | L | done | |
+| F-181 | EPUB export | M | done | |
+| F-182 | SVG page export | M | done | |
+| F-X054 | Integrate PRs 47 through 52 | L | done | |
+| F-X055 | Tag v0.10.0 | S | archived | |
+| F-X056 | Tag rpptx-v0.6.0 | S | done | |
+| F-X057 | Tag v0.10.1 | S | done | |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-178, F-179, and F-X052 are independent and may proceed in parallel. The two
-format stories project into the existing Word document tree, but HTML owns
-browser and CMS markup plus CSS diagnostics, while ODT owns its archive and
-LibreOffice differential boundary. Neither story depends on the outbound ODT
-writer planned for S56. F-X052 owns only the existing reusable layout path and
-must preserve its correctness and memory contracts. F-X053 runs after F-X052
-because the final Issue 46 response needs both the performance implementation
-and the migration correction.
+F-180 depends on the F-179 reader completed in S55, so its round-trip boundary
+is available at sprint entry. F-181, F-182, and F-X054 have no implementation
+dependency on F-180 or on each other. The four stories may proceed in parallel
+while keeping exclusive ownership of ODT packaging, EPUB structure, stable SVG
+entry points, and the contributed reader surface respectively. F-X055 ended as
+the immutable partial v0.10.0 attempt after every implementation and
+contribution record was complete.
+
+The v0.10.0 tag remains immutable after its partial publication failure.
+F-X056 publishes the shared family first because F-X057 cannot verify stable
+packages against unpublished shared APIs. F-X057 starts only after all 15
+incubating registry entries and their release body verify. F-X057 owns the
+complete v0.10.1 stable publication, all nine contribution notifications, and
+the six authorized pull-request closures.
 
 ## Definition of done for this sprint
 
-- HTML import projects the supported copy-paste and CMS subset into paragraphs,
-  runs, tables, and lists in source order.
-- Unsupported CSS produces stable diagnostics naming what was dropped while
-  supported sibling content remains available.
-- ODT input projects its supported text, formatting, tables, lists, and images
-  into the normal Word document tree without a second facade model.
-- A source-built ODT converted here matches the pinned LibreOffice conversion
-  structurally at the declared differential boundary.
-- Malformed markup, unsafe archive paths, unsupported content, and retained
-  conversion output are bounded and fail or diagnose without partial state.
-- A body-only edit and a checked restored-document transfer avoid
-  whole-document debug serialization and deep copies of unchanged pages while
-  retaining exact warm versus cold output, invalidation, and memory bounds.
-- Interleaved release measurements for the Issue 46 load, typing, undo, and
-  table-mutation workload are within 1.25 times the reviewed reference on the
-  same machine for native and bundled-fallback paths.
-- The v0.9.0 compatibility record tells external layout backends to recurse
-  through `MarkedContent::children` or use `oxml_layout::walk`. Issue 44,
-  Issue 46, and PR 45 close with implementation evidence and retained
-  contributor credit, while Issues 39 and 42 remain closed without duplicate
-  scope.
-- All four story gates, the full workspace gate, package checks, and the
+- ODT output preserves the declared text, formatting, table, list, and image
+  fidelity when read back through the F-179 importer.
+- Unsupported ODT properties and content produce stable diagnostics naming
+  what was dropped while supported siblings remain available.
+- Generated EPUB 3 output passes the pinned `epubcheck` gate, and its spine and
+  navigation order match the document outline.
+- SVG output retains searchable text and rasterises to the same pixels as the
+  PNG backend at the same dpi within the reviewed tolerance.
+- SVG traverses every recursive `PageFrame` element, preserves page geometry,
+  fonts, images, backgrounds, links, and clipping at the declared boundary,
+  and diagnoses any unsupported effect without dropping supported siblings.
+- The M18 end gate proves each format at its declared fidelity level and every
+  lossy conversion records a diagnostic naming what it dropped.
+- PRs 47 through 52 are audited against current preservation, namespace,
+  ordering, error, and public API contracts. Every retained outcome has a named
+  regression, a direct pull-request link, and specific authenticated credit to
+  `@pedroassumpcao`.
+- Stable version selection follows the recorded beta policy. Before 1.0,
+  public API additions or incompatibilities and internal-only new functionality
+  take a minor release, while repair-only compatible changes take a patch
+  release. At and after 1.0, incompatible public API changes take a major
+  release, compatible additions take a minor release, and fixes take a patch
+  release. S56 therefore prepares v0.10.0 and records the PR 51 source change
+  explicitly without claiming the stable 1.0 boundary.
+- The v0.10.0 release notes cover only the stable family, name every addition,
+  fix, compatibility action, and included external record, and credit
+  `@emptinessform` and `@pedroassumpcao` for their specific included outcomes.
+- After publication verifies, PRs 47 through 52 receive release-bound
+  maintainer comments and close with their direct or hardened-equivalent status
+  stated accurately.
+- The complete incubating family publishes at 0.6.0 before any stable 0.10.1
+  package, and each registry dependency resolves without local patches.
+- The complete stable family publishes at 0.10.1 from one reviewed SHA, with
+  the failed partial v0.10.0 attempt described accurately and left immutable.
+- All seven story gates, the full workspace gate, package checks, and the
   deterministic hash harness pass without an unexplained baseline change.

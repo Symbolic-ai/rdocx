@@ -579,10 +579,11 @@ impl CT_R {
                         });
                         // `read_text` returns the raw markup span, so entity
                         // references in it still need resolving.
-                        let text = reader
-                            .read_text(name)
-                            .map(|t| crate::xml_text::decode_escaped(&t))
-                            .unwrap_or_default();
+                        let encoded = reader.read_text(name)?;
+                        encoded
+                            .decode()
+                            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                        let text = crate::xml_text::decode_escaped(&encoded);
                         content.push(RunContent::Text(CT_Text {
                             text,
                             preserve_space: preserve,
@@ -594,10 +595,11 @@ impl CT_R {
                                 a.key.as_ref() == b"xml:space" && a.value.as_ref() == b"preserve"
                             })
                         });
-                        let text = reader
-                            .read_text(name)
-                            .map(|t| crate::xml_text::decode_escaped(&t))
-                            .unwrap_or_default();
+                        let encoded = reader.read_text(name)?;
+                        encoded
+                            .decode()
+                            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                        let text = crate::xml_text::decode_escaped(&encoded);
                         content.push(RunContent::DeletedText(CT_Text {
                             text,
                             preserve_space: preserve,
@@ -6792,5 +6794,32 @@ mod tests {
             buf.clear();
         }
         assert!(CT_P::from_xml(&mut reader).is_err());
+    }
+
+    #[test]
+    fn undecodable_ordinary_and_deleted_text_are_rejected() {
+        for child in [
+            b"<w:t>before\xff</w:t>".as_slice(),
+            b"<w:delText>before\xff</w:delText>".as_slice(),
+        ] {
+            let mut xml = br#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r>"#.to_vec();
+            xml.extend_from_slice(child);
+            xml.extend_from_slice(b"</w:r></w:p>");
+            let mut reader = Reader::from_reader(xml.as_slice());
+            let mut buffer = Vec::new();
+            assert!(matches!(
+                reader.read_event_into(&mut buffer),
+                Ok(Event::Start(_))
+            ));
+            assert!(matches!(
+                CT_P::from_xml(&mut reader),
+                Err(OxmlError::InvalidValue(_))
+            ));
+        }
+
+        let valid = parse_paragraph(
+            "<w:r><w:t>one &amp; two</w:t><w:delText>three &lt; four</w:delText></w:r>",
+        );
+        assert_eq!(valid.runs[0].text(), "one & twothree < four");
     }
 }

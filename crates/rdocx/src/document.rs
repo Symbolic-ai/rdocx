@@ -1,5 +1,6 @@
 //! The main Document type — entry point for the rdocx API.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -13,8 +14,9 @@ use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, PackageReadLimits};
 use oxml_sml::Workbook;
+use quick_xml::Writer;
 use quick_xml::XmlVersion;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
@@ -62,6 +64,1130 @@ pub enum BodyItemRef<'a> {
     UnsupportedXml(&'a [u8]),
 }
 
+const WORD_NAMESPACE: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
+
+enum UnsupportedXmlSource<'a> {
+    Raw { raw: &'a [u8] },
+    Modeled,
+}
+
+/// A borrowed fact for content the compatibility reader does not model.
+pub struct UnsupportedXmlRef<'a> {
+    source: UnsupportedXmlSource<'a>,
+    qualified_name: Option<Cow<'a, str>>,
+    local_name: Cow<'a, str>,
+    namespace_uri: Option<Cow<'a, str>>,
+    has_child_content: bool,
+}
+
+impl<'a> UnsupportedXmlRef<'a> {
+    fn raw(raw: &'a [u8], inherited_namespaces: &'a [(String, String)]) -> Self {
+        let names = raw_element_names(raw);
+        let namespace_uri = names.as_ref().and_then(|(name, _)| {
+            let prefix = name.split_once(':').map_or("", |(prefix, _)| prefix);
+            raw_namespace_declaration(raw, prefix)
+                .map(Cow::Owned)
+                .or_else(|| inherited_namespace(inherited_namespaces, prefix).map(Cow::Borrowed))
+        });
+        let (qualified_name, local_name) = names.map_or_else(
+            || (None, Cow::Borrowed("")),
+            |(qualified_name, local_name)| {
+                (Some(Cow::Owned(qualified_name)), Cow::Owned(local_name))
+            },
+        );
+        Self {
+            source: UnsupportedXmlSource::Raw { raw },
+            qualified_name,
+            local_name,
+            namespace_uri,
+            has_child_content: raw_has_child_content(raw),
+        }
+    }
+
+    fn modeled(
+        qualified_name: &'static str,
+        namespace_uri: &'static str,
+        local_name: &'static str,
+        has_child_content: bool,
+    ) -> Self {
+        Self {
+            source: UnsupportedXmlSource::Modeled,
+            qualified_name: Some(Cow::Borrowed(qualified_name)),
+            local_name: Cow::Borrowed(local_name),
+            namespace_uri: Some(Cow::Borrowed(namespace_uri)),
+            has_child_content,
+        }
+    }
+
+    /// Original subtree bytes, or `None` for a modeled compatibility fact.
+    pub fn raw_xml(&self) -> Option<&'a [u8]> {
+        match self.source {
+            UnsupportedXmlSource::Raw { raw } => Some(raw),
+            UnsupportedXmlSource::Modeled => None,
+        }
+    }
+
+    /// Qualified element name, when the retained XML has a valid root element.
+    pub fn qualified_name(&self) -> Option<&str> {
+        self.qualified_name.as_deref()
+    }
+
+    /// Local element name.
+    pub fn local_name(&self) -> &str {
+        &self.local_name
+    }
+
+    /// Namespace URI resolved from local or inherited declarations.
+    pub fn namespace_uri(&self) -> Option<&str> {
+        self.namespace_uri.as_deref()
+    }
+
+    /// Whether the retained element has a child element or visible text.
+    pub fn has_child_content(&self) -> bool {
+        self.has_child_content
+    }
+}
+
+fn raw_element_names(raw: &[u8]) -> Option<(String, String)> {
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).ok()? {
+            Event::Start(element) | Event::Empty(element) => {
+                let qualified_name = std::str::from_utf8(element.name().as_ref())
+                    .ok()?
+                    .to_owned();
+                let local_name = std::str::from_utf8(element.local_name().as_ref())
+                    .ok()?
+                    .to_owned();
+                return Some((qualified_name, local_name));
+            }
+            Event::Eof => return None,
+            _ => buffer.clear(),
+        }
+    }
+}
+
+fn raw_namespace_declaration(raw: &[u8], prefix: &str) -> Option<String> {
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let declaration = if prefix.is_empty() {
+        "xmlns".to_owned()
+    } else {
+        format!("xmlns:{prefix}")
+    };
+    loop {
+        match reader.read_event_into(&mut buffer).ok()? {
+            Event::Start(element) | Event::Empty(element) => {
+                let attribute = element
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| attribute.key.as_ref() == declaration.as_bytes())?;
+                return attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                    .ok()
+                    .map(Cow::into_owned);
+            }
+            Event::Eof => return None,
+            _ => buffer.clear(),
+        }
+    }
+}
+
+fn inherited_namespace<'a>(namespaces: &'a [(String, String)], prefix: &str) -> Option<&'a str> {
+    if prefix == "xml" {
+        return Some(XML_NAMESPACE);
+    }
+    let declaration = if prefix.is_empty() {
+        "xmlns".to_owned()
+    } else {
+        format!("xmlns:{prefix}")
+    };
+    namespaces
+        .iter()
+        .rev()
+        .find(|(name, _)| name == &declaration)
+        .map(|(_, uri)| uri.as_str())
+}
+
+fn raw_has_child_content(raw: &[u8]) -> bool {
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) => {
+                if depth > 0 {
+                    return true;
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(_)) if depth > 0 => return true,
+            Ok(Event::Text(text)) if depth > 0 && !xml_text_is_whitespace(&text) => {
+                return true;
+            }
+            Ok(Event::CData(text)) if depth > 0 && !xml_bytes_are_whitespace(text.as_ref()) => {
+                return true;
+            }
+            Ok(Event::GeneralRef(reference)) if depth > 0 => match reference.resolve_char_ref() {
+                Ok(Some(character)) if !character.is_ascii_whitespace() => return true,
+                Ok(Some(_)) => {}
+                Ok(None) => return true,
+                Err(_) => return false,
+            },
+            Ok(Event::End(_)) => depth = depth.saturating_sub(1),
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn xml_text_is_whitespace(text: &quick_xml::events::BytesText<'_>) -> bool {
+    xml_bytes_are_whitespace(text.as_ref())
+}
+
+fn xml_bytes_are_whitespace(bytes: &[u8]) -> bool {
+    bytes.iter().all(|byte| byte.is_ascii_whitespace())
+}
+
+#[derive(Default)]
+struct DocumentNamespaceScopes {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+}
+
+fn document_namespace_scopes(xml: &[u8]) -> Result<DocumentNamespaceScopes> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut scopes: Vec<Vec<(String, String)>> = Vec::new();
+    let mut root_declarations = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(rdocx_oxml::OxmlError::from)?;
+        match event {
+            Event::Start(ref element) => {
+                let mut scope = scopes.last().cloned().unwrap_or_default();
+                let declarations = namespace_declarations(element)?;
+                apply_namespace_declarations(element, &mut scope)?;
+                if scopes.is_empty() {
+                    root_declarations = declarations.clone();
+                }
+                if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes())
+                    && matches_local_name(element.name().as_ref(), b"body")
+                {
+                    return Ok(DocumentNamespaceScopes {
+                        root_declarations,
+                        body_declarations: declarations,
+                        body_bindings: scope,
+                    });
+                }
+                scopes.push(scope);
+            }
+            Event::Empty(ref element) => {
+                let mut scope = scopes.last().cloned().unwrap_or_default();
+                let declarations = namespace_declarations(element)?;
+                apply_namespace_declarations(element, &mut scope)?;
+                if scopes.is_empty() {
+                    root_declarations = declarations.clone();
+                }
+                if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes())
+                    && matches_local_name(element.name().as_ref(), b"body")
+                {
+                    return Ok(DocumentNamespaceScopes {
+                        root_declarations,
+                        body_declarations: declarations,
+                        body_bindings: scope,
+                    });
+                }
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => {
+                return Ok(DocumentNamespaceScopes {
+                    root_declarations,
+                    ..DocumentNamespaceScopes::default()
+                });
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
+    let mut declarations = Vec::new();
+    apply_namespace_declarations(element, &mut declarations)?;
+    Ok(declarations)
+}
+
+fn apply_namespace_declarations(
+    element: &BytesStart<'_>,
+    scope: &mut Vec<(String, String)>,
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(rdocx_oxml::OxmlError::from)?;
+        let name = attribute.key.as_ref();
+        if name != b"xmlns" && !name.starts_with(b"xmlns:") {
+            continue;
+        }
+        let name = std::str::from_utf8(name)
+            .map_err(rdocx_oxml::OxmlError::from)?
+            .to_owned();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+            .map_err(rdocx_oxml::OxmlError::from)?
+            .into_owned();
+        scope.retain(|(candidate, _)| candidate != &name);
+        scope.push((name, value));
+    }
+    Ok(())
+}
+
+fn unsafe_serializer_namespace_prefix(
+    root_declarations: &[(String, String)],
+    body_declarations: &[(String, String)],
+) -> Option<String> {
+    if let Some((name, _)) = body_declarations.first() {
+        return Some(namespace_prefix(name));
+    }
+
+    root_declarations.iter().find_map(|(name, value)| {
+        let prefix = namespace_prefix(name);
+        let expected = match canonical_serializer_namespace(&prefix) {
+            Some(expected) => expected,
+            None if prefix.is_empty() => return Some("default".to_owned()),
+            None => return None,
+        };
+        (value != expected).then_some(prefix)
+    })
+}
+
+fn canonical_serializer_namespace(prefix: &str) -> Option<&'static str> {
+    match prefix {
+        "w" => Some(WORD_NAMESPACE),
+        "r" => Some("http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
+        "mc" => Some("http://schemas.openxmlformats.org/markup-compatibility/2006"),
+        "wp" => Some("http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"),
+        "a" => Some("http://schemas.openxmlformats.org/drawingml/2006/main"),
+        "pic" => Some("http://schemas.openxmlformats.org/drawingml/2006/picture"),
+        "c" => Some("http://schemas.openxmlformats.org/drawingml/2006/chart"),
+        "w14" => Some("http://schemas.microsoft.com/office/word/2010/wordml"),
+        "w15" => Some("http://schemas.microsoft.com/office/word/2012/wordml"),
+        _ => None,
+    }
+}
+
+fn namespace_prefix(declaration_name: &str) -> String {
+    declaration_name
+        .strip_prefix("xmlns:")
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[derive(Debug)]
+struct NestedNamespaceOwner {
+    local_name: String,
+    declarations: Vec<(String, String)>,
+    snapshot: LogicalOwnerSnapshot,
+    markers: Vec<NamespaceMarker>,
+    ambiguous_without_namespace: bool,
+    same_marker_structural_alternate: bool,
+    same_namespace_structural_alternate: bool,
+}
+
+#[derive(Debug)]
+struct ModeledOwnerSpan {
+    local_name: String,
+    start: usize,
+    end: usize,
+    declarations: Vec<(String, String)>,
+    bindings: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogicalOwnerSnapshot {
+    structure: Vec<String>,
+    semantic: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NamespaceMarker {
+    raw: Vec<u8>,
+    namespace_facts: Vec<(String, Option<String>)>,
+}
+
+fn is_modeled_owner(local_name: &[u8]) -> bool {
+    matches!(
+        local_name,
+        b"p" | b"tbl" | b"tc" | b"sdt" | b"hyperlink" | b"r"
+    )
+}
+
+fn is_modeled_word_child(parent: Option<&[u8]>, local_name: &[u8]) -> bool {
+    match parent {
+        Some(b"p") => matches!(
+            local_name,
+            b"pPr"
+                | b"r"
+                | b"fldSimple"
+                | b"hyperlink"
+                | b"sdt"
+                | b"bookmarkStart"
+                | b"bookmarkEnd"
+                | b"commentRangeStart"
+                | b"commentRangeEnd"
+                | b"ins"
+                | b"del"
+                | b"moveFrom"
+                | b"moveTo"
+        ),
+        Some(b"r") => matches!(
+            local_name,
+            b"rPr"
+                | b"t"
+                | b"delText"
+                | b"tab"
+                | b"br"
+                | b"drawing"
+                | b"fldChar"
+                | b"instrText"
+                | b"commentReference"
+                | b"footnoteReference"
+                | b"endnoteReference"
+        ),
+        Some(b"hyperlink") => {
+            matches!(local_name, b"r" | b"ins" | b"del" | b"moveFrom" | b"moveTo")
+        }
+        Some(b"sdt") => matches!(local_name, b"sdtPr" | b"sdtEndPr" | b"sdtContent"),
+        Some(b"sdtContent") => {
+            matches!(local_name, b"p" | b"tbl" | b"tr" | b"tc" | b"r" | b"sdt")
+        }
+        Some(b"tbl") => matches!(local_name, b"tblPr" | b"tblGrid" | b"tr" | b"sdt"),
+        Some(b"tblGrid") => local_name == b"gridCol",
+        Some(b"tr") => matches!(local_name, b"trPr" | b"tc" | b"sdt"),
+        Some(b"tc") => matches!(local_name, b"tcPr" | b"p" | b"tbl" | b"sdt"),
+        _ => false,
+    }
+}
+
+fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut inside_body = false;
+    let mut depth = 0usize;
+    let mut owner_stack = Vec::new();
+    let mut scope_stack: Vec<Vec<(String, String)>> = Vec::new();
+    let mut spans: Vec<ModeledOwnerSpan> = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid nested namespace scope: {error}")))?;
+        let is_word = matches!(
+            namespace,
+            ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes()
+        );
+        let end = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let local_name = element.local_name();
+                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                apply_namespace_declarations(&element, &mut bindings)?;
+                if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
+                    let index = spans.len();
+                    spans.push(ModeledOwnerSpan {
+                        local_name: std::str::from_utf8(local_name.as_ref())
+                            .map_err(|error| {
+                                Error::Other(format!("invalid nested element name: {error}"))
+                            })?
+                            .to_owned(),
+                        start,
+                        end: 0,
+                        declarations: namespace_declarations(&element)?,
+                        bindings: bindings.clone(),
+                    });
+                    owner_stack.push((depth, index));
+                }
+                if is_word && local_name.as_ref() == b"body" {
+                    inside_body = true;
+                }
+                scope_stack.push(bindings);
+                depth += 1;
+            }
+            Event::Empty(element) => {
+                let local_name = element.local_name();
+                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                apply_namespace_declarations(&element, &mut bindings)?;
+                if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
+                    spans.push(ModeledOwnerSpan {
+                        local_name: std::str::from_utf8(local_name.as_ref())
+                            .map_err(|error| {
+                                Error::Other(format!("invalid nested element name: {error}"))
+                            })?
+                            .to_owned(),
+                        start,
+                        end,
+                        declarations: namespace_declarations(&element)?,
+                        bindings,
+                    });
+                }
+            }
+            Event::End(element) => {
+                depth = depth.saturating_sub(1);
+                scope_stack.pop();
+                if owner_stack
+                    .last()
+                    .is_some_and(|(owner_depth, _)| *owner_depth == depth)
+                {
+                    let (_, index) = owner_stack.pop().expect("checked owner stack");
+                    spans[index].end = end;
+                }
+                if inside_body && is_word && matches_local_name(element.name().as_ref(), b"body") {
+                    inside_body = false;
+                }
+            }
+            Event::Eof => {
+                if spans.iter().any(|span| span.end == 0) {
+                    return Err(Error::Other(
+                        "unterminated modeled namespace owner".to_owned(),
+                    ));
+                }
+                return Ok(spans);
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn element_declared_prefixes(
+    element: &BytesStart<'_>,
+    declarations: &[(String, String)],
+    bindings: &[(String, String)],
+    parent_local_name: Option<&[u8]>,
+    shadowed_owner_prefixes: &HashSet<String>,
+) -> Vec<String> {
+    let prefixes = declarations
+        .iter()
+        .map(|(name, value)| (namespace_prefix(name), value.as_str()))
+        .collect::<Vec<_>>();
+    let local_declarations = local_namespace_prefixes(element);
+    let mut used = Vec::new();
+    let element_is_modeled_word =
+        is_modeled_word_child(parent_local_name, element.local_name().as_ref());
+    let qualified_name = element.name();
+    let element_prefix = std::str::from_utf8(qualified_name.as_ref())
+        .ok()
+        .map(|name| name.split_once(':').map_or("", |(prefix, _)| prefix));
+    if element_prefix.is_some_and(|prefix| {
+        prefixes.iter().any(|(candidate, value)| {
+            candidate == prefix
+                && !shadowed_owner_prefixes.contains(prefix)
+                && inherited_namespace(bindings, prefix) == Some(*value)
+                && !(*value == WORD_NAMESPACE && element_is_modeled_word)
+        }) && !local_declarations.contains(prefix)
+    }) {
+        used.push(element_prefix.unwrap_or_default().to_owned());
+    }
+    for attribute in element.attributes().flatten() {
+        let Some(name) = std::str::from_utf8(attribute.key.as_ref()).ok() else {
+            continue;
+        };
+        let Some((prefix, _)) = name.split_once(':') else {
+            continue;
+        };
+        if prefix != "xmlns"
+            && prefixes.iter().any(|(candidate, value)| {
+                candidate == prefix
+                    && !shadowed_owner_prefixes.contains(prefix)
+                    && inherited_namespace(bindings, prefix) == Some(*value)
+                    && !(*value == WORD_NAMESPACE && element_is_modeled_word)
+            })
+            && !local_declarations.contains(prefix)
+            && !used.iter().any(|candidate| candidate == prefix)
+        {
+            used.push(prefix.to_owned());
+        }
+    }
+    used
+}
+
+fn local_namespace_prefixes(element: &BytesStart<'_>) -> HashSet<String> {
+    element
+        .attributes()
+        .flatten()
+        .filter_map(|attribute| {
+            let name = std::str::from_utf8(attribute.key.as_ref()).ok()?;
+            (name == "xmlns" || name.starts_with("xmlns:")).then(|| namespace_prefix(name))
+        })
+        .collect()
+}
+
+fn resolved_snapshot_name(
+    qualified_name: &[u8],
+    bindings: &[(String, String)],
+    default_namespace_applies: bool,
+) -> Result<String> {
+    let qualified_name = std::str::from_utf8(qualified_name)
+        .map_err(|error| Error::Other(format!("invalid logical owner name: {error}")))?;
+    let (prefix, local_name) = qualified_name
+        .split_once(':')
+        .map_or(("", qualified_name), |(prefix, local)| (prefix, local));
+    let namespace = if prefix == "xml" {
+        Some(XML_NAMESPACE)
+    } else if prefix.is_empty() && !default_namespace_applies {
+        None
+    } else {
+        inherited_namespace(bindings, prefix)
+    };
+    let namespace = match namespace {
+        Some(WORD_NAMESPACE) => WORD_NAMESPACE.to_owned(),
+        Some(XML_NAMESPACE) => XML_NAMESPACE.to_owned(),
+        _ if !prefix.is_empty() => format!("#prefix:{prefix}"),
+        Some(namespace) => namespace.to_owned(),
+        None => String::new(),
+    };
+    Ok(format!("{{{namespace}}}{local_name}"))
+}
+
+fn logical_owner_snapshot(
+    owner_xml: &[u8],
+    inherited_bindings: &[(String, String)],
+    prospective_declarations: &[(String, String)],
+) -> Result<LogicalOwnerSnapshot> {
+    let mut reader = quick_xml::Reader::from_reader(owner_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut owner_bindings = inherited_bindings.to_vec();
+    owner_bindings.extend(prospective_declarations.iter().cloned());
+    let mut scope_stack = vec![owner_bindings];
+    let mut structure = Vec::new();
+    let mut semantic = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid logical owner XML: {error}")))?;
+        match event {
+            event @ (Event::Start(_) | Event::Empty(_)) => {
+                let is_start = matches!(&event, Event::Start(_));
+                let element = match event {
+                    Event::Start(element) | Event::Empty(element) => element,
+                    _ => unreachable!(),
+                };
+                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                apply_namespace_declarations(&element, &mut bindings)?;
+                let name = resolved_snapshot_name(element.name().as_ref(), &bindings, true)?;
+                let mut attribute_names = Vec::new();
+                let mut attribute_values = Vec::new();
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("invalid logical owner attribute: {error}"))
+                    })?;
+                    if attribute.key.as_ref() == b"xmlns"
+                        || attribute.key.as_ref().starts_with(b"xmlns:")
+                    {
+                        continue;
+                    }
+                    let attribute_name =
+                        resolved_snapshot_name(attribute.key.as_ref(), &bindings, false)?;
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                        .map_err(|error| {
+                            Error::Other(format!("invalid logical owner attribute: {error}"))
+                        })?
+                        .into_owned();
+                    attribute_names.push(attribute_name.clone());
+                    attribute_values.push(format!("{attribute_name}={value}"));
+                }
+                attribute_names.sort();
+                attribute_values.sort();
+                structure.push(format!("start:{name}:[{}]", attribute_names.join(",")));
+                semantic.push(format!("start:{name}:[{}]", attribute_values.join(",")));
+                if is_start {
+                    scope_stack.push(bindings);
+                } else {
+                    structure.push(format!("end:{name}"));
+                    semantic.push(format!("end:{name}"));
+                }
+            }
+            Event::End(element) => {
+                let bindings = scope_stack.last().cloned().unwrap_or_default();
+                let name = resolved_snapshot_name(element.name().as_ref(), &bindings, true)?;
+                structure.push(format!("end:{name}"));
+                semantic.push(format!("end:{name}"));
+                scope_stack.pop();
+            }
+            Event::Text(text) => {
+                if xml_bytes_are_whitespace(text.as_ref()) {
+                    buffer.clear();
+                    continue;
+                }
+                structure.push("text".to_owned());
+                semantic.push(format!("text:{}", String::from_utf8_lossy(text.as_ref())));
+            }
+            Event::CData(text) => {
+                structure.push("cdata".to_owned());
+                semantic.push(format!("cdata:{}", String::from_utf8_lossy(text.as_ref())));
+            }
+            Event::GeneralRef(reference) => {
+                structure.push("reference".to_owned());
+                semantic.push(format!(
+                    "reference:{}",
+                    String::from_utf8_lossy(reference.as_ref())
+                ));
+            }
+            Event::Comment(comment) => {
+                structure.push("comment".to_owned());
+                semantic.push(format!(
+                    "comment:{}",
+                    String::from_utf8_lossy(comment.as_ref())
+                ));
+            }
+            Event::PI(instruction) => {
+                structure.push("processing-instruction".to_owned());
+                semantic.push(format!(
+                    "processing-instruction:{}",
+                    String::from_utf8_lossy(instruction.as_ref())
+                ));
+            }
+            Event::Eof => {
+                return Ok(LogicalOwnerSnapshot {
+                    structure,
+                    semantic,
+                });
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn namespace_owner_markers(
+    owner_xml: &[u8],
+    declarations: &[(String, String)],
+    inherited_bindings: &[(String, String)],
+) -> Result<Vec<NamespaceMarker>> {
+    let mut reader = quick_xml::Reader::from_reader(owner_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut stack = Vec::new();
+    let mut element_stack: Vec<Vec<u8>> = Vec::new();
+    let mut empty_markers = Vec::new();
+    let mut expanded_markers = Vec::new();
+    // Candidate owners are inspected before their retained declarations have
+    // been replayed. Seed those prospective bindings at the owner boundary so
+    // descendant uses can still be matched, while declarations encountered
+    // inside the raw subtree continue to shadow them normally.
+    let mut owner_bindings = inherited_bindings.to_vec();
+    owner_bindings.extend(declarations.iter().cloned());
+    let mut scope_stack = vec![owner_bindings];
+    let mut shadow_stack = vec![HashSet::<String>::new()];
+    let mut depth = 0usize;
+    loop {
+        let start = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid namespace owner marker: {error}")))?;
+        let end = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                apply_namespace_declarations(&element, &mut bindings)?;
+                let mut shadowed = shadow_stack.last().cloned().unwrap_or_default();
+                if depth > 0 {
+                    shadowed.extend(local_namespace_prefixes(&element));
+                }
+                let used_prefixes = if depth > 0 {
+                    element_declared_prefixes(
+                        &element,
+                        declarations,
+                        &bindings,
+                        element_stack.last().map(Vec::as_slice),
+                        &shadowed,
+                    )
+                } else {
+                    Vec::new()
+                };
+                let facts = used_prefixes
+                    .into_iter()
+                    .map(|prefix| {
+                        let namespace = inherited_namespace(&bindings, &prefix).map(str::to_owned);
+                        (prefix, namespace)
+                    })
+                    .collect::<Vec<_>>();
+                stack.push((start, facts));
+                element_stack.push(element.local_name().as_ref().to_vec());
+                scope_stack.push(bindings);
+                shadow_stack.push(shadowed);
+                depth += 1;
+            }
+            Event::Empty(element) => {
+                let mut bindings = scope_stack.last().cloned().unwrap_or_default();
+                apply_namespace_declarations(&element, &mut bindings)?;
+                let mut shadowed = shadow_stack.last().cloned().unwrap_or_default();
+                if depth > 0 {
+                    shadowed.extend(local_namespace_prefixes(&element));
+                }
+                let used_prefixes = if depth > 0 {
+                    element_declared_prefixes(
+                        &element,
+                        declarations,
+                        &bindings,
+                        element_stack.last().map(Vec::as_slice),
+                        &shadowed,
+                    )
+                } else {
+                    Vec::new()
+                };
+                if !used_prefixes.is_empty() {
+                    let namespace_facts = used_prefixes
+                        .into_iter()
+                        .map(|prefix| {
+                            let namespace =
+                                inherited_namespace(&bindings, &prefix).map(str::to_owned);
+                            (prefix, namespace)
+                        })
+                        .collect();
+                    empty_markers.push(NamespaceMarker {
+                        raw: owner_xml[start..end].to_vec(),
+                        namespace_facts,
+                    });
+                }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                scope_stack.pop();
+                shadow_stack.pop();
+                element_stack.pop();
+                if let Some((marker_start, namespace_facts)) = stack.pop()
+                    && !namespace_facts.is_empty()
+                {
+                    expanded_markers.push(NamespaceMarker {
+                        raw: owner_xml[marker_start..end].to_vec(),
+                        namespace_facts,
+                    });
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    empty_markers.extend(expanded_markers);
+    Ok(empty_markers)
+}
+
+fn marker_multiset_matches(
+    expected: &[NamespaceMarker],
+    actual: &[NamespaceMarker],
+    include_namespace_facts: bool,
+) -> bool {
+    if expected.len() != actual.len() {
+        return false;
+    }
+    let mut matched = vec![false; actual.len()];
+    expected.iter().all(|marker| {
+        let candidate = actual.iter().enumerate().position(|(index, candidate)| {
+            !matched[index]
+                && candidate.raw == marker.raw
+                && (!include_namespace_facts || candidate.namespace_facts == marker.namespace_facts)
+        });
+        if let Some(index) = candidate {
+            matched[index] = true;
+            true
+        } else {
+            false
+        }
+    })
+}
+
+fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwner>> {
+    let spans = modeled_owner_spans(xml)?;
+    let mut owners = Vec::new();
+    for span in &spans {
+        let mut declarations = span.declarations.clone();
+        if declarations.is_empty() {
+            continue;
+        }
+        let markers =
+            namespace_owner_markers(&xml[span.start..span.end], &declarations, &span.bindings)?;
+        if markers.is_empty() {
+            continue;
+        }
+        let used_prefixes = markers
+            .iter()
+            .flat_map(|marker| marker.namespace_facts.iter())
+            .map(|(prefix, _)| prefix.as_str())
+            .collect::<HashSet<_>>();
+        declarations.retain(|(name, _)| used_prefixes.contains(namespace_prefix(name).as_str()));
+        let snapshot =
+            logical_owner_snapshot(&xml[span.start..span.end], &span.bindings, &declarations)?;
+        let ambiguous_without_namespace = spans.iter().any(|candidate| {
+            if candidate.start == span.start || candidate.local_name != span.local_name {
+                return false;
+            }
+            let Ok(candidate_snapshot) = logical_owner_snapshot(
+                &xml[candidate.start..candidate.end],
+                &candidate.bindings,
+                &declarations,
+            ) else {
+                return true;
+            };
+            if candidate_snapshot != snapshot {
+                return false;
+            }
+            let Ok(candidate_markers) = namespace_owner_markers(
+                &xml[candidate.start..candidate.end],
+                &declarations,
+                &candidate.bindings,
+            ) else {
+                return true;
+            };
+            marker_multiset_matches(&markers, &candidate_markers, false)
+        });
+        let same_marker_structural_alternate = spans.iter().any(|candidate| {
+            if candidate.start == span.start || candidate.local_name != span.local_name {
+                return false;
+            }
+            let Ok(candidate_snapshot) = logical_owner_snapshot(
+                &xml[candidate.start..candidate.end],
+                &candidate.bindings,
+                &declarations,
+            ) else {
+                return true;
+            };
+            if candidate_snapshot.structure != snapshot.structure {
+                return false;
+            }
+            let Ok(candidate_markers) = namespace_owner_markers(
+                &xml[candidate.start..candidate.end],
+                &declarations,
+                &candidate.bindings,
+            ) else {
+                return true;
+            };
+            marker_multiset_matches(&markers, &candidate_markers, false)
+        });
+        let same_namespace_structural_alternate = spans.iter().any(|candidate| {
+            if candidate.start == span.start || candidate.local_name != span.local_name {
+                return false;
+            }
+            let Ok(candidate_snapshot) = logical_owner_snapshot(
+                &xml[candidate.start..candidate.end],
+                &candidate.bindings,
+                &declarations,
+            ) else {
+                return true;
+            };
+            if candidate_snapshot.structure != snapshot.structure {
+                return false;
+            }
+            let Ok(candidate_markers) = namespace_owner_markers(
+                &xml[candidate.start..candidate.end],
+                &declarations,
+                &candidate.bindings,
+            ) else {
+                return true;
+            };
+            marker_multiset_matches(&markers, &candidate_markers, true)
+        });
+        owners.push(NestedNamespaceOwner {
+            local_name: span.local_name.clone(),
+            declarations,
+            snapshot,
+            markers,
+            ambiguous_without_namespace,
+            same_marker_structural_alternate,
+            same_namespace_structural_alternate,
+        });
+    }
+    Ok(owners)
+}
+
+fn unsafe_nested_namespace_prefix(owners: &[NestedNamespaceOwner]) -> Option<String> {
+    owners.iter().find_map(|owner| {
+        owner.declarations.iter().find_map(|(name, value)| {
+            let prefix = namespace_prefix(name);
+            if owner.local_name == "hyperlink" && prefix == "r" {
+                return None;
+            }
+            canonical_serializer_namespace(&prefix)
+                .is_some_and(|expected| value != expected)
+                .then_some(prefix)
+        })
+    })
+}
+
+fn replay_nested_namespace_declarations(
+    xml: &[u8],
+    owners: &[NestedNamespaceOwner],
+) -> Result<Vec<u8>> {
+    if owners.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let spans = modeled_owner_spans(xml)?;
+    let mut targets: Vec<(usize, &NestedNamespaceOwner)> = Vec::new();
+    for owner in owners {
+        let mut candidates = Vec::new();
+        for span in spans
+            .iter()
+            .filter(|span| span.local_name == owner.local_name)
+        {
+            let snapshot = logical_owner_snapshot(
+                &xml[span.start..span.end],
+                &span.bindings,
+                &owner.declarations,
+            )?;
+            if snapshot.structure != owner.snapshot.structure {
+                continue;
+            }
+            let markers = namespace_owner_markers(
+                &xml[span.start..span.end],
+                &owner.declarations,
+                &span.bindings,
+            )?;
+            if marker_multiset_matches(&owner.markers, &markers, false) {
+                candidates.push((span, snapshot, markers));
+            }
+        }
+        let namespace_candidates = candidates
+            .iter()
+            .filter(|(_, _, markers)| marker_multiset_matches(&owner.markers, markers, true))
+            .collect::<Vec<_>>();
+        let target = match namespace_candidates.as_slice() {
+            [candidate] if !owner.same_namespace_structural_alternate => candidate.0,
+            [candidate]
+                if !owner.ambiguous_without_namespace
+                    && candidate.1.semantic == owner.snapshot.semantic =>
+            {
+                candidate.0
+            }
+            [] if !owner.ambiguous_without_namespace => {
+                let semantic_candidates = candidates
+                    .iter()
+                    .filter(|(_, snapshot, _)| snapshot.semantic == owner.snapshot.semantic)
+                    .collect::<Vec<_>>();
+                match semantic_candidates.as_slice() {
+                    [candidate] => candidate.0,
+                    [] if candidates.len() == 1 && !owner.same_marker_structural_alternate => {
+                        candidates[0].0
+                    }
+                    _ => {
+                        return Err(Error::Other(format!(
+                            "cannot identify retained `{}` nested namespace owner after mutation",
+                            owner.local_name
+                        )));
+                    }
+                }
+            }
+            candidates => {
+                if owner.ambiguous_without_namespace && owner.same_namespace_structural_alternate {
+                    return Err(Error::Other(format!(
+                        "cannot identify retained `{}` nested namespace owner after mutation",
+                        owner.local_name
+                    )));
+                }
+                let semantic_candidates = candidates
+                    .iter()
+                    .filter(|candidate| candidate.1.semantic == owner.snapshot.semantic)
+                    .collect::<Vec<_>>();
+                let [candidate] = semantic_candidates.as_slice() else {
+                    return Err(Error::Other(format!(
+                        "cannot identify retained `{}` nested namespace owner after mutation",
+                        owner.local_name
+                    )));
+                };
+                candidate.0
+            }
+        };
+        if owner.declarations.iter().all(|declaration| {
+            target
+                .declarations
+                .iter()
+                .any(|candidate| candidate == declaration)
+        }) {
+            continue;
+        }
+        targets.push((target.start, owner));
+    }
+    if targets.is_empty() {
+        return Ok(xml.to_vec());
+    }
+
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    let mut replayed = 0usize;
+    loop {
+        let start = reader.buffer_position() as usize;
+        let (_namespace, event) =
+            reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|error| {
+                    Error::Other(format!("invalid serialized namespace scope: {error}"))
+                })?;
+        let starts_scope = matches!(&event, Event::Start(_));
+        match event {
+            Event::Start(mut element) | Event::Empty(mut element) => {
+                if let Some((_, owner)) = targets.iter().find(|(target, _)| *target == start) {
+                    let existing = namespace_declarations(&element)?;
+                    for (name, value) in &owner.declarations {
+                        match existing.iter().find(|(candidate, _)| candidate == name) {
+                            Some((_, existing_value)) if existing_value == value => {}
+                            Some(_) => {
+                                return Err(Error::Other(format!(
+                                    "cannot replay conflicting `{}` namespace after mutation",
+                                    namespace_prefix(name),
+                                )));
+                            }
+                            None => element.push_attribute((name.as_str(), value.as_str())),
+                        }
+                    }
+                    replayed += 1;
+                }
+                writer.write_event(if starts_scope {
+                    Event::Start(element)
+                } else {
+                    Event::Empty(element)
+                })?;
+            }
+            Event::End(element) => writer.write_event(Event::End(element))?,
+            Event::Eof => {
+                if replayed < targets.len() {
+                    return Err(Error::Other(
+                        "cannot align retained nested namespace declarations after mutation"
+                            .to_owned(),
+                    ));
+                }
+                return Ok(writer.into_inner());
+            }
+            event => writer.write_event(event)?,
+        }
+        buffer.clear();
+    }
+}
+
+/// One body child exposed through the compatibility reader facade.
+#[non_exhaustive]
+pub enum BodyContentRef<'a> {
+    /// A body paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A body table.
+    Table(TableRef<'a>),
+    /// Content that the compatibility facade does not model.
+    UnsupportedXml(UnsupportedXmlRef<'a>),
+}
+
 /// A Word document (.docx file).
 ///
 /// This is the main entry point for reading, creating, and modifying
@@ -69,6 +1195,12 @@ pub enum BodyItemRef<'a> {
 pub struct Document {
     pub(crate) package: OpcPackage,
     pub(crate) document: CT_Document,
+    /// Namespace declarations on the original document root.
+    root_namespace_declarations: Vec<(String, String)>,
+    /// Namespace declarations local to the original document body.
+    body_namespace_declarations: Vec<(String, String)>,
+    /// Namespace declarations in scope on the original document body.
+    body_namespace_bindings: Vec<(String, String)>,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     pub(crate) core_properties: Option<CoreProperties>,
@@ -431,6 +1563,9 @@ impl Document {
         Document {
             package,
             document,
+            root_namespace_declarations: Vec::new(),
+            body_namespace_declarations: Vec::new(),
+            body_namespace_bindings: Vec::new(),
             styles,
             numbering: None,
             core_properties: None,
@@ -463,6 +1598,9 @@ impl Document {
         Self {
             package: self.package.clone(),
             document: self.document.clone(),
+            root_namespace_declarations: self.root_namespace_declarations.clone(),
+            body_namespace_declarations: self.body_namespace_declarations.clone(),
+            body_namespace_bindings: self.body_namespace_bindings.clone(),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
@@ -582,6 +1720,7 @@ impl Document {
         let doc_xml = package
             .get_part(&doc_part_name)
             .ok_or(Error::NoDocumentPart)?;
+        let namespace_scopes = document_namespace_scopes(doc_xml)?;
         let document = CT_Document::from_xml(doc_xml)?;
 
         // Resolve the part a relationship of the given type points at.
@@ -670,6 +1809,9 @@ impl Document {
         Ok(Document {
             package,
             document,
+            root_namespace_declarations: namespace_scopes.root_declarations,
+            body_namespace_declarations: namespace_scopes.body_declarations,
+            body_namespace_bindings: namespace_scopes.body_bindings,
             styles,
             numbering,
             core_properties,
@@ -836,7 +1978,12 @@ impl Document {
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn save_encrypted<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<()> {
         let bytes = self.to_encrypted_bytes(password)?;
-        write_encrypted_file(path.as_ref(), &bytes)?;
+        write_atomic_file(
+            path.as_ref(),
+            &bytes,
+            "invalid file name",
+            "could not allocate encrypted-save staging file",
+        )?;
         Ok(())
     }
 
@@ -854,8 +2001,37 @@ impl Document {
 
     /// Write the in-memory document/styles back into the OPC package parts.
     pub(crate) fn flush_to_package(&mut self) -> Result<()> {
-        // Serialize document.xml
-        let doc_xml = self.document.to_xml()?;
+        // A read-only save with unsafe retained namespace shadows keeps the
+        // producer's complete scopes and every retained raw subtree byte for
+        // byte. A modified document fails closed when canonical serialization
+        // could change the meaning or bytes of retained content.
+        let existing_document_xml = self.package.get_part(&self.doc_part_name);
+        let typed_document_is_unchanged = existing_document_xml
+            .and_then(|xml| CT_Document::from_xml(xml).ok())
+            .as_ref()
+            == Some(&self.document);
+        let nested_namespace_owners = existing_document_xml
+            .map(nested_modeled_namespace_owners)
+            .transpose()?
+            .unwrap_or_default();
+        let unsafe_prefix = unsafe_serializer_namespace_prefix(
+            &self.root_namespace_declarations,
+            &self.body_namespace_declarations,
+        )
+        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
+        let doc_xml = if typed_document_is_unchanged && unsafe_prefix.is_some() {
+            existing_document_xml
+                .expect("compared existing document XML")
+                .to_vec()
+        } else {
+            if let Some(prefix) = unsafe_prefix {
+                return Err(Error::Other(format!(
+                    "cannot serialize a modified document with a shadowed `{prefix}` namespace"
+                )));
+            }
+            let serialized = self.document.to_xml()?;
+            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
+        };
         self.package.set_part(&self.doc_part_name, doc_xml);
 
         // Serialize the styles part. A document opened without one still gets
@@ -1084,6 +2260,31 @@ impl Document {
                 BodyItemRef::ContentControl(ContentControlRef { inner: control })
             }
             BodyContent::RawXml(raw) => BodyItemRef::UnsupportedXml(raw),
+        })
+    }
+
+    /// Iterate over paragraphs, tables, and unsupported content in body order.
+    ///
+    /// This compatibility view reports content controls as modeled unsupported
+    /// facts without fabricating raw XML bytes.
+    pub fn body_content(&self) -> impl Iterator<Item = BodyContentRef<'_>> {
+        self.document.body.content.iter().map(|item| match item {
+            BodyContent::Paragraph(paragraph) => {
+                BodyContentRef::Paragraph(ParagraphRef { inner: paragraph })
+            }
+            BodyContent::Table(table) => BodyContentRef::Table(TableRef { inner: table }),
+            BodyContent::ContentControl(control) => {
+                BodyContentRef::UnsupportedXml(UnsupportedXmlRef::modeled(
+                    "w:sdt",
+                    WORD_NAMESPACE,
+                    "sdt",
+                    control.has_child_content(),
+                ))
+            }
+            BodyContent::RawXml(raw) => BodyContentRef::UnsupportedXml(UnsupportedXmlRef::raw(
+                raw,
+                &self.body_namespace_bindings,
+            )),
         })
     }
 
@@ -1596,8 +2797,12 @@ impl Document {
     pub fn numbering_is_bullet(&self, num_id: u32) -> Option<bool> {
         let numbering = self.numbering.as_ref()?;
         let abstract_num = numbering.get_abstract_num_for(num_id)?;
-        let fmt = abstract_num.levels.first()?.num_fmt?;
-        Some(fmt == rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+        let fmt = abstract_num.levels.first()?.num_fmt.as_ref()?;
+        match fmt {
+            rdocx_oxml::numbering::ST_NumberFormat::Bullet => Some(true),
+            rdocx_oxml::numbering::ST_NumberFormat::Other(_) => None,
+            _ => Some(false),
+        }
     }
 
     /// Append an external hyperlink to the last paragraph (creating one if
@@ -2253,8 +3458,8 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
-                            == Some(rdocx_oxml::numbering::ST_NumberFormat::Bullet)
+                        a.levels.first().and_then(|l| l.num_fmt.as_ref())
+                            == Some(&rdocx_oxml::numbering::ST_NumberFormat::Bullet)
                     })
                     .unwrap_or(false)
             });
@@ -2297,8 +3502,8 @@ impl Document {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
-                        a.levels.first().and_then(|l| l.num_fmt)
-                            == Some(rdocx_oxml::numbering::ST_NumberFormat::Decimal)
+                        a.levels.first().and_then(|l| l.num_fmt.as_ref())
+                            == Some(&rdocx_oxml::numbering::ST_NumberFormat::Decimal)
                     })
                     .unwrap_or(false)
             });
@@ -3834,6 +5039,42 @@ impl Document {
         ))
     }
 
+    /// Render one zero-based page as a self-contained searchable SVG document.
+    ///
+    /// An index beyond the laid-out document returns `None`. Layout diagnostics
+    /// precede path-specific SVG lowering diagnostics in the returned result.
+    pub fn render_page_to_svg(&self, page_index: usize) -> Result<Option<crate::SvgRenderResult>> {
+        self.render_page_to_svg_with_options(page_index, RenderOptions::default())
+    }
+
+    /// Render one page as SVG with the selected revision view.
+    pub fn render_page_to_svg_with_options(
+        &self,
+        page_index: usize,
+        options: RenderOptions,
+    ) -> Result<Option<crate::SvgRenderResult>> {
+        let layout = self.layout_with_options(options)?;
+        Ok(crate::svg::render_page(&layout.layout, page_index))
+    }
+
+    /// Render one page as SVG using bundled fonts without system font discovery.
+    pub fn render_page_to_svg_deterministic(
+        &self,
+        page_index: usize,
+    ) -> Result<Option<crate::SvgRenderResult>> {
+        self.render_page_to_svg_deterministic_with_options(page_index, RenderOptions::default())
+    }
+
+    /// Render one revision view as deterministic SVG using bundled fonts.
+    pub fn render_page_to_svg_deterministic_with_options(
+        &self,
+        page_index: usize,
+        options: RenderOptions,
+    ) -> Result<Option<crate::SvgRenderResult>> {
+        let layout = self.layout_for_options(options, true)?;
+        Ok(crate::svg::render_page(&layout.layout, page_index))
+    }
+
     /// Render selected zero-based pages to the requested image format.
     pub fn render_pages(
         &self,
@@ -4481,11 +5722,15 @@ impl Document {
     }
 }
 
-#[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
-fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic_file(
+    path: &Path,
+    bytes: &[u8],
+    invalid_name_message: &'static str,
+    exhausted_message: &'static str,
+) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, invalid_name_message)
     })?;
     for attempt in 0..128_u8 {
         let mut temporary_name = std::ffi::OsString::from(".");
@@ -4511,7 +5756,7 @@ fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        "could not allocate encrypted-save staging file",
+        exhausted_message,
     ))
 }
 
@@ -5127,6 +6372,44 @@ mod tests {
     const WORD_BUILD: &str = "16.104.25121423";
     const WORD_CHART_CANDIDATE_SHA256: &str =
         "79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b";
+
+    #[test]
+    fn unsupported_names_come_from_the_accepted_parser_event() {
+        assert_eq!(
+            raw_element_names(b"<?producer keep?><x:item xmlns:x=\"urn:test\"/>")
+                .as_ref()
+                .map(|(qualified, local)| (qualified.as_str(), local.as_str())),
+            Some(("x:item", "item")),
+        );
+    }
+
+    #[test]
+    fn namespace_declaration_decoding_keeps_xml_error_classification() {
+        let valid = format!(
+            "<w:document xmlns:w=\"{WORD_NAMESPACE}\" xmlns:x=\"urn:plain\" \
+             xmlns:y=\"urn:a&amp;b\"><w:body/></w:document>"
+        );
+        let scopes = document_namespace_scopes(valid.as_bytes()).unwrap();
+        assert!(
+            scopes
+                .root_declarations
+                .contains(&("xmlns:x".to_owned(), "urn:plain".to_owned()))
+        );
+        assert!(
+            scopes
+                .root_declarations
+                .contains(&("xmlns:y".to_owned(), "urn:a&b".to_owned()))
+        );
+
+        let malformed = format!(
+            "<w:document xmlns:w=\"{WORD_NAMESPACE}\" \
+             xmlns:x=\"urn:&bad;\"><w:body/></w:document>"
+        );
+        assert!(matches!(
+            document_namespace_scopes(malformed.as_bytes()),
+            Err(Error::Oxml(_))
+        ));
+    }
 
     fn minimal_chart_workbook() -> Workbook {
         Workbook::new(

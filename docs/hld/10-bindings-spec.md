@@ -240,6 +240,55 @@ projected into the existing Word model. Safe lossy skips are diagnosed.
 Python, WASM, and CLI surfaces gain no ODT import entry point and retain their
 existing methods and error contracts.
 
+Native Rust callers can export OpenDocument Text through
+`Document::to_odt_bytes` and `Document::save_odt`. The byte method returns an
+`OdtWriteResult` containing deterministic package bytes and ordered
+`OdtDiagnostic` values with stable document paths. The path method serializes
+completely, stages and syncs a sibling file, then publishes through the shared
+portable replacement primitive. A failure cannot truncate an existing
+destination. Export does not mutate the source document. Python, WASM, and CLI
+surfaces gain no ODT export entry point and retain their existing contracts.
+
+Native Rust callers can export EPUB 3 through `Document::to_epub_bytes` and
+`Document::save_epub`. The byte API returns `EpubWriteResult`, which carries
+the bounded deterministic publication and ordered location-aware
+`EpubDiagnostic` values. The path API serializes first, stages beside the
+destination, publishes atomically, and returns the same diagnostics. Outline
+roots define spine items, content before the first root becomes front matter,
+and a document without headings produces one item. Metadata uses stable title
+and author fallbacks, while supported text, lists, tables, hyperlinks, and
+images retain the established outbound HTML semantics. List identity, restart
+values, nested levels, no-marker levels, and standard Roman and letter marker
+formats remain distinct. An interrupted ordered list with the same numbering
+identity continues from its next value, while nested numbering restarts for a
+new parent. A numbered heading remains a heading inside its list item and owns
+the navigation anchor. Custom marker text, marker styling, marker alignment,
+and list semantics inside a table cell are diagnosed when EPUB list semantics
+cannot preserve them. Supported image descriptions become XHTML alternative
+text. Heading and navigation labels use only bounded direct projected runs.
+Only structurally validated byte-sniffed PNG, JPEG, and GIF media referenced by
+surviving body drawings is packaged. Extension fallback is forbidden, and SVG
+is diagnosed and omitted. Drawing names, extents, preserved drawing XML,
+alternate drawings, preserved Word text spacing, and simplified column breaks
+receive stable loss diagnostics. Explicit no-underline formatting remains
+non-underlined. Non-basic underline styles, patterned, foreground, or invalid
+paragraph, run, and table-cell shading, style-derived deep headings, final
+section properties, and document backgrounds are diagnosed at their source
+locations. A paragraph without an explicit style receives a diagnostic when
+document defaults or its effective default paragraph style carry active
+paragraph formatting, or when active run formatting affects direct projected
+text. Revision, change, and raw-only default state does not produce noise.
+Preserved deleted text reports both spacing normalization and revision
+flattening exactly once. Each dropped modeled item,
+raw item, field semantic, relationship occurrence, or simplified property has
+an ordered source-location diagnostic. This includes dropped named paragraph
+style effects, reduced heading levels, and unconsumed document metadata. Typed
+and raw views of one revision wrapper produce one diagnostic even when Word and
+foreign namespace aliases share a paragraph boundary. Paragraph-local namespace
+shadows override document-root bindings during that correlation. Python,
+WASM, and CLI surfaces gain no EPUB entry point and retain their existing error
+contracts.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method
@@ -399,6 +448,15 @@ flatten control content, and it does not change the recursive semantics of
 WASM, and CLI surfaces gain no ordered-body method and continue to preserve a
 document opened and saved through their existing owners.
 
+Native Word callers inspect direct order below the body through
+`CellRef::items`, `ParagraphRef::items`, `HyperlinkRef::items`, and
+`RunRef::items`. The non-exhaustive borrowed item enums expose every supported
+typed child and each unsupported raw subtree at its original boundary.
+`UnsupportedXmlRef` separately reports qualified name, local name, namespace
+URI, and whether child content exists. Raw bytes are available only for an
+actual preserved raw subtree. Existing flattened accessors remain unchanged,
+and Python, WASM, and CLI gain no corresponding methods.
+
 Native Word callers inspect tracked changes through `Document::revisions`.
 Each immutable `RevisionRef` exposes the revision id, author, optional
 timestamp, and `RevisionKind`. Results recursively cover the main document
@@ -501,6 +559,15 @@ keyword-only `render_pages` arguments, keeps zero-based page indices, releases
 the GIL for rendering, returns `list[bytes]` for PNG or JPEG, and returns one
 `bytes` value for TIFF.
 
+Native Word SVG adds `SvgDiagnostic`, `SvgRenderResult`, and four additive
+`Document` methods. `render_page_to_svg` and
+`render_page_to_svg_with_options` reuse normal layout. Their deterministic
+counterparts reuse bundled-font-only layout. Every method takes a zero-based
+page index and returns `None` beyond the laid-out document. The result contains
+self-contained searchable SVG plus layout-first, path-specific lowering
+diagnostics. Python, WASM, CLI, Presentation, and public `oxml-pdf` APIs do not
+gain SVG methods or values.
+
 Native renderers obtain the complete positioned output through
 `Document::layout` and `Document::layout_with_options`. Accepted calls return a
 shared `Arc<WordLayoutResult>` from the normal-font cache, including pages,
@@ -544,13 +611,16 @@ break for the next stable family. They expose renderer input, not a second
 authoring surface. Opened header XML remains the serialization authority, and
 callers should use the native `Document` methods for mutation.
 
-The stable Rust family moves to 0.5.0 for the numbering preservation model.
+The next stable Rust family includes the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
-producer extensions survive typed mutations. Full struct literals written for
-0.4 must add the preservation fields, or callers should use the existing
-constructors. This is an intentional breaking pre-1.0 boundary. Python, WASM,
-and CLI consumers continue through the package-preserving facade and do not
-construct these low-level structs.
+producer extensions survive typed mutations. `ST_NumberFormat::Other(String)`
+retains producer-defined tokens, so the enum is no longer `Copy` and `to_str`
+borrows its value. Full struct literals written against the prior pre-1.0 API
+must add the preservation fields, or callers should use the existing
+constructors. These are intentional pre-1.0 source breaks. Python, WASM, and
+CLI consumers continue through the package-preserving facade and do not
+construct these low-level structs. Existing Python import error mapping uses
+the generic `RdocxError` exception and gains no new exception type.
 
 `CT_TabStop` also exposes `source_occurrence: Option<usize>`. Parsed numbering
 tabs use this provenance to retain producer XML on the same occurrence after
@@ -602,15 +672,17 @@ honest. Do not auto-generate them from PyO3.
 crates are `publish = false`, because a cdylib has no business on crates.io.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint crates.io family is published at 0.5.0 from the annotated
-`rpptx-v0.5.0` tag at reviewed SHA
-`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The stable workspace and exact
-seven-package Word crates.io family are published at 0.9.0 from the annotated
-`v0.9.0` tag at reviewed SHA
-`e27e519c94c90cd5be340fe5bf8e431cf542ac51`. Both Python project versions and
-`rdocx-wasm` track the stable workspace version, but every binding and WASM
-crate remains unpublished on crates.io. The incubating preparation group
-places the unpublished `rpptx-wasm` crate at 0.5.0. Neither preparation gives
+PowerPoint crates.io family is published at 0.6.0 from the annotated
+`rpptx-v0.6.0` tag at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The stable workspace and exact
+seven-package Word crates.io family are published at 0.10.1 from the annotated
+`v0.10.1` tag at reviewed SHA
+`ae0dcb162a7805e59e5890464b226765645ad547`. The immutable v0.10.0 attempt
+published only `rdocx-opc` and `rdocx-oxml`. Both Python project versions and
+`rdocx-wasm` track the stable workspace version, but
+every binding and WASM crate remains unpublished on crates.io. The incubating
+preparation group
+places the unpublished `rpptx-wasm` crate at 0.6.0. Neither Rust release gives
 binding, WASM, npm, or Python package publication authority. Every later
 release still requires its selected-family gate and a separate final approval
 at the reviewed SHA.

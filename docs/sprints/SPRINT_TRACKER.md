@@ -70,6 +70,7 @@ defended.
 | S53 | M17, X | 7 | 7 | 0 | 16 | 1 | Completed M17 with signature creation, tagged PDF, PDF/A, redaction, and dense-form tables. Published and verified the 15-package incubating 0.5.0 family and seven-package stable 0.9.0 family. The full close gate passed with the reviewed 14-entry PDF-only harness delta and no carries |
 | S54 | M18, X | 4 | 4 | 0 | 9 | 1 | Opened M18 with bounded RTF reading and deterministic diagnostic RTF writing, shared PNG, JPEG, TIFF, transparency, and page-range export, plus exact caller-font family aliases. The full close gate passed with all 49 hashes and 7 golden pixel buffers unchanged, all package archives below 10 MiB, and sprint review clean on pass 2 after two gate gaps were fixed. M18 continues in S55 with HTML and ODT input |
 | S55 | M18, X | 4 | 4 | 0 | 13 | 1 | Added bounded HTML and ODT input, restored exact relayout performance within the Issue 46 budget, and completed migration and contribution records. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review clean on pass 2. M18 continues in S56 with ODT writing and outbound formats |
+| S56 | M18, X | 7 | 6 | 1 | 15 | 1 | Completed M18 with deterministic ODT writing, EPUB 3 export, searchable SVG pages, and hardened outcomes from PRs 47 through 52. The partial v0.10.0 attempt was archived and recovered by publishing the complete 15-package incubating 0.6.0 family before the complete seven-package stable 0.10.1 family. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and the sprint review clean on the authorized exact-HEAD pass 6 |
 
 ## Completed features
 
@@ -318,6 +319,12 @@ defended.
 | F-179 | S55 | L | 4 | 1 | 2026-08-24 | Bounded ODT reader with pinned LibreOffice structural differential |
 | F-X052 | S55 | L | 4 | 1 | 2026-08-24 | Exact shared-block relayout within the Issue 46 performance budget |
 | F-X053 | S55 | S | 1 | 1 | 2026-08-24 | Published migration guidance and authenticated contribution closures |
+| F-180 | S56 | L | 4 | 1 | 2026-08-25 | Deterministic diagnostic ODT writer with structural round trip |
+| F-181 | S56 | M | 2 | 1 | 2026-08-25 | Deterministic EPUB 3 export with pinned EPUBCheck acceptance |
+| F-182 | S56 | M | 2 | 1 | 2026-08-25 | Searchable self-contained SVG page export with calibrated pixel parity |
+| F-X054 | S56 | L | 4 | 1 | 2026-08-25 | Hardened ordered reader and parser outcomes from PRs 47 through 52 |
+| F-X056 | S56 | S | 1 | 1 | 2026-08-25 | Published and verified the complete 15-package rpptx 0.6.0 family |
+| F-X057 | S56 | S | 1 | 1 | 2026-08-25 | Published and verified the complete seven-package stable 0.10.1 family |
 
 ## Velocity
 
@@ -388,6 +395,7 @@ five working days.
 | S53 | 7 | 1 | 35.00 |
 | S54 | 4 | 1 | 20.00 |
 | S55 | 4 | 1 | 20.00 |
+| S56 | 6 | 1 | 30.00 |
 
 ## Escalation record
 
@@ -446,3 +454,4 @@ was done about it. Empty is the expected state.
 | 2026-08-23 | Sprint estimate variance exceeded 30 percent | S53 | Record 1 actual day against 16 estimated. Seven isolated workers and established security, PDF, and release workflows allowed independent work to overlap safely. The resulting 35.00 stories per week is not a sustainable forecast, so retain the dependency-defined S54 boundary |
 | 2026-08-24 | Sprint estimate variance exceeded 30 percent | S54 | Record 1 actual day against 9 estimated. Four isolated workers and established RTF, raster, and layout paths allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S55 boundary |
 | 2026-08-24 | Sprint estimate variance exceeded 30 percent | S55 | Record 1 actual day against 13 estimated. Four isolated workers and established import, layout, differential, and contribution workflows allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S56 boundary |
+| 2026-08-25 | Sprint estimate variance exceeded 30 percent | S56 | Record 1 actual day against 15 estimated. Isolated workers, established exporter and release workflows, and the v0.10.1 recovery allowed implementation, review, and publication work to overlap safely. The resulting 30.00 stories per week is not a sustainable forecast, so retain the dependency-defined future release checkpoints starting at S58 |

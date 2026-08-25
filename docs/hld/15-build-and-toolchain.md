@@ -44,9 +44,10 @@ database and likewise cannot observe bundled or system fonts.
 
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
-`Document::render_page_to_png_deterministic()` and
-`Document::to_pdf_deterministic()`. Both reuse the separate cached
-bundled-font-only layout. The PDF facade passes that layout directly to
+`Document::render_page_to_png_deterministic()`,
+`Document::to_pdf_deterministic()`, and deterministic SVG page export. All
+three reuse the separate cached bundled-font-only layout. The PDF facade passes
+that layout directly to
 `oxml_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
 input without changing the normal PDF API. Existing constructors and rendering
 methods still load system fonts for library users.
@@ -221,21 +222,21 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
 `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
-at 0.5.0 from the annotated `rpptx-v0.5.0` tag at reviewed SHA
-`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The earlier 0.4.0 registry
-release remains available, and no existing version or tag was moved. Manifest
+at 0.6.0 from the annotated `rpptx-v0.6.0` tag at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The earlier 0.5.0 and 0.4.0
+registry releases remain available, and no existing version or tag was moved. Manifest
 eligibility and allowlist membership do not authorize a later publication
 without a separately approved `/release` invocation at the exact reviewed
-SHA. The unpublished `rpptx-wasm` preparation member is also at 0.5.0 but has
+SHA. The unpublished `rpptx-wasm` preparation member is also at 0.6.0 but has
 no crates.io publication path.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.9.0, nine internal pins, eleven
-inherited lockfile packages, two Python project versions, unpublished
+stable regression requires published workspace version 0.10.1, nine internal
+pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.5.0 versions, pins,
+set. The incubating regression requires the exact 0.6.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -310,16 +311,20 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group and its two Python
-project versions and rdocx WASM contract literals are 0.9.0. The exact
-seven-package stable family is published from the annotated `v0.9.0` tag at
-reviewed SHA `e27e519c94c90cd5be340fe5bf8e431cf542ac51`. Earlier immutable
+project versions and rdocx WASM contract literals are at 0.10.1. The exact
+seven-package stable family is published from the annotated `v0.10.1` tag at
+reviewed SHA `ae0dcb162a7805e59e5890464b226765645ad547`.
+The immutable v0.10.0 attempt published only `rdocx-opc` and `rdocx-oxml`
+before package verification failed. The remaining five packages and GitHub
+release were not published at that version. The last complete stable family is
+0.10.1. Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.5.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+0.6.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 exact 15-package crates.io family listed above is published from the annotated
-`rpptx-v0.5.0` tag at reviewed SHA
-`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The preparation group also
+`rpptx-v0.6.0` tag at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The preparation group also
 contains unpublished `rpptx-wasm`, while the crates.io allowlist remains
 exactly 15 packages. Earlier immutable registry releases remain available.
 Workspace settings consolidate the preparation commit, upgrade internal
@@ -541,12 +546,14 @@ artifact.
 dependencies have the named
 default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
 Python, WASM, or CLI graphs.
-Ring, SHA-256, base64, and X.509 parsing have the named default-off
+Ring, SHA-256, and X.509 parsing have the named default-off
 `oxml-opc/digital-signatures` consumer. They do not enter ordinary, Python,
-WASM, or CLI graphs. The creator uses operating-system randomness for strict
-RSA-SHA256 signing and requires a matching embedded public key. The verifier
-authenticates with that embedded key. Certificate-chain trust requires caller
-policy and no ambient trust-store dependency is part of the workspace graph.
+WASM, or CLI graphs. That feature also uses `base64`, whose ordinary runtime
+consumer and binding-graph consequences are described below. The creator uses
+operating-system randomness for strict RSA-SHA256 signing and requires a
+matching embedded public key. The verifier authenticates with that embedded
+key. Certificate-chain trust requires caller policy and no ambient trust-store
+dependency is part of the workspace graph.
 
 PDF/A conformance adds no crate dependency. The sRGB2014 bytes are a
 crate-local compile-time asset, and veraPDF remains external test
@@ -561,6 +568,15 @@ minimises feature sets deliberately, and the comments in the root manifest
 explaining why `zip` and `fontdb` are trimmed should be preserved rather than
 regenerated.
 
+The private native Word SVG renderer is the direct runtime consumer of
+`base64`, which embeds exact layout font bytes and page image bytes into
+self-contained data URLs. No `oxml-*`, Presentation, Python, WASM, or CLI crate
+adds a direct edge. The Python, WASM, and CLI graphs inherit `base64`
+transitively through their ordinary `rdocx` dependency. Exact resvg 0.48.1 is
+an `rdocx` development dependency for the 150 dpi SSIM oracle only. It receives
+explicit layout fonts, never system fonts, and does not enter the runtime graph
+or generated `rdocx` archive.
+
 `scraper` 0.27 has one direct named consumer, the private inbound HTML importer
 inside `rdocx`. Default features are disabled and only `errors` is enabled so
 HTML5 parser repair diagnostics remain available without an unrelated feature
@@ -569,9 +585,24 @@ declares the dependency directly. The complete facade graph passes Rust 1.93,
 both wasm32 checks, the workspace dependency policy, and the `rdocx` package
 dry run. The packaged archive remains below the 10 MiB ceiling.
 
-The existing workspace `zip` 8.1 dependency has one additional direct named
-consumer, the private inbound ODT importer inside `rdocx`. It retains the
-workspace's disabled default features and the existing Deflate, Deflate64, and
-time feature set. No new external package or `oxml-*` dependency edge is added.
-The ODT importer validates bounded archive metadata before parsing and does not
-reuse `OpcPackage` for a non-OPC format.
+The existing workspace `zip` 8.1 dependency has direct named consumers in the
+private ODT reader and writer inside `rdocx`. It retains the workspace's
+disabled default features and enables only `deflate-flate2-zlib-rs`. Deflate64
+and clock-backed timestamp support remain disabled. No new external package or
+`oxml-*` dependency edge is added. The reader validates bounded archive
+metadata before parsing. The writer fixes entry order, compression,
+permissions, the 1980-01-01 timestamp, and other metadata while bounding XML,
+media, entries, and total retained output. Neither direction reuses
+`OpcPackage` for a non-OPC format.
+
+The private EPUB writer inside `rdocx` is another named consumer of that same
+workspace `zip` dependency. It adds no runtime package. EPUBCheck 5.3.0 remains
+external development and CI validation infrastructure. The reviewed W3C
+release ZIP SHA-256 is
+`6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5`,
+and the extracted validator JAR SHA-256 is
+`f7f96617c929371821609b88c8484d6dc9f24fe916499863c46094c5fb778a65`.
+The tracked test job downloads that exact release, verifies both identities,
+exports the verified JAR path, and runs the source-built EPUB oracle as a
+required CI step before the full workspace suite. The validator is not included
+in any crate archive.

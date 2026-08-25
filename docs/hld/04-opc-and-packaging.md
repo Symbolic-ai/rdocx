@@ -21,14 +21,53 @@ essentially unchanged from `rdocx-opc`.
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.
 
-ODT input is a ZIP package but not an OPC package. The private `rdocx` ODT
-reader therefore indexes it directly with the workspace `zip` dependency and
-does not create an `OpcPackage`. The index rejects unsafe or duplicate names,
-non-files, unsupported compression, encryption, and configured expansion-limit
-violations before XML parsing. It requires the exact root `mimetype` and
-`content.xml`, checks manifest encryption state, and reads only styles,
-content, manifest, and referenced image parts. The resulting Word document is
-saved and reopened through the normal OPC owner before it is published.
+ODT is a ZIP package but not an OPC package. The private `rdocx` ODT reader
+therefore indexes it directly with the workspace `zip` dependency and does not
+create an `OpcPackage`. The index rejects unsafe or duplicate names, non-files,
+unsupported compression, encryption, and configured expansion-limit violations
+before XML parsing. It requires the exact root `mimetype` and `content.xml`,
+checks manifest encryption state, and reads only styles, content, manifest, and
+referenced image parts. The resulting Word document is saved and reopened
+through the normal OPC owner before it is published.
+
+The private ODT writer also stays outside OPC. It writes the stored `mimetype`
+entry first with no extra field, followed by deflated `content.xml`, image
+entries in encounter order, and deflated `META-INF/manifest.xml`. The manifest
+names exactly the root, content, and emitted images. Ordered style allocation,
+fixed namespace prefixes, fixed ZIP metadata, and bounded retained output make
+two writes of one document byte-identical.
+
+EPUB output is also ZIP but not OPC. The private `rdocx` writer emits the
+uncompressed `mimetype` entry first, followed by the container, package,
+navigation, stylesheet, source-ordered spine items, and deduplicated media.
+Entry names, order, compression, timestamps, identifiers, XML attributes, and
+metadata fallbacks are deterministic. Output is bounded while ZIP seeks and
+writes. Input, auxiliary projections, relationships, media, list depth, and
+intermediate XHTML are bounded before their export allocations. Generated XML
+rejects forbidden XML 1.0 characters, and external hyperlink targets require a
+syntactically valid allowlisted absolute URI. A path save publishes fully
+serialized bytes through a same-directory atomic replacement.
+Heading labels are assembled only from bounded direct runs that survive the
+projection, so dropped content-control text cannot enter navigation or spine
+metadata. Referenced media is accepted only when byte sniffing and structural
+validation agree on core PNG, JPEG, or GIF. PNG validation requires four-letter
+ASCII chunk type codes with an uppercase reserved byte, one first IHDR, legal
+critical-chunk order and counts, contiguous IDAT chunks, and one terminal IEND.
+An indexed PNG palette cannot exceed the capacity declared by its IHDR bit
+depth. JPEG validation permits exactly one leading SOI marker, requires a valid
+frame before the first scan, and requires a terminal EOI. Baseline and
+progressive frame types are accepted. GIF image descriptors require nonzero
+width and height. GIF image data requires an LZW minimum code size from 2
+through 8 and at least one non-empty data sub-block. Extension fallback is not
+used. SVG and every malformed or unsupported image are diagnosed and omitted.
+Heading-to-spine assignment and source-anchor lookup are linear in the accepted
+source size. Ordered-list counters retain their numbering identity across
+ordinary block interruptions, while deeper counters restart when a parent item
+advances. Hyperlink spans are validated against their paragraph before the HTML
+projection can expand them.
+Page-break elements are lifted out of paragraph and inline formatting before
+the XHTML documents are packaged, so spine items retain conforming flow
+content.
 
 ## Generalising the constructors
 
@@ -122,6 +161,19 @@ a definition therefore preserves producer extensions, identifiers, templates,
 and level overrides verbatim. Identifier allocation uses the next value after
 the maximum when available and the first unoccupied value when the maximum is
 `u32::MAX`.
+
+Producer-defined `w:numFmt` values remain typed as their original token rather
+than being substituted with decimal numbering. Numbering serialization writes
+that token back unchanged. Layout and text exporters emit no marker for a
+format whose rendering semantics are unknown.
+
+The main document reader retains root, body, and modeled-owner namespace facts
+that preserved raw descendants depend on. Save replays those declarations on
+their logical owners through insertion, removal, and reordering without
+rewriting the raw subtree bytes. Prefix aliases, nested shadows, and ordinary
+namespace URI escaping are resolved by the XML parser. Serialization fails
+closed when owner identity or a serializer prefix binding cannot be preserved
+safely, leaving the opened package bytes authoritative.
 
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes

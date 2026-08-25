@@ -27,6 +27,16 @@ and paragraph formatting, list kind and level, table grid and spans, and image
 bytes and dimensions. It deliberately ignores package bytes, relationship ids,
 part names, and namespace prefixes.
 
+The ODT writer round-trip gate builds its document in source, writes ODF 1.3
+through the native facade, and reopens the result through the ODT reader. The
+normalized comparison covers body order, effective text and paragraph
+formatting, list kind and level, table grid and horizontal and vertical spans,
+and image bytes and truncating EMU dimensions. Focused tests lock the stored
+first `mimetype`, fixed-prefix XML and manifest order, byte-identical repeated
+writes, exact whitespace elements, output and diagnostic bounds, stable lossy
+paths, and atomic path replacement. The writer does not use LibreOffice as a
+package-byte oracle.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
@@ -39,6 +49,21 @@ proves that recursive paragraph and table accessors retain their existing
 results. The adjacent low-level regression uses default and aliased Word
 namespaces for self-closing paragraphs, tables, and final section properties,
 while foreign same-local-name empty children remain byte-preserved raw XML.
+
+The ordered compatibility reader regression builds its package in source and
+compares every public direct item variant across body, cell, paragraph,
+hyperlink, and run boundaries. It covers namespace aliases, typed field and
+drawing facts, preserved raw subtrees, and legacy flattened accessors. Its
+save and reopen matrix compares the ordered public facts and every exposed raw
+subtree, including namespace shadowing and owner insertion, removal, and
+reordering. Unsafe namespace replay must fail closed without changing the
+opened package.
+
+Adjacent parser regressions require producer-defined numbering formats to
+round-trip without an invented marker and require malformed encoded `w:t` or
+`w:delText` values to fail before a partial document is published. Binding
+coverage confirms that malformed document XML keeps the existing `XmlError`,
+while HTML and ODT import failures keep the generic `RdocxError`.
 
 The release-notes regression gate validates both release tag families through
 the same deterministic parser used by publication. It requires one exact
@@ -105,6 +130,61 @@ blocks, all Word runs, rows, columns, cells, and diagnostics. The integration
 gate serializes and reopens the generated DOCX before comparing its public
 structure. No binary fixture or sample is added, so all 49 hash entries remain
 unchanged.
+
+The EPUB regression gate builds the complete publication in source. It checks
+the stored first `mimetype` entry, fixed timestamps and metadata, byte-identical
+repeated output, front matter, outline-root spine splitting, nested navigation,
+semantic XHTML, distinct and unmarked lists, bounded list depth, exact image
+attribute correlation, referenced-only image bytes, absolute URI validation,
+XML 1.0 character rejection, stable typed and raw loss diagnostics, and atomic
+destination replacement. Projection limit cases cover source text, styles,
+numbering, relationships, media bytes, and image occurrences before export
+cloning or expansion. Focused cases cover uncloned table grids, named style and
+deep-heading diagnostics, retained Roman and letter list formats, custom marker
+losses, marker alignment, table-cell list diagnostics, interrupted-list
+continuation, nested-list restarts, numbered heading elements and anchors,
+bounded hyperlink spans, explicit no-underline formatting, image alternative
+text and drawing-property diagnostics, alternate drawings, preserved text
+spacing, column breaks, page breaks in formatted runs and field displays, IPv6
+and IPvFuture hosts, malformed authority and fragment delimiters,
+namespace-aware revision diagnostic deduplication, and every dropped custom
+document property. Recovery cases also cover direct-only bounded heading text,
+paragraph-local Word and foreign namespace aliases at one raw boundary with a
+conflicting document-root binding, rejected extension-only and active SVG media,
+duplicate PNG headers, invalid chunk type codes, illegal critical-chunk order,
+indexed palettes beyond the declared bit-depth capacity, structurally validated
+raster media, repeated JPEG start markers, scans before JPEG frames, baseline
+and progressive JPEG controls, invalid GIF LZW minimum code sizes, empty GIF
+image data, zero-sized GIF image descriptors, style-derived deep headings,
+final section properties,
+document backgrounds, visible and inert document defaults and default paragraph
+styles, revision-only inert defaults, invalid HTTP user information, non-basic
+underline styles, patterned, foreground, and invalid paragraph, run, and cell
+shading, and the two distinct losses on preserved deleted text. The external test remains
+ignored in ordinary local runs. The tracked CI test job downloads the reviewed release,
+verifies the archive and JAR digests, sets `EPUBCHECK_JAR`, and invokes the exact
+ignored test as a required gate. That gate requires exact
+EPUBCheck 5.3.0 from the W3C release and accepts no validation error. The
+reviewed distribution ZIP has SHA-256
+`6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5`.
+The gate also verifies the extracted validator JAR has SHA-256
+`f7f96617c929371821609b88c8484d6dc9f24fe916499863c46094c5fb778a65`
+before execution. One source-built oracle fixture combines front matter,
+multiple outline roots, nested headings and lists, and media while asserting
+source-ordered spine and navigation entries. It also includes a page break so
+the external validator covers the lifted XHTML structure, plus an interrupted
+ordered list, a numbered heading, a table-cell list projection, explicit
+no-underline text, image alternative text, rejected active SVG, a style-derived
+deep heading, non-basic underline and patterned shading diagnostics, preserved
+deleted text, final section and background diagnostics, a visible default
+paragraph style and visible document defaults, patterned cell shading, rejected
+duplicate-IHDR and oversized indexed-palette PNGs, an invalid HTTP
+user-information target, invalid PNG, JPEG, and GIF structures, valid baseline
+and progressive JPEG and GIF controls, and paragraph-local Word and foreign
+revision aliases under a conflicting root binding.
+The writer does not mutate the source document, and a save and reopen check
+proves retained unmodelled XML remains byte-preserved. No binary EPUB fixture
+or runtime oracle dependency is added.
 
 The digital-signature regression gate constructs its DOCX and signature XML
 in source. A fixed RSA certificate produced by OpenSSL 3.6.3 on 9 June 2026
@@ -424,6 +504,26 @@ The pull-request `test` job runs the golden-PNG check after the full workspace
 suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
 pixel comparison is unconditional, failure-propagating, and bound to the
 reviewed rasteriser identity.
+
+## The SVG page golden gate
+
+`svg_page_rasterises_like_the_png_backend` constructs one representative page
+entirely in code. It includes exact-font searchable text, an embedded image, a
+path and normalized gradient, three recursive groups with noncommuting scale,
+rotation, and skew, a clip, opacity, nonzero shadow blur, a safe link, marked
+content, and a diagnosed paint fallback. The PNG side uses deterministic
+bundled layout at 150 dpi. The SVG side is rasterised at the same exact 300 by
+300 dimensions by development-only resvg 0.48.1, whose font database receives
+only the layout result's explicit font bytes and exact face identities.
+
+The comparison composites both RGBA buffers over white and requires global
+luminance SSIM of at least 0.99. A one-point view-box perturbation must score
+below 0.99, which proves the calibrated threshold rejects a visible placement
+regression. No PNG, SVG, or font fixture is committed. Focused regressions also
+cover deterministic definition order, searchable complex text, XML and link
+safety, recursive sibling preservation, transform composition order, singular
+effect omission for unprovable text ink, and non-clipping singular geometry
+bounds.
 
 Revision-view rendering has a separate deterministic two-view golden gate. An
 in-code Word fixture renders accepted and tracked views with bundled fonts at a
@@ -884,24 +984,32 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.9.0 regression pins all eleven inherited version
+The stable 0.10.1 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the incubating family remains at its
-published 0.5.0 boundary and `rpptx-wasm` remains unpublished.
+README requirement. It also proves the incubating family is published at 0.6.0
+and `rpptx-wasm` remains unpublished.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.5.0. It separately proves the stable
-workspace remains at its published 0.9.0 boundary and `rpptx-wasm` remains
+15-package publication preflight at 0.6.0. It separately proves the stable
+workspace remains at its published 0.10.1 boundary and `rpptx-wasm` remains
 unpublished.
-The published 0.5.0 gate also verifies every selected registry entry and
-owner, the annotated tag target, and byte-identical GitHub release notes before
-the release story completes.
-The published stable 0.9.0 gate verifies every selected registry entry and
-owner, the annotated tag target, byte-identical GitHub release notes, and that
-every crates.io README endpoint returns non-empty rendered HTML before the
-release story completes.
+The stable dependency recovery gate packages and verifies `rdocx-layout`
+against registry `oxml-layout@0.6.0`. During preparation it patched only the
+then-unpublished stable `rdocx-oxml@0.10.1` dependency to local source, so it
+exercised the exact unpatched shared edge that stopped v0.10.0.
+The 0.6.0 release gate verified every selected registry entry and owner, the
+annotated tag target, byte-identical GitHub release notes, and selected record
+notifications at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The failed stable 0.10.0
+attempt is not a passing release gate because only two packages published and
+no GitHub release was created.
+The 0.10.1 release gate verified all seven selected registry entries under sole
+owner `mantissaman (Atul Sharma)`, the annotated tag at reviewed SHA
+`ae0dcb162a7805e59e5890464b226765645ad547`, byte-identical GitHub release
+notes, nine contribution notifications, and six authorized unmerged
+pull-request closures.
 
 ## What CI runs
 

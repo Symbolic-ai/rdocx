@@ -33,11 +33,13 @@ regenerated, never hand-edited.
 | M15, Charts beyond PowerPoint                  | 4  | 4 | 0 | 0  |
 | M16, Document automation                       | 10 | 10 | 0 | 0  |
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
-| M18, Format breadth                            | 8  | 5 | 0 | 3  |
-| M19, Spreadsheets                              | 12 | 0 | 0 | 12 |
+| M18, Format breadth                            | 8  | 5 | 3 | 0  |
+| M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
-| X, Cross-cutting (opportunistic)            | 56 | 54 | 0 | 1  |
-| **Total** | **267** | **243** | **0** | **23** |
+| M21, Presentation depth                        | 15 | 0 | 0 | 15 |
+| M22, Word depth                                | 12 | 0 | 0 | 12 |
+| X, Cross-cutting (opportunistic)            | 60 | 55 | 1 | 2  |
+| **Total** | **307** | **244** | **4** | **57** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -354,29 +356,38 @@ regenerated, never hand-edited.
 | F-177 | RTF writer                                   | S54  | M | done |
 | F-178 | HTML import                                  | S55  | L | done |
 | F-179 | ODT reader                                   | S55  | L | done |
-| F-180 | ODT writer                                   | S56  | L | pending |
-| F-181 | EPUB export                                  | S56  | M | pending |
-| F-182 | SVG page export                              | S56  | M | pending |
+| F-180 | ODT writer                                   | S56  | L | done |
+| F-181 | EPUB export                                  | S56  | M | done |
+| F-182 | SVG page export                              | S56  | M | done |
 | F-183 | Image export options                         | S54  | S | done |
 <!-- AUTOGEN:backlog-M18 END -->
 
-### M19, Spreadsheets
+### M19, Advanced spreadsheets
 
 <!-- AUTOGEN:backlog-M19 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-184 | Supersede the spreadsheet non-goal           | S57  | S | pending |
-| F-185 | Workbook and worksheet model                 | S57  | L | pending |
-| F-186 | Shared strings, styles and number formats    | S57  | L | pending |
-| F-187 | Reader                                       | S58  | L | pending |
-| F-188 | Writer                                       | S58  | L | pending |
-| F-189 | Formula parser                               | S59  | L | pending |
-| F-190 | Calculation engine                           | S59  | L | pending |
-| F-191 | Charts in spreadsheets                       | S60  | M | pending |
-| F-192 | Conditional formatting and data validation   | S60  | M | pending |
-| F-193 | Pivot table preservation                     | S60  | M | pending |
-| F-194 | Sheet rendering                              | S60  | L | pending |
-| F-195 | rxlsx distribution                           | S60  | L | pending |
+| F-184 | Advanced spreadsheet go or no-go             | S70  | S | pending |
+| F-185 | Workbook and worksheet model                 | S70  | L | pending |
+| F-186 | Shared strings, styles and number formats    | S71  | L | pending |
+| F-187 | Reader                                       | S73  | L | pending |
+| F-188 | Writer                                       | S73  | L | pending |
+| F-189 | Formula parser                               | S71  | L | pending |
+| F-190 | Calculation engine                           | S74  | L | pending |
+| F-191 | Charts in spreadsheets                       | S74  | M | pending |
+| F-192 | Conditional formatting and data validation   | S74  | M | pending |
+| F-193 | Pivot cache and table model                  | S75  | L | pending |
+| F-194 | Sheet rendering                              | S79  | L | pending |
+| F-195 | rxlsx distribution                           | S79  | L | pending |
+| F-204 | Spreadsheet corpus and compatibility matrix | S70  | M | pending |
+| F-205 | Excel tables and structured references      | S71  | L | pending |
+| F-206 | Advanced worksheet objects                  | S72  | L | pending |
+| F-207 | Pivot recalculation engine                  | S75  | L | pending |
+| F-208 | Slicers, pivot charts, and Data Model boundary | S75 | L | pending |
+| F-209 | Power Query package and M language          | S76  | L | pending |
+| F-210 | Power Query execution and connectors        | S77  | L | pending |
+| F-211 | Office Scripts artifacts and ExcelScript surface | S78 | L | pending |
+| F-212 | Sandboxed Office Scripts runtime            | S78  | L | pending |
 <!-- AUTOGEN:backlog-M19 END -->
 
 ### M20, Fidelity at scale
@@ -384,14 +395,55 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M20 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-196 | Word corpus                                  | S61  | M | pending |
-| F-197 | Word SSIM harness                            | S61  | L | pending |
-| F-198 | Hyphenation                                  | S62  | L | pending |
-| F-199 | Complex script shaping                       | S62  | L | pending |
-| F-200 | Vertical and bidirectional text              | S62  | M | pending |
-| F-201 | Large document performance                   | S61  | L | pending |
-| F-202 | Incremental layout                           | S62  | L | pending |
+| F-196 | Word corpus                                  | S57  | M | pending |
+| F-197 | Word SSIM harness                            | S57  | L | pending |
+| F-198 | Hyphenation                                  | S58  | L | pending |
+| F-199 | Complex script shaping                       | S58  | L | pending |
+| F-200 | Vertical and bidirectional text              | S58  | M | pending |
+| F-201 | Large document performance                   | S57  | L | pending |
+| F-202 | Incremental layout                           | S58  | L | pending |
 <!-- AUTOGEN:backlog-M20 END -->
+
+### M21, Presentation depth
+
+<!-- AUTOGEN:backlog-M21 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-213 | Animation and transition timing model       | S60 | L | pending |
+| F-214 | Timeline evaluation and transition rendering | S60 | L | pending |
+| F-215 | Audio and video package model                | S61 | L | pending |
+| F-216 | Media poster and playback rendering          | S61 | M | pending |
+| F-217 | Presentation collaboration and navigation model | S59 | L | pending |
+| F-218 | Embedded object and macro inventory          | S62 | L | pending |
+| F-219 | SmartArt typed model                         | S62 | L | pending |
+| F-220 | SmartArt layout and rendering                | S62 | L | pending |
+| F-221 | Presentation encryption and signatures      | S59 | M | pending |
+| F-222 | ODP read and write                           | S63 | L | pending |
+| F-223 | Modern presentation package variants        | S63 | M | pending |
+| F-224 | HTML slide content import                    | S64 | L | pending |
+| F-225 | PDF page content import                      | S64 | L | pending |
+| F-226 | Notes and handout export                     | S63 | M | pending |
+| F-227 | Animated GIF and video export                | S61 | L | pending |
+<!-- AUTOGEN:backlog-M21 END -->
+
+### M22, Word depth
+
+<!-- AUTOGEN:backlog-M22 START -->
+| F-ID | Title | Sprint | Size | Status |
+|------|-------|--------|------|--------|
+| F-228 | OfficeMath model and authoring               | S65 | L | pending |
+| F-229 | OfficeMath layout and PDF rendering          | S65 | M | pending |
+| F-230 | MathML and LaTeX conversion                  | S65 | M | pending |
+| F-231 | Extended field evaluation                    | S66 | L | pending |
+| F-232 | Dynamic table of contents rebuild            | S66 | L | pending |
+| F-233 | Advanced mail merge                          | S67 | L | pending |
+| F-234 | Full-story document comparison               | S67 | L | pending |
+| F-235 | Comparison granularity and ignore policy     | S67 | M | pending |
+| F-236 | Embedded object and macro inventory          | S68 | L | pending |
+| F-237 | Forms, glossary, and building blocks         | S68 | L | pending |
+| F-238 | Flat OPC and modern Word package variants    | S69 | M | pending |
+| F-239 | MHTML import and export                      | S69 | M | pending |
+<!-- AUTOGEN:backlog-M22 END -->
 
 ### X, Cross-cutting
 
@@ -431,7 +483,7 @@ regenerated, never hand-edited.
 | F-X028 | Repair the agent-facing documentation drift | S44 | M | done |
 | F-X029 | Path-filtered CI jobs                       | S44 | M | done |
 | F-X030 | Decouple the npm package versions           | -   | S | archived |
-| F-X031 | Require the CI gate in branch protection    | S62 | S | pending |
+| F-X031 | Require the CI gate in branch protection    | S58 | S | pending |
 | F-X032 | Expose complete Word layout results         | S51 | S | done |
 | F-X033 | Integrate PR 36 ordered body items          | S51 | S | done |
 | F-X034 | Reviewed release notes for every release    | S51 | S | done |
@@ -454,4 +506,8 @@ regenerated, never hand-edited.
 | F-X051 | Honor caller-supplied font family aliases  | S54 | M | done |
 | F-X052 | Restore interactive relayout performance   | S55 | L | done |
 | F-X053 | Complete layout migration and contribution records | S55 | S | done |
+| F-X054 | Integrate PRs 47 through 52                | S56 | L | done |
+| F-X055 | Tag v0.10.0                               | S56 | S | archived |
+| F-X056 | Tag rpptx-v0.6.0                          | S56 | S | done |
+| F-X057 | Tag v0.10.1                               | S56 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

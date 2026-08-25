@@ -7,8 +7,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use rdocx::{
-    ChartData, ChartKind, Document, FieldDateTime, FieldEvaluationContext, FieldOutcome, Length,
-    RasterFormat, RasterOptions, RasterOutput, RenderOptions, RevisionView, RunPosition, RunRange,
+    BodyContentRef, BodyItemRef, BreakKind, CellItemRef, CellRef, ChartData, ChartKind, Document,
+    FieldDateTime, FieldEvaluationContext, FieldOutcome, HyperlinkItemRef, HyperlinkRef, Length,
+    ParagraphItemRef, ParagraphRef, RasterFormat, RasterOptions, RasterOutput, RenderOptions,
+    RevisionView, RunItemRef, RunPosition, RunRange, RunRef, TableRef, UnsupportedXmlRef,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
@@ -1528,6 +1530,1444 @@ fn caller_font_layout_options_select_the_tracked_revision_projection() {
 
 fn document_with_content_controls(document_xml: &str) -> Document {
     document_with_bound_content_controls(document_xml, None)
+}
+
+fn ordered_reader_fixture() -> &'static str {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <q:body xmlns:x="urn:foreign">
+            <q:p>
+              <q:r><q:t>first</q:t><x:run-raw/></q:r>
+              <x:paragraph-raw/>
+              <q:commentRangeStart q:id="2"/>
+              <q:sdt><q:sdtContent><q:r><q:t>control</q:t></q:r></q:sdtContent></q:sdt>
+              <q:hyperlink r:id="rId3">
+                <q:r><q:t>link before</q:t></q:r><x:inside-link-before/>
+                <q:ins q:id="6" q:author="Bea"><q:r><q:t>linked revision</q:t></q:r></q:ins>
+                <x:inside-link-after/><q:r><q:t>link after</q:t></q:r>
+              </q:hyperlink>
+              <q:ins q:id="4" q:author="Ada"><q:r><q:t>inserted</q:t></q:r></q:ins>
+              <q:bookmarkStart q:id="5" q:name="target"/>
+              <q:r><q:t>last</q:t></q:r>
+              <q:bookmarkEnd q:id="5"/>
+              <q:commentRangeEnd q:id="2"/>
+            </q:p>
+            <x:body-raw><x:child/></x:body-raw>
+            <q:tbl><q:tr><q:tc>
+              <q:p><q:r><q:t>cell</q:t></q:r></q:p>
+              <x:cell-raw/>
+              <q:tbl><q:tr><q:tc><q:p><q:r><q:t>nested</q:t></q:r></q:p></q:tc></q:tr></q:tbl>
+              <q:sdt><q:sdtContent><q:p><q:r><q:t>cell control</q:t></q:r></q:p></q:sdtContent></q:sdt>
+            </q:tc></q:tr></q:tbl>
+            <q:sdt><q:sdtContent><q:p><q:r><q:t>body control</q:t></q:r></q:p></q:sdtContent></q:sdt>
+          </q:body>
+        </q:document>"#
+}
+
+#[test]
+fn ordered_reader_items_keep_every_direct_child_and_preserved_boundary() {
+    let xml = ordered_reader_fixture();
+    let document = document_with_content_controls(xml);
+
+    let body = document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => format!("paragraph:{}", paragraph.text()),
+            BodyItemRef::Table(_) => "table".to_owned(),
+            BodyItemRef::ContentControl(control) => format!("control:{}", control.text()),
+            BodyItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        body,
+        [
+            "paragraph:firstcontrollink beforelink afterlast",
+            "raw:<x:body-raw><x:child/></x:body-raw>",
+            "table",
+            "control:body control",
+        ]
+    );
+
+    let paragraph = document.paragraph(0).unwrap();
+    let paragraph_items = paragraph
+        .items()
+        .map(|item| match item {
+            ParagraphItemRef::Run(run) => format!("run:{}", run.text()),
+            ParagraphItemRef::Hyperlink(link) => {
+                let children = link
+                    .items()
+                    .map(|item| match item {
+                        HyperlinkItemRef::Run(run) => format!("run:{}", run.text()),
+                        HyperlinkItemRef::Revision(revision) => {
+                            format!("revision:{}", revision.id())
+                        }
+                        HyperlinkItemRef::UnsupportedXml(raw) => {
+                            format!("raw:{}", std::str::from_utf8(raw).unwrap())
+                        }
+                        _ => panic!("unexpected hyperlink item"),
+                    })
+                    .collect::<Vec<_>>();
+                format!(
+                    "hyperlink:{}:{}",
+                    link.relationship_id().unwrap(),
+                    children.join(",")
+                )
+            }
+            ParagraphItemRef::ContentControl(control) => format!("control:{}", control.text()),
+            ParagraphItemRef::Revision(revision) => format!("revision:{}", revision.id()),
+            ParagraphItemRef::CommentRangeStart(id) => format!("comment-start:{id}"),
+            ParagraphItemRef::CommentRangeEnd(id) => format!("comment-end:{id}"),
+            ParagraphItemRef::BookmarkStart { id, name } => {
+                format!("bookmark-start:{}:{}", id.unwrap(), name.unwrap())
+            }
+            ParagraphItemRef::BookmarkEnd { id } => {
+                format!("bookmark-end:{}", id.unwrap())
+            }
+            ParagraphItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected paragraph item"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paragraph_items,
+        [
+            "run:first",
+            "raw:<x:paragraph-raw/>",
+            "comment-start:2",
+            "control:control",
+            "hyperlink:rId3:run:link before,raw:<x:inside-link-before/>,revision:6,raw:<x:inside-link-after/>,run:link after",
+            "revision:4",
+            "bookmark-start:5:target",
+            "run:last",
+            "bookmark-end:5",
+            "comment-end:2",
+        ]
+    );
+
+    let first_run = paragraph.run(0).unwrap();
+    let run_items = first_run
+        .items()
+        .map(|item| match item {
+            RunItemRef::Text(text) => format!("text:{text}"),
+            RunItemRef::DeletedText(text) => format!("deleted:{text}"),
+            RunItemRef::Tab => "tab".to_owned(),
+            RunItemRef::Break(BreakKind::Line) => "break:line".to_owned(),
+            RunItemRef::Break(BreakKind::Page) => "break:page".to_owned(),
+            RunItemRef::Break(BreakKind::Column) => "break:column".to_owned(),
+            RunItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected run item"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(run_items, ["text:first", "raw:<x:run-raw/>"]);
+
+    let table = document.table(0).unwrap();
+    let cell = table.cell(0, 0).unwrap();
+    let cell_items = cell
+        .items()
+        .map(|item| match item {
+            CellItemRef::Paragraph(paragraph) => format!("paragraph:{}", paragraph.text()),
+            CellItemRef::Table(table) => format!("table:{}", table.row_count()),
+            CellItemRef::ContentControl(control) => format!("control:{}", control.text()),
+            CellItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected cell item"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cell_items,
+        [
+            "paragraph:cell",
+            "raw:<x:cell-raw/>",
+            "table:1",
+            "control:cell control",
+        ]
+    );
+}
+
+#[test]
+fn ordered_reader_items_resolve_aliases_without_flattening_containers() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:w="urn:not-word" xmlns:x="urn:foreign">
+        <q:body><q:p><w:r><w:t>foreign</w:t></w:r><q:sdt><q:sdtContent>
+          <q:r><q:t>nested</q:t></q:r>
+        </q:sdtContent></q:sdt><q:r><q:t>direct</q:t></q:r></q:p></q:body>
+      </q:document>"#;
+    let document = document_with_content_controls(xml);
+    let items = document
+        .paragraph(0)
+        .unwrap()
+        .items()
+        .map(|item| match item {
+            ParagraphItemRef::Run(run) => format!("run:{}", run.text()),
+            ParagraphItemRef::ContentControl(control) => format!("control:{}", control.text()),
+            ParagraphItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => "other".to_owned(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        items,
+        [
+            "raw:<w:r><w:t>foreign</w:t></w:r>",
+            "control:nested",
+            "run:direct",
+        ]
+    );
+    assert_eq!(document.paragraph(0).unwrap().run_count(), 1);
+}
+
+#[test]
+fn ordered_run_items_expose_every_retained_typed_fact() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><x:r0 xmlns:x="urn:foreign"/><w:t>first</w:t><x:r1 xmlns:x="urn:foreign"/><w:delText>removed</w:delText><x:r2 xmlns:x="urn:foreign"/><w:tab/><x:r3 xmlns:x="urn:foreign"/><w:br/><x:r4 xmlns:x="urn:foreign"/><w:br w:type="page"/><x:r5 xmlns:x="urn:foreign"/><w:br w:type="column"/><x:r6 xmlns:x="urn:foreign"/><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><wp:extent cx="1" cy="2"/><wp:docPr id="11" name="Picture" descr="Alternative"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId9"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing><x:r7 xmlns:x="urn:foreign"/><w:footnoteReference w:id="7"/><x:r8 xmlns:x="urn:foreign"/><w:endnoteReference w:id="8"/><x:r9 xmlns:x="urn:foreign"/><w:commentReference w:id="9"/><x:r10 xmlns:x="urn:foreign"/></w:r><w:fldSimple w:instr=" PAGE " w:dirty="true"><w:r><w:t>3</w:t></w:r></w:fldSimple></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let paragraph = document.paragraph(0).unwrap();
+    let items = paragraph
+        .run(0)
+        .unwrap()
+        .items()
+        .map(|item| match item {
+            RunItemRef::Text(text) => format!("text:{text}"),
+            RunItemRef::DeletedText(text) => format!("deleted:{text}"),
+            RunItemRef::Tab => "tab".to_owned(),
+            RunItemRef::Break(BreakKind::Line) => "break:line".to_owned(),
+            RunItemRef::Break(BreakKind::Page) => "break:page".to_owned(),
+            RunItemRef::Break(BreakKind::Column) => "break:column".to_owned(),
+            RunItemRef::FootnoteReference(id) => format!("footnote:{id}"),
+            RunItemRef::EndnoteReference(id) => format!("endnote:{id}"),
+            RunItemRef::CommentReference(id) => format!("comment:{id}"),
+            RunItemRef::Drawing(drawing) => format!(
+                "drawing:{}:{}:{}:{}:{}:{}:{}",
+                drawing.is_inline(),
+                drawing.is_anchor(),
+                drawing.relationship_id().unwrap(),
+                drawing.name().unwrap(),
+                drawing.description().unwrap(),
+                drawing.width().unwrap().to_emu(),
+                drawing.height().unwrap().to_emu(),
+            ),
+            RunItemRef::Field(_) => panic!("field belongs to the next run"),
+            RunItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected run item"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        items,
+        [
+            "raw:<x:r0 xmlns:x=\"urn:foreign\"/>",
+            "text:first",
+            "raw:<x:r1 xmlns:x=\"urn:foreign\"/>",
+            "deleted:removed",
+            "raw:<x:r2 xmlns:x=\"urn:foreign\"/>",
+            "tab",
+            "raw:<x:r3 xmlns:x=\"urn:foreign\"/>",
+            "break:line",
+            "raw:<x:r4 xmlns:x=\"urn:foreign\"/>",
+            "break:page",
+            "raw:<x:r5 xmlns:x=\"urn:foreign\"/>",
+            "break:column",
+            "raw:<x:r6 xmlns:x=\"urn:foreign\"/>",
+            "drawing:true:false:rId9:Picture:Alternative:1:2",
+            "raw:<x:r7 xmlns:x=\"urn:foreign\"/>",
+            "footnote:7",
+            "raw:<x:r8 xmlns:x=\"urn:foreign\"/>",
+            "endnote:8",
+            "raw:<x:r9 xmlns:x=\"urn:foreign\"/>",
+            "comment:9",
+            "raw:<x:r10 xmlns:x=\"urn:foreign\"/>",
+        ]
+    );
+
+    let field_run = paragraph.run(1).unwrap();
+    let mut field_items = field_run.items();
+    let field = field_items.next().unwrap();
+    let RunItemRef::Field(field) = field else {
+        panic!("expected field fact");
+    };
+    assert_eq!(field.instruction(), "PAGE");
+    assert_eq!(field.name(), "PAGE");
+    assert_eq!(field.cached_result(), "3");
+    assert_eq!(field.dirty(), Some(true));
+    assert!(field_items.next().is_none());
+}
+
+#[test]
+fn ordered_run_items_keep_raw_children_before_properties() {
+    let xml = wrap_word_body(
+        r#"<w:p><w:r><x:before xmlns:x="urn:foreign"/><w:rPr><w:b/></w:rPr><w:t>typed</w:t></w:r></w:p>"#,
+    );
+    let document = document_with_content_controls(&xml);
+    let items = document
+        .paragraph(0)
+        .unwrap()
+        .run(0)
+        .unwrap()
+        .items()
+        .map(|item| match item {
+            RunItemRef::Text(text) => format!("text:{text}"),
+            RunItemRef::UnsupportedXml(raw) => {
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => "other".to_owned(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        items,
+        ["raw:<x:before xmlns:x=\"urn:foreign\"/>", "text:typed"]
+    );
+}
+
+#[test]
+fn modeled_unsupported_body_facts_do_not_invent_raw_xml() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:x="urn:inherited"><q:body><x:custom><x:child/></x:custom>
+        <q:sdt><q:sdtContent><q:p><q:r><q:t>inside</q:t></q:r></q:p></q:sdtContent></q:sdt>
+      </q:body></q:document>"#;
+    let document = document_with_content_controls(xml);
+    let facts = document.body_content().collect::<Vec<_>>();
+    let BodyContentRef::UnsupportedXml(raw) = &facts[0] else {
+        panic!("expected raw unsupported fact");
+    };
+    assert_eq!(raw.qualified_name(), Some("x:custom"));
+    assert_eq!(raw.local_name(), "custom");
+    assert_eq!(raw.namespace_uri(), Some("urn:inherited"));
+    assert_eq!(
+        raw.raw_xml(),
+        Some(b"<x:custom><x:child/></x:custom>".as_slice())
+    );
+    assert!(raw.has_child_content());
+
+    let BodyContentRef::UnsupportedXml(modeled) = &facts[1] else {
+        panic!("expected modeled unsupported fact");
+    };
+    assert_eq!(modeled.qualified_name(), Some("w:sdt"));
+    assert_eq!(modeled.local_name(), "sdt");
+    assert_eq!(
+        modeled.namespace_uri(),
+        Some("http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+    );
+    assert_eq!(modeled.raw_xml(), None);
+}
+
+#[test]
+fn unsupported_body_facts_respect_shadowed_conventional_prefixes() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:w="urn:foreign"><q:body><w:producer/></q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let source = ordered_reader_snapshot(&document);
+    let fact = document.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(fact) = fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(fact.qualified_name(), Some("w:producer"));
+    assert_eq!(fact.namespace_uri(), Some("urn:foreign"));
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_fact = reopened.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(reopened_fact) = reopened_fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(reopened_fact.namespace_uri(), Some("urn:foreign"));
+    assert_eq!(ordered_reader_snapshot(&reopened), source);
+}
+
+#[test]
+fn body_local_canonical_prefix_shadows_survive_save_and_reopen() {
+    for prefix in ["w", "r", "mc"] {
+        let namespace = format!("urn:foreign-{prefix}");
+        let raw = format!("<{prefix}:producer/>");
+        let xml = format!(
+            r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                 <q:body xmlns:{prefix}="{namespace}">{raw}<q:p><q:r><q:t>typed</q:t></q:r></q:p></q:body>
+               </q:document>"#,
+        );
+        let mut document = document_with_content_controls(&xml);
+        let source = ordered_reader_snapshot(&document);
+        let source_fact = document.body_content().next().unwrap();
+        let BodyContentRef::UnsupportedXml(source_fact) = source_fact else {
+            panic!("expected unsupported fact");
+        };
+        assert_eq!(source_fact.namespace_uri(), Some(namespace.as_str()));
+
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains(&format!(r#"xmlns:{prefix}="{namespace}""#)));
+        assert!(saved_xml.contains(&raw));
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().text(), "typed");
+        let reopened_fact = reopened.body_content().next().unwrap();
+        let BodyContentRef::UnsupportedXml(reopened_fact) = reopened_fact else {
+            panic!("expected unsupported fact");
+        };
+        assert_eq!(reopened_fact.namespace_uri(), Some(namespace.as_str()));
+        assert_eq!(ordered_reader_snapshot(&reopened), source);
+    }
+}
+
+#[test]
+fn root_and_body_prefix_collisions_keep_distinct_scopes() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:x="urn:root"><x:background/><q:body xmlns:x="urn:body">
+                    <x:producer/><q:p><q:r><q:t>typed</q:t></q:r></q:p>
+                  </q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let source = ordered_reader_snapshot(&document);
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let document_start = saved_xml.find(":document").unwrap();
+    let root_end = saved_xml[document_start..].find('>').unwrap() + document_start;
+    let body_start = saved_xml.find(":body").unwrap();
+    let body_end = saved_xml[body_start..].find('>').unwrap() + body_start;
+    assert!(saved_xml[..root_end].contains(r#"xmlns:x="urn:root""#));
+    assert!(saved_xml[body_start..body_end].contains(r#"xmlns:x="urn:body""#));
+    assert!(saved_xml.contains("<x:background/>"));
+    assert!(saved_xml.contains("<x:producer/>"));
+
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let reopened_fact = reopened.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(reopened_fact) = reopened_fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(reopened_fact.namespace_uri(), Some("urn:body"));
+    assert_eq!(ordered_reader_snapshot(&reopened), source);
+}
+
+#[test]
+fn unsupported_body_facts_resolve_body_local_namespaces() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <q:body xmlns:x="urn:body"><x:producer/></q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let fact = document.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(fact) = fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(fact.qualified_name(), Some("x:producer"));
+    assert_eq!(fact.namespace_uri(), Some("urn:body"));
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(saved_xml.contains(r#"xmlns:x="urn:body""#));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    let reopened_fact = reopened.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(reopened_fact) = reopened_fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(reopened_fact.namespace_uri(), Some("urn:body"));
+}
+
+#[test]
+fn unsupported_body_facts_decode_local_namespace_uris() {
+    let xml = wrap_word_body(r#"<x:producer xmlns:x="urn:a&amp;b"/>"#);
+    let mut document = document_with_content_controls(&xml);
+    let fact = document.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(fact) = fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(fact.namespace_uri(), Some("urn:a&b"));
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_fact = reopened.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(reopened_fact) = reopened_fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(reopened_fact.namespace_uri(), Some("urn:a&b"));
+}
+
+#[test]
+fn unsupported_body_facts_resolve_the_implicit_xml_prefix() {
+    let xml = wrap_word_body(r#"<xml:producer/>"#);
+    let mut document = document_with_content_controls(&xml);
+    let fact = document.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(fact) = fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(fact.qualified_name(), Some("xml:producer"));
+    assert_eq!(
+        fact.namespace_uri(),
+        Some("http://www.w3.org/XML/1998/namespace")
+    );
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let BodyContentRef::UnsupportedXml(fact) = reopened.body_content().next().unwrap() else {
+        panic!("expected reopened unsupported fact");
+    };
+    assert_eq!(
+        fact.namespace_uri(),
+        Some("http://www.w3.org/XML/1998/namespace")
+    );
+}
+
+#[test]
+fn unsupported_body_facts_accept_empty_default_namespace_undeclarations() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <q:body><producer xmlns=""/></q:body></q:document>"#;
+    let document = document_with_content_controls(xml);
+    let fact = document.body_content().next().unwrap();
+    let BodyContentRef::UnsupportedXml(fact) = fact else {
+        panic!("expected unsupported fact");
+    };
+    assert_eq!(fact.qualified_name(), Some("producer"));
+    assert_eq!(fact.namespace_uri(), Some(""));
+}
+
+#[test]
+fn unsupported_body_facts_detect_cdata_and_entity_content() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:x="urn:foreign"><q:body>
+                    <x:cdata><![CDATA[visible]]></x:cdata><x:entity>&amp;</x:entity>
+                  </q:body></q:document>"#;
+    let document = document_with_content_controls(xml);
+    let facts = document.body_content().collect::<Vec<_>>();
+    assert_eq!(facts.len(), 2);
+    for fact in facts {
+        let BodyContentRef::UnsupportedXml(fact) = fact else {
+            panic!("expected unsupported fact");
+        };
+        assert!(fact.has_child_content());
+    }
+}
+
+#[test]
+fn nested_foreign_descendants_keep_their_scope_and_bytes_after_reopen() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:w="urn:foreign"><q:body>
+        <q:p><w:r><w:t>foreign paragraph</w:t></w:r><q:r><q:t>typed paragraph</q:t></q:r></q:p>
+        <q:tbl><q:tr><q:tc><w:p><w:r>foreign cell</w:r></w:p><q:p><q:r><q:t>typed cell</q:t></q:r></q:p></q:tc></q:tr></q:tbl>
+        <q:sdt><q:sdtContent><q:p><w:r><w:t>foreign control</w:t></w:r><q:r><q:t>typed control</q:t></q:r></q:p></q:sdtContent></q:sdt>
+      </q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let source = ordered_reader_snapshot(&document);
+    assert!(matches!(
+        document.paragraph(0).unwrap().items().next().unwrap(),
+        ParagraphItemRef::UnsupportedXml(raw)
+            if raw == b"<w:r><w:t>foreign paragraph</w:t></w:r>"
+    ));
+    assert!(matches!(
+        document.table(0).unwrap().cell(0, 0).unwrap().items().next().unwrap(),
+        CellItemRef::UnsupportedXml(raw)
+            if raw == b"<w:p><w:r>foreign cell</w:r></w:p>"
+    ));
+    assert_eq!(document.content_controls().len(), 1);
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_eq!(
+        package.get_part("/word/document.xml").unwrap(),
+        xml.as_bytes()
+    );
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(ordered_reader_snapshot(&reopened), source);
+}
+
+#[test]
+fn hyperlink_and_run_shadows_keep_exposed_raw_bytes_after_reopen() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <q:body><q:p><q:hyperlink xmlns:w="urn:foreign">
+          <q:r><q:t>typed</q:t><w:run-producer/></q:r><w:link-producer/>
+        </q:hyperlink></q:p></q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let source = ordered_reader_snapshot(&document);
+    let paragraph = document.paragraph(0).unwrap();
+    let hyperlink = paragraph
+        .items()
+        .find_map(|item| match item {
+            ParagraphItemRef::Hyperlink(hyperlink) => Some(hyperlink),
+            _ => None,
+        })
+        .unwrap();
+    let raw = hyperlink
+        .items()
+        .flat_map(|item| match item {
+            HyperlinkItemRef::Run(run) => run
+                .items()
+                .filter_map(|item| match item {
+                    RunItemRef::UnsupportedXml(raw) => Some(raw.to_vec()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            HyperlinkItemRef::UnsupportedXml(raw) => vec![raw.to_vec()],
+            _ => Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        raw,
+        [
+            b"<w:run-producer/>".to_vec(),
+            b"<w:link-producer/>".to_vec(),
+        ]
+    );
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_eq!(
+        package.get_part("/word/document.xml").unwrap(),
+        xml.as_bytes()
+    );
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(ordered_reader_snapshot(&reopened), source);
+}
+
+#[test]
+fn serializer_prefix_collisions_keep_modeled_drawings_bound_after_reopen() {
+    let scopes = [
+        r#"xmlns:wp="urn:root-wp" xmlns:a="urn:root-a" xmlns:pic="urn:root-pic" xmlns:c="urn:root-c""#,
+        "",
+    ];
+    for (index, root_scope) in scopes.into_iter().enumerate() {
+        let body_scope = if index == 0 {
+            ""
+        } else {
+            r#"xmlns:wp="urn:body-wp" xmlns:a="urn:body-a" xmlns:pic="urn:body-pic" xmlns:c="urn:body-c""#
+        };
+        let xml = format!(
+            r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" {root_scope}>
+              <q:body {body_scope}><q:p><q:r><q:drawing><dwp:inline
+                xmlns:dwp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+                xmlns:da="http://schemas.openxmlformats.org/drawingml/2006/main"
+                xmlns:dpic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+                xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                <dwp:extent cx="1" cy="2"/><dwp:docPr id="11" name="Picture" descr="Alternative"/>
+                <da:graphic><da:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                  <dpic:pic><dpic:blipFill><da:blip rel:embed="rId9"/></dpic:blipFill></dpic:pic>
+                </da:graphicData></da:graphic>
+              </dwp:inline></q:drawing></q:r></q:p></q:body></q:document>"#,
+        );
+        let mut document = document_with_content_controls(&xml);
+        let source = ordered_reader_snapshot(&document);
+        let paragraph = document.paragraph(0).unwrap();
+        let drawing = paragraph.run(0).unwrap();
+        assert!(matches!(
+            drawing.items().next().unwrap(),
+            RunItemRef::Drawing(drawing) if drawing.is_inline()
+        ));
+
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        assert_eq!(
+            package.get_part("/word/document.xml").unwrap(),
+            xml.as_bytes()
+        );
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(ordered_reader_snapshot(&reopened), source);
+    }
+}
+
+#[test]
+fn every_modeled_container_replays_nested_namespaces_after_modification() {
+    let bodies = [
+        (
+            "paragraph",
+            r#"<q:p xmlns:x="urn:paragraph"><x:producer/><q:r><q:t>typed</q:t></q:r></q:p>"#,
+        ),
+        (
+            "table",
+            r#"<q:tbl xmlns:x="urn:table"><x:producer/><q:tr><q:tc><q:p/></q:tc></q:tr></q:tbl>"#,
+        ),
+        (
+            "cell",
+            r#"<q:tbl><q:tr><q:tc xmlns:x="urn:cell"><x:producer/><q:p/></q:tc></q:tr></q:tbl>"#,
+        ),
+        (
+            "control",
+            r#"<q:sdt xmlns:x="urn:control"><x:producer/><q:sdtContent><q:p/></q:sdtContent></q:sdt>"#,
+        ),
+        (
+            "hyperlink",
+            r#"<q:p><q:hyperlink xmlns:x="urn:hyperlink"><x:producer/><q:r><q:t>typed</q:t></q:r></q:hyperlink></q:p>"#,
+        ),
+        (
+            "run",
+            r#"<q:p><q:r xmlns:x="urn:run"><x:producer/><q:t>typed</q:t></q:r></q:p>"#,
+        ),
+    ];
+    for (owner, body) in bodies {
+        let xml = format!(
+            r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>{body}</q:body></q:document>"#,
+        );
+        let mut unchanged = document_with_content_controls(&xml);
+        let source = ordered_reader_snapshot(&unchanged);
+        let saved = unchanged.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains(&format!(r#"xmlns:x="urn:{owner}""#)));
+        assert!(saved_xml.contains("<x:producer/>"));
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(
+            ordered_reader_snapshot(&reopened),
+            source,
+            "{owner} facts changed after reopen",
+        );
+
+        let mut modified = document_with_content_controls(&xml);
+        modified.add_paragraph("changed");
+        let saved = modified.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains(&format!(r#"xmlns:x="urn:{owner}""#)));
+        assert!(saved_xml.contains("<x:producer/>"));
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert!(
+            reopened
+                .paragraphs()
+                .iter()
+                .any(|paragraph| paragraph.text() == "changed")
+        );
+    }
+}
+
+#[test]
+fn word_namespace_alias_used_by_raw_marker_replays_after_save_and_reopen() {
+    let word_namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    for raw in ["<x:producer/>", "<x:t>raw same-local-name child</x:t>"] {
+        let xml = format!(
+            r#"<q:document xmlns:q="{word_namespace}"><q:body><q:p xmlns:x="{word_namespace}">{raw}<q:r><q:t>typed</q:t></q:r></q:p></q:body></q:document>"#,
+        );
+
+        for modified in [false, true] {
+            let mut document = document_with_content_controls(&xml);
+            if modified {
+                document.add_paragraph("changed");
+            }
+            let saved = document.to_bytes().unwrap();
+            let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+            let saved_xml =
+                std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            assert_namespace_on_raw_owner(
+                saved_xml,
+                "p",
+                &format!(r#"xmlns:x="{word_namespace}""#),
+                raw,
+            );
+
+            let mut reopened = Document::from_bytes(&saved).unwrap();
+            assert!(reopened.paragraph(0).unwrap().items().any(
+                |item| matches!(item, ParagraphItemRef::UnsupportedXml(bytes) if bytes == raw.as_bytes())
+            ));
+            let resaved = reopened.to_bytes().unwrap();
+            let package =
+                oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&resaved)).unwrap();
+            let resaved_xml =
+                std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            assert_namespace_on_raw_owner(
+                resaved_xml,
+                "p",
+                &format!(r#"xmlns:x="{word_namespace}""#),
+                raw,
+            );
+        }
+    }
+
+    let typed_only = format!(
+        r#"<q:document xmlns:q="{word_namespace}"><q:body><q:p xmlns:x="{word_namespace}"><x:r><x:t>typed alias</x:t></x:r></q:p></q:body></q:document>"#,
+    );
+    let mut document = document_with_content_controls(&typed_only);
+    document.add_paragraph("changed");
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "typed alias");
+    assert_eq!(reopened.paragraph(1).unwrap().text(), "changed");
+
+    let shared_alias = format!(
+        r#"<q:document xmlns:q="{word_namespace}"><q:body><q:p xmlns:x="{word_namespace}"><x:producer/><x:r><x:t>shared alias</x:t></x:r></q:p></q:body></q:document>"#,
+    );
+    let mut document = document_with_content_controls(&shared_alias);
+    document.add_paragraph("changed");
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_namespace_on_raw_owner(
+        saved_xml,
+        "p",
+        &format!(r#"xmlns:x="{word_namespace}""#),
+        "<x:producer/>",
+    );
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "shared alias");
+    assert_eq!(reopened.paragraph(1).unwrap().text(), "changed");
+}
+
+#[test]
+fn intermediate_raw_shadow_is_safe_but_direct_fixed_prefix_use_fails_closed() {
+    for (owner_uri, child_uri) in [("urn:owner", "urn:child"), ("urn:foreign", "urn:foreign")] {
+        let raw = format!(
+            r#"<x:wrapper xmlns:x="urn:x" xmlns:wp="{child_uri}"><wp:producer/></x:wrapper>"#,
+        );
+        let safe_xml = format!(
+            r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+              <q:p xmlns:wp="{owner_uri}">{raw}<q:r><q:t>typed</q:t></q:r></q:p>
+            </q:body></q:document>"#,
+        );
+        let mut safe = document_with_content_controls(&safe_xml);
+        safe.add_paragraph("changed");
+        let saved = safe.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains(&raw), "{saved_xml}");
+        if owner_uri != child_uri {
+            assert!(!saved_xml.contains(owner_uri), "{saved_xml}");
+        }
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert!(reopened.paragraph(0).unwrap().items().any(
+            |item| matches!(item, ParagraphItemRef::UnsupportedXml(bytes) if bytes == raw.as_bytes())
+        ));
+        assert_eq!(reopened.paragraph(1).unwrap().text(), "changed");
+    }
+
+    let direct_xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p xmlns:wp="urn:owner"><wp:producer/><q:r><q:t>typed</q:t></q:r></q:p>
+    </q:body></q:document>"#;
+    let mut direct = document_with_content_controls(direct_xml);
+    direct.add_paragraph("changed");
+    let error = direct.to_bytes().unwrap_err();
+    assert!(error.to_string().contains("shadowed `wp` namespace"));
+}
+
+fn assert_namespace_on_raw_owner(xml: &str, owner: &str, declaration: &str, raw: &str) {
+    let raw_start = xml.find(raw).expect("raw producer is present");
+    let owner_start = xml[..raw_start]
+        .rfind(&format!("<w:{owner}"))
+        .expect("modeled owner starts before its raw producer");
+    let owner_end = owner_start
+        + xml[owner_start..]
+            .find('>')
+            .expect("modeled owner start tag is complete");
+    assert!(
+        xml[owner_start..=owner_end].contains(declaration),
+        "{declaration} was not replayed on the {owner} that owns {raw}",
+    );
+}
+
+fn assert_namespace_on_named_owner(xml: &str, owner: &str, declaration: &str, owner_text: &str) {
+    let text_start = xml.find(owner_text).expect("named owner text is present");
+    let owner_start = xml[..text_start]
+        .rfind(&format!("<w:{owner}"))
+        .expect("named modeled owner starts before its text");
+    let owner_end = owner_start
+        + xml[owner_start..]
+            .find('>')
+            .expect("named modeled owner start tag is complete");
+    assert!(
+        xml[owner_start..=owner_end].contains(declaration),
+        "{declaration} was not replayed on the {owner} containing {owner_text}",
+    );
+}
+
+#[test]
+fn nested_namespace_replay_tracks_owners_across_insert_remove_and_reorder() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p><q:hyperlink><q:r><q:t>paragraph decoy</q:t></q:r></q:hyperlink></q:p>
+      <q:tbl><q:tr><q:tc><q:p><q:r><q:t>table decoy</q:t></q:r></q:p></q:tc></q:tr></q:tbl>
+      <q:sdt><q:sdtContent><q:p><q:r><q:t>control decoy</q:t></q:r></q:p></q:sdtContent></q:sdt>
+      <q:p xmlns:px="urn:target-paragraph"><px:producer/><q:hyperlink xmlns:hx="urn:target-hyperlink"><hx:producer/><q:r xmlns:rx="urn:target-run"><rx:producer/><q:t>target paragraph</q:t></q:r></q:hyperlink></q:p>
+      <q:tbl xmlns:tx="urn:target-table"><tx:producer/><q:tr><q:tc xmlns:cx="urn:target-cell"><cx:producer/><q:sdt xmlns:sx="urn:target-control"><sx:producer/><q:sdtContent><q:p><q:r><q:t>target table</q:t></q:r></q:p></q:sdtContent></q:sdt></q:tc></q:tr></q:tbl>
+    </q:body></q:document>"#;
+    let owners = [
+        ("p", r#"xmlns:px="urn:target-paragraph""#, "<px:producer/>"),
+        (
+            "hyperlink",
+            r#"xmlns:hx="urn:target-hyperlink""#,
+            "<hx:producer/>",
+        ),
+        ("r", r#"xmlns:rx="urn:target-run""#, "<rx:producer/>"),
+        ("tbl", r#"xmlns:tx="urn:target-table""#, "<tx:producer/>"),
+        ("tc", r#"xmlns:cx="urn:target-cell""#, "<cx:producer/>"),
+        ("sdt", r#"xmlns:sx="urn:target-control""#, "<sx:producer/>"),
+    ];
+
+    for mutation in ["insert", "remove", "reorder"] {
+        let mut document = document_with_content_controls(xml);
+        match mutation {
+            "insert" => {
+                let relationship =
+                    document.add_hyperlink_relationship("https://inserted.example.invalid");
+                document
+                    .insert_paragraph(0, "inserted")
+                    .add_hyperlink("inserted link", &relationship);
+                document.insert_table(1, 1, 1);
+            }
+            "remove" => {
+                assert!(document.remove_content(0));
+                assert!(document.remove_content(0));
+                assert!(document.remove_content(0));
+            }
+            "reorder" => {
+                assert!(document.remove_content(0));
+                assert!(document.remove_content(0));
+                assert!(document.remove_content(0));
+                let relationship =
+                    document.add_hyperlink_relationship("https://moved.example.invalid");
+                document
+                    .add_paragraph("moved paragraph decoy")
+                    .add_hyperlink("moved link", &relationship);
+                document.add_table(1, 1);
+            }
+            _ => unreachable!(),
+        }
+
+        let saved = document
+            .to_bytes()
+            .unwrap_or_else(|error| panic!("{mutation} namespace replay failed: {error}"));
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        for (owner, declaration, raw) in owners {
+            assert_namespace_on_raw_owner(saved_xml, owner, declaration, raw);
+        }
+
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        let resaved = reopened.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&resaved)).unwrap();
+        let resaved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        for (owner, declaration, raw) in owners {
+            assert_namespace_on_raw_owner(resaved_xml, owner, declaration, raw);
+        }
+    }
+}
+
+#[test]
+fn duplicate_raw_markers_cannot_replace_removed_paragraph_or_table_owners() {
+    let cases = [
+        (
+            "p",
+            r#"<q:p><x:producer/><q:r><q:t>survivor</q:t></q:r></q:p>
+               <q:p xmlns:x="urn:target"><x:producer/><q:r><q:t>removed</q:t></q:r></q:p>"#,
+        ),
+        (
+            "tbl",
+            r#"<q:tbl><x:producer/><q:tr><q:tc><q:p><q:r><q:t>survivor</q:t></q:r></q:p></q:tc></q:tr></q:tbl>
+               <q:tbl xmlns:x="urn:target"><x:producer/><q:tr><q:tc><q:p><q:r><q:t>removed</q:t></q:r></q:p></q:tc></q:tr></q:tbl>"#,
+        ),
+    ];
+    for (owner, body) in cases {
+        let xml = format!(
+            r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:root"><q:body>{body}</q:body></q:document>"#,
+        );
+        let mut document = document_with_content_controls(&xml);
+        assert!(document.remove_content(1));
+        let error = document.to_bytes().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("retained `{owner}` nested namespace owner")),
+            "removed {owner} must not transfer its declaration: {error}",
+        );
+    }
+}
+
+#[test]
+fn duplicate_scope_markers_keep_the_target_owner_through_reorder_and_modification() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:root"><q:body>
+      <q:p><x:producer/><q:r><q:t>scope decoy</q:t></q:r></q:p>
+      <q:p xmlns:x="urn:target"><x:producer/><q:r><q:t>scope target</q:t></q:r></q:p>
+    </q:body></q:document>"#;
+    for mutation in ["reorder", "modify"] {
+        let mut document = document_with_content_controls(xml);
+        match mutation {
+            "reorder" => {
+                assert!(document.remove_content(0));
+                let decoy = document_with_content_controls(
+                    r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:root"><q:body><q:p><x:producer/><q:r><q:t>scope decoy</q:t></q:r></q:p></q:body></q:document>"#,
+                );
+                document.insert_document(document.content_count(), &decoy);
+            }
+            "modify" => {
+                document.add_paragraph("unrelated modification");
+            }
+            _ => unreachable!(),
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_namespace_on_named_owner(saved_xml, "p", r#"xmlns:x="urn:target""#, "scope target");
+        assert_eq!(saved_xml.matches("<x:producer/>").count(), 2);
+
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        let resaved = reopened.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&resaved)).unwrap();
+        let resaved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_namespace_on_named_owner(
+            resaved_xml,
+            "p",
+            r#"xmlns:x="urn:target""#,
+            "scope target",
+        );
+    }
+}
+
+#[test]
+fn materially_changed_duplicate_run_owner_fails_closed() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:root"><q:body><q:p>
+      <q:r><x:producer/><q:t>run decoy</q:t></q:r>
+      <q:r xmlns:x="urn:target"><x:producer/><q:t>run target</q:t></q:r>
+    </q:p></q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(1)
+        .unwrap()
+        .set_text("materially changed");
+    let error = document.to_bytes().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("retained `r` nested namespace owner"),
+        "changed run identity must fail closed: {error}",
+    );
+}
+
+#[test]
+fn unused_fixed_prefix_declarations_do_not_reject_safe_raw_replay() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p xmlns:x="urn:producer" xmlns:wp="urn:unused"><x:producer/><q:r><q:t>target</q:t></q:r></q:p>
+    </q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    document.add_paragraph("changed");
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_namespace_on_raw_owner(saved_xml, "p", r#"xmlns:x="urn:producer""#, "<x:producer/>");
+    assert!(!saved_xml.contains("urn:unused"));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.paragraph(1).unwrap().text(), "changed");
+}
+
+#[test]
+fn expanded_raw_markers_disambiguate_a_valid_owner_edit() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p xmlns:x="urn:same"><x:a/><x:b mark="same"></x:b><q:r><q:t>first</q:t></q:r></q:p>
+      <q:p xmlns:x="urn:same"><x:a/><x:b mark='same'></x:b><q:r><q:t>second</q:t></q:r></q:p>
+    </q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_text("first edited");
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(saved_xml.contains(r#"<x:b mark="same"></x:b>"#));
+    assert!(saved_xml.contains("first edited"));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "first edited");
+}
+
+#[test]
+fn exact_marker_cardinality_disambiguates_a_valid_owner_edit() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p xmlns:x="urn:same"><x:a/><x:a/><q:r><q:t>first</q:t></q:r></q:p>
+      <q:p xmlns:x="urn:same"><x:a/><x:a /><q:r><q:t>second</q:t></q:r></q:p>
+    </q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_text("first edited");
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(saved_xml.matches("<x:a/>").count(), 3);
+    assert_eq!(saved_xml.matches("<x:a />").count(), 1);
+    assert!(saved_xml.contains("first edited"));
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "first edited");
+}
+
+#[test]
+fn nested_wp_collisions_preserve_unchanged_bytes_and_fail_closed_when_modified() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <q:body><q:p xmlns:wp="urn:foreign"><wp:producer/><q:r><q:t>typed</q:t></q:r></q:p></q:body>
+      </q:document>"#;
+    let mut unchanged = document_with_content_controls(xml);
+    let source = ordered_reader_snapshot(&unchanged);
+    let saved = unchanged.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_eq!(
+        package.get_part("/word/document.xml").unwrap(),
+        xml.as_bytes()
+    );
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(ordered_reader_snapshot(&reopened), source);
+
+    let mut modified = document_with_content_controls(xml);
+    modified.add_paragraph("changed");
+    let error = modified.to_bytes().unwrap_err();
+    assert!(error.to_string().contains("shadowed `wp` namespace"));
+}
+
+#[test]
+fn fixed_prefix_collisions_fail_closed_after_owner_insert_remove_and_reorder() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p><q:r><q:t>decoy</q:t></q:r></q:p>
+      <q:p xmlns:wp="urn:foreign"><wp:producer/><q:r><q:t>target</q:t></q:r></q:p>
+    </q:body></q:document>"#;
+
+    let mut unchanged = document_with_content_controls(xml);
+    let saved = unchanged.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_eq!(
+        package.get_part("/word/document.xml").unwrap(),
+        xml.as_bytes()
+    );
+    Document::from_bytes(&saved).unwrap();
+
+    for mutation in ["insert", "remove", "reorder"] {
+        let mut document = document_with_content_controls(xml);
+        match mutation {
+            "insert" => {
+                document.insert_paragraph(0, "inserted");
+            }
+            "remove" => {
+                assert!(document.remove_content(0));
+            }
+            "reorder" => {
+                assert!(document.remove_content(0));
+                document.add_paragraph("moved decoy");
+            }
+            _ => unreachable!(),
+        }
+        let error = document.to_bytes().unwrap_err();
+        assert!(
+            error.to_string().contains("shadowed `wp` namespace"),
+            "{mutation} must fail closed: {error}",
+        );
+    }
+}
+
+#[test]
+fn escaped_root_namespace_uris_decode_once_across_unchanged_and_modified_saves() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:x="urn:a&amp;b"><q:body><x:producer/></q:body></q:document>"#;
+    for modified in [false, true] {
+        let mut document = document_with_content_controls(xml);
+        let BodyContentRef::UnsupportedXml(fact) = document.body_content().next().unwrap() else {
+            panic!("expected unsupported fact");
+        };
+        assert_eq!(fact.namespace_uri(), Some("urn:a&b"));
+        if modified {
+            document.add_paragraph("changed");
+        }
+
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(saved_xml.contains(r#"xmlns:x="urn:a&amp;b""#));
+        assert!(!saved_xml.contains("urn:a&amp;amp;b"));
+
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let BodyContentRef::UnsupportedXml(fact) = reopened.body_content().next().unwrap() else {
+            panic!("expected reopened unsupported fact");
+        };
+        assert_eq!(fact.namespace_uri(), Some("urn:a&b"));
+        if modified {
+            assert_eq!(reopened.paragraph(0).unwrap().text(), "changed");
+        }
+    }
+}
+
+#[test]
+fn empty_modeled_controls_and_numeric_references_report_visible_content_accurately() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:x="urn:foreign"><q:body><q:sdt></q:sdt>
+        <x:space>&#32;</x:space><x:tab>&#x9;</x:tab><x:newline>&#xA;</x:newline>
+        <x:return>&#13;</x:return><x:visible>&#65;</x:visible><x:named>&amp;</x:named>
+      </q:body></q:document>"#;
+    let document = document_with_content_controls(xml);
+    let facts = document.body_content().collect::<Vec<_>>();
+    assert_eq!(facts.len(), 7);
+    let BodyContentRef::UnsupportedXml(control) = &facts[0] else {
+        panic!("expected modeled control fact");
+    };
+    assert_eq!(control.raw_xml(), None);
+    assert!(!control.has_child_content());
+    for fact in &facts[1..5] {
+        let BodyContentRef::UnsupportedXml(fact) = fact else {
+            panic!("expected raw unsupported fact");
+        };
+        assert!(!fact.has_child_content());
+    }
+    for fact in &facts[5..] {
+        let BodyContentRef::UnsupportedXml(fact) = fact else {
+            panic!("expected raw unsupported fact");
+        };
+        assert!(fact.has_child_content());
+    }
+}
+
+#[test]
+fn producer_defined_number_formats_survive_save_and_reopen() {
+    let document_xml = wrap_word_body(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+    );
+    let numbering_xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="chicago"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#;
+    let mut seed = Document::new();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    package.set_part("/word/document.xml", document_xml.into_bytes());
+    package.set_part("/word/numbering.xml", numbering_xml.to_vec());
+    package.content_types.add_override(
+        "/word/numbering.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+    );
+    package.get_or_create_part_rels("/word/document.xml").add(
+        oxml_opc::relationship::rel_types::NUMBERING,
+        "numbering.xml",
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert_eq!(document.numbering_is_bullet(1), None);
+    assert!(!document.to_html_fragment().contains("<ol>"));
+    assert!(!document.to_markdown().contains("1. item"));
+    assert!(
+        document
+            .to_rtf_bytes()
+            .unwrap()
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("numbering format"))
+    );
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.numbering_is_bullet(1), None);
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(numbering.contains(r#"<w:numFmt w:val="chicago"/>"#));
+}
+
+#[test]
+fn legacy_flattened_accessors_keep_their_recursive_results() {
+    let xml = wrap_word_body(
+        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>direct</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>",
+    );
+    let document = document_with_content_controls(&xml);
+    let table = document.table(0).unwrap();
+    let cell = table.cell(0, 0).unwrap();
+    assert_eq!(
+        cell.paragraphs()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        ["direct", "control"]
+    );
+    assert_eq!(
+        document
+            .paragraphs()
+            .into_iter()
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+}
+
+fn unsupported_fact_snapshot(
+    fact: UnsupportedXmlRef<'_>,
+    raw_subtrees: &mut Vec<Vec<u8>>,
+) -> String {
+    let raw = fact.raw_xml().map(|raw| {
+        raw_subtrees.push(raw.to_vec());
+        std::str::from_utf8(raw).unwrap().to_owned()
+    });
+    format!(
+        "unsupported:{:?}:{:?}:{}:{}:{raw:?}",
+        fact.qualified_name(),
+        fact.namespace_uri(),
+        fact.local_name(),
+        fact.has_child_content(),
+    )
+}
+
+fn run_snapshot(run: RunRef<'_>, raw_subtrees: &mut Vec<Vec<u8>>) -> String {
+    run.items()
+        .map(|item| match item {
+            RunItemRef::Text(text) => format!("text:{text}"),
+            RunItemRef::DeletedText(text) => format!("deleted:{text}"),
+            RunItemRef::Tab => "tab".to_owned(),
+            RunItemRef::Break(BreakKind::Line) => "break:line".to_owned(),
+            RunItemRef::Break(BreakKind::Page) => "break:page".to_owned(),
+            RunItemRef::Break(BreakKind::Column) => "break:column".to_owned(),
+            RunItemRef::Drawing(drawing) => format!(
+                "drawing:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}",
+                drawing.is_inline(),
+                drawing.is_anchor(),
+                drawing.relationship_id(),
+                drawing.name(),
+                drawing.description(),
+                drawing.width().map(Length::to_emu),
+                drawing.height().map(Length::to_emu),
+            ),
+            RunItemRef::Field(field) => format!(
+                "field:{}:{}:{}:{:?}",
+                field.instruction(),
+                field.name(),
+                field.cached_result(),
+                field.dirty(),
+            ),
+            RunItemRef::FootnoteReference(id) => format!("footnote:{id}"),
+            RunItemRef::EndnoteReference(id) => format!("endnote:{id}"),
+            RunItemRef::CommentReference(id) => format!("comment:{id}"),
+            RunItemRef::UnsupportedXml(raw) => {
+                raw_subtrees.push(raw.to_vec());
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected run item"),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn hyperlink_snapshot(hyperlink: HyperlinkRef<'_>, raw_subtrees: &mut Vec<Vec<u8>>) -> String {
+    let items = hyperlink
+        .items()
+        .map(|item| match item {
+            HyperlinkItemRef::Run(run) => format!("run:[{}]", run_snapshot(run, raw_subtrees)),
+            HyperlinkItemRef::Revision(revision) => format!(
+                "revision:{}:{}:{:?}",
+                revision.id(),
+                revision.author(),
+                revision.kind(),
+            ),
+            HyperlinkItemRef::UnsupportedXml(raw) => {
+                raw_subtrees.push(raw.to_vec());
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected hyperlink item"),
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "hyperlink:{:?}:{:?}:[{items}]",
+        hyperlink.relationship_id(),
+        hyperlink.anchor(),
+    )
+}
+
+fn paragraph_snapshot(paragraph: ParagraphRef<'_>, raw_subtrees: &mut Vec<Vec<u8>>) -> String {
+    paragraph
+        .items()
+        .map(|item| match item {
+            ParagraphItemRef::Run(run) => format!("run:[{}]", run_snapshot(run, raw_subtrees)),
+            ParagraphItemRef::Hyperlink(hyperlink) => hyperlink_snapshot(hyperlink, raw_subtrees),
+            ParagraphItemRef::ContentControl(control) => {
+                format!("control:{}", control.text())
+            }
+            ParagraphItemRef::Revision(revision) => format!(
+                "revision:{}:{}:{:?}",
+                revision.id(),
+                revision.author(),
+                revision.kind(),
+            ),
+            ParagraphItemRef::CommentRangeStart(id) => format!("comment-start:{id}"),
+            ParagraphItemRef::CommentRangeEnd(id) => format!("comment-end:{id}"),
+            ParagraphItemRef::BookmarkStart { id, name } => {
+                format!("bookmark-start:{id:?}:{name:?}")
+            }
+            ParagraphItemRef::BookmarkEnd { id } => format!("bookmark-end:{id:?}"),
+            ParagraphItemRef::UnsupportedXml(raw) => {
+                raw_subtrees.push(raw.to_vec());
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected paragraph item"),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn table_snapshot(table: TableRef<'_>, raw_subtrees: &mut Vec<Vec<u8>>) -> String {
+    let rows = (0..table.row_count())
+        .map(|row_index| {
+            let row = table.row(row_index).unwrap();
+            let cells = (0..row.cell_count())
+                .map(|cell_index| cell_snapshot(row.cell(cell_index).unwrap(), raw_subtrees))
+                .collect::<Vec<_>>()
+                .join("|");
+            format!("row:[{cells}]")
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    format!("table:[{rows}]")
+}
+
+fn cell_snapshot(cell: CellRef<'_>, raw_subtrees: &mut Vec<Vec<u8>>) -> String {
+    cell.items()
+        .map(|item| match item {
+            CellItemRef::Paragraph(paragraph) => {
+                format!(
+                    "paragraph:[{}]",
+                    paragraph_snapshot(paragraph, raw_subtrees)
+                )
+            }
+            CellItemRef::Table(table) => table_snapshot(table, raw_subtrees),
+            CellItemRef::ContentControl(control) => format!("control:{}", control.text()),
+            CellItemRef::UnsupportedXml(raw) => {
+                raw_subtrees.push(raw.to_vec());
+                format!("raw:{}", std::str::from_utf8(raw).unwrap())
+            }
+            _ => panic!("unexpected cell item"),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn ordered_reader_snapshot(document: &Document) -> (Vec<String>, Vec<Vec<u8>>) {
+    let mut raw_subtrees = Vec::new();
+    let facts = document
+        .body_content()
+        .map(|item| match item {
+            BodyContentRef::Paragraph(paragraph) => {
+                format!(
+                    "paragraph:[{}]",
+                    paragraph_snapshot(paragraph, &mut raw_subtrees)
+                )
+            }
+            BodyContentRef::Table(table) => table_snapshot(table, &mut raw_subtrees),
+            BodyContentRef::UnsupportedXml(fact) => {
+                unsupported_fact_snapshot(fact, &mut raw_subtrees)
+            }
+            _ => panic!("unexpected body item"),
+        })
+        .collect::<Vec<_>>();
+    (facts, raw_subtrees)
+}
+
+#[test]
+fn ordered_reader_source_survives_save_and_reopen() {
+    let xml = ordered_reader_fixture();
+    let mut document = document_with_content_controls(xml);
+    let source = ordered_reader_snapshot(&document);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened = ordered_reader_snapshot(&reopened);
+    assert_eq!(reopened.0, source.0, "ordered public facts changed");
+    assert_eq!(reopened.1, source.1, "raw subtrees changed");
 }
 
 fn document_with_bound_content_controls(document_xml: &str, custom_xml: Option<&str>) -> Document {
@@ -6332,4 +7772,31 @@ fn raw_zip_scan_finds_no_redacted_value() {
     let report = document.redact_text("secret").unwrap();
     assert_eq!(report.total(), 2);
     assert_raw_package_has_no_selector(&document.to_bytes().unwrap(), "secret");
+}
+
+#[test]
+fn svg_facade_options_share_the_existing_layout_paths_and_bounds_contract() {
+    let mut document = Document::new();
+    document.add_paragraph("SVG facade");
+    let options = RenderOptions::default();
+
+    assert_eq!(
+        document.render_page_to_svg(0).unwrap(),
+        document
+            .render_page_to_svg_with_options(0, options)
+            .unwrap()
+    );
+    assert_eq!(
+        document.render_page_to_svg_deterministic(0).unwrap(),
+        document
+            .render_page_to_svg_deterministic_with_options(0, options)
+            .unwrap()
+    );
+    assert!(document.render_page_to_svg(usize::MAX).unwrap().is_none());
+    assert!(
+        document
+            .render_page_to_svg_deterministic(usize::MAX)
+            .unwrap()
+            .is_none()
+    );
 }

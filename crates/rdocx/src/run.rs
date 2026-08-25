@@ -1,11 +1,166 @@
 //! Run — a contiguous stretch of text with uniform formatting.
 
+use rdocx_oxml::drawing::CT_Drawing;
 use rdocx_oxml::properties::{CT_RPr, CT_Shd};
 use rdocx_oxml::shared::ST_Underline;
-use rdocx_oxml::text::{CT_R, CT_Text, RunContent};
+use rdocx_oxml::text::{BreakType, CT_R, CT_Text, Field, RunContent};
 use rdocx_oxml::units::{HalfPoint, Twips};
 
 use crate::Length;
+
+/// A break embedded in a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakKind {
+    /// A line break within the current paragraph.
+    Line,
+    /// A page break.
+    Page,
+    /// A column break.
+    Column,
+}
+
+/// An immutable drawing embedded in a run.
+#[derive(Debug, Clone, Copy)]
+pub struct DrawingRef<'a> {
+    inner: &'a CT_Drawing,
+}
+
+impl DrawingRef<'_> {
+    /// Whether this drawing is inline with the surrounding text.
+    pub fn is_inline(&self) -> bool {
+        self.inner.inline.is_some()
+    }
+
+    /// Whether this drawing is floating or anchored.
+    pub fn is_anchor(&self) -> bool {
+        self.inner.anchor.is_some()
+    }
+
+    /// The relationship ID for the drawing's embedded image, when present.
+    pub fn relationship_id(&self) -> Option<&str> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| inline.embed_id.as_str())
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .map(|anchor| anchor.embed_id.as_str())
+            })
+            .filter(|id| !id.is_empty())
+    }
+
+    /// The drawing description, commonly used as image alternative text.
+    pub fn description(&self) -> Option<&str> {
+        self.inner
+            .inline
+            .as_ref()
+            .and_then(|inline| inline.description.as_deref())
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.description.as_deref())
+            })
+    }
+
+    /// The drawing name from its non-visual properties.
+    pub fn name(&self) -> Option<&str> {
+        self.inner
+            .inline
+            .as_ref()
+            .and_then(|inline| inline.name.as_deref())
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.name.as_deref())
+            })
+    }
+
+    /// The drawing width.
+    pub fn width(&self) -> Option<Length> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| Length::emu(inline.extent_cx.0))
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .map(|anchor| Length::emu(anchor.extent_cx.0))
+            })
+    }
+
+    /// The drawing height.
+    pub fn height(&self) -> Option<Length> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| Length::emu(inline.extent_cy.0))
+            .or_else(|| {
+                self.inner
+                    .anchor
+                    .as_ref()
+                    .map(|anchor| Length::emu(anchor.extent_cy.0))
+            })
+    }
+}
+
+/// An immutable field embedded in a run.
+#[derive(Debug, Clone, Copy)]
+pub struct FieldRef<'a> {
+    inner: &'a Field,
+}
+
+impl FieldRef<'_> {
+    /// The retained field instruction text.
+    pub fn instruction(&self) -> &str {
+        &self.inner.instruction.raw
+    }
+
+    /// The parsed field name.
+    pub fn name(&self) -> &str {
+        &self.inner.instruction.name
+    }
+
+    /// The cached display result stored in the document.
+    pub fn cached_result(&self) -> &str {
+        &self.inner.cached_result
+    }
+
+    /// The producer's update marker, when specified.
+    pub fn dirty(&self) -> Option<bool> {
+        self.inner.dirty
+    }
+}
+
+/// One direct child of a run, in source order.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum RunItemRef<'a> {
+    /// Literal text.
+    Text(&'a str),
+    /// Text in a deleted revision.
+    DeletedText(&'a str),
+    /// A tab character.
+    Tab,
+    /// A line, page, or column break.
+    Break(BreakKind),
+    /// An inline or anchored drawing.
+    Drawing(DrawingRef<'a>),
+    /// A simple or complex Word field.
+    Field(FieldRef<'a>),
+    /// A footnote reference ID.
+    FootnoteReference(i32),
+    /// An endnote reference ID.
+    EndnoteReference(i32),
+    /// A comment reference ID.
+    CommentReference(i32),
+    /// A preserved run child that rdocx does not model.
+    UnsupportedXml(&'a [u8]),
+}
 
 /// Underline style for runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,6 +563,64 @@ impl<'a> RunRef<'a> {
         self.inner.text()
     }
 
+    /// Iterate over direct run items in source order.
+    pub fn items(&self) -> impl Iterator<Item = RunItemRef<'_>> {
+        let property_boundary = usize::from(self.inner.properties.is_some());
+        let mut items = Vec::with_capacity(self.inner.content.len() + self.inner.extra_xml.len());
+        let ordered_raw = self.inner.extra_xml_positions.len() == self.inner.extra_xml.len();
+        if ordered_raw && property_boundary > 0 {
+            items.extend(
+                self.inner
+                    .extra_xml_positions
+                    .iter()
+                    .zip(&self.inner.extra_xml)
+                    .filter(|(position, _)| **position == 0)
+                    .map(|(_, raw)| RunItemRef::UnsupportedXml(raw.as_slice())),
+            );
+        }
+        for index in 0..=self.inner.content.len() {
+            let boundary = property_boundary + index;
+            if ordered_raw {
+                items.extend(
+                    self.inner
+                        .extra_xml_positions
+                        .iter()
+                        .zip(&self.inner.extra_xml)
+                        .filter(|(position, _)| **position == boundary)
+                        .map(|(_, raw)| RunItemRef::UnsupportedXml(raw.as_slice())),
+                );
+            }
+            if let Some(content) = self.inner.content.get(index) {
+                items.push(match content {
+                    RunContent::Text(text) => RunItemRef::Text(&text.text),
+                    RunContent::DeletedText(text) => RunItemRef::DeletedText(&text.text),
+                    RunContent::Tab => RunItemRef::Tab,
+                    RunContent::Break(kind) => RunItemRef::Break(match kind {
+                        BreakType::Line => BreakKind::Line,
+                        BreakType::Page => BreakKind::Page,
+                        BreakType::Column => BreakKind::Column,
+                    }),
+                    RunContent::Drawing(drawing) => {
+                        RunItemRef::Drawing(DrawingRef { inner: drawing })
+                    }
+                    RunContent::Field(field) => RunItemRef::Field(FieldRef { inner: field }),
+                    RunContent::FootnoteRef { id } => RunItemRef::FootnoteReference(*id),
+                    RunContent::EndnoteRef { id } => RunItemRef::EndnoteReference(*id),
+                    RunContent::CommentReference { id, .. } => RunItemRef::CommentReference(*id),
+                });
+            }
+        }
+        if !ordered_raw {
+            items.extend(
+                self.inner
+                    .extra_xml
+                    .iter()
+                    .map(|raw| RunItemRef::UnsupportedXml(raw.as_slice())),
+            );
+        }
+        items.into_iter()
+    }
+
     /// The footnote id referenced by this run, if it holds a
     /// `<w:footnoteReference/>`.
     pub fn footnote_id(&self) -> Option<i32> {
@@ -536,5 +749,25 @@ impl<'a> RunRef<'a> {
             .properties
             .as_ref()
             .and_then(|rpr| rpr.style_id.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unordered_legacy_raw_children_follow_typed_run_content() {
+        let run = CT_R {
+            properties: None,
+            content: vec![RunContent::Text(CT_Text::new("typed"))],
+            extra_xml: vec![b"<x:raw/>".to_vec()],
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        };
+        let run = RunRef { inner: &run };
+        let items = run.items().collect::<Vec<_>>();
+        assert!(matches!(items[0], RunItemRef::Text("typed")));
+        assert!(matches!(items[1], RunItemRef::UnsupportedXml(b"<x:raw/>")));
     }
 }

@@ -2,29 +2,265 @@
 
 ## Unreleased
 
+No changes have been recorded since the v0.10.1 preparation.
+
+## v0.10.1
+
+### Highlights
+
+The stable Word family adds native RTF, HTML, and OpenDocument Text input,
+native RTF and OpenDocument Text output, deterministic EPUB and SVG export,
+and ordered compatibility readers that preserve unsupported XML. Layout also
+honors caller font aliases and restores bounded editor-scale reuse.
+
+This patch release recovers the complete stable family after v0.10.0 published
+only `rdocx-opc` and `rdocx-oxml`, then stopped during `rdocx-layout` package
+verification. Version 0.10.1 is the first complete stable family carrying the
+S56 outcome.
+
+### Added
+
+- Read RTF, HTML5, and OpenDocument Text into the native `Document` facade with
+  bounded inputs, ordered diagnostics, and no network access.
+- Write deterministic RTF byte streams with stable lossy diagnostics and
+  failure-atomic path replacement.
+- Write deterministic OpenDocument Text archives with stable lossy diagnostics
+  and failure-atomic path replacement.
+- Export deterministic EPUB publications that retain supported links, images,
+  headings, lists, tables, and accessibility structure while reporting
+  unsupported source content.
+- Export searchable SVG pages with deterministic fixed-page geometry, images,
+  and safe links while reporting unsupported visual content.
+- Export exact selected pages as opaque or transparent PNG, quality-controlled
+  JPEG, or one deterministic multi-page TIFF through native Word, Python, and
+  the general Word and PowerPoint CLI paths.
+- Inspect direct table-cell children through `CellRef::items`. This hardened
+  equivalent includes the outcome proposed in
+  [PR 47](https://github.com/tensorbee/rdocx/pull/47).
+- Inspect direct run content through `RunRef::items`, including text, breaks,
+  drawings, fields, notes, comments, and preserved XML. This hardened
+  equivalent includes the outcome proposed in
+  [PR 48](https://github.com/tensorbee/rdocx/pull/48).
+- Inspect direct paragraph and hyperlink content without changing established
+  flattened accessors. This hardened equivalent includes the outcome proposed
+  in [PR 49](https://github.com/tensorbee/rdocx/pull/49).
+- Classify retained unsupported body XML through borrowed qualified-name,
+  namespace, and child-content facts without inventing source bytes. This
+  hardened equivalent includes the outcome proposed in
+  [PR 50](https://github.com/tensorbee/rdocx/pull/50).
+
 ### Fixed
 
-- Honor caller-supplied font family aliases throughout layout, including
-  aliases that match bundled families. This hardened equivalent addresses
-  [Issue 44](https://github.com/tensorbee/rdocx/issues/44) and
-  [PR 45](https://github.com/tensorbee/rdocx/pull/45).
+- Honor caller-supplied font family aliases without duplicating font bytes,
+  while retaining deterministic fallback and bounded caches. This hardened
+  equivalent addresses
+  [Issue 44](https://github.com/tensorbee/rdocx/issues/44) and the reference
+  implementation in [PR 45](https://github.com/tensorbee/rdocx/pull/45).
 - Restore bounded reusable layout performance for document load, typing, undo,
-  and table mutation while retaining exact shaping and semantic structure.
-  This addresses [Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+  and table mutation while retaining exact shaping, source mappings, and page
+  structure. This hardened equivalent addresses
+  [Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+- Reject undecodable ordinary and deleted Word text instead of publishing an
+  empty lossy value. This hardened equivalent includes the correction proposed
+  in [PR 52](https://github.com/tensorbee/rdocx/pull/52).
 
 ### Compatibility
 
-External layout backends must recurse through
-`PositionedElement::MarkedContent` when walking page elements, as described in
-the corrected v0.9.0 compatibility guidance below.
+The exact seven-package stable crates.io family moves together from 0.9.0 to
+0.10.1. This is an intentional pre-1.0 Rust source boundary. The shared OOXML
+and PowerPoint family is published at 0.6.0. Python, WASM, npm, and PyPI
+publication authority is unchanged.
+
+The immutable v0.10.0 attempt contains only `rdocx-opc` and `rdocx-oxml`.
+Callers should select 0.10.1 for a coherent seven-package stable graph. No
+v0.10.0 tag or registry entry was moved, replaced, or reused.
+
+`ST_NumberFormat` now preserves producer-defined values in `Other(String)`.
+The enum no longer implements `Copy`, and exhaustive matches must handle the
+new value-bearing variant. Callers should borrow or clone numbering formats as
+needed and retain unknown values rather than substituting a modeled marker.
+This hardened equivalent includes the preservation outcome proposed in
+[PR 51](https://github.com/tensorbee/rdocx/pull/51).
+
+External layout backends must continue to recurse through
+`PositionedElement::MarkedContent` or use `oxml_layout::walk`, as documented for
+v0.9.0. No migration is required for callers that use the high-level document
+facade and do not exhaustively match `ST_NumberFormat`.
 
 ### Contributors
 
-Thanks to `@emptinessform` for the font-alias report and reference work in
+Atul Sharma maintained the release. Thanks to `@emptinessform` for the caller
+font-alias report and reference implementation in
 [Issue 44](https://github.com/tensorbee/rdocx/issues/44) and
 [PR 45](https://github.com/tensorbee/rdocx/pull/45), and for the editor
-measurements and migration report in
+performance measurements and migration evidence in
 [Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+
+Thanks to `@pedroassumpcao` for the ordered cell, run, paragraph, and hyperlink
+reader designs in [PR 47](https://github.com/tensorbee/rdocx/pull/47),
+[PR 48](https://github.com/tensorbee/rdocx/pull/48), and
+[PR 49](https://github.com/tensorbee/rdocx/pull/49), the unsupported XML facts
+in [PR 50](https://github.com/tensorbee/rdocx/pull/50), producer-defined
+numbering preservation in [PR 51](https://github.com/tensorbee/rdocx/pull/51),
+and fail-closed text decoding in
+[PR 52](https://github.com/tensorbee/rdocx/pull/52).
+
+No named external patch landed directly. Each named report or proposal landed
+through the hardened equivalent described above so that current namespace,
+non-exhaustive API, bounded-allocation, diagnostic, and compatibility contracts
+remain intact.
+
+## rpptx-v0.6.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family adds caller-controlled font aliases,
+bounded reusable layout work, deterministic page image output, and common CLI
+page selection. This release publishes the shared APIs required by the stable
+Word family before its separate v0.10.1 recovery release.
+
+### Added
+
+- Configure bounded caller font family aliases through the shared font manager
+  without repeating font bytes or changing deterministic fallback.
+- Render exact selected pages as transparent or opaque PNG, quality-controlled
+  JPEG, or deterministic multi-page TIFF through the shared raster backend.
+- Select page ranges and image output options through the common CLI support
+  layer and the PowerPoint CLI.
+
+### Fixed
+
+- Honor caller-supplied family aliases through deterministic fallback and
+  bounded caches. This hardened equivalent addresses
+  [Issue 44](https://github.com/tensorbee/rdocx/issues/44) and the reference
+  implementation in [PR 45](https://github.com/tensorbee/rdocx/pull/45).
+- Restore bounded reusable layout performance for document load, typing, undo,
+  and table mutation while retaining exact shaping, source mappings, and page
+  structure. This hardened equivalent addresses
+  [Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+
+### Compatibility
+
+All 15 crates.io packages in the shared OOXML and PowerPoint family move
+together from 0.5.0 to 0.6.0. This is an intentional pre-1.0 minor boundary.
+Callers that build a `FontManager` directly can use the new caller-alias
+configuration. Existing callers that do not configure aliases retain the same
+deterministic fallback behavior.
+
+The stable Word family remains at its prepared 0.10.0 source boundary while
+this incubating family publishes. `rpptx-wasm` is prepared at 0.6.0 but remains
+unpublished on crates.io. Python, WASM, npm, and PyPI publication authority is
+unchanged.
+
+### Contributors
+
+Atul Sharma maintained the release. Thanks to `@emptinessform` for the caller
+font-alias report and reference implementation in
+[Issue 44](https://github.com/tensorbee/rdocx/issues/44) and
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and for the editor
+performance measurements and migration evidence in
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+
+No named external patch landed directly. Each named report or proposal landed
+through the hardened equivalent described above so that the current bounded
+cache, deterministic fallback, and reusable layout contracts remain intact.
+
+## v0.10.0
+
+### Highlights
+
+The stable Word family adds native RTF, HTML, and OpenDocument Text input,
+native RTF and OpenDocument Text output, deterministic EPUB and SVG export,
+and ordered compatibility readers that preserve unsupported XML. Layout also
+honors caller font aliases and restores bounded editor-scale reuse.
+
+### Added
+
+- Read RTF, HTML5, and OpenDocument Text into the native `Document` facade with
+  bounded inputs, ordered diagnostics, and no network access.
+- Write deterministic RTF byte streams with stable lossy diagnostics and
+  failure-atomic path replacement.
+- Write deterministic OpenDocument Text archives with stable lossy diagnostics
+  and failure-atomic path replacement.
+- Export deterministic EPUB publications that retain supported links, images,
+  headings, lists, tables, and accessibility structure while reporting
+  unsupported source content.
+- Export searchable SVG pages with deterministic fixed-page geometry, images,
+  and safe links while reporting unsupported visual content.
+- Export exact selected pages as opaque or transparent PNG, quality-controlled
+  JPEG, or one deterministic multi-page TIFF through native Word, Python, and
+  the general Word and PowerPoint CLI paths.
+- Inspect direct table-cell children through `CellRef::items`. This hardened
+  equivalent includes the outcome proposed in
+  [PR 47](https://github.com/tensorbee/rdocx/pull/47).
+- Inspect direct run content through `RunRef::items`, including text, breaks,
+  drawings, fields, notes, comments, and preserved XML. This hardened
+  equivalent includes the outcome proposed in
+  [PR 48](https://github.com/tensorbee/rdocx/pull/48).
+- Inspect direct paragraph and hyperlink content without changing established
+  flattened accessors. This hardened equivalent includes the outcome proposed
+  in [PR 49](https://github.com/tensorbee/rdocx/pull/49).
+- Classify retained unsupported body XML through borrowed qualified-name,
+  namespace, and child-content facts without inventing source bytes. This
+  hardened equivalent includes the outcome proposed in
+  [PR 50](https://github.com/tensorbee/rdocx/pull/50).
+
+### Fixed
+
+- Honor caller-supplied font family aliases without duplicating font bytes,
+  while retaining deterministic fallback and bounded caches. This hardened
+  equivalent addresses
+  [Issue 44](https://github.com/tensorbee/rdocx/issues/44) and the reference
+  implementation in [PR 45](https://github.com/tensorbee/rdocx/pull/45).
+- Restore bounded reusable layout performance for document load, typing, undo,
+  and table mutation while retaining exact shaping, source mappings, and page
+  structure. This hardened equivalent addresses
+  [Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+- Reject undecodable ordinary and deleted Word text instead of publishing an
+  empty lossy value. This hardened equivalent includes the correction proposed
+  in [PR 52](https://github.com/tensorbee/rdocx/pull/52).
+
+### Compatibility
+
+The exact seven-package stable crates.io family moves together from 0.9.0 to
+0.10.0. This is an intentional pre-1.0 Rust source boundary. The shared OOXML
+and PowerPoint family remains at its published 0.5.0 boundary. Python, WASM,
+CLI, npm, and PyPI publication authority is unchanged.
+
+`ST_NumberFormat` now preserves producer-defined values in `Other(String)`.
+The enum no longer implements `Copy`, and exhaustive matches must handle the
+new value-bearing variant. Callers should borrow or clone numbering formats as
+needed and retain unknown values rather than substituting a modeled marker.
+This hardened equivalent includes the preservation outcome proposed in
+[PR 51](https://github.com/tensorbee/rdocx/pull/51).
+
+External layout backends must continue to recurse through
+`PositionedElement::MarkedContent` or use `oxml_layout::walk`, as documented for
+v0.9.0. No migration is required for callers that use the high-level document
+facade and do not exhaustively match `ST_NumberFormat`.
+
+### Contributors
+
+Atul Sharma maintained the release. Thanks to `@emptinessform` for the caller
+font-alias report and reference implementation in
+[Issue 44](https://github.com/tensorbee/rdocx/issues/44) and
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and for the editor
+performance measurements and migration evidence in
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46).
+
+Thanks to `@pedroassumpcao` for the ordered cell, run, paragraph, and hyperlink
+reader designs in [PR 47](https://github.com/tensorbee/rdocx/pull/47),
+[PR 48](https://github.com/tensorbee/rdocx/pull/48), and
+[PR 49](https://github.com/tensorbee/rdocx/pull/49), the unsupported XML facts
+in [PR 50](https://github.com/tensorbee/rdocx/pull/50), producer-defined
+numbering preservation in [PR 51](https://github.com/tensorbee/rdocx/pull/51),
+and fail-closed text decoding in
+[PR 52](https://github.com/tensorbee/rdocx/pull/52).
+
+No named external patch landed directly. Each named report or proposal landed
+through the hardened equivalent described above so that current namespace,
+non-exhaustive API, bounded-allocation, diagnostic, and compatibility contracts
+remain intact.
 
 ## v0.9.0
 

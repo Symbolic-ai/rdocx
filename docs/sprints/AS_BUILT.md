@@ -9006,3 +9006,275 @@ evidence and maintainer-authenticated comments.
 [Issue 44](https://github.com/tensorbee/rdocx/issues/44#issuecomment-5395173425),
 [PR 45](https://github.com/tensorbee/rdocx/pull/45#issuecomment-5395175132), and
 [Issue 46](https://github.com/tensorbee/rdocx/issues/46#issuecomment-5395176825).
+
+### F-180, ODT writer
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::to_odt_bytes` and `Document::save_odt` now write
+a deterministic bounded ODF 1.3 package from the native Word tree. The writer
+projects supported effective paragraph and text formatting, nested lists,
+table spans, and inline images, and returns stable path-aware diagnostics for
+every unsupported or simplified source fact.
+
+**Non-obvious choices.** ODT remains a private `rdocx` facade concern rather
+than an OPC mode. The package writes an uncompressed first `mimetype` entry,
+schema-ordered XML, deterministic automatic styles and media names, and an
+exact manifest. Byte serialization completes before failure-atomic path
+replacement, and write limits are expressed in the units the F-179 reader
+will observe after reopening.
+
+**Deviations from the design plan.** None. Review expanded the conformance and
+loss matrices, limit proofs, inherited numbering coverage, and exact F-179
+piece-to-run accounting without changing the approved public boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Twenty-nine focused writer tests and the public structural round-trip
+gate passed. The exact LibreOffice 26.2.5.2 differential, full workspace suite,
+WASM, package, documentation, and supply-chain gates also passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-179 and F-180 share one declared fidelity
+boundary. Extending either direction requires extending the structural record,
+loss diagnostics, and bounded package checks together.
+
+### F-181, EPUB export
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now exports deterministic EPUB 3
+bytes and files with ordered spine and navigation documents, structured
+headings, nested lists, tables, safe hyperlinks, validated raster media, and
+bounded metadata. Unsupported or simplified document facts remain visible as
+stable diagnostics.
+
+**Non-obvious choices.** EPUB projection is private to `rdocx` and reuses the
+existing document tree rather than introducing a second retained model. Media
+must pass byte-level PNG, JPEG, or GIF structure validation before packaging.
+Heading anchors remain source-correlated, list continuation remains explicit,
+and every XHTML, navigation, media, and diagnostic budget is checked before
+unbounded expansion.
+
+**Deviations from the design plan.** None. Review strengthened bounded
+projection, URI and media validation, style and numbering loss reporting,
+table-cell lists, metadata diagnostics, and exact source correlation.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Thirty-three focused exporter tests passed. The source-built
+publication passed the exact checksum-pinned EPUBCheck 5.3.0 oracle. Full
+workspace, WASM, package, documentation, and supply-chain gates also passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** EPUB output owns document semantics and reading
+order rather than fixed-page geometry. New media or XHTML support must extend
+the strict validator, bounded preflight, and EPUBCheck fixture together.
+
+### F-182, SVG page export
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now exports one deterministic,
+self-contained SVG string from a selected `PageFrame`. Text stays searchable,
+fonts and raster images are embedded, safe links remain active, and recursive
+geometry, gradients, clipping, opacity, marked content, and supported shadows
+retain shared layout order.
+
+**Non-obvious choices.** The backend lives privately in stable `rdocx` because
+the shared PDF family remains at its published incubating boundary. Definition
+IDs and diagnostics follow deterministic first use. Complex text remains text
+with an approximation diagnostic when exact scalar positioning is impossible,
+and an unprovable singular-transform effect is omitted without dropping its
+source content or siblings.
+
+**Deviations from the design plan.** None. Review replaced the initial narrow
+golden with representative text, image, gradient, clip, shadow, link, and
+three-level noncommuting transform coverage, and tightened font, XML, gradient,
+and filter behavior.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Nineteen focused SVG tests passed, including the calibrated 150 dpi
+resvg 0.48.1 SSIM gate and its perturbation control. Full workspace,
+no-default-font, WASM, package, documentation, and supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** SVG consumes immutable layout output. It must
+not grow Word format knowledge or silently flatten searchable text into
+outlines.
+
+### F-X054, Integrate PRs 47 through 52
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Borrowed ordered readers now expose direct body, cell,
+paragraph, hyperlink, and run children while established flattened accessors
+remain unchanged. Unsupported XML facts retain qualified names, resolved
+namespaces, child facts, and optional exact bytes. Producer-defined numbering
+values survive in `ST_NumberFormat::Other(String)`, and undecodable ordinary or
+deleted Word text fails closed.
+
+**Non-obvious choices.** The six external proposals landed as hardened
+equivalents rather than direct merges. Public item enums are non-exhaustive,
+modeled unsupported facts do not fabricate raw bytes, namespace facts come
+from parser scope, and namespace replay uses declaration-dependent logical
+owner identity with safe unchanged-byte preservation and fail-closed mutation.
+Exporters never invent decimal markers for producer-defined numbering.
+
+**Deviations from the design plan.** All six outcomes are hardened equivalents.
+The implementation adds current namespace, non-exhaustive API, bounded
+allocation, exact raw-boundary, and diagnostic protections beyond the proposed
+patches. The S55 Python `Html` and `Odt` error reconciliation was recorded
+separately from the numbering outcome.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The complete ordered-reader and namespace regression suite passed
+168 tests before integration, and the integrated suite passed 169. The pinned
+Python 3.12.9 and maturin 1.13.3 binding environment passed all 37 tests. Full
+workspace, package, documentation, WASM, and supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The included outcomes came from
+[PR 47](https://github.com/tensorbee/rdocx/pull/47),
+[PR 48](https://github.com/tensorbee/rdocx/pull/48),
+[PR 49](https://github.com/tensorbee/rdocx/pull/49),
+[PR 50](https://github.com/tensorbee/rdocx/pull/50),
+[PR 51](https://github.com/tensorbee/rdocx/pull/51), and
+[PR 52](https://github.com/tensorbee/rdocx/pull/52), with specific credit to
+`@pedroassumpcao`. F-X055 owns their release-bound comments and closure after
+v0.10.0 publication verifies.
+
+### F-X056, Tag rpptx-v0.6.0
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete fifteen-package shared OOXML and PowerPoint
+family was published at 0.6.0 from reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The release includes the shared
+font-alias and bounded relayout outcomes, raster export additions, and current
+Presentation CLI output selection. `rpptx-wasm` remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[32866396976](https://github.com/tensorbee/rdocx/actions/runs/32866396976)
+passed output stability, metadata, reviewed-note, archive, fifteen-crate
+publication, and GitHub Release jobs. Every selected 0.6.0 registry entry
+resolved under sole owner `mantissaman (Atul Sharma)`. The annotated
+[`rpptx-v0.6.0`](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.6.0)
+tag dereferenced to the reviewed SHA, and its 2,502-byte body was
+byte-identical to the committed changelog render.
+
+**Contribution inventory.** Authenticated contributor `@emptinessform`
+reported [Issue 44](https://github.com/tensorbee/rdocx/issues/44), authored
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and reported
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46). F-X051 and F-X052
+landed all three selected outcomes as hardened equivalents. No record state
+changed during this release.
+
+**Notifications.** The reviewed comments were posted and verified at
+[Issue 44 comment](https://github.com/tensorbee/rdocx/issues/44#issuecomment-5413050520),
+[PR 45 comment](https://github.com/tensorbee/rdocx/pull/45#issuecomment-5413050758),
+and [Issue 46 comment](https://github.com/tensorbee/rdocx/issues/46#issuecomment-5413050988).
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The full workspace gate, 70 workflow tests, 49-entry hash harness,
+no-default-font tests, both WASM targets, warning-free docs, README checks,
+exact 22-package dry run, archive inventory and size checks, and cargo-deny
+passed at the reviewed source. The publication workflow and independent
+registry, owner, tag, release-body, and notification checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.6.0` tag.
+F-X057 owns stable 0.10.1 and retains its separate exact-SHA final approval.
+
+### F-X057, Tag v0.10.1
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete seven-package stable Word family was
+published at 0.10.1 from reviewed SHA
+`ae0dcb162a7805e59e5890464b226765645ad547`. The release recovers the full S56
+stable outcome after the immutable v0.10.0 attempt published only `rdocx-opc`
+and `rdocx-oxml`.
+
+**Release evidence.** GitHub Actions run
+[32879293813](https://github.com/tensorbee/rdocx/actions/runs/32879293813)
+passed the exact seven-package publication and GitHub Release jobs. Every
+selected 0.10.1 registry entry resolved under sole owner
+`mantissaman (Atul Sharma)`. The annotated
+[`v0.10.1`](https://github.com/tensorbee/rdocx/releases/tag/v0.10.1) tag
+dereferenced to the reviewed SHA, and its 5,542-byte body was byte-identical to
+the committed changelog render.
+
+**Contribution inventory.** Authenticated contributor `@emptinessform`
+reported [Issue 44](https://github.com/tensorbee/rdocx/issues/44), authored
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and reported
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46). Authenticated
+contributor `@pedroassumpcao` authored
+[PR 47](https://github.com/tensorbee/rdocx/pull/47) through
+[PR 52](https://github.com/tensorbee/rdocx/pull/52). F-X051, F-X052, and F-X054
+landed all nine selected outcomes as hardened equivalents.
+
+**Notifications.** The exact reviewed comments were posted by `mantissaman`
+and verified at
+[Issue 44 comment](https://github.com/tensorbee/rdocx/issues/44#issuecomment-5414486370),
+[PR 45 comment](https://github.com/tensorbee/rdocx/pull/45#issuecomment-5414486381),
+[Issue 46 comment](https://github.com/tensorbee/rdocx/issues/46#issuecomment-5414486391),
+[PR 47 comment](https://github.com/tensorbee/rdocx/pull/47#issuecomment-5414486414),
+[PR 48 comment](https://github.com/tensorbee/rdocx/pull/48#issuecomment-5414486360),
+[PR 49 comment](https://github.com/tensorbee/rdocx/pull/49#issuecomment-5414486396),
+[PR 50 comment](https://github.com/tensorbee/rdocx/pull/50#issuecomment-5414486392),
+[PR 51 comment](https://github.com/tensorbee/rdocx/pull/51#issuecomment-5414486351),
+and [PR 52 comment](https://github.com/tensorbee/rdocx/pull/52#issuecomment-5414486404).
+PRs 47 through 52 were then closed unmerged as authorized.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The full workspace gate, 74 workflow tests, 49-entry hash harness,
+no-default-font tests, both WASM targets, pinned Python binding tests,
+warning-free docs, README checks, exact 22-package dry run, archive inventory
+and size checks, and cargo-deny passed at the reviewed source. Publication and
+independent registry, owner, tag, release-body, notification, and closure
+checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable v0.10.0 partial release
+and the complete `v0.10.1` release. Binding, WASM, npm, and PyPI publication
+authority remains unchanged.

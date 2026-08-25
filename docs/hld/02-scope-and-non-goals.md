@@ -135,7 +135,7 @@ will render legibly but not faithfully, and will say so.
 v1 shipped. This section records what changed after it, and it is the only place
 a v1 non-goal may be superseded. A non-goal not named here still stands.
 
-The shape of the roadmap is in `14-development-backlog.md`, M14 through M20. The
+The shape of the roadmap is in `14-development-backlog.md`, M14 through M22. The
 principle behind it: v1 proved the model and the renderer can live in one
 codebase, which is the thing no other library in Python or Rust has. Everything
 after v1 leans on that rather than away from it.
@@ -144,11 +144,21 @@ after v1 leans on that rather than away from it.
 
 | v1 position | Superseded by | Why it changed |
 |---|---|---|
-| `oxml-sml` is not a spreadsheet library and must not grow into one without a separate decision | **M19**, and F-184 is that decision | The decision was correct while the foundations were unbuilt. OPC, DrawingML, charts, layout and the PDF backend now all exist and are format-neutral, so the marginal cost of the third family is a fraction of what it was |
 | Charts are a PowerPoint capability | **M15** | `oxml-chart` now owns the format-neutral engine. `rpptx-chart` remains a deprecated compatibility shim |
+| Animations, transitions, and `p:timing` are preserved but never executed | **M21** | The static renderer and corpus now provide the geometry, timing-independent frame state, and output backends needed to add bounded timeline execution without making it a prerequisite for ordinary slide rendering |
 
-Both entries are decisions, not corrections. The v1 positions were right when
+These entries are decisions, not corrections. The v1 positions were right when
 they were written.
+
+### Conditional expansion
+
+`oxml-sml` remains chart-workbook support rather than a spreadsheet library.
+M19 may supersede that position only if F-184 finds a material gap still exists
+in the Rust ecosystem at S70. A basic reader, writer, or formula evaluator is
+not enough. The required gap is one loss-aware lifecycle covering advanced
+editing, calculation, local pivot refresh, selected Power Query execution,
+Office Scripts-compatible automation, and rendering. If a credible maintained
+crate provides that boundary by then, M19 is archived rather than implemented.
 
 ### Still non-goals, and still permanent
 
@@ -160,10 +170,17 @@ they were written.
   lxml.
 - **EMF and WMF interpretation.** Still an outline placeholder. M18 adds
   formats, and this is not one of them.
-- **Animations, transitions and `p:timing` as behaviour.** Preserved, never
-  executed. Nothing static renders them.
-- **Recalculating pivot tables.** M19 preserves the cache and reports the
-  source. Reproducing Excel's pivot engine is a library of its own.
+- **Legacy binary Office formats.** Binary `.doc`, `.xls`, and `.ppt`, Word 2003
+  XML, and equivalent pre-OOXML authoring surfaces are not scheduled. They do
+  not share the OOXML package, model, preservation, or rendering foundations,
+  and adding them would create separate legacy engines rather than deepen the
+  current product.
+- **Universal Excel service compatibility.** If M19 proceeds, it executes
+  worksheet and table-backed pivots, a declared Power Query M and connector
+  subset, and an explicitly versioned Office Scripts-compatible API. It
+  preserves and reports unsupported OLAP and Power Pivot execution, proprietary
+  and tenant-bound connectors, custom functions, Python cells, VBA, XLM, and
+  Microsoft-hosted storage or automation services without claiming to run them.
 
 ### The WASM packages are deliberately unpublished
 
@@ -188,11 +205,8 @@ confirmed, and its entry records what the work would be if the position changes.
 Named so a reader knows they were considered rather than missed.
 
 - **Legacy binary `.doc`, `.xls` and `.ppt`.** Each is a compound-file format
-  with no relation to OOXML, and each is roughly a milestone on its own. The
-  demand is real and enterprise, and the cost is not justified until the OOXML
-  side is complete through M18.
-- **Presentation to video.** A commercial checkbox feature that needs an
-  encoder, a timeline and the animation engine v1 declined to build.
+  with no relation to OOXML, and each would require a separate legacy engine.
+  They remain excluded after the modern Office depth milestones complete.
 - **A collaborative editing server.** Out of the shape of a library.
 
 ## The measurable bar
