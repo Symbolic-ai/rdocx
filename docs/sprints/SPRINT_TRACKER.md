@@ -71,6 +71,7 @@ defended.
 | S54 | M18, X | 4 | 4 | 0 | 9 | 1 | Opened M18 with bounded RTF reading and deterministic diagnostic RTF writing, shared PNG, JPEG, TIFF, transparency, and page-range export, plus exact caller-font family aliases. The full close gate passed with all 49 hashes and 7 golden pixel buffers unchanged, all package archives below 10 MiB, and sprint review clean on pass 2 after two gate gaps were fixed. M18 continues in S55 with HTML and ODT input |
 | S55 | M18, X | 4 | 4 | 0 | 13 | 1 | Added bounded HTML and ODT input, restored exact relayout performance within the Issue 46 budget, and completed migration and contribution records. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review clean on pass 2. M18 continues in S56 with ODT writing and outbound formats |
 | S56 | M18, X | 7 | 6 | 1 | 15 | 1 | Completed M18 with deterministic ODT writing, EPUB 3 export, searchable SVG pages, and hardened outcomes from PRs 47 through 52. The partial v0.10.0 attempt was archived and recovered by publishing the complete 15-package incubating 0.6.0 family before the complete seven-package stable 0.10.1 family. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and the sprint review clean on the authorized exact-HEAD pass 6 |
+| S57 | M20 | 3 | 3 | 0 | 10 | 1 | Established the pinned Word corpus, complete-union SSIM evidence, and thousand-page performance limits. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review clean on pass 1. M20 continues in S58 with shaping and incremental layout |
 
 ## Completed features
 
@@ -325,6 +326,9 @@ defended.
 | F-X054 | S56 | L | 4 | 1 | 2026-08-25 | Hardened ordered reader and parser outcomes from PRs 47 through 52 |
 | F-X056 | S56 | S | 1 | 1 | 2026-08-25 | Published and verified the complete 15-package rpptx 0.6.0 family |
 | F-X057 | S56 | S | 1 | 1 | 2026-08-25 | Published and verified the complete seven-package stable 0.10.1 family |
+| F-196 | S57 | M | 2 | 1 | 2026-08-25 | Five-document pinned Word corpus with strict provenance and checksum verification |
+| F-201 | S57 | L | 4 | 1 | 2026-08-25 | Thousand-page deterministic layout and PDF performance gate |
+| F-197 | S57 | L | 4 | 1 | 2026-08-25 | Complete-union Word SSIM harness against pinned Writer and Poppler |
 
 ## Velocity
 
@@ -396,6 +400,7 @@ five working days.
 | S54 | 4 | 1 | 20.00 |
 | S55 | 4 | 1 | 20.00 |
 | S56 | 6 | 1 | 30.00 |
+| S57 | 3 | 1 | 15.00 |
 
 ## Escalation record
 
@@ -455,3 +460,4 @@ was done about it. Empty is the expected state.
 | 2026-08-24 | Sprint estimate variance exceeded 30 percent | S54 | Record 1 actual day against 9 estimated. Four isolated workers and established RTF, raster, and layout paths allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S55 boundary |
 | 2026-08-24 | Sprint estimate variance exceeded 30 percent | S55 | Record 1 actual day against 13 estimated. Four isolated workers and established import, layout, differential, and contribution workflows allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S56 boundary |
 | 2026-08-25 | Sprint estimate variance exceeded 30 percent | S56 | Record 1 actual day against 15 estimated. Isolated workers, established exporter and release workflows, and the v0.10.1 recovery allowed implementation, review, and publication work to overlap safely. The resulting 30.00 stories per week is not a sustainable forecast, so retain the dependency-defined future release checkpoints starting at S58 |
+| 2026-08-25 | Sprint estimate variance exceeded 30 percent | S57 | Record 1 actual day against 10 estimated. Isolated workers, established corpus and oracle infrastructure, and test-only reuse of existing render paths reduced delivery time while preserving the dependency-defined S58 shaping boundary. The resulting 15.00 stories per week is not a sustainable forecast, so retain the planned S58 scope |

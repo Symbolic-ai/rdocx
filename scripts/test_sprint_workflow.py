@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import fetch_docx_corpus
 from scripts import readme_doctests
 from scripts import install_pinned_libreoffice
 from scripts import install_pinned_poppler
@@ -23,6 +24,10 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    LARGE_DOCUMENT_TEST = (
+        "a_thousand_page_document_paginates_and_renders_within_the_declared_limits"
+    )
+
     def yaml_block(self, source: str, header: str) -> str:
         lines = source.splitlines()
         matches = [index for index, line in enumerate(lines) if line == header]
@@ -161,6 +166,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm",
             "python_bindings",
             "presentation_fidelity",
+            "word_fidelity",
             "hash_harness",
             "supply_chain",
             "prose",
@@ -203,6 +209,10 @@ class SprintWorkflowTests(unittest.TestCase):
             ),
             "presentation_fidelity": (
                 "scripts/pptx-corpus-manifest.tsv",
+                "docs/hld/00-vision.md",
+            ),
+            "word_fidelity": (
+                "scripts/docx_ssim_harness.py",
                 "docs/hld/00-vision.md",
             ),
             "hash_harness": (
@@ -280,6 +290,52 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("--ignored --nocapture", gate)
         self.assertNotIn("continue-on-error", install + gate)
 
+    def test_large_document_ci_gate_is_exact_release_ignored_and_single_threaded(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_large_document_ci_gate(ci)
+
+    def assert_large_document_ci_gate(self, ci: str) -> None:
+        test_job = self.yaml_block(ci, "  test:")
+        gate = self.yaml_step(test_job, "Run thousand-page performance gate")
+        self.assertEqual(
+            self.operative_lines(gate),
+            (
+                "- name: Run thousand-page performance gate",
+                "run: >-",
+                "cargo test --locked --release -p rdocx",
+                "--test regression_test",
+                self.LARGE_DOCUMENT_TEST,
+                "-- --ignored --exact --test-threads=1 --nocapture",
+            ),
+        )
+
+    def test_large_document_ci_gate_rejects_weakened_invocations(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        test_job = self.yaml_block(ci, "  test:")
+        gate = self.yaml_step(test_job, "Run thousand-page performance gate")
+        mutations = {
+            "missing": "",
+            "unlocked": gate.replace("--locked ", ""),
+            "debug": gate.replace("--release ", ""),
+            "not-ignored": gate.replace("--ignored ", ""),
+            "not-exact": gate.replace("--exact ", ""),
+            "parallel": gate.replace("--test-threads=1", "--test-threads=2"),
+            "swallowed": gate.replace(
+                "        run: >-\n", "        continue-on-error: true\n        run: >-\n"
+            ),
+        }
+        for name, mutated_gate in mutations.items():
+            mutated_ci = ci.replace(gate, mutated_gate, 1)
+            self.assertNotEqual(mutated_ci, ci, name)
+            with self.subTest(mutation=name), self.assertRaises(AssertionError):
+                self.assert_large_document_ci_gate(mutated_ci)
+
     def test_docs_only_changes_skip_expensive_jobs_and_still_report_the_ci_gate(
         self,
     ) -> None:
@@ -310,6 +366,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm",
             "python-bindings",
             "presentation-fidelity",
+            "word-fidelity",
             "hash-harness",
             "prose",
         ):
@@ -346,6 +403,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm",
             "python-bindings",
             "presentation-fidelity",
+            "word-fidelity",
             "hash-harness",
             "supply-chain",
             "prose",
@@ -368,6 +426,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 "PYTHON_BINDINGS_RESULT: ${{ needs['python-bindings'].result }}",
                 "PRESENTATION_FIDELITY_SELECTED: ${{ needs.changes.outputs.presentation_fidelity }}",
                 "PRESENTATION_FIDELITY_RESULT: ${{ needs['presentation-fidelity'].result }}",
+                "WORD_FIDELITY_SELECTED: ${{ needs.changes.outputs.word_fidelity }}",
+                "WORD_FIDELITY_RESULT: ${{ needs['word-fidelity'].result }}",
                 "HASH_HARNESS_SELECTED: ${{ needs.changes.outputs.hash_harness }}",
                 "HASH_HARNESS_RESULT: ${{ needs['hash-harness'].result }}",
                 "SUPPLY_CHAIN_SELECTED: ${{ needs.changes.outputs.supply_chain }}",
@@ -499,7 +559,12 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn('os.environ.get("GITHUB_PATH")', installer)
 
     def assert_libreoffice_consumers_contract(self, ci: str) -> None:
-        for job_name in ("test", "msrv"):
+        consumers = {
+            "test": "Run full workspace suite",
+            "msrv": "Run full workspace suite",
+            "word-fidelity": "Run all-page Word SSIM trend and completeness gate",
+        }
+        for job_name, use_step in consumers.items():
             job = self.yaml_block(ci, f"  {job_name}:")
             self.assertIn("runs-on: ubuntu-24.04", job)
             install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
@@ -507,17 +572,18 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.yaml_direct_lines(install, 8),
                 ("run: python3 scripts/install_pinned_libreoffice.py",),
             )
-            test_step = self.yaml_step(job, "Run full workspace suite")
+            test_step = self.yaml_step(job, use_step)
             self.assertLess(job.index(install), job.index(test_step))
             self.assertNotIn("continue-on-error", install)
             self.assert_no_success_short_circuit(self.operative_lines(install))
-        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 2)
+        self.assertEqual(ci.count("python3 scripts/install_pinned_libreoffice.py"), 3)
 
     def assert_poppler_consumers_contract(self, ci: str) -> None:
         consumers = {
             "test": "cargo test --workspace",
             "python-bindings": "Run full Python binding suite",
             "presentation-fidelity": "Run all-slide SSIM trend and completeness gate",
+            "word-fidelity": "Run all-page Word SSIM trend and completeness gate",
             "msrv": "cargo test --workspace",
         }
         for job_name, use_marker in consumers.items():
@@ -537,9 +603,91 @@ class SprintWorkflowTests(unittest.TestCase):
                     for line in self.operative_lines(job)
                 )
             )
-        self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 4)
+        self.assertEqual(ci.count("python3 scripts/install_pinned_poppler.py"), 5)
         self.assertNotIn("brew install poppler", ci)
         self.assertNotIn("apt-get install poppler-utils", ci)
+
+    def assert_word_fidelity_ci_contract(self, ci: str) -> None:
+        job = self.yaml_block(ci, "  word-fidelity:")
+        self.assertIn("runs-on: ubuntu-24.04", self.yaml_direct_lines(job, 4))
+        steps = self.yaml_steps(job)
+        self.assertEqual(
+            self.yaml_step_actions(steps[0]),
+            ("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",),
+        )
+        self.assertEqual(
+            self.yaml_step_actions(steps[1]),
+            ("dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",),
+        )
+        self.assertIn("toolchain: 1.97.1", self.operative_lines(steps[1]))
+        fetch = self.yaml_step(job, "Fetch pinned Word corpus")
+        gate = self.yaml_step(
+            job, "Run all-page Word SSIM trend and completeness gate"
+        )
+        upload = self.yaml_step(job, "Retain Word fidelity evidence")
+        self.assertEqual(
+            self.yaml_direct_lines(fetch, 8),
+            ("run: python3 scripts/fetch_docx_corpus.py",),
+        )
+        self.assertEqual(
+            self.operative_lines(gate),
+            (
+                "- name: Run all-page Word SSIM trend and completeness gate",
+                "run: >-",
+                "python3 scripts/docx_ssim_harness.py --check",
+                '--output-dir "${RUNNER_TEMP}/word-fidelity"',
+            ),
+        )
+        self.assertIn("if: always()", self.operative_lines(upload))
+        self.assertIn(
+            "${{ runner.temp }}/word-fidelity/gate-evidence.json", upload
+        )
+        self.assertIn("${{ runner.temp }}/word-fidelity/ssim-results.tsv", upload)
+        self.assertIn("if-no-files-found: error", self.operative_lines(upload))
+        self.assertNotIn("continue-on-error", job)
+        self.assertLess(job.index(fetch), job.index(gate))
+        self.assertLess(job.index(gate), job.index(upload))
+
+    def test_word_fidelity_ci_gate_rejects_weakened_invocations(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_word_fidelity_ci_contract(ci)
+        job = self.yaml_block(ci, "  word-fidelity:")
+        gate = self.yaml_step(
+            job, "Run all-page Word SSIM trend and completeness gate"
+        )
+        upload = self.yaml_step(job, "Retain Word fidelity evidence")
+        mutations = {
+            "missing-gate": ci.replace(gate, "", 1),
+            "self-test-only": ci.replace(
+                gate, gate.replace("--check", "--self-test", 1), 1
+            ),
+            "no-evidence-output": ci.replace(
+                '          --output-dir "${RUNNER_TEMP}/word-fidelity"\n', "", 1
+            ),
+            "swallowed": ci.replace(
+                gate,
+                gate.replace(
+                    "        run: >-\n",
+                    "        continue-on-error: true\n        run: >-\n",
+                    1,
+                ),
+                1,
+            ),
+            "missing-json": ci.replace(
+                "            ${{ runner.temp }}/word-fidelity/gate-evidence.json\n",
+                "",
+                1,
+            ),
+            "warning-artifact": ci.replace(
+                upload, upload.replace("if-no-files-found: error", "if-no-files-found: warn"), 1
+            ),
+        }
+        for label, mutated in mutations.items():
+            self.assertNotEqual(mutated, ci, label)
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self.assert_word_fidelity_ci_contract(mutated)
 
     def assert_workspace_oracle_environment_contract(self, ci: str) -> None:
         setup_action = (
@@ -822,7 +970,7 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_libreoffice_consumers_contract(ci)
-        for job_name in ("test", "msrv"):
+        for job_name in ("test", "msrv", "word-fidelity"):
             job = self.yaml_block(ci, f"  {job_name}:")
             install = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
             for label, mutated_install in {
@@ -1136,7 +1284,13 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_poppler_consumers_contract(ci)
-        for job_name in ("test", "python-bindings", "presentation-fidelity", "msrv"):
+        for job_name in (
+            "test",
+            "python-bindings",
+            "presentation-fidelity",
+            "word-fidelity",
+            "msrv",
+        ):
             marker = f"  {job_name}:"
             job = self.yaml_block(ci, marker)
             step = self.yaml_step(job, "Install pinned Poppler 26.01.0")
@@ -1272,6 +1426,133 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     self.yaml_direct_lines(fetch, 8),
                     ("run: python3 scripts/fetch_pptx_corpus.py",),
+                )
+                test_steps = tuple(
+                    step
+                    for step in self.yaml_steps(job)
+                    if "cargo test --workspace" in step
+                )
+                self.assertEqual(len(test_steps), 1)
+                self.assertLess(job.index(fetch), job.index(test_steps[0]))
+                self.assertNotIn("continue-on-error", fetch)
+
+    def test_word_corpus_fetcher_verifies_every_checksum_and_refuses_a_mismatch(
+        self,
+    ) -> None:
+        content = {
+            category: f"{category} content".encode()
+            for category in sorted(fetch_docx_corpus.EXPECTED_CATEGORIES)
+        }
+        entries = [
+            (
+                f"{category}.docx",
+                category,
+                "test-producer",
+                "Apache-2.0",
+                fetch_docx_corpus.LICENCE_URLS["Apache-2.0"],
+                hashlib.sha256(content[category]).hexdigest(),
+                f"https://example.com/{category}.docx",
+            )
+            for category in sorted(fetch_docx_corpus.EXPECTED_CATEGORIES)
+        ]
+        with tempfile.TemporaryDirectory(dir=workflow.REPO) as directory:
+            corpus = Path(directory)
+            for entry in entries:
+                (corpus / entry[0]).write_bytes(content[entry[1]])
+            fetch_docx_corpus.verify_directory(corpus, entries)
+            for entry in entries:
+                source = corpus / entry[0]
+                source.write_bytes(b"changed")
+                with self.subTest(checksum=entry[0]), self.assertRaisesRegex(
+                    ValueError, "digest mismatch"
+                ):
+                    fetch_docx_corpus.verify_directory(corpus, entries)
+                source.write_bytes(content[entry[1]])
+
+            destination = corpus / entries[-1][0]
+            destination.write_bytes(b"stale")
+            temporary = corpus / f".{entries[-1][0]}.download"
+            with contextlib.redirect_stdout(io.StringIO()):
+                with patch.object(
+                    fetch_docx_corpus.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(b"wrong download"),
+                ), self.assertRaisesRegex(ValueError, "digest mismatch"):
+                    fetch_docx_corpus.fetch(corpus, entries)
+            self.assertEqual(destination.read_bytes(), b"stale")
+            self.assertFalse(temporary.exists())
+
+    def test_word_corpus_fetcher_refuses_missing_extra_and_unlicensed_inputs(
+        self,
+    ) -> None:
+        header = (
+            "path\tcategory\tproducer\tlicence\tlicence_url\tsha256\turl\n"
+        )
+        lines = [
+            "\t".join(
+                (
+                    f"{category}.docx",
+                    category,
+                    "test-producer",
+                    "Apache-2.0",
+                    fetch_docx_corpus.LICENCE_URLS["Apache-2.0"],
+                    hashlib.sha256(category.encode()).hexdigest(),
+                    f"https://example.com/{category}.docx",
+                )
+            )
+            for category in sorted(fetch_docx_corpus.EXPECTED_CATEGORIES)
+        ]
+        valid = header + "\n".join(lines) + "\n"
+        with tempfile.TemporaryDirectory(dir=workflow.REPO) as directory:
+            root = Path(directory)
+            manifest = root / "manifest.tsv"
+            manifest.write_text(valid, encoding="utf-8")
+            entries = fetch_docx_corpus.load_manifest(manifest)
+
+            corpus = root / "corpus"
+            corpus.mkdir()
+            for entry in entries:
+                (corpus / entry[0]).write_bytes(entry[1].encode())
+            (corpus / entries[0][0]).unlink()
+            with self.assertRaisesRegex(ValueError, "corpus is missing"):
+                fetch_docx_corpus.verify_directory(corpus, entries)
+            (corpus / entries[0][0]).write_bytes(entries[0][1].encode())
+            (corpus / "extra.docx").write_bytes(b"extra")
+            with self.assertRaisesRegex(ValueError, "unmanifested files"):
+                fetch_docx_corpus.verify_directory(corpus, entries)
+
+            mutations = {
+                "unsafe": valid.replace("business-letter.docx", "../unsafe.docx", 1),
+                "unlicensed": valid.replace("Apache-2.0", "GPL-3.0-only", 1),
+                "incomplete": valid.replace("\tmulti-script\t", "\treport\t", 1),
+                "insecure-source": valid.replace(
+                    "https://example.com/business-letter.docx",
+                    "http://example.com/business-letter.docx",
+                    1,
+                ),
+                "unapproved-licence-url": valid.replace(
+                    fetch_docx_corpus.LICENCE_URLS["Apache-2.0"],
+                    "https://example.com/LICENSE",
+                    1,
+                ),
+            }
+            for label, mutated in mutations.items():
+                with self.subTest(mutation=label):
+                    manifest.write_text(mutated, encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        fetch_docx_corpus.load_manifest(manifest)
+
+    def test_workspace_test_jobs_fetch_the_pinned_word_corpus(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for job_name in ("test", "msrv"):
+            with self.subTest(job=job_name):
+                job = self.yaml_block(ci, f"  {job_name}:")
+                fetch = self.yaml_step(job, "Fetch pinned Word corpus")
+                self.assertEqual(
+                    self.yaml_direct_lines(fetch, 8),
+                    ("run: python3 scripts/fetch_docx_corpus.py",),
                 )
                 test_steps = tuple(
                     step

@@ -9278,3 +9278,125 @@ checks then passed.
 **Notes for future sessions.** Preserve the immutable v0.10.0 partial release
 and the complete `v0.10.1` release. Binding, WASM, npm, and PyPI publication
 authority remains unchanged.
+
+### F-196, Word corpus
+
+**Sprint.** S57
+**Completed.** 2026-08-25
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** A strict fetched Word corpus now covers a business letter,
+report, form, legal document with revisions, and multi-script text. The
+manifest binds each input to an immutable source revision, SHA-256 digest,
+category, SPDX licence, and immutable licence URL. The fetcher stages downloads
+atomically and its read-only check rejects missing, extra, changed, unsafe,
+misclassified, or unlicensed inputs.
+
+**Non-obvious choices.** Four fixtures come from one pinned Apache POI revision
+under Apache-2.0. The legal redline comes from a pinned docx-mcp revision under
+MIT because it proves real contract text with both insertions and deletions.
+The corpus stays ignored and outside every published crate archive. Test and
+MSRV CI fetch and verify it before Cargo runs.
+
+**Deviations from the design plan.** None. Review tightened the manifest and
+workflow mutation checks without changing the approved five-category boundary.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, the external Word
+corpus contract, and `docs/hld/15-build-and-toolchain.md`, corpus acquisition
+and CI ownership.
+
+**Tests.** `test_word_corpus_fetcher_verifies_every_checksum_and_refuses_a_mismatch`,
+`test_word_corpus_fetcher_refuses_missing_extra_and_unlicensed_inputs`,
+`test_workspace_test_jobs_fetch_the_pinned_word_corpus`, and the live fetcher
+`--check` all passed for exactly five documents.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Extend the manifest and all category-count
+assertions together. Do not replace immutable source or licence URLs with
+branch links, and never place fetched binaries in a crate archive.
+
+### F-201, Large document performance
+
+**Sprint.** S57
+**Completed.** 2026-08-25
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The existing `rdocx` regression binary now source-builds
+an exact thousand-page document, lays it out with deterministic bundled fonts,
+and renders the returned layout directly to PDF. The ignored release gate
+asserts page count, nonempty output, layout and PDF throughput floors, and
+separate peak live heap ceilings.
+
+**Non-obvious choices.** A generation-tagged test allocator measures only
+allocations owned by the active stage, so deallocations from setup or a prior
+stage cannot corrupt the result. The reviewed limits are 64 MiB and 250 pages
+per second for layout, then 16 MiB additional peak and 1,000 pages per second
+for PDF. CI runs the exact locked release test serially on Ubuntu 24.04.
+
+**Deviations from the design plan.** None. Calibration confirmed that no
+production optimization was needed. The consolidated run measured 64,528
+layout pages per second at 22.32 MiB and 76,831 PDF pages per second at 1.73
+MiB.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`, the numeric
+large-document contract, `docs/hld/12-testing-strategy.md`, the named release
+regression, and `docs/hld/15-build-and-toolchain.md`, its CI execution.
+
+**Tests.** `a_thousand_page_document_paginates_and_renders_within_the_declared_limits`
+passed in locked release mode with one test thread. Workflow mutation tests
+also proved that CI cannot drop, weaken, parallelize, or swallow the gate.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The PDF stage consumes the already returned
+layout, so its allocator number is the additional render peak rather than total
+document retention. Any production optimization prompted by a future failure
+needs fresh layout and PDF risk routing.
+
+### F-197, Word SSIM harness
+
+**Sprint.** S57
+**Completed.** 2026-08-25
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** A path-filtered Word fidelity job now renders every pinned
+document through the deterministic `rdocx-cli` production path and compares it
+at 150 dpi with accepted-view LibreOffice Writer output rasterized by Poppler.
+The harness records every page in the union, per-page luminance SSIM, source
+dimensions, normalization actions, page-count differences, summary statistics,
+and exact tool identities in retained TSV and JSON evidence.
+
+**Non-obvious choices.** Unequal dimensions are placed on one shared white
+canvas, and a page produced by only one renderer is compared with a blank white
+counterpart. Those differences remain scored evidence instead of disappearing
+as orchestration failures. A temporary locked and offline helper uses the
+existing `Document::accept_all()` API, saves, reopens, and verifies the legal
+fixture before Writer sees it. SSIM at least 0.95 on 80 percent of pages is an
+advisory trend. Corpus, tool, render, oracle, zero-output, and evidence failures
+remain hard failures.
+
+**Deviations from the design plan.** The user approved a material plan revision
+after the first calibration showed 18 Rust pages and 16 oracle pages with
+one-pixel dimension differences. Review then found that a fresh Writer profile
+did not guarantee accepted revision view, so the final plan and implementation
+made acceptance explicit through the existing Rust API.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`, complete union-page
+comparison, `docs/hld/12-testing-strategy.md`, Word SSIM evidence and hard-gate
+policy, and `docs/hld/15-build-and-toolchain.md`, pinned `word-fidelity` CI.
+
+**Tests.** Seventeen harness self-tests covered exact SSIM, alpha compositing,
+accepted-view preparation, tool pins, union coverage, white-canvas
+normalization, required artifacts, trend classification, and a one-pixel
+perturbation. Eighty workflow regressions passed. The consolidated live gate
+covered five documents and 18 union pages with exact LibreOffice 26.2.5.2 and
+Poppler 26.01.0 identities.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The consolidated baseline records 18 Rust pages,
+16 Writer pages, 14 dimension normalizations, two Rust-only pages, and one of
+18 pages at SSIM 0.95 or greater. The 5.56 percent trend is deliberately
+visible but advisory. Future shaping stories should improve or intentionally
+explain this evidence without weakening complete-union coverage.

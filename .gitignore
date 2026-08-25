@@ -31,7 +31,7 @@ Thumbs.db
 .claude/scratch/
 .claude/settings.local.json
 
-# Deck corpus. Fetched by a script rather than committed, so the published
+# Office corpora. Fetched by scripts rather than committed, so the published
 # crates stay small. See docs/hld/12-testing-strategy.md.
 /corpus/
 
