@@ -124,13 +124,13 @@ only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Confirm every dependency and the reviewed S56 SHA before changing stable carriers.
-- [ ] Move the workspace version, stable pins, lock entries, Python metadata, WASM and CI literals, README requirements, and self-tests to 0.10.0.
-- [ ] Rename and strengthen the stable 0.10.0 metadata regression.
-- [ ] Build and reconcile the selected-family contribution inventory.
-- [ ] Prepare the reviewed `v0.10.0` changelog section and one unposted comment per included record.
-- [ ] Update exactly the listed HLD files for the prepared release state.
-- [ ] Run full verification, package, asset, binding, WASM, supply-chain, notes, and hash gates.
+- [x] Confirm every dependency and the reviewed S56 SHA before changing stable carriers.
+- [x] Move the workspace version, stable pins, lock entries, Python metadata, WASM and CI literals, README requirements, and self-tests to 0.10.0.
+- [x] Rename and strengthen the stable 0.10.0 metadata regression.
+- [x] Build and reconcile the selected-family contribution inventory.
+- [x] Prepare the reviewed `v0.10.0` changelog section and one unposted comment per included record.
+- [x] Update exactly the listed HLD files for the prepared release state.
+- [x] Run full verification, package, asset, binding, WASM, supply-chain, notes, and hash gates.
 - [ ] Stop at `/release v0.10.0` final approval.
 - [ ] After approval, verify registry entries, owners, tag and release body, post every reviewed comment, close PRs 47 through 52 accurately, and record every comment URL.
 
