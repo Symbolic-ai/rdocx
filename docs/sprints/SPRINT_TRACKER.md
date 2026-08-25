@@ -323,6 +323,7 @@ defended.
 | F-182 | S56 | M | 2 | 1 | 2026-08-25 | Searchable self-contained SVG page export with calibrated pixel parity |
 | F-X054 | S56 | L | 4 | 1 | 2026-08-25 | Hardened ordered reader and parser outcomes from PRs 47 through 52 |
 | F-X056 | S56 | S | 1 | 1 | 2026-08-25 | Published and verified the complete 15-package rpptx 0.6.0 family |
+| F-X057 | S56 | S | 1 | 1 | 2026-08-25 | Published and verified the complete seven-package stable 0.10.1 family |
 
 ## Velocity
 

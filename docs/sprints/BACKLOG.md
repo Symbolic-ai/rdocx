@@ -509,5 +509,5 @@ regenerated, never hand-edited.
 | F-X054 | Integrate PRs 47 through 52                | S56 | L | done |
 | F-X055 | Tag v0.10.0                               | S56 | S | archived |
 | F-X056 | Tag rpptx-v0.6.0                          | S56 | S | done |
-| F-X057 | Tag v0.10.1                               | S56 | S | in-progress |
+| F-X057 | Tag v0.10.1                               | S56 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

@@ -233,8 +233,8 @@ no crates.io publication path.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires workspace 0.10.1, nine internal pins, eleven
-inherited lockfile packages, two Python project versions, unpublished
+stable regression requires published workspace version 0.10.1, nine internal
+pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
 set. The incubating regression requires the exact 0.6.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
@@ -311,12 +311,13 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group and its two Python
-project versions and rdocx WASM contract literals are prepared at 0.10.1.
+project versions and rdocx WASM contract literals are at 0.10.1. The exact
+seven-package stable family is published from the annotated `v0.10.1` tag at
+reviewed SHA `ae0dcb162a7805e59e5890464b226765645ad547`.
 The immutable v0.10.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed. The remaining five packages and GitHub
-release were not published. The last complete stable family is 0.9.0 from the
-annotated `v0.9.0` tag at reviewed SHA
-`e27e519c94c90cd5be340fe5bf8e431cf542ac51`. Earlier immutable
+release were not published at that version. The last complete stable family is
+0.10.1. Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version

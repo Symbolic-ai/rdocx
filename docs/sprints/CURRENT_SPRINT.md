@@ -43,7 +43,7 @@ incubating family at 0.6.0, then the stable family at 0.10.1.
 | F-X054 | Integrate PRs 47 through 52 | L | done | |
 | F-X055 | Tag v0.10.0 | S | archived | |
 | F-X056 | Tag rpptx-v0.6.0 | S | done | |
-| F-X057 | Tag v0.10.1 | S | in-progress | codex |
+| F-X057 | Tag v0.10.1 | S | done | |
 
 ## Sequencing note
 

@@ -9217,3 +9217,64 @@ registry, owner, tag, release-body, and notification checks then passed.
 
 **Notes for future sessions.** Preserve the immutable `rpptx-v0.6.0` tag.
 F-X057 owns stable 0.10.1 and retains its separate exact-SHA final approval.
+
+### F-X057, Tag v0.10.1
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete seven-package stable Word family was
+published at 0.10.1 from reviewed SHA
+`ae0dcb162a7805e59e5890464b226765645ad547`. The release recovers the full S56
+stable outcome after the immutable v0.10.0 attempt published only `rdocx-opc`
+and `rdocx-oxml`.
+
+**Release evidence.** GitHub Actions run
+[32879293813](https://github.com/tensorbee/rdocx/actions/runs/32879293813)
+passed the exact seven-package publication and GitHub Release jobs. Every
+selected 0.10.1 registry entry resolved under sole owner
+`mantissaman (Atul Sharma)`. The annotated
+[`v0.10.1`](https://github.com/tensorbee/rdocx/releases/tag/v0.10.1) tag
+dereferenced to the reviewed SHA, and its 5,542-byte body was byte-identical to
+the committed changelog render.
+
+**Contribution inventory.** Authenticated contributor `@emptinessform`
+reported [Issue 44](https://github.com/tensorbee/rdocx/issues/44), authored
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and reported
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46). Authenticated
+contributor `@pedroassumpcao` authored
+[PR 47](https://github.com/tensorbee/rdocx/pull/47) through
+[PR 52](https://github.com/tensorbee/rdocx/pull/52). F-X051, F-X052, and F-X054
+landed all nine selected outcomes as hardened equivalents.
+
+**Notifications.** The exact reviewed comments were posted by `mantissaman`
+and verified at
+[Issue 44 comment](https://github.com/tensorbee/rdocx/issues/44#issuecomment-5414486370),
+[PR 45 comment](https://github.com/tensorbee/rdocx/pull/45#issuecomment-5414486381),
+[Issue 46 comment](https://github.com/tensorbee/rdocx/issues/46#issuecomment-5414486391),
+[PR 47 comment](https://github.com/tensorbee/rdocx/pull/47#issuecomment-5414486414),
+[PR 48 comment](https://github.com/tensorbee/rdocx/pull/48#issuecomment-5414486360),
+[PR 49 comment](https://github.com/tensorbee/rdocx/pull/49#issuecomment-5414486396),
+[PR 50 comment](https://github.com/tensorbee/rdocx/pull/50#issuecomment-5414486392),
+[PR 51 comment](https://github.com/tensorbee/rdocx/pull/51#issuecomment-5414486351),
+and [PR 52 comment](https://github.com/tensorbee/rdocx/pull/52#issuecomment-5414486404).
+PRs 47 through 52 were then closed unmerged as authorized.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The full workspace gate, 74 workflow tests, 49-entry hash harness,
+no-default-font tests, both WASM targets, pinned Python binding tests,
+warning-free docs, README checks, exact 22-package dry run, archive inventory
+and size checks, and cargo-deny passed at the reviewed source. Publication and
+independent registry, owner, tag, release-body, notification, and closure
+checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable v0.10.0 partial release
+and the complete `v0.10.1` release. Binding, WASM, npm, and PyPI publication
+authority remains unchanged.

@@ -1,6 +1,6 @@
 # F-X057, Tag v0.10.1
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S56
 **Size**: S
 **Depends on**: F-180, F-181, F-182, F-X051, F-X052, F-X053, F-X054, F-X056
@@ -130,7 +130,7 @@ and dependency versions only. Any output delta blocks preparation.
 - [x] Run the full workspace gate, deterministic hash harness, and all risk riders.
 - [x] Reach a clean microscope and sprint review at the exact prepared SHA.
 - [x] Stop at `/release v0.10.1` for separate final approval.
-- [ ] After approval, verify seven registry entries, owners, tag, release body, nine notification URLs, and six authorized PR closures.
+- [x] After approval, verify seven registry entries, owners, tag, release body, nine notification URLs, and six authorized PR closures.
 
 ## Open questions
 

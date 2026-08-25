@@ -3227,18 +3227,17 @@ package publishes from this tag.
 
 ### F-X057, Tag v0.10.1 (S)
 
-The stable workspace, all seven stable packages, stable workspace pins, binding
-metadata, README requirements, CI literals, lockfile records, release
-regressions, and reviewed notes are prepared at 0.10.1 after the immutable
-partial v0.10.0 attempt. Every shared dependency is pinned to the
+The stable workspace and all seven stable packages are published at 0.10.1
+from reviewed SHA `ae0dcb162a7805e59e5890464b226765645ad547` after the
+immutable partial v0.10.0 attempt. Stable workspace pins, binding metadata,
+README requirements, CI literals, lockfile records, and release regressions
+remain coherent at that version. Every shared dependency is pinned to the
 verified incubating 0.6.0 family from F-X056.
 
 The 0.10.1 notes describe the complete stable outcome and the v0.10.0 partial
 publication accurately. The two registry packages already present at 0.10.0
-remain immutable. After all seven 0.10.1 packages and the byte-identical GitHub
-release verify, post the stable release comments to Issue 44, PR 45, Issue 46,
-and PRs 47 through 52. Close PRs 47 through 52 only after those comments are
-verified, as F-X054 authorized.
+remain immutable. All nine reviewed stable release comments are verified, and
+PRs 47 through 52 are closed unmerged with their hardened-equivalent status.
 
 **Depends on**: F-180, F-181, F-182, F-X051, F-X052, F-X053, F-X054, F-X056.
 **Test gate**: release. All seven stable registry entries resolve at 0.10.1
