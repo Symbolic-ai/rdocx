@@ -24,6 +24,10 @@ from scripts import sprint_workflow as workflow
 
 
 class SprintWorkflowTests(unittest.TestCase):
+    LARGE_DOCUMENT_TEST = (
+        "a_thousand_page_document_paginates_and_renders_within_the_declared_limits"
+    )
+
     def yaml_block(self, source: str, header: str) -> str:
         lines = source.splitlines()
         matches = [index for index, line in enumerate(lines) if line == header]
@@ -280,6 +284,52 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         self.assertIn("--ignored --nocapture", gate)
         self.assertNotIn("continue-on-error", install + gate)
+
+    def test_large_document_ci_gate_is_exact_release_ignored_and_single_threaded(
+        self,
+    ) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_large_document_ci_gate(ci)
+
+    def assert_large_document_ci_gate(self, ci: str) -> None:
+        test_job = self.yaml_block(ci, "  test:")
+        gate = self.yaml_step(test_job, "Run thousand-page performance gate")
+        self.assertEqual(
+            self.operative_lines(gate),
+            (
+                "- name: Run thousand-page performance gate",
+                "run: >-",
+                "cargo test --locked --release -p rdocx",
+                "--test regression_test",
+                self.LARGE_DOCUMENT_TEST,
+                "-- --ignored --exact --test-threads=1 --nocapture",
+            ),
+        )
+
+    def test_large_document_ci_gate_rejects_weakened_invocations(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        test_job = self.yaml_block(ci, "  test:")
+        gate = self.yaml_step(test_job, "Run thousand-page performance gate")
+        mutations = {
+            "missing": "",
+            "unlocked": gate.replace("--locked ", ""),
+            "debug": gate.replace("--release ", ""),
+            "not-ignored": gate.replace("--ignored ", ""),
+            "not-exact": gate.replace("--exact ", ""),
+            "parallel": gate.replace("--test-threads=1", "--test-threads=2"),
+            "swallowed": gate.replace(
+                "        run: >-\n", "        continue-on-error: true\n        run: >-\n"
+            ),
+        }
+        for name, mutated_gate in mutations.items():
+            mutated_ci = ci.replace(gate, mutated_gate, 1)
+            self.assertNotEqual(mutated_ci, ci, name)
+            with self.subTest(mutation=name), self.assertRaises(AssertionError):
+                self.assert_large_document_ci_gate(mutated_ci)
 
     def test_docs_only_changes_skip_expensive_jobs_and_still_report_the_ci_gate(
         self,

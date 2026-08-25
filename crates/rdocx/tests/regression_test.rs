@@ -3,8 +3,11 @@
 //! Each test names the failure it locks down, so a reintroduction is obvious
 //! from the test name alone rather than from a diff.
 
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use rdocx::{
     BodyContentRef, BodyItemRef, BreakKind, CellItemRef, CellRef, ChartData, ChartKind, Document,
@@ -14,6 +17,199 @@ use rdocx::{
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
+
+struct MeasuredAllocator;
+
+#[repr(C)]
+struct AllocationHeader {
+    generation: usize,
+}
+
+static ACTIVE_ALLOCATION_GENERATION: AtomicUsize = AtomicUsize::new(0);
+static NEXT_ALLOCATION_GENERATION: AtomicUsize = AtomicUsize::new(1);
+static LIVE_ALLOCATION_BYTES: AtomicUsize = AtomicUsize::new(0);
+static PEAK_ALLOCATION_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+fn measured_allocation_layout(layout: Layout) -> Option<(Layout, usize)> {
+    Layout::new::<AllocationHeader>()
+        .extend(layout)
+        .ok()
+        .map(|(combined, offset)| (combined.pad_to_align(), offset))
+}
+
+fn record_allocation(size: usize) {
+    let live = LIVE_ALLOCATION_BYTES.fetch_add(size, Ordering::Relaxed) + size;
+    let mut peak = PEAK_ALLOCATION_BYTES.load(Ordering::Relaxed);
+    while live > peak {
+        match PEAK_ALLOCATION_BYTES.compare_exchange_weak(
+            peak,
+            live,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => peak = observed,
+        }
+    }
+}
+
+unsafe impl GlobalAlloc for MeasuredAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let Some((system_layout, offset)) = measured_allocation_layout(layout) else {
+            return std::ptr::null_mut();
+        };
+        // SAFETY: `system_layout` is valid and is deallocated with the same layout below.
+        let base = unsafe { System.alloc(system_layout) };
+        if base.is_null() {
+            return base;
+        }
+        let generation = ACTIVE_ALLOCATION_GENERATION.load(Ordering::Relaxed);
+        // SAFETY: the combined layout reserves an aligned header at `base`.
+        unsafe {
+            base.cast::<AllocationHeader>()
+                .write(AllocationHeader { generation })
+        };
+        if generation != 0 {
+            record_allocation(layout.size());
+        }
+        // SAFETY: `offset` is the payload offset returned for the combined layout.
+        unsafe { base.add(offset) }
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        let (system_layout, offset) = measured_allocation_layout(layout)
+            .expect("an allocated layout must remain representable during deallocation");
+        // SAFETY: `pointer` was returned at this exact offset by `alloc` above.
+        let base = unsafe { pointer.sub(offset) };
+        // SAFETY: `base` points to the initialized header for this allocation.
+        let generation = unsafe { base.cast::<AllocationHeader>().read().generation };
+        if generation != 0 && generation == ACTIVE_ALLOCATION_GENERATION.load(Ordering::Relaxed) {
+            LIVE_ALLOCATION_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
+        }
+        // SAFETY: `base` and `system_layout` exactly match the allocation above.
+        unsafe { System.dealloc(base, system_layout) };
+    }
+}
+
+#[global_allocator]
+static TEST_ALLOCATOR: MeasuredAllocator = MeasuredAllocator;
+
+struct AllocationMeasurement {
+    generation: usize,
+    started: Instant,
+}
+
+impl AllocationMeasurement {
+    fn start() -> Self {
+        let generation = NEXT_ALLOCATION_GENERATION.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(generation, 0, "allocation measurement generation wrapped");
+        LIVE_ALLOCATION_BYTES.store(0, Ordering::Relaxed);
+        PEAK_ALLOCATION_BYTES.store(0, Ordering::Relaxed);
+        ACTIVE_ALLOCATION_GENERATION
+            .compare_exchange(0, generation, Ordering::AcqRel, Ordering::Relaxed)
+            .expect("only one allocation measurement may run at a time");
+        Self {
+            generation,
+            started: Instant::now(),
+        }
+    }
+
+    fn finish(self) -> (Duration, usize) {
+        let elapsed = self.started.elapsed();
+        let peak = PEAK_ALLOCATION_BYTES.load(Ordering::Relaxed);
+        ACTIVE_ALLOCATION_GENERATION
+            .compare_exchange(self.generation, 0, Ordering::AcqRel, Ordering::Relaxed)
+            .expect("allocation measurement generation changed unexpectedly");
+        std::mem::forget(self);
+        (elapsed, peak)
+    }
+}
+
+impl Drop for AllocationMeasurement {
+    fn drop(&mut self) {
+        let _ = ACTIVE_ALLOCATION_GENERATION.compare_exchange(
+            self.generation,
+            0,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
+    }
+}
+
+fn measure_allocations<T>(operation: impl FnOnce() -> T) -> (T, Duration, usize) {
+    let measurement = AllocationMeasurement::start();
+    let output = operation();
+    let (elapsed, peak) = measurement.finish();
+    (output, elapsed, peak)
+}
+
+#[test]
+#[ignore = "release-mode large-document performance gate"]
+fn a_thousand_page_document_paginates_and_renders_within_the_declared_limits() {
+    const PAGE_COUNT: usize = 1_000;
+    const MIB: usize = 1024 * 1024;
+    const MAX_LAYOUT_PEAK_BYTES: usize = 64 * MIB;
+    const MAX_PDF_PEAK_BYTES: usize = 16 * MIB;
+    const MIN_LAYOUT_PAGES_PER_SECOND: f64 = 250.0;
+    const MIN_PDF_PAGES_PER_SECOND: f64 = 1_000.0;
+
+    let mut document = Document::new();
+    document.add_paragraph("Performance page 1");
+    for page in 2..=PAGE_COUNT {
+        document
+            .add_paragraph(&format!("Performance page {page}"))
+            .page_break_before(true);
+    }
+
+    let (layout, layout_elapsed, layout_peak) = measure_allocations(|| {
+        document
+            .layout_deterministic()
+            .expect("deterministic thousand-page layout")
+    });
+    assert_eq!(layout.layout.pages.len(), PAGE_COUNT);
+
+    let (pdf, pdf_elapsed, pdf_peak) =
+        measure_allocations(|| oxml_pdf::render_to_pdf(&layout.layout));
+    assert!(pdf.starts_with(b"%PDF"));
+    assert!(pdf.len() > PAGE_COUNT);
+
+    let layout_rate = PAGE_COUNT as f64 / layout_elapsed.as_secs_f64();
+    let pdf_rate = PAGE_COUNT as f64 / pdf_elapsed.as_secs_f64();
+    eprintln!(
+        "F-201 calibration: pages={PAGE_COUNT}, layout_seconds={:.3}, \
+         layout_pages_per_second={layout_rate:.1}, layout_peak_mib={:.2}, \
+         pdf_seconds={:.3}, pdf_pages_per_second={pdf_rate:.1}, pdf_peak_mib={:.2}",
+        layout_elapsed.as_secs_f64(),
+        layout_peak as f64 / MIB as f64,
+        pdf_elapsed.as_secs_f64(),
+        pdf_peak as f64 / MIB as f64,
+    );
+    assert!(
+        layout_peak > 0,
+        "layout allocation accounting must be active"
+    );
+    assert!(pdf_peak > 0, "PDF allocation accounting must be active");
+    assert!(
+        layout_peak <= MAX_LAYOUT_PEAK_BYTES,
+        "layout peak {:.2} MiB exceeds {:.2} MiB",
+        layout_peak as f64 / MIB as f64,
+        MAX_LAYOUT_PEAK_BYTES as f64 / MIB as f64,
+    );
+    assert!(
+        pdf_peak <= MAX_PDF_PEAK_BYTES,
+        "PDF peak {:.2} MiB exceeds {:.2} MiB",
+        pdf_peak as f64 / MIB as f64,
+        MAX_PDF_PEAK_BYTES as f64 / MIB as f64,
+    );
+    assert!(
+        layout_rate >= MIN_LAYOUT_PAGES_PER_SECOND,
+        "layout rate {layout_rate:.1} pages/s is below {MIN_LAYOUT_PAGES_PER_SECOND:.1} pages/s",
+    );
+    assert!(
+        pdf_rate >= MIN_PDF_PAGES_PER_SECOND,
+        "PDF rate {pdf_rate:.1} pages/s is below {MIN_PDF_PAGES_PER_SECOND:.1} pages/s",
+    );
+}
 
 #[test]
 fn unsupported_html_css_is_diagnosed_without_dropping_supported_siblings() {

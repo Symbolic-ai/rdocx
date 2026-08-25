@@ -1034,12 +1034,21 @@ owner `mantissaman (Atul Sharma)`, the annotated tag at reviewed SHA
 notes, nine contribution notifications, and six authorized unmerged
 pull-request closures.
 
+The large-document regression source-builds 1,000 one-page paragraphs and
+measures deterministic pagination separately from direct PDF rendering. Its
+test-binary allocator is inactive outside an explicit measurement generation.
+The release gate requires exactly 1,000 pages, nonempty PDF output, layout at
+or below 64 MiB and at or above 250 pages per second, and PDF rendering at or
+below 16 MiB additional peak and at or above 1,000 pages per second. Workflow
+mutation tests reject a missing, unlocked, debug, non-ignored, non-exact,
+parallel, or failure-swallowing invocation.
+
 ## What CI runs
 
 | Job | Command |
 |---|---|
 | changes | On pushes and pull requests, classify changed paths for the eight filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
-| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch both pinned corpora, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, then run `python3 scripts/golden_png_harness.py --check` |
+| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch both pinned corpora, run the exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |

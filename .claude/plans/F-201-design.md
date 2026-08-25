@@ -1,6 +1,6 @@
 # F-201, Large document performance
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S57
 **Size**: L
 **Depends on**: none
@@ -85,15 +85,15 @@ gate without changing product output.
 
 ## Implementation checklist
 
-- [ ] Approve PDF as the measured render backend and the calibration policy.
-- [ ] Add inactive-by-default peak allocator accounting to the existing test binary.
-- [ ] Build and verify the exact thousand-page deterministic fixture.
-- [ ] Measure layout and PDF stages separately.
-- [ ] Assert reviewed memory ceilings and throughput floors.
-- [ ] Add the exact ignored release gate to CI.
-- [ ] Add workflow mutation regressions.
-- [ ] Run the focused gate, full verification, and hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Approve PDF as the measured render backend and the calibration policy.
+- [x] Add inactive-by-default peak allocator accounting to the existing test binary.
+- [x] Build and verify the exact thousand-page deterministic fixture.
+- [x] Measure layout and PDF stages separately.
+- [x] Assert reviewed memory ceilings and throughput floors.
+- [x] Add the exact ignored release gate to CI.
+- [x] Add workflow mutation regressions.
+- [x] Run the focused gate, full verification, and hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

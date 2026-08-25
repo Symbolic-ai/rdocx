@@ -424,6 +424,14 @@ same Ubuntu 24.04 job runs `python3 scripts/golden_png_harness.py --check` with
 the Poppler 26.01.0 installation already on `PATH`. The step is unconditional
 and propagates a decoded-pixel mismatch as a CI failure.
 
+**The large-document gate in the test job.** The Ubuntu 24.04 runner executes
+the exact locked `rdocx` regression binary in release mode, selects only the
+ignored 1,000-page performance test, and uses one test thread. The test measures
+deterministic layout and direct PDF rendering separately, including their
+generation-isolated peak heap allocations. Workflow mutation coverage rejects
+removing or weakening any part of this invocation and rejects swallowed
+failures.
+
 **Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
 high-level `rdocx` guide. The other 26 packages use focused crate-local files.

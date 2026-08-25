@@ -162,6 +162,12 @@ jobs:
           cargo test --locked -p rdocx
           epubcheck_5_3_0_accepts_the_source_built_publication
           --lib -- --ignored --nocapture
+      - name: Run thousand-page performance gate
+        run: >-
+          cargo test --locked --release -p rdocx
+          --test regression_test
+          a_thousand_page_document_paginates_and_renders_within_the_declared_limits
+          -- --ignored --exact --test-threads=1 --nocapture
       - name: Run full workspace suite
         env:
           UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"
