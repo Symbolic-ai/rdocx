@@ -5,11 +5,12 @@ use rdocx_oxml::properties::CT_Shd;
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TblWidth, CT_Tc, CT_TcPr, CT_TrPr,
-    ST_VerticalJc, VMerge,
+    CellContent, ST_VerticalJc, VMerge,
 };
 use rdocx_oxml::text::CT_P;
 
 use crate::Length;
+use crate::content_control::ContentControlRef;
 use crate::paragraph::{Paragraph, ParagraphRef};
 
 /// Vertical alignment within a table cell.
@@ -676,10 +677,52 @@ pub struct CellRef<'a> {
     pub(crate) inner: &'a CT_Tc,
 }
 
+/// One direct child of a table cell, in source order.
+#[non_exhaustive]
+pub enum CellItemRef<'a> {
+    /// A cell paragraph.
+    Paragraph(ParagraphRef<'a>),
+    /// A nested table.
+    Table(TableRef<'a>),
+    /// A cell-level content control.
+    ContentControl(ContentControlRef<'a>),
+    /// A preserved cell child that rdocx does not model.
+    UnsupportedXml(&'a [u8]),
+}
+
 impl<'a> CellRef<'a> {
     /// Get the combined text of all paragraphs.
     pub fn text(&self) -> String {
         self.inner.text()
+    }
+
+    /// Iterate over direct cell items in source order.
+    ///
+    /// Unlike [`Self::paragraphs`], this retains nested tables, content
+    /// controls, and preserved unmodelled XML at their original boundaries.
+    pub fn items(&self) -> impl Iterator<Item = CellItemRef<'_>> {
+        let mut items = Vec::with_capacity(self.inner.content.len() + self.inner.extra_xml.len());
+        for index in 0..=self.inner.content.len() {
+            items.extend(
+                self.inner
+                    .extra_xml
+                    .iter()
+                    .filter(|(at, _)| *at == index)
+                    .map(|(_, raw)| CellItemRef::UnsupportedXml(raw.as_slice())),
+            );
+            if let Some(content) = self.inner.content.get(index) {
+                items.push(match content {
+                    CellContent::Paragraph(paragraph) => {
+                        CellItemRef::Paragraph(ParagraphRef { inner: paragraph })
+                    }
+                    CellContent::Table(table) => CellItemRef::Table(TableRef { inner: table }),
+                    CellContent::ContentControl(control) => {
+                        CellItemRef::ContentControl(ContentControlRef { inner: control })
+                    }
+                });
+            }
+        }
+        items.into_iter()
     }
 
     /// Get paragraph references.

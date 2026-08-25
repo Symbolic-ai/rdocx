@@ -250,6 +250,13 @@ footnotes, comments, settings, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
 
+The low-level text reader decodes visible `w:t` and `w:delText` content
+fallibly and rejects malformed encoded values instead of publishing partial
+text. The numbering grammar retains producer-defined `w:numFmt` tokens in
+`ST_NumberFormat::Other(String)`. Its writer emits those tokens unchanged,
+while render and export consumers decline to invent a marker for an unknown
+format.
+
 The settings model owns the separate `w:settings` root and read-only
 projections for `w:documentProtection` and valid `w:docVars` entries. It reports
 the four supported editing modes, the recorded enforcement and formatting
@@ -635,6 +642,17 @@ recursive `paragraphs()` and `tables()` accessors keep their existing behavior.
 Self-closing Word paragraphs and tables normalize to typed empty values, while
 self-closing final section properties remain outside the item vector. Empty
 foreign and unsupported children remain captured raw rather than being lost.
+
+The same ordered compatibility view extends through `CellRef::items`,
+`ParagraphRef::items`, `HyperlinkRef::items`, and `RunRef::items`. Their
+non-exhaustive borrowed item enums retain each typed child and unsupported raw
+subtree at its direct source boundary, including borrowed drawing and field
+facts. Existing flattened run, paragraph, table, and body accessors keep their
+established semantics. `Document::body_content` reports unsupported modeled
+content through `UnsupportedXmlRef` name, namespace, and child-content facts,
+while exposing raw bytes only when the facade owns an actual preserved raw
+subtree. Save replays the namespace scope required by retained raw content and
+fails closed when a safe prefix binding cannot be maintained.
 
 The `rdocx` facade also owns RTF import and export. The private RTF reader
 parses the Word-written subset for text, run and paragraph formatting, tables,

@@ -162,6 +162,19 @@ and level overrides verbatim. Identifier allocation uses the next value after
 the maximum when available and the first unoccupied value when the maximum is
 `u32::MAX`.
 
+Producer-defined `w:numFmt` values remain typed as their original token rather
+than being substituted with decimal numbering. Numbering serialization writes
+that token back unchanged. Layout and text exporters emit no marker for a
+format whose rendering semantics are unknown.
+
+The main document reader retains root, body, and modeled-owner namespace facts
+that preserved raw descendants depend on. Save replays those declarations on
+their logical owners through insertion, removal, and reordering without
+rewriting the raw subtree bytes. Prefix aliases, nested shadows, and ordinary
+namespace URI escaping are resolved by the XML parser. Serialization fails
+closed when owner identity or a serializer prefix binding cannot be preserved
+safely, leaving the opened package bytes authoritative.
+
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes
 the typed comments model back to that target with its content-type override.

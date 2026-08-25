@@ -205,15 +205,17 @@ pub fn generate_marker(
     // sequence at every block, so a two item list rendered as "1." twice.
     let counter_id = abs.abstract_num_id;
 
-    let num_fmt = lvl.num_fmt.unwrap_or(ST_NumberFormat::Decimal);
+    let num_fmt = lvl.num_fmt.clone().unwrap_or(ST_NumberFormat::Decimal);
     let start = lvl.start.unwrap_or(1);
     let lvl_text = lvl.lvl_text.as_deref().unwrap_or("%1.");
 
-    let marker_text = if num_fmt == ST_NumberFormat::Bullet {
-        lvl_text.to_string()
-    } else {
-        let count = state.advance(counter_id, ilvl, start);
-        format_lvl_text(lvl_text, num_id, counter_id, ilvl, count, numbering, state)
+    let marker_text = match num_fmt {
+        ST_NumberFormat::Bullet => lvl_text.to_string(),
+        ST_NumberFormat::Other(_) => String::new(),
+        _ => {
+            let count = state.advance(counter_id, ilvl, start);
+            format_lvl_text(lvl_text, num_id, counter_id, ilvl, count, numbering, state)
+        }
     };
 
     let marker_rpr = lvl.rpr.clone().unwrap_or_default();
@@ -253,7 +255,7 @@ fn format_lvl_text(
                 .levels
                 .iter()
                 .find(|l| l.ilvl == lvl_idx)
-                .and_then(|l| l.num_fmt)
+                .and_then(|l| l.num_fmt.clone())
                 .unwrap_or(ST_NumberFormat::Decimal);
             let formatted = format_number(count, fmt);
             result = result.replace(&placeholder, &formatted);
@@ -271,7 +273,9 @@ fn format_number(n: u32, fmt: ST_NumberFormat) -> String {
         ST_NumberFormat::UpperLetter => to_letter(n, true),
         ST_NumberFormat::LowerLetter => to_letter(n, false),
         ST_NumberFormat::Ordinal => format!("{n}"),
-        ST_NumberFormat::Bullet | ST_NumberFormat::None => String::new(),
+        ST_NumberFormat::Bullet | ST_NumberFormat::None | ST_NumberFormat::Other(_) => {
+            String::new()
+        }
     }
 }
 
@@ -529,5 +533,19 @@ mod tests {
             left1 > left0,
             "level 1 must indent further than level 0, got {left0} then {left1}"
         );
+    }
+
+    #[test]
+    fn producer_defined_number_formats_do_not_invent_layout_markers() {
+        assert_eq!(
+            format_number(7, ST_NumberFormat::Other("chicago".to_owned())),
+            ""
+        );
+        assert_eq!(format_number(7, ST_NumberFormat::Decimal), "7");
+
+        let mut numbering = CT_Numbering::new();
+        let num_id = numbering.add_list(&[(ST_NumberFormat::Other("chicago".to_owned()), Some(1))]);
+        let marker = generate_marker(num_id, 0, &numbering, &mut NumberingState::new()).unwrap();
+        assert_eq!(marker.marker_text, "");
     }
 }

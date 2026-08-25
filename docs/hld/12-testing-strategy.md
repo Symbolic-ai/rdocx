@@ -50,6 +50,21 @@ results. The adjacent low-level regression uses default and aliased Word
 namespaces for self-closing paragraphs, tables, and final section properties,
 while foreign same-local-name empty children remain byte-preserved raw XML.
 
+The ordered compatibility reader regression builds its package in source and
+compares every public direct item variant across body, cell, paragraph,
+hyperlink, and run boundaries. It covers namespace aliases, typed field and
+drawing facts, preserved raw subtrees, and legacy flattened accessors. Its
+save and reopen matrix compares the ordered public facts and every exposed raw
+subtree, including namespace shadowing and owner insertion, removal, and
+reordering. Unsafe namespace replay must fail closed without changing the
+opened package.
+
+Adjacent parser regressions require producer-defined numbering formats to
+round-trip without an invented marker and require malformed encoded `w:t` or
+`w:delText` values to fail before a partial document is published. Binding
+coverage confirms that malformed document XML keeps the existing `XmlError`,
+while HTML and ODT import failures keep the generic `RdocxError`.
+
 The release-notes regression gate validates both release tag families through
 the same deterministic parser used by publication. It requires one exact
 version section, the complete ordered heading set, meaningful rendered

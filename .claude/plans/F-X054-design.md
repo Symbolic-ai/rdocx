@@ -1,6 +1,6 @@
 # F-X054, Integrate PRs 47 through 52
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S56
 **Size**: L
 **Depends on**: F-X033
@@ -161,20 +161,20 @@ numbering value. Any delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Reconfirm all six PR heads, author identity, and checks.
-- [ ] Add non-exhaustive borrowed cell, run, paragraph, hyperlink, and body facts.
-- [ ] Mirror complete retained sidecar order and keep legacy accessors unchanged.
-- [ ] Classify unsupported XML through `quick_xml` and inherited namespace scope.
-- [ ] Add `ST_NumberFormat::Other(String)`, remove `Copy`, borrow in `to_str`, and update every consumer.
-- [ ] Preserve unknown numbering without inventing markers or hiding lossy exports.
-- [ ] Map S55 HTML and ODT Python errors to the existing exception.
-- [ ] Reject undecodable ordinary and deleted visible text.
-- [ ] Add all source-built regressions to existing binaries and modules.
-- [ ] Review the complete stable API diff and record the PR 51 break.
-- [ ] Record each PR's classification, deviation, link, and contributor credit.
-- [ ] Leave all GitHub mutations to F-X055 after publication.
-- [ ] Run focused checks, all risk riders, full verification, and the unchanged harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Reconfirm all six PR heads, author identity, and checks.
+- [x] Add non-exhaustive borrowed cell, run, paragraph, hyperlink, and body facts.
+- [x] Mirror complete retained sidecar order and keep legacy accessors unchanged.
+- [x] Classify unsupported XML through `quick_xml` and inherited namespace scope.
+- [x] Add `ST_NumberFormat::Other(String)`, remove `Copy`, borrow in `to_str`, and update every consumer.
+- [x] Preserve unknown numbering without inventing markers or hiding lossy exports.
+- [x] Map S55 HTML and ODT Python errors to the existing exception.
+- [x] Reject undecodable ordinary and deleted visible text.
+- [x] Add all source-built regressions to existing binaries and modules.
+- [x] Review the complete stable API diff and record the PR 51 break.
+- [x] Record each PR's classification, deviation, link, and contributor credit.
+- [x] Leave all GitHub mutations to F-X055 after publication.
+- [x] Run focused checks, all risk riders, full verification, and the unchanged harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

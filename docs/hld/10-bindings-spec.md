@@ -448,6 +448,15 @@ flatten control content, and it does not change the recursive semantics of
 WASM, and CLI surfaces gain no ordered-body method and continue to preserve a
 document opened and saved through their existing owners.
 
+Native Word callers inspect direct order below the body through
+`CellRef::items`, `ParagraphRef::items`, `HyperlinkRef::items`, and
+`RunRef::items`. The non-exhaustive borrowed item enums expose every supported
+typed child and each unsupported raw subtree at its original boundary.
+`UnsupportedXmlRef` separately reports qualified name, local name, namespace
+URI, and whether child content exists. Raw bytes are available only for an
+actual preserved raw subtree. Existing flattened accessors remain unchanged,
+and Python, WASM, and CLI gain no corresponding methods.
+
 Native Word callers inspect tracked changes through `Document::revisions`.
 Each immutable `RevisionRef` exposes the revision id, author, optional
 timestamp, and `RevisionKind`. Results recursively cover the main document
@@ -602,13 +611,16 @@ break for the next stable family. They expose renderer input, not a second
 authoring surface. Opened header XML remains the serialization authority, and
 callers should use the native `Document` methods for mutation.
 
-The stable Rust family moves to 0.5.0 for the numbering preservation model.
+The next stable Rust family includes the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
-producer extensions survive typed mutations. Full struct literals written for
-0.4 must add the preservation fields, or callers should use the existing
-constructors. This is an intentional breaking pre-1.0 boundary. Python, WASM,
-and CLI consumers continue through the package-preserving facade and do not
-construct these low-level structs.
+producer extensions survive typed mutations. `ST_NumberFormat::Other(String)`
+retains producer-defined tokens, so the enum is no longer `Copy` and `to_str`
+borrows its value. Full struct literals written against the prior pre-1.0 API
+must add the preservation fields, or callers should use the existing
+constructors. These are intentional pre-1.0 source breaks. Python, WASM, and
+CLI consumers continue through the package-preserving facade and do not
+construct these low-level structs. Existing Python import error mapping uses
+the generic `RdocxError` exception and gains no new exception type.
 
 `CT_TabStop` also exposes `source_occurrence: Option<usize>`. Parsed numbering
 tabs use this provenance to retain producer XML on the same occurrence after

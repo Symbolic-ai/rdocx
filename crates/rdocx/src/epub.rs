@@ -798,6 +798,9 @@ impl<'a> EpubWriter<'a> {
             }
             if properties.num_id.is_some_and(|id| id != 0)
                 && detect_list(paragraph, self.document.numbering.as_ref()).is_none()
+                && list_definition(paragraph, self.document.numbering.as_ref()).is_none_or(
+                    |level| !matches!(level.num_fmt.as_ref(), Some(ST_NumberFormat::Other(_))),
+                )
             {
                 self.diagnose(
                     format!("{path}/properties/numbering"),
@@ -805,7 +808,22 @@ impl<'a> EpubWriter<'a> {
                 )?;
             }
             if let Some(level) = list_definition(paragraph, self.document.numbering.as_ref()) {
-                if level.num_fmt == Some(ST_NumberFormat::Ordinal) {
+                let producer_defined =
+                    matches!(level.num_fmt.as_ref(), Some(ST_NumberFormat::Other(_)));
+                if producer_defined {
+                    self.diagnose(
+                        format!("{path}/properties/numbering/format"),
+                        "producer-defined numbering format was emitted without a marker during EPUB export"
+                            .to_owned(),
+                    )?;
+                    if level.start.is_some_and(|start| start != 1) {
+                        self.diagnose(
+                            format!("{path}/properties/numbering/start"),
+                            "producer-defined list start value was dropped during EPUB export"
+                                .to_owned(),
+                        )?;
+                    }
+                } else if level.num_fmt == Some(ST_NumberFormat::Ordinal) {
                     self.diagnose(
                         format!("{path}/properties/numbering/format"),
                         "ordinal list markers were reduced to decimal during EPUB export"
@@ -814,11 +832,18 @@ impl<'a> EpubWriter<'a> {
                 }
                 if let Some(marker) = &level.lvl_text {
                     let standard = format!("%{}.", level.ilvl + 1);
-                    if level.num_fmt == Some(ST_NumberFormat::Bullet) || marker != &standard {
+                    if producer_defined
+                        || level.num_fmt == Some(ST_NumberFormat::Bullet)
+                        || marker != &standard
+                    {
                         self.diagnose(
                             format!("{path}/properties/numbering/marker"),
-                            "custom list marker text was replaced by EPUB list semantics"
-                                .to_owned(),
+                            if producer_defined {
+                                "list marker text was dropped during EPUB export"
+                            } else {
+                                "custom list marker text was replaced by EPUB list semantics"
+                            }
+                            .to_owned(),
                         )?;
                     }
                 }
@@ -843,7 +868,12 @@ impl<'a> EpubWriter<'a> {
                 if level.suffix.is_some() {
                     self.diagnose(
                         format!("{path}/properties/numbering/suffix"),
-                        "list marker suffix spacing was normalized during EPUB export".to_owned(),
+                        if producer_defined {
+                            "list marker suffix was dropped during EPUB export"
+                        } else {
+                            "list marker suffix spacing was normalized during EPUB export"
+                        }
+                        .to_owned(),
                     )?;
                 }
                 if !level.extra_xml.is_empty() || !level.extra_attributes.is_empty() {
@@ -1442,7 +1472,7 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
                 .map(|level| CT_Lvl {
                     ilvl: level.ilvl,
                     start: level.start,
-                    num_fmt: level.num_fmt,
+                    num_fmt: level.num_fmt.clone(),
                     suffix: level.suffix,
                     lvl_text: None,
                     lvl_jc: level.lvl_jc,
@@ -2542,6 +2572,9 @@ fn detect_list(paragraph: &CT_P, numbering: Option<&CT_Numbering>) -> Option<Lis
         .levels
         .iter()
         .find(|definition| definition.ilvl == level)?;
+    if matches!(definition.num_fmt.as_ref(), Some(ST_NumberFormat::Other(_))) {
+        return None;
+    }
     let kind = match definition.num_fmt {
         Some(ST_NumberFormat::Bullet) => ListKind::Unordered,
         Some(ST_NumberFormat::None) => ListKind::None,
@@ -4431,6 +4464,73 @@ mod tests {
         assert!(body.contains("<ol start=\"3\">"), "{body}");
         assert!(body.contains("<ul class=\"no-marker\">"), "{body}");
         assert!(body.contains("<li>without marker</li>"), "{body}");
+    }
+
+    #[test]
+    fn epub_does_not_invent_markers_for_producer_defined_numbering() {
+        let mut document = Document::new();
+        let number = document.add_list_definition(&[ListLevel::decimal()]);
+        let abstract_id = document
+            .numbering
+            .as_ref()
+            .unwrap()
+            .nums
+            .iter()
+            .find(|item| item.num_id == number)
+            .unwrap()
+            .abstract_num_id;
+        document
+            .numbering
+            .as_mut()
+            .unwrap()
+            .abstract_nums
+            .iter_mut()
+            .find(|item| item.abstract_num_id == abstract_id)
+            .unwrap()
+            .levels[0] = {
+            let mut level = CT_Lvl::new(0);
+            level.num_fmt = Some(ST_NumberFormat::Other("chicago".to_owned()));
+            level.start = Some(3);
+            level.lvl_text = Some("custom".to_owned());
+            level.suffix = Some(rdocx_oxml::numbering::ST_LvlSuffix::Space);
+            level
+        };
+        document
+            .add_paragraph("producer marker")
+            .set_numbering(number, 0);
+
+        let result = document.to_epub_bytes().unwrap();
+        let body = entry_text(&archive_entries(&result.bytes), "EPUB/document.xhtml");
+        assert!(!body.contains("<ol"), "{body}");
+        assert!(!body.contains("<ul"), "{body}");
+        assert!(body.contains("<p>producer marker</p>"), "{body}");
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "body[0]/properties/numbering/format"
+                && diagnostic.message
+                    == "producer-defined numbering format was emitted without a marker during EPUB export"
+        }));
+        for (suffix, message) in [
+            (
+                "start",
+                "producer-defined list start value was dropped during EPUB export",
+            ),
+            ("marker", "list marker text was dropped during EPUB export"),
+            (
+                "suffix",
+                "list marker suffix was dropped during EPUB export",
+            ),
+        ] {
+            assert!(result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.path == format!("body[0]/properties/numbering/{suffix}")
+                    && diagnostic.message == message
+            }));
+        }
+        assert!(result.diagnostics.iter().all(|diagnostic| {
+            !diagnostic
+                .message
+                .contains("replaced by EPUB list semantics")
+                && !diagnostic.message.contains("spacing was normalized")
+        }));
     }
 
     #[test]

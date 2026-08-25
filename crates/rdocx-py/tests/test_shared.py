@@ -109,26 +109,62 @@ def test_exceptions_have_the_required_hierarchy():
         assert issubclass(error_type, RdocxError)
 
 
-def test_binding_errors_raise_public_exception_classes():
-    from rdocx import Document, PackageError, RdocxError, StaleElementError, XmlError
-
-    with pytest.raises(PackageError):
-        Document.from_bytes(b"not an OPC package")
+def package_with_document_xml(document_xml):
+    from rdocx import Document
 
     source = Document()
     source.add_paragraph("valid before corruption")
     source_bytes = io.BytesIO(source.to_bytes())
-    corrupted_bytes = io.BytesIO()
+    output_bytes = io.BytesIO()
     with zipfile.ZipFile(source_bytes) as source_zip:
-        with zipfile.ZipFile(corrupted_bytes, "w") as corrupted_zip:
+        with zipfile.ZipFile(output_bytes, "w") as output_zip:
             for info in source_zip.infolist():
                 data = source_zip.read(info.filename)
                 if info.filename == "word/document.xml":
-                    data = b"</w:nope>"
-                corrupted_zip.writestr(info, data)
+                    data = document_xml
+                output_zip.writestr(info, data)
+    return output_bytes.getvalue()
+
+
+def test_binding_errors_raise_public_exception_classes():
+    from rdocx import Document, PackageError, RdocxError, StaleElementError
+
+    with pytest.raises(PackageError):
+        Document.from_bytes(b"not an OPC package")
+
+
+def test_malformed_namespace_scan_keeps_the_public_xml_error_class():
+    from rdocx import Document, XmlError
 
     with pytest.raises(XmlError):
-        Document.from_bytes(corrupted_bytes.getvalue())
+        Document.from_bytes(package_with_document_xml(b"</w:nope>"))
+
+
+def test_namespace_declaration_decoding_keeps_the_public_xml_error_class():
+    from rdocx import Document, XmlError
+
+    word_namespace = b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    for value in (b"urn:plain", b"urn:a&amp;b"):
+        document_xml = (
+            b'<w:document xmlns:w="'
+            + word_namespace
+            + b'" xmlns:x="'
+            + value
+            + b'"><w:body/></w:document>'
+        )
+        Document.from_bytes(package_with_document_xml(document_xml))
+
+    malformed_xml = (
+        b'<w:document xmlns:w="'
+        + word_namespace
+        + b'" xmlns:x="urn:&bad;"><w:body/></w:document>'
+    )
+    with pytest.raises(XmlError):
+        Document.from_bytes(package_with_document_xml(malformed_xml))
+
+
+def test_stale_handles_raise_the_public_stale_element_error_class():
+    from rdocx import Document, RdocxError, StaleElementError
 
     live = Document()
     live.add_paragraph("zero")

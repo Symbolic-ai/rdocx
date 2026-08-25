@@ -44,8 +44,8 @@ pub use comments::{BookmarkRef, CommentRef, RunPosition, RunRange};
 pub use comparison::ComparisonDiagnostic;
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
-    ListNumberFormat, OutlineNode, RenderOptions,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
+    ListLevel, ListNumberFormat, OutlineNode, RenderOptions, UnsupportedXmlRef,
 };
 pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
@@ -61,8 +61,8 @@ pub use oxml_opc::{
 };
 pub use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 pub use paragraph::{
-    Alignment, BorderStyle, Paragraph, ParagraphBorderRef, ParagraphRef, SectionBreak,
-    TabAlignment, TabLeader,
+    Alignment, BorderStyle, HyperlinkItemRef, HyperlinkRef, Paragraph, ParagraphBorderRef,
+    ParagraphItemRef, ParagraphRef, SectionBreak, TabAlignment, TabLeader,
 };
 pub use rdocx_layout::RevisionView;
 pub use rdocx_oxml::settings::{
@@ -71,10 +71,10 @@ pub use rdocx_oxml::settings::{
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
-pub use run::{Run, RunRef, UnderlineStyle};
+pub use run::{BreakKind, DrawingRef, FieldRef, Run, RunItemRef, RunRef, UnderlineStyle};
 pub use style::{Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
-pub use table::{Cell, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
 
 #[cfg(test)]
 mod tests {

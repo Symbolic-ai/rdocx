@@ -154,8 +154,15 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 
     let level = abstract_num.levels.iter().find(|l| l.ilvl == ilvl)?;
 
+    if matches!(
+        level.num_fmt.as_ref(),
+        Some(rdocx_oxml::numbering::ST_NumberFormat::Other(_))
+    ) {
+        return None;
+    }
+
     let is_ordered = !matches!(
-        level.num_fmt,
+        level.num_fmt.as_ref(),
         Some(rdocx_oxml::numbering::ST_NumberFormat::Bullet)
     );
 

@@ -1,7 +1,7 @@
 //! Document-level elements: `CT_Document` and `CT_Body`.
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::content_control::CT_Sdt;
 use crate::error::Result;
@@ -851,8 +851,12 @@ impl CT_Document {
                                 && !known_ns.contains(&key)
                             {
                                 let key_str = std::str::from_utf8(key).unwrap_or("").to_string();
-                                let val_str =
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string();
+                                let val_str = attr
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        e.decoder(),
+                                    )?
+                                    .into_owned();
                                 extra_namespaces.push((key_str, val_str));
                             }
                         }

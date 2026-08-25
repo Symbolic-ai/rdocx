@@ -363,7 +363,6 @@ impl CT_Sdt {
             content_attributes: Vec::new(),
             slots: Vec::new(),
         };
-        let mut saw_content = false;
         let mut buffer = Vec::new();
         loop {
             match reader.read_event_into(&mut buffer) {
@@ -379,11 +378,13 @@ impl CT_Sdt {
                         )?);
                         sdt.slots.push(RootSlot::Properties);
                     } else if is_word_element(child.name().as_ref(), b"sdtContent", &child_prefixes)
-                        && !saw_content
+                        && !sdt
+                            .slots
+                            .iter()
+                            .any(|slot| matches!(slot, RootSlot::Content))
                     {
                         sdt.content_attributes = capture_attributes(&child, &child_prefixes, &[])?;
                         sdt.content = parse_content(reader, &child_prefixes, &mut sdt.revisions)?;
-                        saw_content = true;
                         sdt.slots.push(RootSlot::Content);
                     } else {
                         sdt.slots
@@ -403,16 +404,17 @@ impl CT_Sdt {
             }
             buffer.clear();
         }
-        let has_content = sdt.content.iter().any(|content| match content {
-            SdtContent::RawXml(raw) => !raw.iter().all(u8::is_ascii_whitespace),
-            _ => true,
-        });
-        if !saw_content || !has_content {
-            return Err(OxmlError::MissingElement(
-                "nonempty w:sdtContent".to_owned(),
-            ));
-        }
         Ok(sdt)
+    }
+
+    /// Whether the control has a child element or visible direct text.
+    pub fn has_child_content(&self) -> bool {
+        self.properties.is_some()
+            || !self.content.is_empty()
+            || self.slots.iter().any(|slot| match slot {
+                RootSlot::Properties | RootSlot::Content => true,
+                RootSlot::Raw(raw) => raw_fragment_has_child_content(raw),
+            })
     }
 
     pub(crate) fn to_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -442,7 +444,13 @@ impl CT_Sdt {
         if !properties_written && let Some(properties) = &self.properties {
             properties.to_xml(writer)?;
         }
-        if !content_written {
+        if !content_written
+            && (!self.content.is_empty()
+                || self
+                    .slots
+                    .iter()
+                    .any(|slot| matches!(slot, RootSlot::Content)))
+        {
             self.write_content(writer)?;
         }
         writer.write_event(Event::End(BytesEnd::new("w:sdt")))?;
@@ -747,6 +755,32 @@ fn push_root_event_raw(slots: &mut Vec<RootSlot>, event: Event<'_>) -> Result<()
         slots.push(RootSlot::Raw(raw));
     }
     Ok(())
+}
+
+fn raw_fragment_has_child_content(raw: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_) | Event::Empty(_)) => return true,
+            Ok(Event::Text(text)) if !text.as_ref().iter().all(u8::is_ascii_whitespace) => {
+                return true;
+            }
+            Ok(Event::CData(text)) if !text.as_ref().iter().all(u8::is_ascii_whitespace) => {
+                return true;
+            }
+            Ok(Event::GeneralRef(reference)) => match reference.resolve_char_ref() {
+                Ok(Some(character)) if !character.is_ascii_whitespace() => return true,
+                Ok(Some(_)) => {}
+                Ok(None) => return true,
+                Err(_) => return false,
+            },
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 #[cfg(test)]

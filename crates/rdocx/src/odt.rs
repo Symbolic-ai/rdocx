@@ -468,8 +468,16 @@ impl<'a> OdtWriter<'a> {
                     format!("ODT list level exceeds 8 at {path}"),
                 ));
             }
-            self.used_list_levels.insert((num_id, level));
-            self.ensure_list_style(num_id, path)?;
+            if self.list_level_has_producer_format(num_id, level) {
+                self.diagnose(
+                    &format!("numbering[{num_id}]/level[{level}]"),
+                    "producer-defined numbering format was flattened without a marker during ODT export",
+                )?;
+                self.scan_flattened_producer_list_losses(num_id, level)?;
+            } else {
+                self.used_list_levels.insert((num_id, level));
+                self.ensure_list_style(num_id, path)?;
+            }
         }
         let mut trailing_text_style = None;
         let mut projected_runs = 0_usize;
@@ -1088,7 +1096,24 @@ impl<'a> OdtWriter<'a> {
     }
 
     fn paragraph_numbering(&self, paragraph: &CT_P) -> Option<(u32, u32)> {
-        paragraph_numbering_properties(&self.effective_paragraph_properties(paragraph))
+        let numbering =
+            paragraph_numbering_properties(&self.effective_paragraph_properties(paragraph))?;
+        (!self.list_level_has_producer_format(numbering.0, numbering.1)).then_some(numbering)
+    }
+
+    fn list_level_has_producer_format(&self, num_id: u32, level: u32) -> bool {
+        self.document
+            .numbering
+            .as_ref()
+            .and_then(|numbering| numbering.get_abstract_num_for(num_id))
+            .and_then(|abstract_num| {
+                abstract_num
+                    .levels
+                    .iter()
+                    .find(|definition| definition.ilvl == level)
+            })
+            .and_then(|definition| definition.num_fmt.as_ref())
+            .is_some_and(|format| matches!(format, ST_NumberFormat::Other(_)))
     }
 
     fn effective_run_properties(&self, paragraph: &CT_P, run: &CT_R) -> CT_RPr {
@@ -1215,6 +1240,68 @@ impl<'a> OdtWriter<'a> {
         ] {
             if present {
                 self.diagnose(&format!("{path}/{suffix}"), message)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_flattened_producer_list_losses(&mut self, num_id: u32, level: u32) -> Result<()> {
+        self.scan_numbering_container_losses(num_id)?;
+        let definition = self
+            .document
+            .numbering
+            .as_ref()
+            .and_then(|numbering| numbering.get_abstract_num_for(num_id))
+            .and_then(|abstract_num| {
+                abstract_num
+                    .levels
+                    .iter()
+                    .find(|definition| definition.ilvl == level)
+            });
+        let losses = definition.map_or(
+            (false, false, false, false, false, false, false),
+            |definition| {
+                (
+                    definition.start.is_some_and(|start| start != 1),
+                    definition.suffix.is_some(),
+                    definition.lvl_text.is_some(),
+                    definition.lvl_jc.is_some(),
+                    definition.ppr.is_some() || definition.ppr_raw.is_some(),
+                    definition.rpr.is_some() || definition.rpr_raw.is_some(),
+                    !definition.extra_xml.is_empty() || !definition.extra_attributes.is_empty(),
+                )
+            },
+        );
+        let path = format!("numbering[{num_id}]/level[{level}]");
+        for (present, message) in [
+            (
+                losses.0,
+                "custom list start value was dropped during ODT export",
+            ),
+            (losses.1, "list marker suffix was dropped during ODT export"),
+            (
+                losses.2,
+                "list marker text or bullet glyph was dropped during ODT export",
+            ),
+            (
+                losses.3,
+                "list marker justification was dropped during ODT export",
+            ),
+            (
+                losses.4,
+                "list level paragraph formatting was dropped during ODT export",
+            ),
+            (
+                losses.5,
+                "list marker run formatting was dropped during ODT export",
+            ),
+            (
+                losses.6,
+                "retained list level XML or attributes were dropped during ODT export",
+            ),
+        ] {
+            if present {
+                self.diagnose(&path, message)?;
             }
         }
         Ok(())
@@ -5366,6 +5453,202 @@ mod tests {
                 .diagnostics
                 .iter()
                 .all(|diagnostic| !diagnostic.path.starts_with("numbering["))
+        );
+    }
+
+    #[test]
+    fn odt_writer_does_not_invent_markers_for_producer_defined_numbering() {
+        let mut document = Document::new();
+        let number = document.add_list_definition(&[ListLevel::decimal()]);
+        let abstract_id = document
+            .numbering
+            .as_ref()
+            .unwrap()
+            .nums
+            .iter()
+            .find(|item| item.num_id == number)
+            .unwrap()
+            .abstract_num_id;
+        let numbering = document.numbering.as_mut().unwrap();
+        numbering
+            .root_attributes
+            .push(("xmlns:x".to_owned(), "urn:producer".to_owned()));
+        numbering
+            .extra_xml
+            .push((0, b"<x:root xmlns:x=\"urn:producer\"/>".to_vec()));
+        let instance = numbering
+            .nums
+            .iter_mut()
+            .find(|item| item.num_id == number)
+            .unwrap();
+        instance
+            .extra_attributes
+            .push(("x:instance".to_owned(), "retained".to_owned()));
+        instance
+            .extra_xml
+            .push((0, b"<x:instance xmlns:x=\"urn:producer\"/>".to_vec()));
+        let abstract_numbering = numbering
+            .abstract_nums
+            .iter_mut()
+            .find(|item| item.abstract_num_id == abstract_id)
+            .unwrap();
+        abstract_numbering.multi_level_type = Some("hybridMultilevel".to_owned());
+        abstract_numbering
+            .extra_attributes
+            .push(("x:abstract".to_owned(), "retained".to_owned()));
+        abstract_numbering
+            .extra_xml
+            .push((0, b"<x:abstract xmlns:x=\"urn:producer\"/>".to_vec()));
+        abstract_numbering.levels[0] = {
+            let mut level = rdocx_oxml::numbering::CT_Lvl::new(0);
+            level.num_fmt = Some(ST_NumberFormat::Other("chicago".to_owned()));
+            level.start = Some(3);
+            level.suffix = Some(rdocx_oxml::numbering::ST_LvlSuffix::Space);
+            level.lvl_text = Some("custom".to_owned());
+            level.lvl_jc = Some(ST_Jc::Right);
+            level.ppr = Some(CT_PPr::default());
+            level.rpr = Some(CT_RPr::default());
+            level.extra_xml.push((0, b"<x:producer/>".to_vec()));
+            level
+        };
+        document
+            .add_paragraph("producer marker")
+            .set_numbering(number, 0);
+        document
+            .add_paragraph("repeated producer marker")
+            .set_numbering(number, 0);
+        let mut table = CT_Tbl::new();
+        let mut row = CT_Row::new();
+        let mut cell = CT_Tc::new();
+        let CellContent::Paragraph(cell_paragraph) = &mut cell.content[0] else {
+            unreachable!();
+        };
+        cell_paragraph.add_run("cell producer marker");
+        cell_paragraph.properties = Some(CT_PPr {
+            num_id: Some(number),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        row.cells.push(cell);
+        table.rows.push(row);
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+
+        let written = document.to_odt_bytes().unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(&written.bytes)).unwrap();
+        let mut content_xml = String::new();
+        archive
+            .by_name("content.xml")
+            .unwrap()
+            .read_to_string(&mut content_xml)
+            .unwrap();
+        assert!(!content_xml.contains("<text:list"), "{content_xml}");
+        let numbering_diagnostics: Vec<_> = written
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.path.starts_with(&format!("numbering[{number}]")))
+            .map(|diagnostic| (diagnostic.path.clone(), diagnostic.message.clone()))
+            .collect();
+        let level_path = format!("numbering[{number}]/level[0]");
+        let root_path = format!("numbering[{number}]");
+        assert_eq!(
+            numbering_diagnostics,
+            vec![
+                (
+                    level_path.clone(),
+                    "producer-defined numbering format was flattened without a marker during ODT export"
+                        .to_owned(),
+                ),
+                (
+                    format!("{root_path}/root-attributes"),
+                    "retained numbering root attributes were dropped during ODT export".to_owned(),
+                ),
+                (
+                    format!("{root_path}/root-xml"),
+                    "retained numbering root XML was dropped during ODT export".to_owned(),
+                ),
+                (
+                    format!("{root_path}/instance-attributes"),
+                    "retained numbering instance attributes were dropped during ODT export"
+                        .to_owned(),
+                ),
+                (
+                    format!("{root_path}/instance-overrides"),
+                    "numbering instance overrides or retained XML were dropped during ODT export"
+                        .to_owned(),
+                ),
+                (
+                    format!("{root_path}/abstract-type"),
+                    "abstract numbering type metadata was dropped during ODT export".to_owned(),
+                ),
+                (
+                    format!("{root_path}/abstract-attributes"),
+                    "retained abstract numbering attributes were dropped during ODT export"
+                        .to_owned(),
+                ),
+                (
+                    format!("{root_path}/abstract-xml"),
+                    "retained abstract numbering XML was dropped during ODT export".to_owned(),
+                ),
+                (
+                    level_path.clone(),
+                    "custom list start value was dropped during ODT export".to_owned(),
+                ),
+                (
+                    level_path.clone(),
+                    "list marker suffix was dropped during ODT export".to_owned(),
+                ),
+                (
+                    level_path.clone(),
+                    "list marker text or bullet glyph was dropped during ODT export".to_owned(),
+                ),
+                (
+                    level_path.clone(),
+                    "list marker justification was dropped during ODT export".to_owned(),
+                ),
+                (
+                    level_path.clone(),
+                    "list level paragraph formatting was dropped during ODT export".to_owned(),
+                ),
+                (
+                    level_path.clone(),
+                    "list marker run formatting was dropped during ODT export".to_owned(),
+                ),
+                (
+                    level_path,
+                    "retained list level XML or attributes were dropped during ODT export"
+                        .to_owned(),
+                ),
+            ]
+        );
+        let reopened = Document::from_odt_bytes(&written.bytes).unwrap().document;
+        assert_eq!(
+            reopened
+                .paragraphs()
+                .into_iter()
+                .map(|paragraph| (paragraph.text(), paragraph.numbering()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("producer marker".to_owned(), None),
+                ("repeated producer marker".to_owned(), None),
+            ]
+        );
+        let BodyContent::Table(table) = &reopened.document.body.content[2] else {
+            unreachable!();
+        };
+        let CellContent::Paragraph(cell_paragraph) = &table.rows[0].cells[0].content[0] else {
+            unreachable!();
+        };
+        assert_eq!(cell_paragraph.text(), "cell producer marker");
+        assert_eq!(
+            cell_paragraph
+                .properties
+                .as_ref()
+                .and_then(paragraph_numbering_properties),
+            None
         );
     }
 
