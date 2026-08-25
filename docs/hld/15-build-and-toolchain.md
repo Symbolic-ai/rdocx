@@ -221,11 +221,10 @@ The exact incubating crates.io allowlist now contains 15 implemented shared
 and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are prepared at
-0.6.0 for the reviewed `rpptx-v0.6.0` boundary. The last complete family is
-published at 0.5.0 from the annotated `rpptx-v0.5.0` tag at reviewed SHA
-`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The earlier 0.4.0 registry
-release remains available, and no existing version or tag was moved. Manifest
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
+at 0.6.0 from the annotated `rpptx-v0.6.0` tag at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The earlier 0.5.0 and 0.4.0
+registry releases remain available, and no existing version or tag was moved. Manifest
 eligibility and allowlist membership do not authorize a later publication
 without a separately approved `/release` invocation at the exact reviewed
 SHA. The unpublished `rpptx-wasm` preparation member is also at 0.6.0 but has
@@ -322,10 +321,9 @@ registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.6.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-exact 15-package crates.io family listed above is prepared for the reviewed
-`rpptx-v0.6.0` boundary. The last complete family is published from the
-annotated `rpptx-v0.5.0` tag at reviewed SHA
-`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The preparation group also
+exact 15-package crates.io family listed above is published from the annotated
+`rpptx-v0.6.0` tag at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The preparation group also
 contains unpublished `rpptx-wasm`, while the crates.io allowlist remains
 exactly 15 packages. Earlier immutable registry releases remain available.
 Workspace settings consolidate the preparation commit, upgrade internal

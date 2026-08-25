@@ -995,9 +995,10 @@ flags, README examples, Rust assertions, the CI WASM literal, and the exact
 15-package publication preflight at 0.6.0. It separately proves the stable
 workspace remains at its prepared 0.10.0 boundary and `rpptx-wasm` remains
 unpublished.
-The 0.6.0 release gate verifies every selected registry entry and owner, the
+The 0.6.0 release gate verified every selected registry entry and owner, the
 annotated tag target, byte-identical GitHub release notes, and selected record
-notifications before the release story completes. The failed stable 0.10.0
+notifications at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The failed stable 0.10.0
 attempt is not a passing release gate because only two packages published and
 no GitHub release was created.
 

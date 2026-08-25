@@ -9168,3 +9168,52 @@ workspace, package, documentation, WASM, and supply-chain gates passed.
 [PR 52](https://github.com/tensorbee/rdocx/pull/52), with specific credit to
 `@pedroassumpcao`. F-X055 owns their release-bound comments and closure after
 v0.10.0 publication verifies.
+
+### F-X056, Tag rpptx-v0.6.0
+
+**Sprint.** S56
+**Completed.** 2026-08-25
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete fifteen-package shared OOXML and PowerPoint
+family was published at 0.6.0 from reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The release includes the shared
+font-alias and bounded relayout outcomes, raster export additions, and current
+Presentation CLI output selection. `rpptx-wasm` remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[32866396976](https://github.com/tensorbee/rdocx/actions/runs/32866396976)
+passed output stability, metadata, reviewed-note, archive, fifteen-crate
+publication, and GitHub Release jobs. Every selected 0.6.0 registry entry
+resolved under sole owner `mantissaman (Atul Sharma)`. The annotated
+[`rpptx-v0.6.0`](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.6.0)
+tag dereferenced to the reviewed SHA, and its 2,502-byte body was
+byte-identical to the committed changelog render.
+
+**Contribution inventory.** Authenticated contributor `@emptinessform`
+reported [Issue 44](https://github.com/tensorbee/rdocx/issues/44), authored
+[PR 45](https://github.com/tensorbee/rdocx/pull/45), and reported
+[Issue 46](https://github.com/tensorbee/rdocx/issues/46). F-X051 and F-X052
+landed all three selected outcomes as hardened equivalents. No record state
+changed during this release.
+
+**Notifications.** The reviewed comments were posted and verified at
+[Issue 44 comment](https://github.com/tensorbee/rdocx/issues/44#issuecomment-5413050520),
+[PR 45 comment](https://github.com/tensorbee/rdocx/pull/45#issuecomment-5413050758),
+and [Issue 46 comment](https://github.com/tensorbee/rdocx/issues/46#issuecomment-5413050988).
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The full workspace gate, 70 workflow tests, 49-entry hash harness,
+no-default-font tests, both WASM targets, warning-free docs, README checks,
+exact 22-package dry run, archive inventory and size checks, and cargo-deny
+passed at the reviewed source. The publication workflow and independent
+registry, owner, tag, release-body, and notification checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.6.0` tag.
+F-X057 owns stable 0.10.1 and retains its separate exact-SHA final approval.

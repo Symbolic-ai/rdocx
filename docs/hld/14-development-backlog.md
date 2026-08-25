@@ -3222,8 +3222,9 @@ release comment URL.
 
 ### F-X056, Tag rpptx-v0.6.0 (S)
 
-Publish the complete 15-package incubating family at 0.6.0 before retrying the
-stable release. The v0.10.0 publication attempt proved that the stable source
+The complete 15-package incubating family is published at 0.6.0 from reviewed
+SHA `55fb2f54caf91d7dedc8936b4c7b116354590628` before the stable release retry.
+The v0.10.0 publication attempt proved that the stable source
 graph uses shared layout APIs added after the immutable 0.5.0 registry
 boundary. `rdocx-layout` therefore cannot verify against crates.io until the
 current shared family has its own reviewed release.

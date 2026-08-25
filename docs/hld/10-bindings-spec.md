@@ -672,9 +672,9 @@ honest. Do not auto-generate them from PyO3.
 crates are `publish = false`, because a cdylib has no business on crates.io.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint crates.io family is prepared at 0.6.0 for `rpptx-v0.6.0`. The last
-complete published family remains 0.5.0 from the annotated `rpptx-v0.5.0` tag
-at reviewed SHA `343388e19bce21b3d83f17e8cc0e5418861a94cb`. The stable
+PowerPoint crates.io family is published at 0.6.0 from the annotated
+`rpptx-v0.6.0` tag at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`. The stable
 workspace and exact seven-package Word crates.io family remain prepared at
 0.10.0. The immutable v0.10.0 attempt published only `rdocx-opc` and
 `rdocx-oxml`, so the last complete stable family remains 0.9.0 from the

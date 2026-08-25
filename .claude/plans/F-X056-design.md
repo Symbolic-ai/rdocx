@@ -1,6 +1,6 @@
 # F-X056, Tag rpptx-v0.6.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S56
 **Size**: S
 **Depends on**: F-X051, F-X052, F-X053, F-X054
@@ -124,9 +124,9 @@ only. Any output delta blocks preparation.
 - [x] Prepare and validate the selected-family `rpptx-v0.6.0` notes and three-record contribution inventory.
 - [x] Verify metadata, dependency order, binding isolation, package contents, archive limits, and supply chain.
 - [x] Run the full workspace gate, deterministic hash harness, and all risk riders.
-- [ ] Reach a clean microscope and sprint review at the exact prepared SHA.
-- [ ] Stop at `/release rpptx-v0.6.0` for separate final approval.
-- [ ] After approval, verify 15 registry entries, owners, tag, release body, and three notification URLs without changing record states.
+- [x] Reach a clean microscope and sprint review at the exact prepared SHA.
+- [x] Stop at `/release rpptx-v0.6.0` for separate final approval.
+- [x] After approval, verify 15 registry entries, owners, tag, release body, and three notification URLs without changing record states.
 
 ## Open questions
 

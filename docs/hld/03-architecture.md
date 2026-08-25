@@ -514,12 +514,10 @@ an endnote sharing a number.
 
 The 15 shared and PowerPoint publication candidates use the explicit common
 incubating version in their manifests and workspace pins. All 15 candidates
-are prepared together at 0.6.0 for the reviewed `rpptx-v0.6.0` release
-boundary. The last published complete family remains 0.5.0 from the annotated
-`rpptx-v0.5.0` tag at reviewed SHA
-`343388e19bce21b3d83f17e8cc0e5418861a94cb`. The unpublished `rpptx-wasm`
-preparation member is also at 0.6.0 but has no crates.io publication path. The
-family adds
+are published together at 0.6.0 from the annotated `rpptx-v0.6.0` tag at
+reviewed SHA `55fb2f54caf91d7dedc8936b4c7b116354590628`. The unpublished
+`rpptx-wasm` preparation member is also at 0.6.0 but has no crates.io
+publication path. The family adds
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates use the
 separate workspace version. That stable workspace and its exact seven-package
