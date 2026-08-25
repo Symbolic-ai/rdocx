@@ -35,11 +35,11 @@ regenerated, never hand-edited.
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
-| M20, Fidelity at scale                         | 7  | 0 | 0 | 7  |
+| M20, Fidelity at scale                         | 7  | 0 | 1 | 6  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
 | X, Cross-cutting (opportunistic)            | 60 | 55 | 1 | 2  |
-| **Total** | **307** | **244** | **4** | **57** |
+| **Total** | **307** | **244** | **5** | **56** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -395,7 +395,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M20 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-196 | Word corpus                                  | S57  | M | pending |
+| F-196 | Word corpus                                  | S57  | M | in-progress |
 | F-197 | Word SSIM harness                            | S57  | L | pending |
 | F-198 | Hyphenation                                  | S58  | L | pending |
 | F-199 | Complex script shaping                       | S58  | L | pending |
