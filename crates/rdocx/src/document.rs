@@ -1978,7 +1978,12 @@ impl Document {
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn save_encrypted<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<()> {
         let bytes = self.to_encrypted_bytes(password)?;
-        write_encrypted_file(path.as_ref(), &bytes)?;
+        write_atomic_file(
+            path.as_ref(),
+            &bytes,
+            "invalid file name",
+            "could not allocate encrypted-save staging file",
+        )?;
         Ok(())
     }
 
@@ -5717,11 +5722,15 @@ impl Document {
     }
 }
 
-#[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
-fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic_file(
+    path: &Path,
+    bytes: &[u8],
+    invalid_name_message: &'static str,
+    exhausted_message: &'static str,
+) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, invalid_name_message)
     })?;
     for attempt in 0..128_u8 {
         let mut temporary_name = std::ffi::OsString::from(".");
@@ -5747,7 +5756,7 @@ fn write_encrypted_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        "could not allocate encrypted-save staging file",
+        exhausted_message,
     ))
 }
 

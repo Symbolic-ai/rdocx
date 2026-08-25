@@ -138,42 +138,14 @@ impl Document {
     /// Serialize and save ODT to a path, returning lossy-conversion diagnostics.
     pub fn save_odt<P: AsRef<Path>>(&self, path: P) -> Result<Vec<OdtDiagnostic>> {
         let result = self.to_odt_bytes()?;
-        write_atomic_odt(path.as_ref(), &result.bytes)?;
+        crate::document::write_atomic_file(
+            path.as_ref(),
+            &result.bytes,
+            "invalid file name",
+            "could not allocate ODT-save staging file",
+        )?;
         Ok(result.diagnostics)
     }
-}
-
-fn write_atomic_odt(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
-    })?;
-    for attempt in 0..128_u8 {
-        let mut temporary_name = std::ffi::OsString::from(".");
-        temporary_name.push(file_name);
-        temporary_name.push(format!(".rdocx-{}-{attempt}.tmp", std::process::id()));
-        let temporary = parent.join(temporary_name);
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = file.write_all(bytes).and_then(|()| file.sync_all());
-        drop(file);
-        let result = result.and_then(|()| crate::document::replace_file(&temporary, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        return result;
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not allocate ODT-save staging file",
-    ))
 }
 
 #[derive(Clone)]

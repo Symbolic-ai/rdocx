@@ -63,7 +63,12 @@ impl Document {
     /// Serialize and atomically save EPUB, returning lossy-conversion diagnostics.
     pub fn save_epub<P: AsRef<Path>>(&self, path: P) -> Result<Vec<EpubDiagnostic>> {
         let result = self.to_epub_bytes()?;
-        write_atomic_file(path.as_ref(), &result.bytes)?;
+        crate::document::write_atomic_file(
+            path.as_ref(),
+            &result.bytes,
+            "invalid EPUB file name",
+            "could not allocate EPUB-save staging file",
+        )?;
         Ok(result.diagnostics)
     }
 }
@@ -3784,39 +3789,6 @@ fn base64_encode(data: &[u8]) -> String {
         });
     }
     output
-}
-
-fn write_atomic_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid EPUB file name")
-    })?;
-    for attempt in 0..128_u8 {
-        let mut temporary_name = std::ffi::OsString::from(".");
-        temporary_name.push(file_name);
-        temporary_name.push(format!(".rdocx-{}-{attempt}.tmp", std::process::id()));
-        let temporary = parent.join(temporary_name);
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = file.write_all(bytes).and_then(|()| file.sync_all());
-        drop(file);
-        let result = result.and_then(|()| crate::document::replace_file(&temporary, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        return result;
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not allocate EPUB-save staging file",
-    ))
 }
 
 fn epub_error(message: impl Into<String>) -> Error {
