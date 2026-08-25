@@ -27,6 +27,16 @@ and paragraph formatting, list kind and level, table grid and spans, and image
 bytes and dimensions. It deliberately ignores package bytes, relationship ids,
 part names, and namespace prefixes.
 
+The ODT writer round-trip gate builds its document in source, writes ODF 1.3
+through the native facade, and reopens the result through the ODT reader. The
+normalized comparison covers body order, effective text and paragraph
+formatting, list kind and level, table grid and horizontal and vertical spans,
+and image bytes and truncating EMU dimensions. Focused tests lock the stored
+first `mimetype`, fixed-prefix XML and manifest order, byte-identical repeated
+writes, exact whitespace elements, output and diagnostic bounds, stable lossy
+paths, and atomic path replacement. The writer does not use LibreOffice as a
+package-byte oracle.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,

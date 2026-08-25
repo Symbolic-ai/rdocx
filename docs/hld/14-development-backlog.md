@@ -1511,16 +1511,25 @@ editable document. Archive names, encryption, compression, and expansion are
 validated before namespace-aware XML parsing. Default, named, parent, and
 automatic styles resolve into effective Word formatting. Stable source-path
 diagnostics identify safe lossy skips, and fatal failures expose no partial
-document. ODT remains a private one-way facade conversion rather than an OPC
-package or a retained second document model. Python, WASM, and CLI surfaces do
-not gain ODT entry points.
+document. The ODT boundary is a private two-way facade conversion rather than
+an OPC package or a retained second document model. Python, WASM, and CLI
+surfaces do not gain ODT entry points.
 **Depends on**: none.
 **Test gate**: differential. A source-built ODT converted here matches the exact
 pinned LibreOffice conversion by normalized body structure, formatting, lists,
 tables, and image content without comparing package serialization details.
 
 ### F-180, ODT writer (L)
-The inverse.
+The native Word facade writes the F-179 fidelity boundary through
+`Document::to_odt_bytes` and `Document::save_odt`. The private writer walks the
+owned document tree without mutating it, materializes effective paragraph and
+run formatting, emits nested lists and valid table spans, and copies supported
+inline image bytes at their truncating EMU dimensions. Automatic styles,
+media paths, manifest entries, ZIP metadata, and package order are
+deterministic and bounded. Unsupported Word content returns stable path-aware
+diagnostics while supported siblings continue. Path saves serialize first,
+stage and sync a sibling file, and publish through the portable replacement
+primitive. Python, WASM, and CLI surfaces do not gain ODT export methods.
 **Depends on**: F-179.
 **Test gate**: round-trip. Text, formatting, tables, lists and images survive.
 

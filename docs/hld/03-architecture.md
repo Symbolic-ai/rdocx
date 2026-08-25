@@ -94,12 +94,14 @@ content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
 
-**Inbound ODT belongs to the `rdocx` facade.** The private importer validates
+**ODT conversion belongs to the `rdocx` facade.** The private importer validates
 the complete bounded ZIP index, parses ODF XML by expanded namespace, and
 projects supported content directly into the one owned WordprocessingML
-document model. ODT is not OPC, so the importer does not enter `oxml-opc` or
-retain an ODT object model. The facade uses the existing workspace `zip`,
-`quick-xml`, and `oxml-media` dependencies for this one-way conversion.
+document model. The private writer walks that same tree and its package media,
+materializes effective formatting, and writes deterministic ODF 1.3 content,
+manifest, and image entries. ODT is not OPC, so neither direction enters
+`oxml-opc` or retains an ODT object model. The facade uses the existing
+workspace `zip`, `quick-xml`, and `oxml-media` dependencies for conversion.
 
 **`oxml-layout` is where the format boundary genuinely falls.** Its
 output, font, and line modules hold page frames, positioned elements, glyph

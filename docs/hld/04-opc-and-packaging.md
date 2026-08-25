@@ -21,14 +21,21 @@ essentially unchanged from `rdocx-opc`.
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.
 
-ODT input is a ZIP package but not an OPC package. The private `rdocx` ODT
-reader therefore indexes it directly with the workspace `zip` dependency and
-does not create an `OpcPackage`. The index rejects unsafe or duplicate names,
-non-files, unsupported compression, encryption, and configured expansion-limit
-violations before XML parsing. It requires the exact root `mimetype` and
-`content.xml`, checks manifest encryption state, and reads only styles,
-content, manifest, and referenced image parts. The resulting Word document is
-saved and reopened through the normal OPC owner before it is published.
+ODT is a ZIP package but not an OPC package. The private `rdocx` ODT reader
+therefore indexes it directly with the workspace `zip` dependency and does not
+create an `OpcPackage`. The index rejects unsafe or duplicate names, non-files,
+unsupported compression, encryption, and configured expansion-limit violations
+before XML parsing. It requires the exact root `mimetype` and `content.xml`,
+checks manifest encryption state, and reads only styles, content, manifest, and
+referenced image parts. The resulting Word document is saved and reopened
+through the normal OPC owner before it is published.
+
+The private ODT writer also stays outside OPC. It writes the stored `mimetype`
+entry first with no extra field, followed by deflated `content.xml`, image
+entries in encounter order, and deflated `META-INF/manifest.xml`. The manifest
+names exactly the root, content, and emitted images. Ordered style allocation,
+fixed namespace prefixes, fixed ZIP metadata, and bounded retained output make
+two writes of one document byte-identical.
 
 ## Generalising the constructors
 

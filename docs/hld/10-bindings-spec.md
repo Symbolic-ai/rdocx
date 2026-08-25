@@ -240,6 +240,15 @@ projected into the existing Word model. Safe lossy skips are diagnosed.
 Python, WASM, and CLI surfaces gain no ODT import entry point and retain their
 existing methods and error contracts.
 
+Native Rust callers can export OpenDocument Text through
+`Document::to_odt_bytes` and `Document::save_odt`. The byte method returns an
+`OdtWriteResult` containing deterministic package bytes and ordered
+`OdtDiagnostic` values with stable document paths. The path method serializes
+completely, stages and syncs a sibling file, then publishes through the shared
+portable replacement primitive. A failure cannot truncate an existing
+destination. Export does not mutate the source document. Python, WASM, and CLI
+surfaces gain no ODT export entry point and retain their existing contracts.
+
 Tagged PDF is an implementation detail of the existing deterministic and
 normal PDF methods. Word layout now carries source semantics to the shared PDF
 backend, but the native method signatures, returned byte type, binding method

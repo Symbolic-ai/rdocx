@@ -1,12 +1,14 @@
 //! Integration tests for rdocx — end-to-end document creation and round-trip.
 
+use std::collections::HashMap;
+
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
 use rdocx::paragraph::Alignment;
 use rdocx::table::VerticalAlignment;
 use rdocx::{
-    BodyItemRef, BorderStyle, Length, ListLevel, RunPosition, RunRange, SectionBreak, StyleBuilder,
-    TabAlignment, TabLeader, UnderlineStyle,
+    BodyItemRef, BorderStyle, Length, ListLevel, ParagraphRef, RunPosition, RunRange, SectionBreak,
+    StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind};
 
@@ -14,6 +16,30 @@ const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aa
 
 #[derive(Debug, PartialEq)]
 struct OdtStructuralRecord {
+    body_order: Vec<String>,
+    paragraphs: Vec<OdtOracleParagraphRecord>,
+    tables: Vec<OdtOracleTableRecord>,
+    images: Vec<(i64, i64)>,
+    media: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, PartialEq)]
+struct OdtOracleParagraphRecord {
+    text: String,
+    alignment: String,
+    numbering: Option<(bool, u32)>,
+    runs: Vec<(String, bool, bool, Option<String>)>,
+}
+
+#[derive(Debug, PartialEq)]
+struct OdtOracleTableRecord {
+    rows: usize,
+    columns: usize,
+    cells: Vec<(String, Option<u32>, Option<String>)>,
+}
+
+#[derive(Debug, PartialEq)]
+struct OdtSupportedRecord {
     body_order: Vec<String>,
     paragraphs: Vec<OdtParagraphRecord>,
     tables: Vec<OdtTableRecord>,
@@ -81,14 +107,146 @@ struct OdtParagraphRecord {
     text: String,
     alignment: String,
     numbering: Option<(bool, u32)>,
-    runs: Vec<(String, bool, bool, Option<String>)>,
+    space_before: Option<i32>,
+    space_after: Option<i32>,
+    indent_left: Option<i32>,
+    indent_right: Option<i32>,
+    first_line_indent: Option<i32>,
+    line_spacing: Option<(String, i32)>,
+    runs: Vec<OdtRunRecord>,
+}
+
+#[derive(Debug, PartialEq)]
+struct OdtRunRecord {
+    text: String,
+    font: Option<String>,
+    size_half_points: Option<u32>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+    color: Option<String>,
+    highlight: Option<String>,
+    vertical: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
 struct OdtTableRecord {
     rows: usize,
     columns: usize,
-    cells: Vec<(String, Option<u32>, Option<String>)>,
+    cells: Vec<(Vec<OdtParagraphRecord>, Option<u32>, Option<String>)>,
+}
+
+fn odt_paragraph_record(
+    document: &Document,
+    paragraph: ParagraphRef<'_>,
+    numbering_kinds: &HashMap<(u32, u32), bool>,
+) -> OdtParagraphRecord {
+    let paragraph_style = document.resolve_paragraph_properties(paragraph.style_id());
+    let alignment = paragraph
+        .alignment()
+        .map(|value| format!("{value:?}"))
+        .or_else(|| paragraph_style.jc.map(|value| format!("{value:?}")))
+        .unwrap_or_else(|| "Left".to_string());
+    let numbering = paragraph.numbering().and_then(|(id, level)| {
+        numbering_kinds
+            .get(&(id, level))
+            .map(|bullet| (*bullet, level))
+    });
+    let direct_line = paragraph
+        .line_spacing_multiple()
+        .map(|value| ("auto".to_string(), (value * 240.0).round() as i32))
+        .or_else(|| {
+            paragraph
+                .line_spacing()
+                .map(|value| ("exact".to_string(), value.to_twips()))
+        });
+    let style_line = paragraph_style.line_spacing.map(|value| {
+        (
+            paragraph_style
+                .line_rule
+                .clone()
+                .unwrap_or_else(|| "auto".to_string()),
+            value.0,
+        )
+    });
+    let runs = (0..paragraph.run_count())
+        .filter_map(|index| paragraph.run(index))
+        .filter(|run| !run.text().is_empty())
+        .map(|run| {
+            let resolved = document.resolve_run_properties(paragraph.style_id(), run.style_id());
+            OdtRunRecord {
+                text: run.text(),
+                font: run.font_name().map(str::to_string).or_else(|| {
+                    resolved
+                        .font_ascii
+                        .or(resolved.font_hansi)
+                        .or(resolved.font_east_asia)
+                        .or(resolved.font_cs)
+                }),
+                size_half_points: run
+                    .size()
+                    .map(|value| (value * 2.0).round() as u32)
+                    .or_else(|| resolved.sz.map(|value| value.0)),
+                bold: run.bold_value().or(resolved.bold).unwrap_or(false),
+                italic: run.italic_value().or(resolved.italic).unwrap_or(false),
+                underline: run
+                    .underline_code_value()
+                    .map(|value| value != 0)
+                    .or_else(|| resolved.underline.map(|value| value.to_str() != "none"))
+                    .unwrap_or(false),
+                strike: run.strike_value().or(resolved.strike).unwrap_or(false),
+                color: run
+                    .color()
+                    .map(str::to_string)
+                    .or(resolved.color)
+                    .or_else(|| Some("000000".to_string())),
+                highlight: run.highlight().or_else(|| {
+                    resolved
+                        .shading
+                        .and_then(|shading| shading.fill)
+                        .or_else(|| resolved.highlight.map(|value| value.to_str().to_string()))
+                }),
+                vertical: run.vert_align().map(str::to_string).or(resolved.vert_align),
+            }
+        })
+        .collect();
+    OdtParagraphRecord {
+        text: paragraph.text(),
+        alignment,
+        numbering,
+        space_before: paragraph
+            .space_before()
+            .map(Length::to_twips)
+            .or_else(|| paragraph_style.space_before.map(|value| value.0)),
+        space_after: paragraph
+            .space_after()
+            .map(Length::to_twips)
+            .or_else(|| paragraph_style.space_after.map(|value| value.0)),
+        indent_left: paragraph
+            .indent_left()
+            .map(Length::to_twips)
+            .or_else(|| paragraph_style.ind_left.map(|value| value.0)),
+        indent_right: paragraph
+            .indent_right()
+            .map(Length::to_twips)
+            .or_else(|| paragraph_style.ind_right.map(|value| value.0)),
+        first_line_indent: paragraph
+            .first_line_indent()
+            .map(Length::to_twips)
+            .or_else(|| {
+                paragraph_style
+                    .ind_first_line
+                    .map(|value| value.0)
+                    .or_else(|| {
+                        paragraph_style
+                            .ind_hanging
+                            .map(|value| value.0.saturating_neg())
+                    })
+            }),
+        line_spacing: direct_line.or(style_line),
+        runs,
+    }
 }
 
 fn source_built_odt() -> Vec<u8> {
@@ -149,6 +307,93 @@ fn source_built_odt() -> Vec<u8> {
     output.into_inner()
 }
 
+fn odt_supported_record(mut document: Document) -> OdtSupportedRecord {
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let numbering = package
+        .get_part("/word/numbering.xml")
+        .map(rdocx_oxml::numbering::CT_Numbering::from_xml)
+        .transpose()
+        .unwrap();
+    let mut numbering_kinds = HashMap::new();
+    if let Some(numbering) = numbering.as_ref() {
+        for instance in &numbering.nums {
+            let Some(definition) = numbering.get_abstract_num_for(instance.num_id) else {
+                continue;
+            };
+            for level in &definition.levels {
+                if let Some(format) = level.num_fmt.as_ref() {
+                    numbering_kinds.insert(
+                        (instance.num_id, level.ilvl),
+                        matches!(format, rdocx_oxml::numbering::ST_NumberFormat::Bullet),
+                    );
+                }
+            }
+        }
+    }
+    let body_order = document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => format!("p:{}", paragraph.text()),
+            BodyItemRef::Table(table) => {
+                format!("table:{}x{}", table.row_count(), table.column_count())
+            }
+            BodyItemRef::ContentControl(_) => "content-control".to_string(),
+            BodyItemRef::UnsupportedXml(_) => "unsupported".to_string(),
+        })
+        .collect();
+    let paragraphs = document
+        .paragraphs()
+        .into_iter()
+        .map(|paragraph| odt_paragraph_record(&document, paragraph, &numbering_kinds))
+        .collect();
+    let tables = (0..document.table_count())
+        .map(|index| {
+            let table = document.table(index).unwrap();
+            let mut cells = Vec::new();
+            for row_index in 0..table.row_count() {
+                let row = table.row(row_index).unwrap();
+                for cell_index in 0..row.cell_count() {
+                    let cell = row.cell(cell_index).unwrap();
+                    cells.push((
+                        cell.paragraphs()
+                            .map(|paragraph| {
+                                odt_paragraph_record(&document, paragraph, &numbering_kinds)
+                            })
+                            .collect(),
+                        cell.grid_span(),
+                        cell.v_merge().map(|value| format!("{value:?}")),
+                    ));
+                }
+            }
+            OdtTableRecord {
+                rows: table.row_count(),
+                columns: table.column_count(),
+                cells,
+            }
+        })
+        .collect();
+    let images = document
+        .images()
+        .into_iter()
+        .map(|image| (image.width_emu, image.height_emu))
+        .collect();
+    let mut media: Vec<(String, Vec<u8>)> = package
+        .parts
+        .iter()
+        .filter(|(name, _)| name.starts_with("/word/media/"))
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect();
+    media.sort_by(|left, right| left.0.cmp(&right.0));
+    OdtSupportedRecord {
+        body_order,
+        paragraphs,
+        tables,
+        images,
+        media: media.into_iter().map(|(_, bytes)| bytes).collect(),
+    }
+}
+
 fn odt_structural_record(mut document: Document) -> OdtStructuralRecord {
     let body_order = document
         .body_items()
@@ -195,7 +440,7 @@ fn odt_structural_record(mut document: Document) -> OdtStructuralRecord {
                     )
                 })
                 .collect();
-            OdtParagraphRecord {
+            OdtOracleParagraphRecord {
                 text: paragraph.text(),
                 alignment,
                 numbering,
@@ -218,7 +463,7 @@ fn odt_structural_record(mut document: Document) -> OdtStructuralRecord {
                     ));
                 }
             }
-            OdtTableRecord {
+            OdtOracleTableRecord {
                 rows: table.row_count(),
                 columns: table.column_count(),
                 cells,
@@ -295,6 +540,91 @@ fn odt_reader_matches_pinned_libreoffice_structure() {
     let oracle = odt_structural_record(oracle);
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(ours, oracle);
+}
+
+#[test]
+fn odt_writer_round_trip_preserves_supported_document_content() {
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("");
+    paragraph.set_alignment(Alignment::Center);
+    paragraph.set_space_before(Length::twips(60));
+    paragraph.set_space_after(Length::twips(120));
+    paragraph.set_indent_left(Length::twips(720));
+    paragraph.set_indent_right(Length::twips(360));
+    paragraph.set_first_line_indent(Length::twips(240));
+    paragraph.set_line_spacing_multiple(1.5);
+    paragraph
+        .add_run("Round")
+        .font("Arial")
+        .size(11.0)
+        .bold(true)
+        .underline(true)
+        .strike(true)
+        .color("123456")
+        .highlight("ABCDEF")
+        .superscript();
+    paragraph
+        .add_run(" trip")
+        .font("Liberation Serif")
+        .size(13.0)
+        .italic(true)
+        .subscript();
+
+    let list_id = document.add_list_definition(&[ListLevel::bullet(), ListLevel::decimal()]);
+    document.add_paragraph("top item").set_numbering(list_id, 0);
+    document
+        .add_paragraph("nested item")
+        .set_numbering(list_id, 1);
+
+    {
+        let mut table = document.add_table(2, 2);
+        table.cell(0, 0).unwrap().set_text("vertical");
+        table.cell(0, 0).unwrap().set_v_merge_restart();
+        table.cell(0, 1).unwrap().set_text("top right");
+        table
+            .cell(0, 1)
+            .unwrap()
+            .paragraph_mut(0)
+            .unwrap()
+            .set_space_after(Length::twips(80));
+        let mut top_right = table.cell(0, 1).unwrap();
+        let mut cell_list = top_right.add_paragraph("cell list item");
+        cell_list.set_alignment(Alignment::Right);
+        cell_list.set_numbering(list_id, 1);
+        cell_list
+            .add_run(" formatted")
+            .font("Arial")
+            .size(10.0)
+            .underline(true)
+            .highlight("FEDCBA");
+        table.cell(1, 0).unwrap().set_v_merge_continue();
+        table.cell(1, 1).unwrap().set_text("bottom right");
+    }
+    document.add_picture(
+        PNG_2_BY_3,
+        "two-by-three.png",
+        Length::emu(914_400),
+        Length::emu(457_200),
+    );
+
+    let expected_docx = document.to_bytes().unwrap();
+    let expected = odt_supported_record(Document::from_bytes(&expected_docx).unwrap());
+    assert_eq!(expected.paragraphs[2].numbering, Some((false, 1)));
+    let written = document.to_odt_bytes().unwrap();
+    assert!(
+        written
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path == "body[3]/tblPr")
+    );
+    assert!(
+        written
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path == "body[3]/tblGrid")
+    );
+    let actual = odt_supported_record(Document::from_odt_bytes(&written.bytes).unwrap().document);
+    assert_eq!(actual, expected);
 }
 
 #[test]

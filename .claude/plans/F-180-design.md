@@ -1,6 +1,6 @@
 # F-180, ODT writer
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S56
 **Size**: L
 **Depends on**: F-179
@@ -169,14 +169,14 @@ Any delta blocks integration and the baseline is not re-recorded.
 
 ## Implementation checklist
 
-- [ ] Add `OdtWriteResult`, byte and atomic path APIs, and the public re-export.
-- [ ] Allocate deterministic automatic styles, list styles, media, and diagnostics.
-- [ ] Emit fixed-prefix ODF content for supported text, formatting, lists, tables, and images.
-- [ ] Translate valid table spans and reject malformed overlap.
-- [ ] Build the bounded manifest and deterministic ZIP.
-- [ ] Diagnose every unsupported item without mutating the source document.
-- [ ] Add source-built round-trip, determinism, bounds, diagnostics, and atomic-save coverage.
-- [ ] Run scoped checks, all risk riders, full verification, packaging, and the unchanged harness.
+- [x] Add `OdtWriteResult`, byte and atomic path APIs, and the public re-export.
+- [x] Allocate deterministic automatic styles, list styles, media, and diagnostics.
+- [x] Emit fixed-prefix ODF content for supported text, formatting, lists, tables, and images.
+- [x] Translate valid table spans and reject malformed overlap.
+- [x] Build the bounded manifest and deterministic ZIP.
+- [x] Diagnose every unsupported item without mutating the source document.
+- [x] Add source-built round-trip, determinism, bounds, diagnostics, and atomic-save coverage.
+- [x] Run scoped checks, all risk riders, full verification, packaging, and the unchanged harness.
 
 ## Open questions
 

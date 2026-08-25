@@ -577,9 +577,12 @@ declares the dependency directly. The complete facade graph passes Rust 1.93,
 both wasm32 checks, the workspace dependency policy, and the `rdocx` package
 dry run. The packaged archive remains below the 10 MiB ceiling.
 
-The existing workspace `zip` 8.1 dependency has one additional direct named
-consumer, the private inbound ODT importer inside `rdocx`. It retains the
-workspace's disabled default features and the existing Deflate, Deflate64, and
-time feature set. No new external package or `oxml-*` dependency edge is added.
-The ODT importer validates bounded archive metadata before parsing and does not
-reuse `OpcPackage` for a non-OPC format.
+The existing workspace `zip` 8.1 dependency has direct named consumers in the
+private ODT reader and writer inside `rdocx`. It retains the workspace's
+disabled default features and enables only `deflate-flate2-zlib-rs`. Deflate64
+and clock-backed timestamp support remain disabled. No new external package or
+`oxml-*` dependency edge is added. The reader validates bounded archive
+metadata before parsing. The writer fixes entry order, compression,
+permissions, the 1980-01-01 timestamp, and other metadata while bounding XML,
+media, entries, and total retained output. Neither direction reuses
+`OpcPackage` for a non-OPC format.
