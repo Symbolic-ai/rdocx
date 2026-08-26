@@ -21,7 +21,7 @@ protection at the reviewed sprint SHA.
   SSIM evidence, deliberate render sensitivity, performance regression gates,
   and the always-reporting `ci-gate` contract.
 - `docs/hld/14-development-backlog.md`, for the exact F-198, F-199, F-200,
-  F-202, F-X031, F-X058, F-X059, F-X060, and F-X061 dependencies and acceptance gates.
+  F-202, F-X031, and F-X058 through F-X063 dependencies and acceptance gates.
 - `docs/hld/15-build-and-toolchain.md`, for bundled-font deterministic output,
   cache ceilings, pinned corpus and oracle runtimes, the CI matrix, and the
   separation between tracked workflow state and repository protection state.
@@ -30,7 +30,9 @@ protection at the reviewed sprint SHA.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X061 | Support staged release checkpoints in run-sprint | S | in-progress | codex |
+| F-X061 | Support staged dependency checkpoints in run-sprint | S | in-progress | codex |
+| F-X062 | Reuse restart pagination with notes and headers | M | pending | - |
+| F-X063 | Avoid duplicate caller-font byte comparisons | S | pending | - |
 | F-X058 | Shared multilingual text substrate | L | in-progress | codex |
 | F-X059 | Tag rpptx-v0.7.0 | S | pending | - |
 | F-198 | Hyphenation | L | in-progress | codex |
@@ -44,8 +46,9 @@ protection at the reviewed sprint SHA.
 
 Rows are listed in dependency order, not F-ID order.
 
-F-X061 first makes the two dependency release checkpoints resumable. F-X058
-then establishes the complete shared text contract, and F-X059 publishes it as
+F-X061 first makes ordinary and release dependency checkpoints resumable.
+F-X062 and F-X063 then close the two reported retained-layout cliffs. F-X058
+establishes the complete shared text contract, and F-X059 publishes it as
 the incubating 0.7.0 family. F-198, F-199, and then F-200 consume that published
 boundary. F-202 is already independently reviewed. F-X060 publishes the
 settled stable family at 0.11.0. F-X031 is the final operational step
@@ -65,6 +68,10 @@ move rendered output, so its hash delta must be isolated and declared.
   their separately approved reviewed SHAs, and their registry graphs verify.
 - Each dependency release checkpoint records full verification and clean review
   at its release SHA, then resumes later waves in the same sprint state.
+- Unchanged notes, endnotes, headers, and footers retain safe restart
+  pagination, and changed related stories invalidate it exactly.
+- Warm caller-font relayout avoids the redundant retained-context byte pass
+  while exact changed-font and transfer checks remain authoritative.
 - Editing one paragraph of the thousand-page document re-lays out a bounded
   number of pages while the established memory and throughput limits remain
   green.

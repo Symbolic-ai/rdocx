@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S58
 **Size**: S
-**Depends on**: F-198, F-199, F-200, F-202, F-X059
+**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063
 
 ## Problem
 
@@ -44,6 +44,11 @@ pre-1.0 source impact from the final API diff, the shared 0.7.0 requirement,
 and unchanged binding publication authority. Rebuild the selected-family
 contribution inventory after every dependency lands. Do not duplicate records
 already credited under `v0.10.1`.
+
+The reviewed inventory must include Issues 53 and 54, authenticate
+`@emptinessform`, classify the final F-X062 and F-X063 fixes, credit the
+specific reporter evidence, and prepare one stable-release notification for
+each issue. This story does not close either issue without separate authority.
 
 Update the stable metadata regression for 0.11.0 and update the registry proof
 so packaged `rdocx-layout@0.11.0` resolves published `oxml-layout@0.7.0`

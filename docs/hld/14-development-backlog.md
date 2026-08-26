@@ -3289,30 +3289,60 @@ regression, and changelog section together. Pin every shared dependency to the
 verified 0.7.0 family from F-X059. Python, WASM, npm, and PyPI packages remain
 outside publication authority.
 
-**Depends on**: F-198, F-199, F-200, F-202, F-X059.
+**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063.
 **Test gate**: release. All seven stable registry entries resolve at 0.11.0
 against incubating 0.7.0 dependencies, their owners match the authenticated
 registry inventory, the annotated tag targets the reviewed SHA, the GitHub
 release body is byte-identical to the reviewed notes, and every selected
 external record receives its reviewed notification.
 
-### F-X061, Support staged release checkpoints in run-sprint (S)
+### F-X061, Support staged dependency checkpoints in run-sprint (S)
 
-`/run-sprint` currently defers every release F-ID until all feature branches
-are integrated. That deadlocks a sprint when an unfinished story depends on a
-real publication, because the dependent story cannot start and the release
-cannot reach its final verification and review boundary. Add a resumable
-checkpoint route that completes and records the dependency prefix, prepares
-and publishes the release F-ID with its separate approval, then returns the
-same sprint state to implementation for later waves. Preserve HEAD-bound full
-verification and review at every release SHA and again after release evidence
-changes the tracked record.
+`/run-sprint` currently finalises delivery records only after all feature
+branches are integrated. That deadlocks any later wave whose formal dependency
+is integrated but not yet completed, including a dependency that requires real
+publication. Add a resumable checkpoint route that completes and records each
+required dependency prefix, then returns the same sprint state to
+implementation. Release checkpoints add preparation, separate approval,
+publication, and post-release evidence before that return. Preserve HEAD-bound
+full verification and review at every checkpoint.
 
 **Depends on**: none.
 **Test gate**: regression. The workflow contract and phase-state regression
-prove two verify-review-release checkpoints can return to implementation before
-the final close-preflight, without weakening release approval or HEAD-bound
+prove ordinary and release dependency checkpoints can return to implementation
+before final close-preflight without weakening release approval or HEAD-bound
 evidence.
+
+### F-X062, Reuse restart pagination with notes and headers (M)
+
+Issue 53 reports two independent restart cliffs. F-202 already raises the
+32-page ceiling to 1,024. The remaining global eligibility predicate still
+rejects any document with footnotes, endnotes, headers, or footers even when
+those related stories are unchanged. Admit them when the retained context is
+exactly equal and restart only at the paginator's existing note-clean page
+boundaries. Preserve conservative fallback for changed related stories,
+note-bearing tables, and other traversal-sensitive content. Append endnote
+pages exactly once after a complete restarted body.
+
+**Depends on**: F-202.
+**Test gate**: regression. Source-built 700-paragraph note and header/footer
+workloads retain bounded page work and exact warm-versus-fresh output, while
+changed related stories and dirty note continuations invalidate reuse.
+
+### F-X063, Avoid duplicate caller-font byte comparisons (S)
+
+Issue 54 isolates a WASM relayout regression to a second exact comparison of
+caller font bytes. `FontManager::load_additional_fonts` already performs the
+authoritative ordered family-and-byte comparison. The retained engine context
+then repeats it on every warm relayout. Skip only that redundant second pass
+after the font manager reports an unchanged context. Keep exact bytes in the
+retained context and keep checked engine transfer byte-exact.
+
+**Depends on**: F-X052.
+**Test gate**: regression. Five generated caller fonts totalling about 22 MiB
+and 40 aliases perform zero repeated retained-context font-byte work on warm
+layout, same-length changed bytes still invalidate reuse, checked transfer stays
+exact, and warm output equals fresh output.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

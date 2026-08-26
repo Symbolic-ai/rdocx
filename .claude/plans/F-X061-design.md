@@ -1,4 +1,4 @@
-# F-X061, Support staged release checkpoints in run-sprint
+# F-X061, Support staged dependency checkpoints in run-sprint
 
 **Status**: approved
 **Sprint**: S58
@@ -7,12 +7,12 @@
 
 ## Problem
 
-`/run-sprint` currently integrates every feature before full verification and
-defers release F-IDs to its final step. That works only when publication has no
-unfinished consumer in the same sprint. S58 requires `rpptx-v0.7.0` before
-F-198 and F-199 can start, and `v0.11.0` before F-X031 can start. The current
-workflow therefore deadlocks both dependency edges even though the state
-machine can already retain multiple HEAD-bound verification and review records.
+`/run-sprint` currently integrates every feature before finalising any delivery
+record. A later wave cannot start when its formal dependency is integrated but
+not completed. Release dependencies add a second requirement because real
+publication must also finish before their consumers start. The state machine
+can already retain multiple HEAD-bound verification and review records, but the
+command lacks the prefix-finalisation and resume route.
 
 Wave numbers alone cannot solve this. `/start-feature` correctly refuses an
 unfinished dependency, while `/release` correctly requires completed
@@ -22,7 +22,7 @@ HEAD.
 ## Spec reference
 
 - `docs/hld/12-testing-strategy.md`, workflow regression and HEAD-bound evidence.
-- `docs/hld/14-development-backlog.md`, "F-X061, Support staged release checkpoints in run-sprint".
+- `docs/hld/14-development-backlog.md`, "F-X061, Support staged dependency checkpoints in run-sprint".
 - `docs/hld/15-build-and-toolchain.md`, sprint automation, publication, and release process.
 - `.claude/WORKFLOW.md`, resumable sprint state and command authority.
 - `.claude/commands/run-sprint.md`, wave, verification, review, release, and finish sequence.
@@ -30,26 +30,30 @@ HEAD.
 
 ## Approach
 
-Add one concise dependency-release checkpoint route to the canonical
-`.claude/commands/run-sprint.md`. Trigger it when a release F-ID is a dependency
-of any unfinished story in the same sprint.
+Add concise ordinary and release dependency checkpoint routes to the canonical
+`.claude/commands/run-sprint.md`. Trigger a checkpoint whenever a later wave's
+formal dependency is integrated or reviewed but not completed.
 
-At a checkpoint:
+At an ordinary checkpoint:
 
 1. Integrate and fully verify the completed non-release dependency prefix.
 2. Finalise that prefix's delivery records, commit them, and repeat full
    verification plus sprint review at the new current HEAD.
-3. Return to implementation, then claim, implement, microscope, prepare, and
-   integrate the release F-ID.
-4. Run full verification and clean sprint review at the prepared release HEAD.
-5. Leave the release F-ID reviewed and in progress, invoke `/release`, and stop
-   for its mandatory separate final approval.
-6. After verified publication, finalise the release records, commit them, and
-   rerun full verification plus bounded sprint review at the evidence HEAD.
-7. Return the same sprint state to implementation and continue only the waves
-   whose dependencies are now completed.
+3. Commit the review record, record the clean verdict at the resulting HEAD,
+   and rerun full verification if that review-only commit changed HEAD. Do not
+   run a confirmation review after a clean pass.
+4. Return to implementation and continue only waves whose dependencies are now
+   completed.
 
-Repeat the route for each dependency release boundary. The ordinary final
+When the completed prefix enables a release F-ID, claim, implement, microscope,
+prepare, and integrate that release story. Run full verification and clean
+sprint review at the prepared release HEAD. Leave the release F-ID reviewed
+and in progress, invoke `/release`, and stop for its mandatory separate final
+approval. After verified publication, finalise the release records, commit
+them, rerun full verification plus bounded sprint review at the evidence HEAD,
+then return the same sprint state to implementation.
+
+Repeat the route for each dependency boundary. The ordinary final
 verification, review, close-preflight, and sprint push still run after all
 waves. Never treat an earlier checkpoint as closure evidence for a later HEAD.
 Never start an unfinished dependent story before publication is verified and
@@ -58,9 +62,9 @@ the release F-ID is completed.
 No new script command or state field is required. `set-phase` already permits
 the resumable phase sequence, and review and verification records already bind
 to their exact HEAD. Extend the existing state-machine regression to exercise
-two returns from review to implementation. Add a command-contract regression
-that requires the checkpoint trigger, ordered steps, separate release approval,
-HEAD-bound reruns, and final normal closure.
+ordinary and release returns from review to implementation. Add command
+contract regressions for an A to B to C dependency chain and for the additional
+release approval, publication, evidence rerun, and resume steps.
 
 Edit only the canonical command, its existing workflow test file, and the HLD
 files listed below. Regenerate `.agents/skills/run-sprint/SKILL.md` through
@@ -69,7 +73,7 @@ hand and do not add a new skill folder, module, or test binary.
 
 ## Rejected alternatives
 
-- Ignore unfinished release dependencies until sprint finish. The dependent feature cannot legally start.
+- Ignore unfinished dependencies until sprint finish. The dependent feature cannot legally start.
 - Mark an unpublished release F-ID completed. That weakens the real release gate into local preparation.
 - Split S58 after work has begun. The approved goal is one resumable S58 delivery record.
 - Add a second sprint state file. The repository requires exactly one shared state authority.
@@ -79,13 +83,14 @@ hand and do not add a new skill folder, module, or test binary.
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | `test_run_sprint_phase_sequence_is_accepted` | Two review-to-implementation returns remain resumable before final closure |
+| regression | `test_run_sprint_phase_sequence_is_accepted` | Ordinary and release review-to-implementation returns remain resumable before final closure |
+| workflow | `test_run_sprint_requires_dependency_checkpoints` | The canonical command completes A before B and B before C, then resumes later waves |
 | workflow | `test_run_sprint_requires_dependency_release_checkpoints` | The canonical command detects an unfinished consumer, orders prefix evidence and release approval, reruns evidence at changed HEADs, and resumes later waves |
 | workflow | release authority regression | Only `/release` creates release tags and every checkpoint retains separate immediate approval |
 | generated skill | `python3 scripts/sync_agent_skills.py --check` | The Codex adapter matches the canonical command SHA and content |
 
 The **test gate is regression**. The workflow contract and phase-state
-regression prove two verify-review-release checkpoints can return to
+regression prove ordinary and release dependency checkpoints can return to
 implementation before final close-preflight without weakening approval or
 HEAD-bound evidence.
 
@@ -112,7 +117,7 @@ text only. It must not edit render code, samples, or baselines.
 ## Implementation checklist
 
 - [ ] Add failing phase-sequence and command-contract regressions.
-- [ ] Add the dependency-release checkpoint route to the canonical command.
+- [ ] Add ordinary and release dependency checkpoint routes to the canonical command.
 - [ ] Preserve final verification, review, close-preflight, and sprint push.
 - [ ] Update exactly the three listed HLD files.
 - [ ] Regenerate and validate the `run-sprint` adapter.
@@ -121,5 +126,5 @@ text only. It must not edit render code, samples, or baselines.
 
 ## Open questions
 
-None. The user approved resumable release checkpoints inside the existing S58
-state and retained every separate `/release` approval boundary.
+None. The user approved resumable dependency checkpoints inside the existing
+S58 state and retained every separate `/release` approval boundary.
