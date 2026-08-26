@@ -9422,10 +9422,8 @@ at the 1,024 and 1,025 page boundary, and retained page frames use shared
 gate so it proves 1,000 initial page layouts and only one or two warm page
 layouts instead of accepting a zero-work false positive.
 
-**Spec sections touched.** `docs/hld/03-architecture.md`,
-`docs/hld/08-rendering-spec.md`, `docs/hld/12-testing-strategy.md`,
-`docs/hld/14-development-backlog.md`, and
-`docs/hld/15-build-and-toolchain.md`.
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/15-build-and-toolchain.md`.
 
 **Tests.** The engine and facade thousand-page restart regressions,
 substituted-page boundary equality, the existing locked F-201 release gate,
