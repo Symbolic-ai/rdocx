@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 4 | 1 | 2  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 66 | 56 | 2 | 6  |
-| **Total** | **313** | **249** | **6** | **56** |
+| X, Cross-cutting (opportunistic)            | 66 | 56 | 3 | 5  |
+| **Total** | **313** | **249** | **7** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -514,6 +514,6 @@ regenerated, never hand-edited.
 | F-X059 | Tag rpptx-v0.7.0                          | S58 | S | pending |
 | F-X060 | Tag v0.11.0                               | S58 | S | pending |
 | F-X061 | Support staged dependency checkpoints in run-sprint | S58 | S | done |
-| F-X062 | Reuse restart pagination with notes and headers | S58 | M | pending |
+| F-X062 | Reuse restart pagination with notes and headers | S58 | M | in-progress |
 | F-X063 | Avoid duplicate caller-font byte comparisons | S58 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
