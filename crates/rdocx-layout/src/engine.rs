@@ -459,6 +459,8 @@ pub struct Engine {
     last_rebuilt_page_range: Option<std::ops::Range<usize>>,
     #[cfg(test)]
     last_shared_block_counts: (usize, usize),
+    #[cfg(test)]
+    page_layout_invocations: usize,
 }
 
 #[derive(Clone, PartialEq)]
@@ -727,7 +729,7 @@ struct FieldSubstitutionInputs {
     revision_view: RevisionView,
 }
 
-const CACHE_MAX_ENTRIES: usize = 4_224;
+const CACHE_MAX_ENTRIES: usize = 5_216;
 const CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PARAGRAPH_CACHE_MAX_ENTRIES: usize = 4_096;
 const PARAGRAPH_CACHE_MAX_BYTES: usize = 50 * 1024 * 1024;
@@ -735,7 +737,7 @@ const TABLE_CACHE_MAX_ENTRIES: usize = 32;
 const TABLE_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const HEADER_FOOTER_CACHE_MAX_ENTRIES: usize = 64;
 const HEADER_FOOTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
-const RESTART_CACHE_MAX_ENTRIES: usize = 32;
+const RESTART_CACHE_MAX_ENTRIES: usize = 1_024;
 const RESTART_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const CALLER_ALIAS_MAX_ENTRIES: usize = 256;
 const CALLER_ALIAS_MAX_RETAINED_BYTES: usize = 64 * 1024;
@@ -743,7 +745,7 @@ const _: () = assert!(PARAGRAPH_CACHE_MAX_ENTRIES == 4_096);
 const _: () = assert!(PARAGRAPH_CACHE_MAX_BYTES == 50 * 1024 * 1024);
 const _: () = assert!(HEADER_FOOTER_CACHE_MAX_ENTRIES == 64);
 const _: () = assert!(HEADER_FOOTER_CACHE_MAX_BYTES == 4 * 1024 * 1024);
-const _: () = assert!(CACHE_MAX_ENTRIES == 4_224);
+const _: () = assert!(CACHE_MAX_ENTRIES == 5_216);
 const _: () = assert!(CACHE_MAX_BYTES == 64 * 1024 * 1024);
 const _: () = assert!(
     PARAGRAPH_CACHE_MAX_ENTRIES
@@ -849,6 +851,8 @@ impl Engine {
             last_rebuilt_page_range: None,
             #[cfg(test)]
             last_shared_block_counts: (0, 0),
+            #[cfg(test)]
+            page_layout_invocations: 0,
         }
     }
 
@@ -966,6 +970,7 @@ impl Engine {
             self.pending_table_cache_peak_bytes = 0;
             self.pending_header_footer_cache_peak_entries = 0;
             self.pending_header_footer_cache_peak_bytes = 0;
+            self.page_layout_invocations = 0;
         }
 
         let result = self.layout_transaction(input, sources, has_wrapping_drawing);
@@ -1349,6 +1354,10 @@ impl Engine {
                 restart_checkpoint,
                 tail_source.map(|(stop, _)| stop),
             );
+            #[cfg(test)]
+            {
+                self.page_layout_invocations = recorded.pages.len();
+            }
             for page in &mut recorded.pages {
                 mark_remaining_artifacts(&mut page.elements);
             }
@@ -1422,6 +1431,10 @@ impl Engine {
         } else {
             let (mut pages, outlines) =
                 paginator::paginate_shared_sections(&sections, &self.font_manager, &media, &notes);
+            #[cfg(test)]
+            {
+                self.page_layout_invocations = pages.len();
+            }
             // Endnotes read at the end of the document, so they follow the last
             // body page rather than sitting at the foot of their reference's page.
             paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
@@ -1903,6 +1916,11 @@ impl Engine {
     #[cfg(test)]
     fn hot_path_work_counts(&self) -> (usize, usize) {
         (self.body_debug_work, self.retained_page_deep_copies)
+    }
+
+    #[cfg(test)]
+    fn page_layout_invocation_count(&self) -> usize {
+        self.page_layout_invocations
     }
 
     fn publish_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
@@ -8658,9 +8676,9 @@ mod tests {
         );
         assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
 
-        let mut oversized = make_input_with_text("");
-        oversized.document.body.content.clear();
-        for page in 0..=RESTART_CACHE_MAX_ENTRIES {
+        let mut bounded_input = make_input_with_text("");
+        bounded_input.document.body.content.clear();
+        for page in 0..1_024 {
             let mut paragraph = CT_P::new();
             paragraph.properties = Some(CT_PPr {
                 page_break_before: (page > 0).then_some(true),
@@ -8669,13 +8687,33 @@ mod tests {
             let mut run = CT_R::new("");
             run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
             paragraph.runs.push(run);
-            oversized.document.body.add_paragraph(paragraph);
+            bounded_input.document.body.add_paragraph(paragraph);
         }
         let mut bounded = Engine::new_deterministic().expect("bundled fonts load");
         let result = bounded
+            .layout(&bounded_input)
+            .expect("bounded layout succeeds");
+        assert_eq!(result.pages.len(), 1_024);
+        let retained = bounded
+            .restart_cache
+            .as_ref()
+            .expect("1,024 substituted page slots remain reusable");
+        assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
+
+        let mut oversized = bounded_input;
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            page_break_before: Some(true),
+            ..Default::default()
+        });
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
+        paragraph.runs.push(run);
+        oversized.document.body.add_paragraph(paragraph);
+        let result = bounded
             .layout(&oversized)
             .expect("oversized layout succeeds");
-        assert_eq!(result.pages.len(), RESTART_CACHE_MAX_ENTRIES + 1);
+        assert_eq!(result.pages.len(), 1_025);
         assert!(
             bounded.restart_cache.is_none(),
             "an oversized pair set drops the optimization"
@@ -8762,6 +8800,51 @@ mod tests {
                     }));
             });
         }
+    }
+
+    #[test]
+    fn thousand_page_restart_records_at_most_two_page_layout_invocations() {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        for page in 0..1_000 {
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                page_break_before: (page > 0).then_some(true),
+                ..Default::default()
+            });
+            paragraph.add_run(&format!("Incremental page {}", page + 1));
+            input.document.body.add_paragraph(paragraph);
+        }
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("initial thousand-page layout");
+        assert_eq!(initial.pages.len(), 1_000);
+        assert_eq!(engine.page_layout_invocation_count(), 1_000);
+        engine
+            .restart_cache
+            .as_ref()
+            .expect("thousand-page restart record retained");
+        let cache_counts = engine.paragraph_cache_counts();
+
+        set_body_paragraph_text(&mut input, 499, "Incremental page 500 changed");
+        let warm = engine.layout(&input).expect("warm thousand-page layout");
+        assert!((1..=2).contains(&engine.page_layout_invocation_count()));
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh thousand-page layout");
+        assert_layout_results_equal(&warm, &fresh);
+        let rebuilt = engine
+            .last_rebuilt_page_range
+            .clone()
+            .expect("rebuilt range recorded");
+        assert!(
+            rebuilt.end.saturating_sub(rebuilt.start) <= 2,
+            "{rebuilt:?}"
+        );
+        let warm_cache_counts = engine.paragraph_cache_counts();
+        assert_eq!(warm_cache_counts.0 - cache_counts.0, 999);
+        assert_eq!(warm_cache_counts.1 - cache_counts.1, 1);
     }
 
     #[test]

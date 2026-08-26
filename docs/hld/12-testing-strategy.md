@@ -344,7 +344,7 @@ the independently pinned 4,096-entry and 50 MiB paragraph limits. Cacheable
 active paragraph and table blocks share immutable cache payloads through a
 private representation. Warm and fresh results must retain exact pages,
 structure, provenance, and nested table paths while public block APIs remain
-unchanged. Compile-time checks also pin the 4,224-entry and 64 MiB combined
+unchanged. Compile-time checks also pin the 5,216-entry and 64 MiB combined
 envelope.
 
 The restart-pagination regression gate compares warm edits at the start,
@@ -356,6 +356,14 @@ rebuilt range. Insertions and deletions have the same complete-equality check.
 Multi-section content, tables, split paragraphs, floating drawings, note
 continuations, keep constraints, headers, footers, backgrounds, and mismatched
 boundary state must use the full paginator.
+
+The incremental-layout scale gate builds 1,000 one-page paragraphs through the
+public deterministic bundled-fallback facade, edits paragraph 500, and compares
+the warm result with a fresh layout. It requires exactly 1,000 pages, at most
+two warm page-layout invocations, at least 998 retained page-frame `Arc`
+identities, 999 paragraph-cache hits, one paragraph build, and complete result
+equality. The paired engine gate requires a 1,024-page restart record to remain
+within 8 MiB and a 1,025-page record to fall back safely.
 
 The substituted-page regression gate proves that unchanged PAGE, NUMPAGES, and
 PAGEREF pages reuse their prior substituted frame only through pristine `Arc`
@@ -401,9 +409,9 @@ shrunk per-paragraph font traces, and both pending and published block queues.
 Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
-must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096
+must stay within 5,216 entries and 64 MiB, with paragraph state capped at 4,096
 entries and 50 MiB, table state capped at 32 entries and 2 MiB, header and
-footer state capped at 64 entries and 4 MiB, and restart state capped at 32
+footer state capped at 64 entries and 4 MiB, and restart state capped at 1,024
 entries and 8 MiB. Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,

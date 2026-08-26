@@ -212,6 +212,60 @@ fn a_thousand_page_document_paginates_and_renders_within_the_declared_limits() {
 }
 
 #[test]
+fn editing_one_paragraph_of_a_thousand_page_document_rebuilds_at_most_two_pages() {
+    fn thousand_page_document() -> Document {
+        let mut document = Document::new();
+        for page in 0..1_000 {
+            document
+                .add_paragraph(&format!("Incremental page {}", page + 1))
+                .page_break_before(page > 0);
+        }
+        document
+    }
+
+    let mut warm_document = thousand_page_document();
+    let initial = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("initial deterministic thousand-page layout");
+    assert_eq!(initial.layout.pages.len(), 1_000);
+
+    warm_document
+        .paragraph_mut(499)
+        .expect("paragraph 500")
+        .run_mut(0)
+        .expect("paragraph text run")
+        .set_text("Incremental page 500 changed");
+    let warm = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("warm deterministic thousand-page layout");
+
+    let mut fresh_document = thousand_page_document();
+    fresh_document
+        .paragraph_mut(499)
+        .expect("paragraph 500")
+        .run_mut(0)
+        .expect("paragraph text run")
+        .set_text("Incremental page 500 changed");
+    let fresh = fresh_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("fresh deterministic thousand-page layout");
+
+    assert_eq!(warm.layout.pages.len(), 1_000);
+    assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+    let retained_pages = warm
+        .layout
+        .pages
+        .iter()
+        .zip(&initial.layout.pages)
+        .filter(|(current, retained)| Arc::ptr_eq(current, retained))
+        .count();
+    assert!(
+        retained_pages >= 998,
+        "expected at least 998 retained page frames, got {retained_pages}"
+    );
+}
+
+#[test]
 fn unsupported_html_css_is_diagnosed_without_dropping_supported_siblings() {
     let parsed = Document::from_html(
         "<!doctype html><html><head><link rel='STYLESHEET' href='external.css'><script>head()</script><style>@media print { p { color: red } } p:hover { color: blue } p { color: rgb(1, 2, 3); made-up: yes }</style></head><body><p>before<blink style='unknown-value: yes'>kept</blink>after<a href='https://example.invalid'>link</a><img alt='picture'><script>ignored()</script><input value='field'><iframe>frame</iframe></p><form>form text</form><p><b><i>repaired</b></p></body></html>",

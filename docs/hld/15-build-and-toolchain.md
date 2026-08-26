@@ -81,10 +81,15 @@ path.
 
 Reusable managers bound shaping to 2,048 entries and 16 MiB, file bytes to 256
 entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
-entry ceilings. The reusable Word engine bounds both pending and published
-paragraph entries at 256 entries and 16 MiB with retained-capacity accounting.
-These caches add no feature flag or dependency and remain available in the
-default-off graphs without enabling host discovery.
+entry ceilings. The reusable Word engine bounds paragraph state at 4,096
+entries and 50 MiB, table state at 32 entries and 2 MiB, header and footer state
+at 64 entries and 4 MiB, and aligned restart page and checkpoint state at 1,024
+entries and 8 MiB. Its aggregate retained state stays within 5,216 entries and
+64 MiB. Both pending and published queues use retained-capacity accounting.
+The thousand-page incremental gate exercises the deterministic bundled-fallback
+facade and requires a middle edit to paginate at most two pages while matching
+a fresh layout exactly. These caches add no feature flag or dependency and
+remain available in the default-off graphs without enabling host discovery.
 
 `rpptx-render::layout_presentation_deterministic` applies the same rule to a
 whole presentation. It shares page lowering with

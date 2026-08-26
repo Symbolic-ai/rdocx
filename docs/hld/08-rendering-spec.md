@@ -689,10 +689,10 @@ VML watermarks remain reusable because the part, complete section geometry,
 resolved media bytes, and reusable context are all authoritative identity
 inputs.
 
-Retained block and restart state share a 4,224-entry and 64 MiB ceiling.
+Retained block and restart state share a 5,216-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 50 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
-aligned restart page and checkpoint slots receive 32 entries and 8 MiB. The
+aligned restart page and checkpoint slots receive 1,024 entries and 8 MiB. The
 published and transaction-pending queues enforce the same partitions using
 retained-capacity accounting for owned keys, resolved part bytes, rows, cells,
 recursive cell blocks, watermark media, diagnostics, font traces, and reflow
@@ -731,9 +731,17 @@ page number, total-page count, sorted bookmark targets, font trace, revision
 view, and every substitution input compare equal. Field-free output shares its
 pristine `Arc` directly. Field-bearing blocks still receive no pagination
 checkpoint, so this optimization cannot widen the restart-safe region. Page
-pairs and checkpoints occupy aligned slots inside the 32-entry partition, and
+pairs and checkpoints occupy aligned slots inside the 1,024-entry partition, and
 all pair payloads and exact inputs count toward its 8 MiB ceiling. A mismatch
 reshapes the page. A bound failure drops the whole restart record.
+
+A thousand-page document with one safe page-boundary paragraph per page keeps
+the complete restart record under these limits. Editing paragraph 500 through
+the deterministic bundled-fallback facade paginates at most two pages, retains
+at least 998 prior page-frame `Arc` identities, and produces a warm result that
+equals a fresh layout exactly. The edit yields 999 paragraph-cache hits and one
+paragraph build. A 1,025-page record exceeds the slot ceiling and uses the safe
+full-pagination path.
 
 `Document::transfer_reusable_layout_from` builds the receiver input before it
 takes anything. It moves the source's normal engine only when that complete

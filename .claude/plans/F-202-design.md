@@ -1,6 +1,6 @@
 # F-202, Incremental layout
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: L
 **Depends on**: F-201
@@ -98,16 +98,16 @@ declared hyphenation delta.
 
 ## Implementation checklist
 
-- [ ] Raise restart slots to 1,024 and aggregate slots to 5,216.
-- [ ] Keep restart bytes at 8 MiB and aggregate bytes at 64 MiB.
-- [ ] Add private test-only page-layout invocation accounting.
-- [ ] Add the exact thousand-page engine regression.
-- [ ] Add the public deterministic bundled-fallback facade regression.
-- [ ] Update the oversized restart fallback regression for 1,025 pages.
-- [ ] Prove warm and fresh complete equality and retained `Arc` identity.
-- [ ] Re-run the unchanged F-201 release performance gate.
-- [ ] Run scoped checks, full verification, and the unchanged hash harness.
-- [ ] Update exactly the three listed HLD files.
+- [x] Raise restart slots to 1,024 and aggregate slots to 5,216.
+- [x] Keep restart bytes at 8 MiB and aggregate bytes at 64 MiB.
+- [x] Add private test-only page-layout invocation accounting.
+- [x] Add the exact thousand-page engine regression.
+- [x] Add the public deterministic bundled-fallback facade regression.
+- [x] Update the oversized restart fallback regression for 1,025 pages.
+- [x] Prove warm and fresh complete equality and retained `Arc` identity.
+- [x] Re-run the unchanged F-201 release performance gate.
+- [x] Run scoped checks, full verification, and the unchanged hash harness.
+- [x] Update exactly the three listed HLD files.
 
 ## Open questions
 
