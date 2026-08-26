@@ -9550,3 +9550,48 @@ reported zero defects and zero smells.
 and length checks or a full-input hash. Any new warm path must prove the font
 manager has already accepted the exact bytes before using the font-elided
 retained-context comparison.
+
+### F-X058, Shared multilingual text substrate
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The shared layout family now provides additive multilingual
+shaping, cluster-safe line breaking, conditional hyphenation, paragraph
+direction, and line-local bidi ordering. DrawingML direction reaches the rich
+PowerPoint path, and PDF, raster, and SVG consume validated positioned glyphs
+while preserving logical searchable text. Deterministic Noto Arabic,
+Devanagari, Thai, and reproducibly subset CJK fonts include complete licence
+and provenance records.
+
+**Non-obvious choices.** Existing exhaustive public structs and legacy Latin
+entry points keep their exact shapes and behavior. New direction information
+travels through a sibling sidecar. Rich shaping is paragraph-wide across
+forced breaks, line layout applies UAX 9 L1 before L2, and malformed public
+rich runs fail safely in every backend.
+
+**Deviations from the design plan.** Six microscope passes tightened the
+approved implementation without changing scope. Remediation preserved legacy
+struct literals, moved direction to an additive carrier, made bidi resolution
+paragraph-wide, applied line-local whitespace resets at cluster granularity,
+and aligned SVG validation with PDF and raster. The final pass reported zero
+defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/11-migration-plan.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The conditional-hyphen, Arabic, Indic, Thai, CJK, bidi,
+DrawingML-direction, rich PowerPoint output, legacy source-compatibility, and
+font-inventory regressions pass. Full workspace tests, no-default layout, both
+WASM targets, rustdoc, 27 README inventories, the exact 22-package dry run,
+archive limits, and cargo-deny also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-X059 must publish the complete 0.7.0 shared
+family before stable Word consumers opt into this rich path. F-198 owns the
+first declared rendering-baseline movement.

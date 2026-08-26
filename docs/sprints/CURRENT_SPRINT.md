@@ -33,7 +33,7 @@ protection at the reviewed sprint SHA.
 | F-X061 | Support staged dependency checkpoints in run-sprint | S | done | - |
 | F-X062 | Reuse restart pagination with notes and headers | M | done | - |
 | F-X063 | Avoid duplicate caller-font byte comparisons | S | done | - |
-| F-X058 | Shared multilingual text substrate | L | in-progress | codex |
+| F-X058 | Shared multilingual text substrate | L | done | - |
 | F-X059 | Tag rpptx-v0.7.0 | S | pending | - |
 | F-X064 | Accept whole-valued decimal table measurements | S | pending | - |
 | F-X065 | Expose tracked table grid changes | S | pending | - |
