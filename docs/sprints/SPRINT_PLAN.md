@@ -1060,6 +1060,7 @@ the advanced spreadsheet programme begins.
 | F-199 | Complex script shaping | L |
 | F-200 | Vertical and bidirectional text | M |
 | F-202 | Incremental layout | L |
+| F-X061 | Support staged release checkpoints in run-sprint | S |
 | F-X058 | Shared multilingual text substrate | L |
 | F-X059 | Tag rpptx-v0.7.0 | S |
 | F-X060 | Tag v0.11.0 | S |
@@ -1069,11 +1070,12 @@ F-198 changes line breaking and therefore every line after the first hyphenated
 one, so it lands after the corpus exists to measure it. Expect a declared hash
 harness delta, and expect it to be large.
 
-F-X058 establishes the complete shared text contract needed by F-198, F-199,
-and F-200. F-X059 publishes that contract as the incubating 0.7.0 family before
-the stable Word consumers verify against crates.io. F-X060 publishes the
-settled stable family at 0.11.0 after every S58 product story completes. Each
-release retains the separate final approval required by `/release`.
+F-X061 makes dependency release checkpoints resumable inside one sprint.
+F-X058 then establishes the complete shared text contract needed by F-198,
+F-199, and F-200. F-X059 publishes that contract as the incubating 0.7.0 family
+before the stable Word consumers verify against crates.io. F-X060 publishes
+the settled stable family at 0.11.0 after every S58 product story completes.
+Each release retains the separate final approval required by `/release`.
 
 F-X031 remains at the non-spreadsheet boundary. F-X029 creates the stable
 repository-side `ci-gate` in S44. This operational story makes it a required

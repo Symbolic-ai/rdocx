@@ -3259,7 +3259,7 @@ deterministic multilingual fonts and legal files without changing legacy Latin
 output. Stable Word property parsing, facade authoring, and final Word oracle
 acceptance remain in F-198, F-199, and F-200.
 
-**Depends on**: F-196, F-197.
+**Depends on**: F-196, F-197, F-X061.
 **Test gate**: regression. Shared deterministic tests prove conditional
 hyphens, exact logical source spans, cluster-safe Arabic and Indic shaping,
 Thai and CJK breaking, bidi visual order, searchable logical text, and
@@ -3295,6 +3295,24 @@ against incubating 0.7.0 dependencies, their owners match the authenticated
 registry inventory, the annotated tag targets the reviewed SHA, the GitHub
 release body is byte-identical to the reviewed notes, and every selected
 external record receives its reviewed notification.
+
+### F-X061, Support staged release checkpoints in run-sprint (S)
+
+`/run-sprint` currently defers every release F-ID until all feature branches
+are integrated. That deadlocks a sprint when an unfinished story depends on a
+real publication, because the dependent story cannot start and the release
+cannot reach its final verification and review boundary. Add a resumable
+checkpoint route that completes and records the dependency prefix, prepares
+and publishes the release F-ID with its separate approval, then returns the
+same sprint state to implementation for later waves. Preserve HEAD-bound full
+verification and review at every release SHA and again after release evidence
+changes the tracked record.
+
+**Depends on**: none.
+**Test gate**: regression. The workflow contract and phase-state regression
+prove two verify-review-release checkpoints can return to implementation before
+the final close-preflight, without weakening release approval or HEAD-bound
+evidence.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

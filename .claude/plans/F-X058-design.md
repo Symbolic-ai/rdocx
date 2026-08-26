@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S58
 **Size**: L
-**Depends on**: F-196, F-197
+**Depends on**: F-196, F-197, F-X061
 
 ## Problem
 
