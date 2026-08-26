@@ -30,7 +30,7 @@ protection at the reviewed sprint SHA.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X058 | Shared multilingual text substrate | L | pending | - |
+| F-X058 | Shared multilingual text substrate | L | in-progress | codex |
 | F-X059 | Tag rpptx-v0.7.0 | S | pending | - |
 | F-198 | Hyphenation | L | in-progress | codex |
 | F-199 | Complex script shaping | L | pending | - |
