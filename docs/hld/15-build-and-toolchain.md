@@ -384,6 +384,23 @@ approval immediately before the first mutation. `/release` pushes only the
 requested tag. `/close-sprint` remains the only command allowed to merge
 `main` or create an `sNN` tag.
 
+When a later sprint wave depends on an integrated and reviewed F-ID that is not
+completed, `/run-sprint` uses a resumable dependency-prefix checkpoint before
+that consumer. It verifies and completes the prefix, commits the clean review
+file, records review at the resulting HEAD, reruns full verification, and
+returns the same state to implementation. It does not add a confirmation review
+solely because the review file was committed. A release dependency extends the
+ordinary route with preparation, exact-HEAD review, publication through
+`/release`, separate approval, and verified publication evidence. Full
+verification repeats after every tracked evidence commit and again over the
+final integrated sprint. Earlier checkpoint evidence never satisfies a later
+HEAD.
+
+`sprint_workflow.py init --resume` treats `CURRENT_SPRINT.md` as the canonical
+source for each F-ID's title and size. It refreshes those fields and adds newly
+listed F-IDs while preserving the existing phase, feature state, owner, wave,
+worker handoff, review, and verification records.
+
 The requested tag starts `publish.yml`. Its Linux runner reproduces the
 deterministic hash baseline, release metadata check, and full workspace dry run
 before crates.io publication begins. Success requires every package in the

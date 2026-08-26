@@ -3298,20 +3298,23 @@ external record receives its reviewed notification.
 
 ### F-X061, Support staged dependency checkpoints in run-sprint (S)
 
-`/run-sprint` currently finalises delivery records only after all feature
-branches are integrated. That deadlocks any later wave whose formal dependency
-is integrated but not yet completed, including a dependency that requires real
-publication. Add a resumable checkpoint route that completes and records each
-required dependency prefix, then returns the same sprint state to
-implementation. Release checkpoints add preparation, separate approval,
-publication, and post-release evidence before that return. Preserve HEAD-bound
-full verification and review at every checkpoint.
+`/run-sprint` detects when a later wave depends on an integrated and reviewed
+F-ID that is not completed, then uses a resumable checkpoint before that
+consumer. The route verifies and completes the dependency prefix, commits its
+clean review evidence, records review at that resulting HEAD, reruns full
+verification, and returns the same sprint state to implementation. A release
+dependency extends that route with preparation, publication, and its separate
+approval. Review evidence remains bound to the prefix, prepared release,
+post-publication evidence, and final closure HEADs without a self-confirming
+review loop. Resuming an existing run refreshes canonical title and size
+metadata and discovers new F-IDs without discarding state, ownership, worker,
+review, or verification facts.
 
 **Depends on**: none.
-**Test gate**: regression. The workflow contract and phase-state regression
-prove ordinary and release dependency checkpoints can return to implementation
-before final close-preflight without weakening release approval or HEAD-bound
-evidence.
+**Test gate**: regression. The workflow contracts, A to B to C state regression,
+and phase regression prove ordinary and release dependency checkpoints can
+return to implementation before the final close-preflight without weakening
+release approval or HEAD-bound evidence.
 
 ### F-X062, Reuse restart pagination with notes and headers (M)
 

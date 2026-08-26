@@ -4170,6 +4170,94 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(saved["features"], {})
             self.assertEqual(saved["phase"], "design")
 
+    def test_init_resume_refreshes_feature_metadata_without_losing_progress(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current = root / "CURRENT_SPRINT.md"
+            scratch = root / "scratch"
+            current.write_text(
+                "# Current Sprint, S11\n\n"
+                "| F-ID | Title | Size | Status | Owner |\n"
+                "|---|---|---|---|---|\n"
+                "| F-001 | Refreshed title | M | in-progress | claude |\n"
+                "| F-002 | Newly added | S | pending | - |\n",
+                encoding="utf-8",
+            )
+            existing = {
+                "schema_version": workflow.SCHEMA_VERSION,
+                "sprint": "S11",
+                "phase": "implementation",
+                "max_review_passes": 3,
+                "max_workers": 2,
+                "features": {
+                    "F-001": {
+                        "state": "reviewed",
+                        "size": "S",
+                        "title": "Original title",
+                        "owner": "codex",
+                        "wave": 2,
+                        "branch": "work/f-001-codex",
+                        "worktree": "/private/tmp/f-001",
+                        "head": "abc123",
+                        "handoff": "consumed",
+                        "integration_commit": "def456",
+                    }
+                },
+                "reviews": [{"pass": 1, "blocking": 0, "head": "def456"}],
+                "verifications": [
+                    {"scope": "full", "passed": True, "head": "def456"}
+                ],
+            }
+            scratch.mkdir()
+            (scratch / "S11-run.json").write_text(
+                json.dumps(existing), encoding="utf-8"
+            )
+            args = argparse.Namespace(
+                sprint="S11",
+                resume=True,
+                force=False,
+                max_review_passes=4,
+                max_workers=3,
+            )
+
+            with (
+                patch.object(workflow, "CURRENT_SPRINT", current),
+                patch.object(workflow, "SCRATCH", scratch),
+            ):
+                workflow.cmd_init(args)
+
+            saved = json.loads((scratch / "S11-run.json").read_text(encoding="utf-8"))
+            refreshed = saved["features"]["F-001"]
+            self.assertEqual(refreshed["title"], "Refreshed title")
+            self.assertEqual(refreshed["size"], "M")
+            for field in (
+                "state",
+                "owner",
+                "wave",
+                "branch",
+                "worktree",
+                "head",
+                "handoff",
+                "integration_commit",
+            ):
+                self.assertEqual(refreshed[field], existing["features"]["F-001"][field])
+            self.assertEqual(saved["reviews"], existing["reviews"])
+            self.assertEqual(saved["verifications"], existing["verifications"])
+            self.assertEqual(saved["phase"], "implementation")
+            self.assertEqual(saved["max_review_passes"], 4)
+            self.assertEqual(saved["max_workers"], 3)
+            self.assertEqual(
+                saved["features"]["F-002"],
+                {
+                    "state": "pending",
+                    "size": "S",
+                    "title": "Newly added",
+                    "owner": None,
+                },
+            )
+
     def test_empty_sprint_without_validation_marker_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             current = Path(directory) / "CURRENT_SPRINT.md"
@@ -5071,6 +5159,124 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertNotEqual(mutated, release)
         with self.assertRaises(AssertionError):
             self.assertIn("The 22 patches keep packaged", " ".join(mutated.split()))
+
+    def assert_run_sprint_dependency_release_checkpoint_contract(
+        self, run_sprint: str
+    ) -> None:
+        normalized = " ".join(run_sprint.split())
+        checkpoint = run_sprint[
+            run_sprint.index("#### Release dependency extension") :
+            run_sprint.index("## 5. Integrate")
+        ]
+
+        self.assertIn(
+            "a release F-ID is a dependency of any unfinished story in the same sprint",
+            normalized,
+        )
+        ordered_steps = (
+            "Prepare and integrate the release F-ID",
+            "Run `/verify --full` and `/sprint-review`",
+            "Follow `/release <tag>`",
+            "Finalise the release F-ID's delivery records",
+            "Return the phase to `implementation` again",
+        )
+        positions = tuple(checkpoint.index(step) for step in ordered_steps)
+        self.assertEqual(positions, tuple(sorted(positions)))
+        self.assertIn("separate final approval", checkpoint)
+        self.assertGreaterEqual(checkpoint.count("current HEAD"), 2)
+        self.assertIn("Never use checkpoint evidence for final closure", checkpoint)
+        self.assertIn("close-preflight SNN", run_sprint)
+
+    def assert_run_sprint_dependency_prefix_checkpoint_contract(
+        self, run_sprint: str
+    ) -> None:
+        normalized = " ".join(run_sprint.split())
+        checkpoint = run_sprint[
+            run_sprint.index("### Dependency-prefix checkpoint") :
+            run_sprint.index("#### Release dependency extension")
+        ]
+
+        self.assertIn(
+            "a formal dependency is integrated and `reviewed` but not `completed`",
+            normalized,
+        )
+        ordered_steps = (
+            "Integrate the prepared dependency prefix",
+            "Run `/verify --full`",
+            "Finalise the reviewed non-release prefix",
+            "Commit the clean review file",
+            "record the clean review at the resulting HEAD",
+            "Rerun `/verify --full` because the review commit changed HEAD",
+            "Return the phase to `implementation`",
+        )
+        positions = tuple(checkpoint.index(step) for step in ordered_steps)
+        self.assertEqual(positions, tuple(sorted(positions)))
+        self.assertIn("Do not run a confirmation review", checkpoint)
+        self.assertIn("Do not claim the dependent wave", checkpoint)
+        self.assertIn("Pass numbering remains global", checkpoint)
+        self.assertIn("at most the configured review-pass bound", checkpoint)
+        self.assertIn("scheduled dependency-prefix boundary", checkpoint)
+
+    def test_run_sprint_requires_ordinary_dependency_prefix_checkpoints(self) -> None:
+        run_sprint = (workflow.REPO / ".claude/commands/run-sprint.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_run_sprint_dependency_prefix_checkpoint_contract(run_sprint)
+
+        mutations = {
+            "missing-trigger": run_sprint.replace(
+                "dependency is integrated and `reviewed` but not `completed`",
+                "a formal dependency exists",
+                1,
+            ),
+            "missing-review-commit": run_sprint.replace(
+                "Commit the clean review file", "Leave the review file uncommitted", 1
+            ),
+            "confirmation-review": run_sprint.replace(
+                "Do not run a confirmation review",
+                "Run a confirmation review",
+                1,
+            ),
+            "missing-checkpoint-review-bound": run_sprint.replace(
+                "at most the configured review-pass bound",
+                "an unlimited number of review passes",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, run_sprint, name)
+            with self.subTest(name=name), self.assertRaises(
+                (AssertionError, ValueError)
+            ):
+                self.assert_run_sprint_dependency_prefix_checkpoint_contract(mutated)
+
+    def test_run_sprint_requires_dependency_release_checkpoints(self) -> None:
+        run_sprint = (workflow.REPO / ".claude/commands/run-sprint.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_run_sprint_dependency_release_checkpoint_contract(run_sprint)
+
+        mutations = {
+            "missing-trigger": run_sprint.replace(
+                "a release F-ID is a dependency of any unfinished story in the same sprint",
+                "a release F-ID is ready",
+                1,
+            ),
+            "missing-approval": run_sprint.replace(
+                "separate final approval", "release approval", 1
+            ),
+            "missing-final-evidence-boundary": run_sprint.replace(
+                "Never use checkpoint evidence for final closure",
+                "Checkpoint evidence is reusable for final closure",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, run_sprint, name)
+            with self.subTest(name=name), self.assertRaises(
+                (AssertionError, ValueError)
+            ):
+                self.assert_run_sprint_dependency_release_checkpoint_contract(mutated)
 
     def assert_release_command_notes_contract(self, release: str) -> None:
         preflight = release[release.index("## Preconditions") : release.index("## Final approval")]
@@ -6194,11 +6400,75 @@ Pedro Assumpcao and the rdocx maintainers.
                     "integration",
                     "verification",
                     "review",
+                    "implementation",
+                    "integration",
+                    "verification",
+                    "review",
+                    "implementation",
+                    "integration",
+                    "verification",
+                    "review",
                     "ready_to_close",
                 ):
                     workflow.cmd_set_phase(argparse.Namespace(sprint="S01", phase=phase))
                     saved = json.loads((scratch / "S01-run.json").read_text(encoding="utf-8"))
                     self.assertEqual(saved["phase"], phase)
+
+    def test_run_sprint_ordinary_dependency_chain_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            state = {
+                "schema_version": workflow.SCHEMA_VERSION,
+                "sprint": "S01",
+                "phase": "implementation",
+                "features": {
+                    fid: {
+                        "state": "approved",
+                        "size": "S",
+                        "title": title,
+                        "owner": "codex",
+                    }
+                    for fid, title in (
+                        ("F-001", "A"),
+                        ("F-002", "B depends on A"),
+                        ("F-003", "C depends on B"),
+                    )
+                },
+                "reviews": [],
+                "verifications": [],
+            }
+            (scratch / "S01-run.json").write_text(json.dumps(state), encoding="utf-8")
+
+            def mark(fid: str, feature_state: str) -> None:
+                workflow.cmd_mark_feature(
+                    argparse.Namespace(
+                        sprint="S01",
+                        fid=fid,
+                        state=feature_state,
+                        owner=None,
+                        clear_owner=feature_state == "completed",
+                    )
+                )
+
+            with patch.object(workflow, "SCRATCH", scratch):
+                for fid in ("F-001", "F-002"):
+                    mark(fid, "running")
+                    mark(fid, "reviewed")
+                    for phase in ("integration", "verification", "review"):
+                        workflow.cmd_set_phase(
+                            argparse.Namespace(sprint="S01", phase=phase)
+                        )
+                    mark(fid, "completed")
+                    workflow.cmd_set_phase(
+                        argparse.Namespace(sprint="S01", phase="implementation")
+                    )
+                mark("F-003", "running")
+
+            saved = json.loads((scratch / "S01-run.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["features"]["F-001"]["state"], "completed")
+            self.assertEqual(saved["features"]["F-002"]["state"], "completed")
+            self.assertEqual(saved["features"]["F-003"]["state"], "running")
+            self.assertEqual(saved["phase"], "implementation")
 
     def test_completed_feature_requires_every_delivery_record(self) -> None:
         with tempfile.TemporaryDirectory(dir=workflow.REPO) as directory:

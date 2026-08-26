@@ -85,6 +85,26 @@ mutation tests pin the inventory, approval-report, and post-publication
 notification requirements. After the release body verifies byte for byte, the
 release records the comment URL posted to each included issue and pull request.
 
+The sprint-workflow regression also covers ordinary and release dependencies
+inside one sprint. An A to B to C regression requires each reviewed dependency
+prefix to complete before its consumer starts, then returns the same state to
+implementation. Each checkpoint commits its clean review file, records review
+at that resulting HEAD, and repeats full verification because the evidence
+commit changed HEAD. It does not create a confirmation review solely for that
+review-file commit. Release cases extend the ordinary checkpoint with prepared
+release and post-publication evidence HEADs plus separate immediate approval.
+The ordinary final gate remains bound to the latest integrated HEAD. Review
+pass numbers remain global, but each scheduled evidence boundary has its own
+bounded remediation loop. Passing the global counter limit solely because
+earlier boundaries finished clean uses the recorded extension path and does not
+weaken the current boundary's limit.
+
+The resume regression changes an existing F-ID's canonical title and size and
+adds another story after run state exists. Reinitialisation with `--resume`
+must refresh those two metadata fields and discover the new F-ID while
+preserving phase, feature state, owner, wave, worker evidence, review records,
+and verification records.
+
 The Word field regression matrix records Microsoft Word 16.104 build
 16.104.25121423 with an en-US locale, Gregorian calendar, period decimal
 separator, comma grouping separator, and UTC clock context. Its readable
