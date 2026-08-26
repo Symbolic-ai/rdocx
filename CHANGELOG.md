@@ -2,7 +2,62 @@
 
 ## Unreleased
 
-No changes have been recorded since the v0.10.1 preparation.
+No changes have been recorded since the rpptx-v0.7.0 preparation.
+
+## rpptx-v0.7.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family adds one complete multilingual text
+substrate for the later Word hyphenation, complex-script, and bidirectional
+layout stories. Conditional hyphenation, script-aware shaping, cluster-safe
+breaking, paragraph direction, line-local visual ordering, and deterministic
+complex-script fonts now share one format-neutral contract.
+
+### Added
+
+- Offer conditional hyphenation for English, French, German, and Spanish while
+  retaining contiguous source spans and omitting a source for generated
+  hyphens.
+- Shape Arabic, Devanagari, Thai, and Simplified Chinese with deterministic
+  font fallback, explicit script and language, logical clusters, and complete
+  two-dimensional glyph advances and offsets.
+- Apply ICU complex-script boundaries, CJK prohibited-punctuation rules, and
+  UAX 9 bidirectional levels and line-local visual ordering without rewriting
+  logical searchable text.
+- Carry typed DrawingML paragraph direction through an additive PowerPoint
+  sidecar into PDF, raster, and SVG output.
+- Bundle licensed Noto Sans Arabic, Devanagari, and Thai fonts plus a
+  reproducible Noto Sans Simplified Chinese subset for the approved fixture
+  repertoire.
+
+### Fixed
+
+- Apply explicit right-to-left direction to numeric and Latin text across
+  styled runs and forced line breaks using one paragraph-wide bidi context.
+- Reject malformed rich glyph positioning safely across PDF, raster, and SVG
+  backends. SVG retains logical searchable text with an explicit positioning
+  approximation diagnostic.
+
+### Compatibility
+
+The exact 15-package incubating crates.io family moves together from 0.6.0 to
+0.7.0. This is an intentional pre-1.0 minor boundary for new additive shared
+text types, non-exhaustive variants, and sibling resolver and renderer entry
+points. Existing legacy Latin struct and entrypoint shapes remain valid, and
+their deterministic output remains byte-identical.
+
+The seven-package stable family remains at 0.10.1 and does not opt into the new
+shared path in this release. Word property parsing, facade authoring, and final
+Word oracle acceptance remain in the later product stories. `rpptx-wasm` is
+prepared at 0.7.0 for binding checks but remains unpublished on crates.io, npm,
+and every other registry.
+
+### Contributors
+
+Atul Sharma maintained the release with the rdocx maintainers. The selected
+F-X058 substrate adds no new authenticated external issue or pull-request
+record after rpptx-v0.6.0, so this release prepares no external notification.
 
 ## v0.10.1
 

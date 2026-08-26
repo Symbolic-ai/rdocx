@@ -112,13 +112,13 @@ story changes release metadata only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Confirm F-X058 is completed and its shared boundary is final.
-- [ ] Add the failing 0.7.0 carrier regression.
-- [ ] Move every incubating carrier and preparation-only WASM value to 0.7.0.
-- [ ] Preserve stable 0.10.1 carriers and publication exclusion.
-- [ ] Preserve the historical stable registry proof without requiring unpublished 0.7.0.
-- [ ] Prepare selected-family notes and contribution inventory.
-- [ ] Verify metadata, order, bindings, packages, assets, and supply chain.
+- [x] Confirm F-X058 is completed and its shared boundary is final.
+- [x] Add the failing 0.7.0 carrier regression.
+- [x] Move every incubating carrier and preparation-only WASM value to 0.7.0.
+- [x] Preserve stable 0.10.1 carriers and publication exclusion.
+- [x] Preserve the historical stable registry proof without requiring unpublished 0.7.0.
+- [x] Prepare selected-family notes and contribution inventory.
+- [x] Verify metadata, order, bindings, packages, assets, and supply chain.
 - [ ] Run full verification, microscope, and clean sprint review at one SHA.
 - [ ] Stop at `/release rpptx-v0.7.0` for separate final approval.
 - [ ] Verify all publications, owners, tag, body, and notifications.

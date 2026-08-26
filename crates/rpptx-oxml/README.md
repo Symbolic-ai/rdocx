@@ -24,4 +24,4 @@ assert!(presentation.slide_ids.is_empty());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Add `rpptx-oxml = "0.6.0"` to your dependencies. The [API documentation](https://docs.rs/rpptx-oxml) lists the modeled PresentationML types.
+Add `rpptx-oxml = "0.7.0"` to your dependencies. The [API documentation](https://docs.rs/rpptx-oxml) lists the modeled PresentationML types.

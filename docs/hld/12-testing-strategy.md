@@ -1096,17 +1096,17 @@ The stable 0.10.1 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the incubating family is published at 0.6.0
-and `rpptx-wasm` remains unpublished.
+while its current preparation is 0.7.0 and `rpptx-wasm` remains unpublished.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.6.0. It separately proves the stable
+15-package publication preflight at 0.7.0. It separately proves the stable
 workspace remains at its published 0.10.1 boundary and `rpptx-wasm` remains
 unpublished.
-The stable dependency recovery gate packages and verifies `rdocx-layout`
-against registry `oxml-layout@0.6.0`. During preparation it patched only the
-then-unpublished stable `rdocx-oxml@0.10.1` dependency to local source, so it
-exercised the exact unpatched shared edge that stopped v0.10.0.
+The stable dependency recovery gate constructs an isolated registry consumer
+of exact `rdocx-layout@0.10.1` and inspects its unpatched normal dependency
+tree. It requires registry `oxml-layout@0.6.0` and rejects 0.7.0, so the
+immutable published proof remains independent of current workspace pins.
 The 0.6.0 release gate verified every selected registry entry and owner, the
 annotated tag target, byte-identical GitHub release notes, and selected record
 notifications at reviewed SHA

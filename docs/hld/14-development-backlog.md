@@ -3267,11 +3267,12 @@ unchanged legacy Latin hashes.
 
 ### F-X059, Tag rpptx-v0.7.0 (S)
 
-Publish the complete 15-package incubating family at 0.7.0 after F-X058. Move
-every incubating manifest, workspace pin, lock record, README requirement, CI
+The complete 15-package incubating family is prepared at 0.7.0 after F-X058.
+Every incubating manifest, workspace pin, lock record, README requirement, CI
 literal, release regression, and the unpublished `rpptx-wasm` preparation
-carrier together. Keep the stable family at 0.10.1. The release establishes the
-registry boundary that F-198, F-199, and F-200 must compile and run against.
+carrier moves together. The stable family stays at 0.10.1. Separately approved
+publication establishes the registry boundary that F-198, F-199, and F-200
+must compile and run against.
 
 **Depends on**: F-X058.
 **Test gate**: release. All 15 incubating registry entries resolve at 0.7.0

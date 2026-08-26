@@ -253,13 +253,14 @@ The exact incubating crates.io allowlist now contains 15 implemented shared
 and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
-at 0.6.0 from the annotated `rpptx-v0.6.0` tag at reviewed SHA
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are prepared at
+0.7.0. The last published complete family remains 0.6.0 from the annotated
+`rpptx-v0.6.0` tag at reviewed SHA
 `55fb2f54caf91d7dedc8936b4c7b116354590628`. The earlier 0.5.0 and 0.4.0
 registry releases remain available, and no existing version or tag was moved. Manifest
 eligibility and allowlist membership do not authorize a later publication
 without a separately approved `/release` invocation at the exact reviewed
-SHA. The unpublished `rpptx-wasm` preparation member is also at 0.6.0 but has
+SHA. The unpublished `rpptx-wasm` preparation member is also at 0.7.0 but has
 no crates.io publication path.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
@@ -268,7 +269,7 @@ and incubating metadata regressions without external development tools. The
 stable regression requires published workspace version 0.10.1, nine internal
 pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.6.0 versions, pins,
+set. The incubating regression requires the exact 0.7.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -359,16 +360,17 @@ release were not published at that version. The last complete stable family is
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.6.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-exact 15-package crates.io family listed above is published from the annotated
-`rpptx-v0.6.0` tag at reviewed SHA
-`55fb2f54caf91d7dedc8936b4c7b116354590628`. The preparation group also
-contains unpublished `rpptx-wasm`, while the crates.io allowlist remains
-exactly 15 packages. Earlier immutable registry releases remain available.
+0.7.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+preparation group contains unpublished `rpptx-wasm`, while the crates.io
+allowlist remains exactly 15 packages. The last published complete family is
+the immutable `rpptx-v0.6.0` release at reviewed SHA
+`55fb2f54caf91d7dedc8936b4c7b116354590628`, and earlier registry releases
+remain available.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
-Preparation therefore changes only the selected manifests and `Cargo.lock`.
+Preparation changes release carriers, assertions, and selected-family notes
+without changing runtime behavior.
 External release actions remain owned by `/release`.
 
 `/release {vX.Y.Z | rpptx-vX.Y.Z}` is the only command allowed to create or push
