@@ -30,7 +30,7 @@ protection at the reviewed sprint SHA.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-198 | Hyphenation | L | pending | - |
+| F-198 | Hyphenation | L | in-progress | codex |
 | F-199 | Complex script shaping | L | pending | - |
 | F-202 | Incremental layout | L | in-progress | codex |
 | F-200 | Vertical and bidirectional text | M | pending | - |
