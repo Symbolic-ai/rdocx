@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 3 | 2 | 2  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 60 | 55 | 1 | 2  |
-| **Total** | **307** | **247** | **6** | **52** |
+| X, Cross-cutting (opportunistic)            | 63 | 55 | 1 | 5  |
+| **Total** | **310** | **247** | **6** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -510,4 +510,7 @@ regenerated, never hand-edited.
 | F-X055 | Tag v0.10.0                               | S56 | S | archived |
 | F-X056 | Tag rpptx-v0.6.0                          | S56 | S | done |
 | F-X057 | Tag v0.10.1                               | S56 | S | done |
+| F-X058 | Shared multilingual text substrate        | S58 | L | pending |
+| F-X059 | Tag rpptx-v0.7.0                          | S58 | S | pending |
+| F-X060 | Tag v0.11.0                               | S58 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

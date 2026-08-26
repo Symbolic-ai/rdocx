@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S58
 **Size**: L
-**Depends on**: F-197
+**Depends on**: F-197, F-X059
 
 ## Problem
 
@@ -39,23 +39,18 @@ to false while the complete source XML remains preserved. Model all three
 do not compete over one schema slot. Preserve namespace tolerance, fixed `w:`
 output, schema order, unknown attributes, and unrelated raw children.
 
-Pass document automatic-hyphenation state into `LayoutInput`. Map supported BCP
-47 primary-language tags to deterministic embedded Liang patterns. Use a
-language-aware additive `InlineItem` variant so ordinary `InlineItem::Text`
-remains unhyphenated and existing `TextSegment` construction is unchanged.
+Pass document automatic-hyphenation state into `LayoutInput` and consume the
+published F-X058 conditional-hyphen `InlineItem` path. Map regional BCP 47 tags
+to the four supported primary languages without duplicating Liang line fitting
+in the Word crate. Ordinary `InlineItem::Text` remains unhyphenated and existing
+`TextSegment` construction remains valid.
 
-Extend the private breakable-segment representation with optional generated
-break suffixes. When overflow chooses a Liang opportunity, shape the hyphen in
-the preceding run's font and formatting, emit it with `source: None`, and leave
-the original word fragments' Unicode-scalar source ranges exact and contiguous.
-Keep existing UAX 14 behavior for disabled or unsupported languages,
-suppressed paragraphs, generated fields without an attributable language,
-explicit breaks, and unwrapped text.
-
-Use `hypher` 0.1.7 in `oxml-layout` only, with default features disabled and
-the English, French, German, and Spanish patterns selected explicitly. Map
-regional BCP 47 tags to their primary language pattern. Do not add a new
-feature flag or source module.
+F-X058 owns `hypher` 0.1.7, the private breakable-segment implementation, the
+farthest-fitting decision, generated `source: None` hyphens, contiguous source
+fragments, and no-wrap behavior. F-198 retains focused regressions for that
+published behavior while implementing only Word settings, effective language,
+paragraph suppression, generated-field exclusion, authoring, showcase, and
+oracle integration.
 
 Add the smallest authoring surface needed to enable document automatic
 hyphenation and assign run language. Update a page-one paragraph in the
@@ -107,8 +102,9 @@ line breaks within the recorded tolerance, and the harness delta is declared.
 - Parser and serializer. Read `docs/hld/04-opc-and-packaging.md` and
   `docs/hld/06-presentationml-model.md`, then prove namespace tolerance,
   schema-order output, and byte preservation of unmodelled content.
-- Crate dependency graph. Read `docs/hld/03-architecture.md` and keep the
-  pattern dependency inside `oxml-layout`, with no reverse workspace edge.
+- Crate dependency graph. Read `docs/hld/03-architecture.md`, verify the
+  pattern dependency remains inside published `oxml-layout@0.7.0`, and add no
+  reverse workspace edge.
 - Public API of published crates. Read `docs/hld/10-bindings-spec.md`, state the
   low-level pre-1.0 Rust source impact, run `cargo publish --workspace --dry-run`,
   and enforce each `.crate` size limit.
@@ -128,8 +124,8 @@ LibreOffice comparison explain the movement.
 - [ ] Project `w:autoHyphenation` without losing preserved settings XML.
 - [ ] Model and round-trip the complete `w:lang` attribute set.
 - [ ] Carry automatic hyphenation and effective run language into layout.
-- [ ] Add deterministic supported-language mapping and Liang candidates.
-- [ ] Emit only selected conditional hyphens with no source span.
+- [ ] Map effective Word languages onto F-X058's published supported-language path.
+- [ ] Retain regressions for selected conditional hyphens and exact source spans.
 - [ ] Preserve suppression, unsupported-language, and no-wrap behavior.
 - [ ] Add unit, round-trip, integration, golden, differential, and hash evidence.
 - [ ] Run every risk rider and update exactly the listed HLD files.

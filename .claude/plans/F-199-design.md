@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S58
 **Size**: L
-**Depends on**: F-196
+**Depends on**: F-196, F-X059
 
 ## Problem
 
@@ -39,43 +39,26 @@ an approved font and corpus expansion before implementation can satisfy it.
 
 ## Approach
 
-Segment text by script and font coverage inside existing `oxml-layout` files.
-Keep inherited and common characters with adjacent strong scripts, never split
-a grapheme or shaping cluster merely to change font, and pass explicit script,
-language, and direction into HarfRust. Preserve cluster indices, x and y
-advances, and x and y offsets.
+Consume F-X058's published additive rich shaping path. It already owns script
+and font coverage segmentation, explicit HarfRust properties, cluster-safe
+breaking, positioned glyphs, logical source ranges, PDF ToUnicode mapping, and
+the migrated incubating PowerPoint consumers. Do not add fields to legacy
+shared structs or create another shaping representation.
 
-Carry logical source ranges, cluster mappings, advances, and offsets through
-`ShapedText`, `TextSegment`, and `GlyphRun`. Treat additions to exhaustive
-public structs as an intentional pre-1.0 Rust source break. Word and
-PowerPoint must consume the same script-aware span result instead of resolving
-one font for each whole input run.
+Migrate Word layout and its PDF and raster path onto the same published rich
+values. Project complete `w:lang` information from the F-198 parser, preserve
+logical source ownership, and prove that Word and PowerPoint now consume the
+same shaped span result. Retain exact-slice reshaping and every F-X058 Arabic,
+Indic, Thai, and CJK structural regression while adding the final Word facade
+and corpus evidence.
 
-Retain exact-slice reshaping after line fitting. Reject breaks inside Arabic
-joining contexts and Indic clusters, insert approved Thai word opportunities
-before UAX 14 fitting, and enforce CJK opening, closing, and nonstarter rules.
-Logical Unicode scalar ranges remain authoritative even when visual glyph
-order and glyph count differ.
-
-Update PDF and raster emission to apply shaped offsets. Use cluster mappings
-for PDF ToUnicode and searchable text. Preserve the documented SVG
-approximation only where that backend cannot expose a more exact mapping.
-
-The approved script scope is Arabic, Devanagari, Thai, and Simplified Chinese.
-Add Noto Sans Arabic, Noto Sans Devanagari, and Noto Sans Thai, plus a
-reproducible Noto Sans CJK SC subset containing the generated fixture repertoire
-and reviewed CJK punctuation. Each bundled family carries its authentic OFL
-licence and notice, deterministic fallback order, package inventory, and
-archive-size evidence. The new font and licence assets are explicitly
-authorised. General caller-supplied fonts remain the coverage source outside
-the deterministic bundled fixture repertoire.
-
-Use `icu_segmenter` 2.3.0 with compiled-data automatic complex-script
-segmentation for Thai and UAX 14 line opportunities. Add the multi-script
-documents as source-built fixtures in existing test and harness entrypoints,
-then send those exact generated packages through the pinned LibreOffice and
-Poppler oracle. For the new fixtures, make the existing 0.95 SSIM on at least
-80 percent of pages a hard gate rather than an advisory trend.
+The approved script scope remains Arabic, Devanagari, Thai, and Simplified
+Chinese. F-X058 owns the approved Noto families, reproducible CJK subset,
+authentic legal files, fallback order, and `icu_segmenter` dependency. F-199
+verifies that inventory and adds the multi-script documents as source-built
+fixtures in existing test and harness entrypoints. Send those exact packages
+through pinned LibreOffice and Poppler. The existing 0.95 SSIM on at least 80
+percent of pages is a hard gate for the new fixtures.
 
 ## Rejected alternatives
 
@@ -139,13 +122,11 @@ unexpected and must not be folded into F-198's isolated output change.
 
 ## Implementation checklist
 
-- [ ] Segment by script and font coverage without splitting graphemes or clusters.
-- [ ] Pass explicit shaping properties and retain clusters and offsets.
-- [ ] Carry exact shaped data through shared line and output structures.
-- [ ] Make Word and PowerPoint consume the same segmented result.
-- [ ] Enforce Arabic, Indic, Thai, and CJK line-break constraints.
-- [ ] Apply offsets and logical cluster mappings in PDF and raster output.
-- [ ] Add the approved deterministic fonts with authentic licences and notices.
+- [ ] Migrate Word onto F-X058's published rich shaping path.
+- [ ] Project complete effective Word language and exact logical source spans.
+- [ ] Prove Word and PowerPoint consume the same segmented result.
+- [ ] Retain Arabic, Indic, Thai, CJK, offset, and searchable-text regressions.
+- [ ] Verify the approved deterministic fonts, licences, notices, and subset provenance.
 - [ ] Add the approved pinned multi-script corpus inputs and oracle evidence.
 - [ ] Prove the existing Latin and hash outputs remain byte-identical.
 - [ ] Run all risk riders and update exactly the listed HLD files.

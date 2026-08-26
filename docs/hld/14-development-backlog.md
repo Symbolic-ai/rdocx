@@ -1837,7 +1837,7 @@ Liang hyphenation with language-specific patterns, which changes line breaking
 and therefore every subsequent line. Word hyphenates and this renderer does not,
 so any hyphenated document currently differs from the first hyphenated line
 onward.
-**Depends on**: F-197.
+**Depends on**: F-197, F-X059.
 **Test gate**: golden. A hyphenated document matches the oracle's line breaks
 within the recorded tolerance, and the harness delta is declared.
 
@@ -1845,14 +1845,14 @@ within the recorded tolerance, and the harness delta is declared.
 Arabic joining and shaping, Indic reordering and clusters, Thai breaking, and
 CJK line-breaking rules. The shaper handles these and the line breaker does not
 know their rules.
-**Depends on**: F-196.
+**Depends on**: F-196, F-X059.
 **Test gate**: golden. Multi-script corpus pages match the oracle within the
 recorded threshold.
 
 ### F-200, Vertical and bidirectional text (M)
 Right-to-left paragraph direction, mixed-direction runs, and the vertical text
 directions the deck renderer currently approximates.
-**Depends on**: F-199.
+**Depends on**: F-199, F-X059.
 **Test gate**: golden. A bidirectional document renders with the correct visual
 order.
 
@@ -2615,7 +2615,7 @@ existing protections without an explicit reviewed decision. Bind the evidence
 to the repository, branch pattern, ruleset or protection identifier, and the
 reviewed sprint SHA.
 
-**Depends on**: F-X029.
+**Depends on**: F-X029, F-X060.
 **Test gate**: integration. A docs-only pull request reports a successful
 required `ci-gate` while the filtered expensive jobs stay skipped, and a
 selected failing job makes the required gate fail.
@@ -3246,6 +3246,55 @@ registry inventory, the annotated tag targets the reviewed SHA, the GitHub
 release body is byte-identical, all nine stable contribution notifications are
 verified, and PRs 47 through 52 close with their reviewed hardened-equivalent
 status.
+
+### F-X058, Shared multilingual text substrate (L)
+
+The shared layout family must own one complete text contract before stable Word
+consumers can use language-aware hyphenation, complex-script shaping, or
+bidirectional layout. Add conditional-hyphen opportunities, script and font
+segmentation, cluster and offset preservation, complex-script line boundaries,
+paragraph and run direction, and line-local visual ordering in the existing
+incubating layout, drawing, PDF, and Presentation paths. Add the approved
+deterministic multilingual fonts and legal files without changing legacy Latin
+output. Stable Word property parsing, facade authoring, and final Word oracle
+acceptance remain in F-198, F-199, and F-200.
+
+**Depends on**: F-196, F-197.
+**Test gate**: regression. Shared deterministic tests prove conditional
+hyphens, exact logical source spans, cluster-safe Arabic and Indic shaping,
+Thai and CJK breaking, bidi visual order, searchable logical text, and
+unchanged legacy Latin hashes.
+
+### F-X059, Tag rpptx-v0.7.0 (S)
+
+Publish the complete 15-package incubating family at 0.7.0 after F-X058. Move
+every incubating manifest, workspace pin, lock record, README requirement, CI
+literal, release regression, and the unpublished `rpptx-wasm` preparation
+carrier together. Keep the stable family at 0.10.1. The release establishes the
+registry boundary that F-198, F-199, and F-200 must compile and run against.
+
+**Depends on**: F-X058.
+**Test gate**: release. All 15 incubating registry entries resolve at 0.7.0
+from the reviewed SHA, their owners match the authenticated registry inventory,
+the tag and GitHub release body match the reviewed evidence, every selected
+external record receives its reviewed notification, and no stable package is
+published.
+
+### F-X060, Tag v0.11.0 (S)
+
+Publish the complete seven-package stable family at 0.11.0 after the S58 Word
+features and incremental layout settle. Move every stable version carrier,
+binding metadata value, README requirement, CI literal, lock record, release
+regression, and changelog section together. Pin every shared dependency to the
+verified 0.7.0 family from F-X059. Python, WASM, npm, and PyPI packages remain
+outside publication authority.
+
+**Depends on**: F-198, F-199, F-200, F-202, F-X059.
+**Test gate**: release. All seven stable registry entries resolve at 0.11.0
+against incubating 0.7.0 dependencies, their owners match the authenticated
+registry inventory, the annotated tag targets the reviewed SHA, the GitHub
+release body is byte-identical to the reviewed notes, and every selected
+external record receives its reviewed notification.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

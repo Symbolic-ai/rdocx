@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S58
 **Size**: M
-**Depends on**: F-199
+**Depends on**: F-199, F-X059
 
 ## Problem
 
@@ -37,33 +37,31 @@ therefore be a scope change substantially larger than this M-sized story.
 
 ## Approach
 
-Type Word paragraph `bidi`, Word run `rtl`, and DrawingML paragraph direction
-in their existing schema positions without losing unknown XML. Propagate one
-shared `Auto`, `LeftToRight`, or `RightToLeft` paragraph direction through
-existing line-layout types. Do not create a new module or forwarding layer.
+Type Word paragraph `bidi` and Word run `rtl` in their existing schema positions
+without losing unknown XML. Consume F-X058's published `Auto`, `LeftToRight`,
+and `RightToLeft` direction path instead of adding another shared type or bidi
+dependency. Retain its DrawingML direction round-trip regression.
 
-Resolve the paragraph base direction, compute Unicode bidi levels for logical
-text, intersect bidi spans with F-199's script and font spans, and shape each
-directional span explicitly. Fit logical content into lines, then reorder spans
-into visual order. Keep logical text and logical source ranges authoritative
-for selection, diagnostics, PDF ToUnicode maps, and round-trip output.
+Project paragraph base direction and run overrides into F-X058's logical bidi
+spans, intersect them with F-199's script and font spans, and consume its
+line-local visual order. Keep logical text and source ranges authoritative for
+selection, diagnostics, PDF ToUnicode maps, and round-trip output.
 
 Interpret start and end alignment, indents, bullets, and labels from the
 paragraph base direction while keeping stored numeric measurements unchanged.
-Carry visual painting order through Word, PowerPoint, PDF, raster, and SVG
-consumers of F-199's cluster and offset representation.
+Carry visual painting order through Word and prove parity with the PowerPoint,
+PDF, raster, and SVG consumers already migrated by F-X058.
 
 Retain the already documented whole-group quarter-turn vertical approximations
 and add regression coverage proving bidi metadata does not disturb them. Exact
 East Asian or Mongolian vertical writing remains outside v1 and does not change
 this story's HLD scope.
 
-Support both paragraph-level and character-level direction in Word and
-DrawingML. Accept the planned pre-1.0 additions to exhaustive public line and
-glyph structures. Correct visual order requires deterministic structural
-assertions over bidi levels, visual glyph runs, logical source spans, and PDF
-search text, with the pinned 0.95 SSIM and 80 percent page result as the visual
-cross-check.
+Support both paragraph-level and character-level direction in Word and retain
+the published DrawingML support. Correct visual order requires deterministic
+structural assertions over bidi levels, visual glyph runs, logical source
+spans, and PDF search text, with the pinned 0.95 SSIM and 80 percent page result
+as the visual cross-check.
 
 ## Rejected alternatives
 
@@ -111,8 +109,8 @@ correct visual order.
   invariants in addition to pixel evidence.
 - Public API of published crates. State any source impact, run package
   dry-runs, and enforce archive-size limits.
-- Crate dependency graph. Keep any bidi or vertical-orientation dependency in
-  the format-neutral layout layer.
+- Crate dependency graph. Verify the bidi dependency remains in published
+  `oxml-layout@0.7.0` and add no stable reverse edge.
 - External oracle comparison. Pin tool, DPI, and corpus identities, then retain
   complete page evidence and the exact threshold.
 
@@ -124,10 +122,10 @@ Do not re-record unrelated output or absorb F-198's delta.
 
 ## Implementation checklist
 
-- [ ] Type Word and DrawingML direction properties without raw loss.
-- [ ] Propagate shared paragraph and run direction through existing layout types.
-- [ ] Intersect bidi levels with F-199 script, font, cluster, and offset spans.
-- [ ] Fit logical content and reorder each final line visually.
+- [ ] Type Word direction properties and retain DrawingML direction regressions.
+- [ ] Project Word paragraph and run direction into F-X058's published types.
+- [ ] Intersect the published bidi spans with F-199 script, font, cluster, and offset spans.
+- [ ] Consume F-X058's line-local visual order.
 - [ ] Resolve alignment, indents, bullets, and labels from base direction.
 - [ ] Paint visual order while preserving logical extraction and source spans.
 - [ ] Add structural, round-trip, integration, golden, and backend regressions.
