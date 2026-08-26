@@ -108,7 +108,19 @@ fontdb = { version = "0.23", default-features = false, features = [
     "fontconfig",
 ] }
 harfrust = "0.12"
+hypher = { version = "=0.1.7", default-features = false, features = [
+    "alloc",
+    "english",
+    "french",
+    "german",
+    "spanish",
+] }
+icu_segmenter = { version = "=2.3.0", default-features = false, features = [
+    "auto",
+    "compiled_data",
+] }
 ttf-parser = "0.25"
+unicode-bidi = "=0.3.18"
 unicode-linebreak = "0.1"
 itoa = "1"
 regex = "1.13"

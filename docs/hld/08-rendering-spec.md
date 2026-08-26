@@ -448,6 +448,24 @@ ascent and descent and the tallest complete run advance. Omitted line spacing
 uses that natural advance, while percentage line spacing multiplies the largest
 effective run point size. Exact point spacing remains exact, including when it
 is smaller than the glyph box.
+
+Complex text enters shared layout as one paragraph-wide logical sequence.
+Coverage and script boundaries select deterministic fonts before HarfRust
+receives explicit script, language, and direction. ICU supplies Thai and
+complex-script opportunities, shared punctuation rules protect CJK line edges,
+and language-specific Liang dictionaries supply conditional hyphens. Fitting
+never divides a shaping cluster. After fitting, UAX 9 reorders each completed
+line for painting without rewriting its logical text or source spans.
+PowerPoint transports resolved paragraph direction beside the established
+resolved-slide model. Its facade supplies that sidecar to the renderer, so an
+explicit DrawingML direction also controls numeric and Latin text on both
+sides of a forced line break.
+
+`MultilingualGlyphRun` is the rich positioned output. It carries glyph ids,
+x and y advances, x and y offsets, logical clusters, direction, and extraction
+text. PDF paints those exact positions inside logical `ActualText`, raster
+applies the same per-glyph coordinates, and SVG emits searchable logical text.
+Legacy Latin remains on `GlyphRun` so existing output bytes do not move.
 Non-negative leading is divided equally above and below the glyph box. A
 below-natural exact line keeps its stated height and places no negative leading
 before the baseline. Stored normal-autofit line-spacing reduction applies only

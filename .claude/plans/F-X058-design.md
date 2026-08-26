@@ -1,6 +1,6 @@
 # F-X058, Shared multilingual text substrate
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: L
 **Depends on**: F-196, F-197, F-X061
@@ -185,18 +185,18 @@ new rich path, and F-198 retains exclusive ownership of the declared
 
 ## Implementation checklist
 
-- [ ] Add shared failing stubs without creating a new test binary or module.
-- [ ] Extract the reviewed conditional-hyphen implementation from the F-198 worktree.
-- [ ] Add additive rich shaping, cluster, offset, source, and direction types.
-- [ ] Preserve every legacy public struct and entrypoint shape.
-- [ ] Implement script and coverage segmentation plus complex breaking.
-- [ ] Implement UAX 9 line-local ordering with logical extraction.
-- [ ] Type DrawingML direction and migrate incubating consumers.
-- [ ] Add approved deterministic fonts, legal files, and reproducible CJK subset evidence.
-- [ ] Prove legacy stable source compatibility and unchanged Latin hashes.
-- [ ] Run scoped tests, no-default, WASM, package, archive, dependency, and full verification riders.
-- [ ] Update exactly the six listed HLD files.
-- [ ] Reach a clean microscope before handoff and integration.
+- [x] Add shared failing stubs without creating a new test binary or module.
+- [x] Extract the reviewed conditional-hyphen implementation from the F-198 worktree.
+- [x] Add additive rich shaping, cluster, offset, source, and direction types.
+- [x] Preserve every legacy public struct and entrypoint shape.
+- [x] Implement script and coverage segmentation plus complex breaking.
+- [x] Implement UAX 9 line-local ordering with logical extraction.
+- [x] Type DrawingML direction and migrate incubating consumers.
+- [x] Add approved deterministic fonts, legal files, and reproducible CJK subset evidence.
+- [x] Prove legacy stable source compatibility and unchanged Latin hashes.
+- [x] Run scoped tests, no-default, WASM, package, archive, dependency, and full verification riders.
+- [x] Update exactly the seven listed HLD files.
+- [x] Reach a clean microscope before handoff and integration.
 
 ## Open questions
 

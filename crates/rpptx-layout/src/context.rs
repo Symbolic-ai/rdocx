@@ -42,10 +42,11 @@ use crate::{
     ChartResource, ParagraphAlignment, ResolvedAutofit, ResolvedBackground, ResolvedBullet,
     ResolvedBulletSize, ResolvedContent, ResolvedGeometry, ResolvedImage, ResolvedImagePlacement,
     ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize, ResolvedParagraph,
-    ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape, ResolvedSlide, ResolvedTable,
-    ResolvedTableBorder, ResolvedTableCell, ResolvedTableRow, ResolvedTextBody, ResolvedTextRun,
-    ResolvedTextSpacing, ResolvedTileFlip, ResolvedTilePlacement, ScopedChartResources,
-    ScopedHyperlinkTargets, ScopedMediaIds, TextAnchor, TextDirection, TextInsets,
+    ResolvedRectAlignment, ResolvedRunStyle, ResolvedShape, ResolvedSlide,
+    ResolvedSlideTextDirections, ResolvedTable, ResolvedTableBorder, ResolvedTableCell,
+    ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip,
+    ResolvedTilePlacement, ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
+    TextAnchor, TextDirection, TextInsets,
 };
 
 /// The producer part that supplied the effective background.
@@ -327,6 +328,7 @@ impl<'a> ResolveCtx<'a> {
     /// Resolves one owned renderer-facing slide at the supplied point size.
     pub fn resolve_slide(&self, size: (f64, f64)) -> Result<ResolvedSlide, ResolveError> {
         self.resolve_slide_inner(size, None, None, None, None)
+            .map(|(slide, _)| slide)
     }
 
     /// Resolves one slide using embedded media identifiers scoped to source parts.
@@ -336,6 +338,7 @@ impl<'a> ResolveCtx<'a> {
         media: &ScopedMediaIds,
     ) -> Result<ResolvedSlide, ResolveError> {
         self.resolve_slide_inner(size, Some(media), None, None, None)
+            .map(|(slide, _)| slide)
     }
 
     /// Resolves one slide with source-scoped media and external hyperlink targets.
@@ -346,6 +349,7 @@ impl<'a> ResolveCtx<'a> {
         hyperlinks: &ScopedHyperlinkTargets,
     ) -> Result<ResolvedSlide, ResolveError> {
         self.resolve_slide_inner(size, Some(media), Some(hyperlinks), None, None)
+            .map(|(slide, _)| slide)
     }
 
     /// Resolves one slide with source-scoped charts and the caller's font manager.
@@ -364,6 +368,29 @@ impl<'a> ResolveCtx<'a> {
             Some(charts),
             Some(fonts),
         )
+        .map(|(slide, _)| slide)
+    }
+
+    /// Resolves one slide and returns paragraph directions in shape and text-body order.
+    ///
+    /// The outer vector follows `ResolvedSlide::shapes`. Each shape entry contains
+    /// one paragraph-direction vector for a text shape, or one entry per table cell
+    /// in row-major order. Non-text shapes have an empty entry.
+    pub fn resolve_slide_with_chart_resources_and_text_directions(
+        &self,
+        size: (f64, f64),
+        media: &ScopedMediaIds,
+        hyperlinks: &ScopedHyperlinkTargets,
+        charts: &ScopedChartResources,
+        fonts: &mut FontManager,
+    ) -> Result<(ResolvedSlide, ResolvedSlideTextDirections), ResolveError> {
+        self.resolve_slide_inner(
+            size,
+            Some(media),
+            Some(hyperlinks),
+            Some(charts),
+            Some(fonts),
+        )
     }
 
     fn resolve_slide_inner(
@@ -373,13 +400,14 @@ impl<'a> ResolveCtx<'a> {
         hyperlinks: Option<&ScopedHyperlinkTargets>,
         charts: Option<&ScopedChartResources>,
         mut fonts: Option<&mut FontManager>,
-    ) -> Result<ResolvedSlide, ResolveError> {
+    ) -> Result<(ResolvedSlide, ResolvedSlideTextDirections), ResolveError> {
         let mut slide = ResolvedSlide {
             size,
             background: None,
             shapes: Vec::new(),
             diagnostics: Vec::new(),
         };
+        let mut text_directions = Vec::new();
         for item in self.flatten() {
             match item {
                 FlattenedItem::Background(background) => {
@@ -429,6 +457,7 @@ impl<'a> ResolveCtx<'a> {
                     group_issues,
                 } => {
                     push_group_diagnostics(group_issues, &mut slide.diagnostics);
+                    let mut shape_text_directions = Vec::new();
                     if let Some(shape) = self.resolve_flattened_shape(
                         ShapePlacement {
                             source,
@@ -439,14 +468,15 @@ impl<'a> ResolveCtx<'a> {
                         media,
                         (hyperlinks, charts),
                         fonts.as_deref_mut(),
-                        &mut slide.diagnostics,
+                        (&mut slide.diagnostics, &mut shape_text_directions),
                     )? {
                         slide.shapes.push(shape);
+                        text_directions.push(shape_text_directions);
                     }
                 }
             }
         }
-        Ok(slide)
+        Ok((slide, text_directions))
     }
 
     fn resolve_flattened_shape(
@@ -459,8 +489,12 @@ impl<'a> ResolveCtx<'a> {
             Option<&ScopedChartResources>,
         ),
         fonts: Option<&mut FontManager>,
-        diagnostics: &mut Vec<Diagnostic>,
+        output: (
+            &mut Vec<Diagnostic>,
+            &mut Vec<Vec<oxml_layout::TextDirection>>,
+        ),
     ) -> Result<Option<ResolvedShape>, ResolveError> {
+        let (diagnostics, text_directions) = output;
         let (hyperlinks, charts) = scoped_resources;
         let ShapePlacement {
             source,
@@ -468,9 +502,14 @@ impl<'a> ResolveCtx<'a> {
             group_transform,
         } = placement;
         match child {
-            ShapeTreeChild::Shape(shape) => {
-                self.resolve_ordinary_shape(shape, placement, media, hyperlinks, diagnostics)
-            }
+            ShapeTreeChild::Shape(shape) => self.resolve_ordinary_shape(
+                shape,
+                placement,
+                media,
+                hyperlinks,
+                diagnostics,
+                text_directions,
+            ),
             ShapeTreeChild::Picture(picture) => {
                 let Some((bounds, rotation_deg, flip_h, flip_v)) =
                     transform_values(self.effective_picture_xfrm(picture).as_ref())
@@ -533,6 +572,7 @@ impl<'a> ResolveCtx<'a> {
                             source,
                             hyperlinks,
                             diagnostics,
+                            text_directions,
                         )?),
                         None,
                         false,
@@ -867,6 +907,7 @@ impl<'a> ResolveCtx<'a> {
         media: Option<&ScopedMediaIds>,
         hyperlinks: Option<&ScopedHyperlinkTargets>,
         diagnostics: &mut Vec<Diagnostic>,
+        text_directions: &mut Vec<Vec<oxml_layout::TextDirection>>,
     ) -> Result<Option<ResolvedShape>, ResolveError> {
         let ShapePlacement {
             source,
@@ -986,13 +1027,14 @@ impl<'a> ResolveCtx<'a> {
                 None,
             )
         };
-        let content = shape
-            .text_body
-            .as_ref()
-            .map(|body| self.resolve_text_body(shape, body, source, hyperlinks, diagnostics))
-            .transpose()?
-            .map(ResolvedContent::Text)
-            .unwrap_or(ResolvedContent::None);
+        let content = if let Some(body) = shape.text_body.as_ref() {
+            let (body, directions) =
+                self.resolve_text_body(shape, body, source, hyperlinks, diagnostics)?;
+            text_directions.push(directions);
+            ResolvedContent::Text(body)
+        } else {
+            ResolvedContent::None
+        };
         if let ResolvedContent::Text(text) = &content
             && let Some(message) = vertical_text_diagnostic(text.vertical)
         {
@@ -1669,10 +1711,10 @@ impl ResolveCtx<'_> {
         source: FlattenedSource,
         hyperlinks: Option<&ScopedHyperlinkTargets>,
         diagnostics: &mut Vec<Diagnostic>,
-    ) -> Result<ResolvedTextBody, ResolveError> {
+    ) -> Result<(ResolvedTextBody, Vec<oxml_layout::TextDirection>), ResolveError> {
         let properties = self.effective_body_pr(shape);
         let slide_number_placeholder = self.is_slide_number_placeholder(shape);
-        let paragraphs = body
+        let resolved = body
             .paragraphs()
             .iter()
             .map(|paragraph| {
@@ -1686,7 +1728,8 @@ impl ResolveCtx<'_> {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        resolved_text_body(&properties, paragraphs)
+        let (paragraphs, directions) = resolved.into_iter().unzip();
+        Ok((resolved_text_body(&properties, paragraphs)?, directions))
     }
 
     fn resolve_paragraph(
@@ -1697,7 +1740,7 @@ impl ResolveCtx<'_> {
         hyperlinks: Option<&ScopedHyperlinkTargets>,
         slide_number_placeholder: bool,
         diagnostics: &mut Vec<Diagnostic>,
-    ) -> Result<ResolvedParagraph, ResolveError> {
+    ) -> Result<(ResolvedParagraph, oxml_layout::TextDirection), ResolveError> {
         let effective = self.effective_text_properties(shape, paragraph.properties.as_ref(), None);
         let paragraph_properties = &effective.paragraph;
         let mut runs = Vec::new();
@@ -1748,27 +1791,35 @@ impl ResolveCtx<'_> {
                 }
             }
         }
-        Ok(ResolvedParagraph {
-            level: paragraph_properties.level.unwrap_or(0),
-            left_margin: emu_to_points(i64::from(paragraph_properties.left_margin.unwrap_or(0))),
-            right_margin: emu_to_points(i64::from(paragraph_properties.right_margin.unwrap_or(0))),
-            indent: emu_to_points(i64::from(paragraph_properties.indent.unwrap_or(0))),
-            alignment: paragraph_alignment(paragraph_properties.alignment),
-            line_spacing: resolved_text_spacing(paragraph_properties.line_spacing.as_ref()),
-            space_before: resolved_text_spacing(paragraph_properties.space_before.as_ref()),
-            space_after: resolved_text_spacing(paragraph_properties.space_after.as_ref()),
-            bullet: paragraph_properties
-                .bullet
-                .as_ref()
-                .and_then(|bullet| self.resolve_bullet(bullet).transpose())
-                .transpose()?,
-            end_style: self.resolve_run_style(
-                shape,
-                paragraph.properties.as_ref(),
-                paragraph.end_properties.as_ref(),
-            )?,
-            runs,
-        })
+        let direction = paragraph_base_direction(paragraph_properties.right_to_left);
+        Ok((
+            ResolvedParagraph {
+                level: paragraph_properties.level.unwrap_or(0),
+                left_margin: emu_to_points(i64::from(
+                    paragraph_properties.left_margin.unwrap_or(0),
+                )),
+                right_margin: emu_to_points(i64::from(
+                    paragraph_properties.right_margin.unwrap_or(0),
+                )),
+                indent: emu_to_points(i64::from(paragraph_properties.indent.unwrap_or(0))),
+                alignment: paragraph_alignment(paragraph_properties.alignment),
+                line_spacing: resolved_text_spacing(paragraph_properties.line_spacing.as_ref()),
+                space_before: resolved_text_spacing(paragraph_properties.space_before.as_ref()),
+                space_after: resolved_text_spacing(paragraph_properties.space_after.as_ref()),
+                bullet: paragraph_properties
+                    .bullet
+                    .as_ref()
+                    .and_then(|bullet| self.resolve_bullet(bullet).transpose())
+                    .transpose()?,
+                end_style: self.resolve_run_style(
+                    shape,
+                    paragraph.properties.as_ref(),
+                    paragraph.end_properties.as_ref(),
+                )?,
+                runs,
+            },
+            direction,
+        ))
     }
 
     fn resolve_run_style(
@@ -1882,6 +1933,7 @@ impl ResolveCtx<'_> {
         source: FlattenedSource,
         hyperlinks: Option<&ScopedHyperlinkTargets>,
         diagnostics: &mut Vec<Diagnostic>,
+        text_directions: &mut Vec<Vec<oxml_layout::TextDirection>>,
     ) -> Result<ResolvedTable, ResolveError> {
         let column_widths = table
             .grid
@@ -2053,20 +2105,21 @@ impl ResolveCtx<'_> {
                             push_table_diagnostic(diagnostics, unsupported);
                         }
                         let table_text_style = table_character_properties(&cascade.text_style)?;
-                        let mut text = cell
-                            .text_body
-                            .as_ref()
-                            .map(|body| {
-                                resolve_standalone_text_body(
-                                    self,
-                                    body,
-                                    &table_text_style,
-                                    source,
-                                    hyperlinks,
-                                    diagnostics,
-                                )
-                            })
-                            .transpose()?;
+                        let mut text = if let Some(body) = cell.text_body.as_ref() {
+                            let (body, directions) = resolve_standalone_text_body(
+                                self,
+                                body,
+                                &table_text_style,
+                                source,
+                                hyperlinks,
+                                diagnostics,
+                            )?;
+                            text_directions.push(directions);
+                            Some(body)
+                        } else {
+                            text_directions.push(Vec::new());
+                            None
+                        };
                         if let Some(body) = text.as_mut()
                             && body.autofit != ResolvedAutofit::None
                         {
@@ -2553,6 +2606,14 @@ fn paragraph_alignment(alignment: Option<TextAlignment>) -> ParagraphAlignment {
     }
 }
 
+fn paragraph_base_direction(right_to_left: Option<bool>) -> oxml_layout::TextDirection {
+    match right_to_left {
+        Some(true) => oxml_layout::TextDirection::RightToLeft,
+        Some(false) => oxml_layout::TextDirection::LeftToRight,
+        None => oxml_layout::TextDirection::Auto,
+    }
+}
+
 fn vertical_text_diagnostic(direction: TextDirection) -> Option<&'static str> {
     match direction {
         TextDirection::EastAsianVertical => {
@@ -2578,10 +2639,10 @@ fn resolve_standalone_text_body(
     source: FlattenedSource,
     hyperlinks: Option<&ScopedHyperlinkTargets>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<ResolvedTextBody, ResolveError> {
+) -> Result<(ResolvedTextBody, Vec<oxml_layout::TextDirection>), ResolveError> {
     let mut properties = default_body_properties();
     merge_body_properties(&mut properties, &body.body_properties);
-    let paragraphs = body
+    let resolved = body
         .paragraphs()
         .iter()
         .map(|paragraph| {
@@ -2637,34 +2698,39 @@ fn resolve_standalone_text_body(
                     }
                 })
                 .collect::<Result<Vec<_>, ResolveError>>()?;
-            Ok(ResolvedParagraph {
-                level: paragraph_properties.level.unwrap_or(0),
-                left_margin: emu_to_points(i64::from(
-                    paragraph_properties.left_margin.unwrap_or(0),
-                )),
-                right_margin: emu_to_points(i64::from(
-                    paragraph_properties.right_margin.unwrap_or(0),
-                )),
-                indent: emu_to_points(i64::from(paragraph_properties.indent.unwrap_or(0))),
-                alignment: paragraph_alignment(paragraph_properties.alignment),
-                line_spacing: resolved_text_spacing(paragraph_properties.line_spacing.as_ref()),
-                space_before: resolved_text_spacing(paragraph_properties.space_before.as_ref()),
-                space_after: resolved_text_spacing(paragraph_properties.space_after.as_ref()),
-                bullet: paragraph_properties
-                    .bullet
-                    .as_ref()
-                    .and_then(|bullet| context.resolve_bullet(bullet).transpose())
-                    .transpose()?,
-                end_style: context.resolve_table_run_style(
-                    table_style,
-                    paragraph.properties.as_ref(),
-                    paragraph.end_properties.as_ref(),
-                )?,
-                runs,
-            })
+            let direction = paragraph_base_direction(paragraph_properties.right_to_left);
+            Ok((
+                ResolvedParagraph {
+                    level: paragraph_properties.level.unwrap_or(0),
+                    left_margin: emu_to_points(i64::from(
+                        paragraph_properties.left_margin.unwrap_or(0),
+                    )),
+                    right_margin: emu_to_points(i64::from(
+                        paragraph_properties.right_margin.unwrap_or(0),
+                    )),
+                    indent: emu_to_points(i64::from(paragraph_properties.indent.unwrap_or(0))),
+                    alignment: paragraph_alignment(paragraph_properties.alignment),
+                    line_spacing: resolved_text_spacing(paragraph_properties.line_spacing.as_ref()),
+                    space_before: resolved_text_spacing(paragraph_properties.space_before.as_ref()),
+                    space_after: resolved_text_spacing(paragraph_properties.space_after.as_ref()),
+                    bullet: paragraph_properties
+                        .bullet
+                        .as_ref()
+                        .and_then(|bullet| context.resolve_bullet(bullet).transpose())
+                        .transpose()?,
+                    end_style: context.resolve_table_run_style(
+                        table_style,
+                        paragraph.properties.as_ref(),
+                        paragraph.end_properties.as_ref(),
+                    )?,
+                    runs,
+                },
+                direction,
+            ))
         })
         .collect::<Result<Vec<_>, ResolveError>>()?;
-    resolved_text_body(&properties, paragraphs)
+    let (paragraphs, directions) = resolved.into_iter().unzip();
+    Ok((resolved_text_body(&properties, paragraphs)?, directions))
 }
 
 fn resolved_text_body(
@@ -3159,12 +3225,12 @@ mod tests {
 
     use super::{BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, transform_values};
     use crate::{
-        ChartResource, Diagnostic, ResolvedAutofit, ResolvedBackground, ResolvedBullet,
-        ResolvedBulletSize, ResolvedContent, ResolvedGeometry, ResolvedImagePlacement,
-        ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize, ResolvedRectAlignment,
-        ResolvedSlide, ResolvedTextRun, ResolvedTextSpacing, ResolvedTileFlip,
-        ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
-        TextAnchor as ResolvedTextAnchor, TextDirection,
+        ChartResource, Diagnostic, ParagraphAlignment, ResolvedAutofit, ResolvedBackground,
+        ResolvedBullet, ResolvedBulletSize, ResolvedContent, ResolvedGeometry,
+        ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
+        ResolvedParagraph, ResolvedRectAlignment, ResolvedRunStyle, ResolvedSlide, ResolvedTextRun,
+        ResolvedTextSpacing, ResolvedTileFlip, ScopedChartResources, ScopedHyperlinkTargets,
+        ScopedMediaIds, TextAnchor as ResolvedTextAnchor, TextDirection,
     };
     use oxml_layout::{
         Color, Effect, FontManager, MediaId, Paint, PathCommand, Point, PositionedElement, Rect,
@@ -4929,6 +4995,46 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn explicit_rtl_paragraph_direction_reaches_resolved_layout() {
+        let text = r#"<a:bodyPr/><a:p><a:pPr rtl="1"/><a:r><a:t>123</a:t></a:r></a:p>"#;
+        let fixture = Fixture::new(
+            &shape_with_details(None, None, &transform(0), Some(text)),
+            "",
+            "",
+        );
+
+        let (resolved, directions) = fixture
+            .context()
+            .resolve_slide_inner((720.0, 540.0), None, None, None, None)
+            .unwrap();
+        let ResolvedContent::Text(body) = &resolved.shapes[0].content else {
+            panic!("expected text");
+        };
+        assert_eq!(body.paragraphs[0].runs.len(), 1);
+        assert_eq!(directions[0][0].len(), body.paragraphs.len());
+        assert_eq!(directions[0][0][0], oxml_layout::TextDirection::RightToLeft);
+    }
+
+    #[test]
+    fn legacy_resolved_paragraph_literal_remains_source_compatible() {
+        let paragraph = ResolvedParagraph {
+            level: 0,
+            left_margin: 0.0,
+            right_margin: 0.0,
+            indent: 0.0,
+            alignment: ParagraphAlignment::Left,
+            line_spacing: None,
+            space_before: None,
+            space_after: None,
+            bullet: None,
+            end_style: ResolvedRunStyle::default(),
+            runs: Vec::new(),
+        };
+
+        assert_eq!(paragraph, ResolvedParagraph::default());
     }
 
     #[test]

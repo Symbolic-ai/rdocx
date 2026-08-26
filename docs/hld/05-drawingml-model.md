@@ -204,6 +204,12 @@ are absent, inserting them moves preserved boundary-0 content to the slot after
 keeps a preserved `mc:AlternateContent` run substitution after the newly
 inserted properties without changing its bytes.
 
+`a:pPr/@rtl` is a typed optional boolean direction input. Parsing accepts the
+DrawingML attribute only in its unqualified schema form, while a foreign
+same-local-name attribute remains opaque. Writing places the canonical typed
+attribute with the other paragraph attributes and preserves unknown attributes
+and children at their established boundaries.
+
 `CT_TextListStyle` types `a:defPPr` separately from its nine optional level
 properties. The reader accepts any prefix, and the writer emits `a:defPPr`
 before the ascending level properties with fixed `a:` prefixes. Unmodelled

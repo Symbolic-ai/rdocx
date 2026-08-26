@@ -167,15 +167,16 @@ include = [
     "fonts/*.ttf",
     "fonts/LICENSE-*",
     "fonts/NOTICE-*",
+    "fonts/SUBSET-*.md",
 ]
 ```
 
 The dedicated package CI job compares `cargo package -p oxml-layout --list`
-against all 20 TTFs, the three family licence files, and the Caladea notice. It
-then runs verified packaging without `--no-verify` and rejects a missing
-archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
-published 0.1.2 package, while the release workflow remains the authority for
-every later publication.
+against all 24 TTFs, the four family licence files, the Caladea and Noto
+notices, and the Simplified Chinese subset record. It then runs verified
+packaging without `--no-verify` and rejects a missing archive or one larger
+than the crates.io 10 MiB limit. `oxml-layout` is a published 0.1.2 package,
+while the release workflow remains the authority for every later publication.
 
 The external PowerPoint and Word corpora remain outside every published crate
 under the ignored `corpus/` directory. Their tracked manifests pin immutable
@@ -309,9 +310,15 @@ and authentication, network, compilation and duplicate-version failures fail
 the job.
 
 The generated archives remain subject to the crates.io 10 MiB ceiling.
-`oxml-layout` contains all 20 bundled fonts and their required legal files, and
+`oxml-layout` contains all 24 bundled fonts and their required legal files, and
 `rpptx` contains `assets/default.pptx`. No binding or WASM package is in either
 crates.io allowlist.
+
+The deterministic inventory includes official Noto Sans Arabic, Devanagari,
+and Thai fonts plus a FontTools-reproducible Noto Sans Simplified Chinese
+subset for the approved fixture repertoire. The source and output hashes,
+subset command, licence, and notice ship with `oxml-layout`. Package checks
+verify that inventory and keep the archive below the same 10 MiB ceiling.
 
 Two tag namespaces:
 
@@ -641,6 +648,12 @@ New dependencies are added only with a named consumer. The workspace already
 minimises feature sets deliberately, and the comments in the root manifest
 explaining why `zip` and `fontdb` are trimmed should be preserved rather than
 regenerated.
+
+`oxml-layout` is the direct consumer of exact `hypher` 0.1.7 for conditional
+hyphens, `icu_segmenter` 2.3 with compiled data for complex-script boundaries,
+and `unicode-bidi` 0.3.18 for paragraph levels and line-local visual order.
+These edges remain format-neutral and compile in the no-default-features and
+wasm32 graphs.
 
 The private native Word SVG renderer is the direct runtime consumer of
 `base64`, which embeds exact layout font bytes and page image bytes into

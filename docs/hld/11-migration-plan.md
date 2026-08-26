@@ -84,6 +84,14 @@ each step remains independently revertable.
 `crates/rdocx-layout/src/convert.rs` translate the retained Word flow values at
 the engine boundary.
 
+Shared line breaking has two compatible representations. Legacy `InlineItem`,
+`LineItem`, and `GlyphRun` shapes remain unchanged for stable consumers. The
+additive rich representation carries paragraph-wide script, language,
+direction, cluster, source, and two-dimensional positioning state for
+incubating consumers. Conditional hyphenation and complex-script breaking live
+in the shared layer so format adapters do not duplicate fitting or reorder
+logical source text.
+
 | Word input | Shared layout value |
 |---|---|
 | `CT_TabStop` | `TabStop { pos_pt: f64, align: TabAlign, leader: Option<TabLeader> }` |

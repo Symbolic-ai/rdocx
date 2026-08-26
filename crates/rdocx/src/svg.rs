@@ -175,6 +175,23 @@ impl<'a> SvgState<'a> {
             let element_path = format!("{path}[{index}]");
             match element {
                 PositionedElement::Text(run) => self.emit_text(run, &element_path, output),
+                PositionedElement::MultilingualText(run) => {
+                    if !run.is_valid() {
+                        self.diagnose(
+                            &element_path,
+                            "invalid multilingual glyph positioning was omitted from SVG output",
+                        );
+                        continue;
+                    }
+                    let diagnostic_count = self.diagnostics.len();
+                    self.emit_text(&run.legacy_projection(), &element_path, output);
+                    if self.diagnostics.len() == diagnostic_count {
+                        self.diagnose(
+                            &element_path,
+                            "multilingual shaping kept searchable text with browser-positioned glyph approximation",
+                        );
+                    }
+                }
                 PositionedElement::Line {
                     start,
                     end,
@@ -647,6 +664,11 @@ fn collect_used_fonts(
                     ordered.push(run.font_id);
                 }
             }
+            PositionedElement::MultilingualText(run) if !run.logical_text.is_empty() => {
+                if seen.insert(run.font_id) {
+                    ordered.push(run.font_id);
+                }
+            }
             PositionedElement::Group(group) => collect_used_fonts(&group.children, seen, ordered),
             PositionedElement::MarkedContent { children, .. } => {
                 collect_used_fonts(children, seen, ordered)
@@ -733,6 +755,7 @@ fn elements_bounds(elements: &[PositionedElement]) -> Result<Option<Rect>, ()> {
 fn element_bounds(element: &PositionedElement) -> Result<Option<Rect>, ()> {
     match element {
         PositionedElement::Text(run) if !run.text.is_empty() => Err(()),
+        PositionedElement::MultilingualText(run) if !run.logical_text.is_empty() => Err(()),
         PositionedElement::Line {
             start, end, width, ..
         } => {
@@ -768,7 +791,9 @@ fn element_bounds(element: &PositionedElement) -> Result<Option<Rect>, ()> {
                 .map(|bounds| group.transform.transform_rect_bbox(bounds)))
         }
         PositionedElement::MarkedContent { children, .. } => elements_bounds(children),
-        PositionedElement::LinkAnnotation { .. } | PositionedElement::Text(_) => Ok(None),
+        PositionedElement::LinkAnnotation { .. }
+        | PositionedElement::Text(_)
+        | PositionedElement::MultilingualText(_) => Ok(None),
         _ => Err(()),
     }
 }
@@ -1035,9 +1060,10 @@ mod tests {
     use std::sync::Arc;
 
     use oxml_layout::{
-        Color, Diagnostic, Effect, FillRule, FontData, FontId, FontManager, GlyphRun, GradientStop,
-        GroupElement, LayoutResult, LineCap, LineJoin, MediaId, PageFrame, Paint, Path,
-        PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
+        Color, Diagnostic, Effect, FillRule, FontData, FontId, FontManager, GlyphCluster, GlyphRun,
+        GradientStop, GroupElement, LayoutResult, LineCap, LineJoin, MediaId, MultilingualGlyphRun,
+        PageFrame, Paint, Path, PathCommand, PathElement, Point, PositionedElement, Rect, Stroke,
+        TextDirection, TextScript, Transform,
     };
 
     use super::{image_mime, is_safe_link, preserves_isotropic_blur, render_page};
@@ -1101,6 +1127,107 @@ mod tests {
         assert!(!result.svg.contains("rdocx-font-8"));
         assert!(!result.svg.contains("file://"));
         assert!(render_page(&layout, 1).is_none());
+    }
+
+    #[test]
+    fn svg_export_keeps_multilingual_logical_text_searchable() {
+        let rich = PositionedElement::MultilingualText(MultilingualGlyphRun {
+            origin: Point { x: 12.0, y: 28.0 },
+            font_id: FontId(7),
+            font_size: 14.0,
+            glyph_ids: vec![1, 2],
+            x_advances: vec![8.0, 8.0],
+            y_advances: vec![0.0, 0.0],
+            x_offsets: vec![1.0, 0.0],
+            y_offsets: vec![0.0, 1.0],
+            clusters: vec![
+                GlyphCluster {
+                    glyph_start: 0,
+                    glyph_end: 1,
+                    char_start: 1,
+                    char_end: 2,
+                },
+                GlyphCluster {
+                    glyph_start: 1,
+                    glyph_end: 2,
+                    char_start: 0,
+                    char_end: 1,
+                },
+            ],
+            logical_text: "אב".to_owned(),
+            logical_index: 0,
+            source: None,
+            script: TextScript::Hebrew,
+            language: Some("he".to_owned()),
+            direction: TextDirection::RightToLeft,
+            bidi_level: 1,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            note: None,
+        });
+
+        let result = render_page(&layout(vec![rich]), 0).unwrap();
+        assert!(result.svg.contains(">אב</text>"));
+        assert!(result.svg.contains("rdocx-font-7"));
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].path, "pages[0].elements[0]");
+        assert!(
+            result.diagnostics[0]
+                .message
+                .contains("multilingual shaping kept searchable text")
+        );
+    }
+
+    #[test]
+    fn svg_rejects_non_finite_multilingual_positioning_without_invalid_numbers() {
+        let rich = PositionedElement::MultilingualText(MultilingualGlyphRun {
+            origin: Point { x: 12.0, y: 28.0 },
+            font_id: FontId(7),
+            font_size: 14.0,
+            glyph_ids: vec![1, 2],
+            x_advances: vec![f64::NAN, 8.0],
+            y_advances: vec![0.0, 0.0],
+            x_offsets: vec![0.0, 0.0],
+            y_offsets: vec![0.0, 0.0],
+            clusters: vec![
+                GlyphCluster {
+                    glyph_start: 0,
+                    glyph_end: 1,
+                    char_start: 1,
+                    char_end: 2,
+                },
+                GlyphCluster {
+                    glyph_start: 1,
+                    glyph_end: 2,
+                    char_start: 0,
+                    char_end: 1,
+                },
+            ],
+            logical_text: "אב".to_owned(),
+            logical_index: 0,
+            source: None,
+            script: TextScript::Hebrew,
+            language: Some("he".to_owned()),
+            direction: TextDirection::RightToLeft,
+            bidi_level: 1,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            note: None,
+        });
+
+        let result = render_page(&layout(vec![rich]), 0).unwrap();
+        assert!(!result.svg.contains("NaN"), "{}", result.svg);
+        assert!(!result.svg.contains(">אב</text>"));
+        assert_eq!(result.diagnostics.len(), 1);
+        assert!(
+            result.diagnostics[0]
+                .message
+                .contains("invalid multilingual")
+        );
     }
 
     #[test]

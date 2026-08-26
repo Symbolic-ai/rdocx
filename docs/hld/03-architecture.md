@@ -124,6 +124,14 @@ output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
 format.
 
+The same boundary owns multilingual text mechanics. Rich segments retain
+logical text and source ranges while carrying script, language, direction,
+bidi level, glyph clusters, and two-dimensional advances and offsets. Script
+and coverage segmentation, ICU break opportunities, conditional hyphenation,
+HarfRust shaping, and line-local UAX 9 visual ordering therefore remain shared
+by document formats. Logical order is the extraction contract. Visual order is
+applied only to completed lines for painting.
+
 Completed layout results share each immutable page frame and each font byte
 buffer through `Arc`. Word and Presentation producers establish that ownership
 at their format boundary. PDF, raster, SVG, facade page access, diagnostics,

@@ -57,7 +57,9 @@ use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
 #[cfg(feature = "render")]
-use rpptx_render::{MediaData, RenderInput, layout_presentation_with_font_manager};
+use rpptx_render::{
+    MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions,
+};
 use thiserror::Error;
 
 #[cfg(feature = "default-template")]
@@ -3585,6 +3587,7 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
     let mut font_manager = FontManager::new_deterministic()
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
+    let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
     for slide_id in &presentation.slide_ids {
         let slide_relationship = presentation_relationships
             .get_by_id(&slide_id.relationship_id)
@@ -3647,8 +3650,8 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
             [&slide_part, &layout_part, &master_part],
             &mut media,
         )?;
-        let resolved = context
-            .resolve_slide_with_chart_resources(
+        let (resolved, slide_text_directions) = context
+            .resolve_slide_with_chart_resources_and_text_directions(
                 size,
                 &slide_media,
                 &slide_hyperlinks,
@@ -3663,6 +3666,7 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
             )));
         }
         resolved_slides.push(resolved);
+        text_directions.push(slide_text_directions);
     }
 
     let input = RenderInput {
@@ -3671,8 +3675,12 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
         fonts: Vec::new(),
         metadata: None,
     };
-    let layout = layout_presentation_with_font_manager(&input, font_manager)
-        .map_err(|error| render_failure(error.to_string()))?;
+    let layout = layout_presentation_with_font_manager_and_text_directions(
+        &input,
+        font_manager,
+        &text_directions,
+    )
+    .map_err(|error| render_failure(error.to_string()))?;
     if layout.pages.len() != input.slides.len() {
         return Err(render_failure(format!(
             "rendered {} pages for {} slides",

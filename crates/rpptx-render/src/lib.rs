@@ -13,8 +13,9 @@ use oxml_layout::{
 use rpptx_layout::{
     CropRect, ResolvedBackground, ResolvedContent, ResolvedGeometry, ResolvedImage,
     ResolvedImagePlacement, ResolvedLineEnd, ResolvedLineEndKind, ResolvedLineEndSize,
-    ResolvedRectAlignment, ResolvedShape, ResolvedSlide, ResolvedTable, ResolvedTableBorder,
-    ResolvedTileFlip, ResolvedTilePlacement, ScopedHyperlinkTargets,
+    ResolvedRectAlignment, ResolvedShape, ResolvedSlide, ResolvedSlideTextDirections,
+    ResolvedTable, ResolvedTableBorder, ResolvedTileFlip, ResolvedTilePlacement,
+    ScopedHyperlinkTargets,
 };
 use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
@@ -228,10 +229,40 @@ pub fn layout_presentation_deterministic(
 /// Lowers every slide with the same manager that shaped any frozen group content.
 pub fn layout_presentation_with_font_manager(
     input: &RenderInput,
+    font_manager: FontManager,
+) -> Result<LayoutResult, RenderInputError> {
+    layout_presentation_with_font_manager_inner(input, font_manager, None)
+}
+
+/// Lowers every slide with paragraph directions from the additive resolver path.
+///
+/// Direction entries follow slides, shapes, text bodies, and paragraphs in that
+/// order. A table shape has one text-body entry per cell in row-major order.
+pub fn layout_presentation_with_font_manager_and_text_directions(
+    input: &RenderInput,
+    font_manager: FontManager,
+    text_directions: &[ResolvedSlideTextDirections],
+) -> Result<LayoutResult, RenderInputError> {
+    layout_presentation_with_font_manager_inner(input, font_manager, Some(text_directions))
+}
+
+fn layout_presentation_with_font_manager_inner(
+    input: &RenderInput,
     mut font_manager: FontManager,
+    text_directions: Option<&[ResolvedSlideTextDirections]>,
 ) -> Result<LayoutResult, RenderInputError> {
     let pages = (0..input.slides.len())
-        .map(|index| layout_slide_with_fonts(input, index, &mut font_manager).map(Arc::new))
+        .map(|index| {
+            layout_slide_with_fonts_and_text_directions(
+                input,
+                index,
+                &mut font_manager,
+                text_directions
+                    .and_then(|directions| directions.get(index))
+                    .map(Vec::as_slice),
+            )
+            .map(Arc::new)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let diagnostics = input
         .slides
@@ -259,6 +290,15 @@ fn layout_slide_with_fonts(
     input: &RenderInput,
     index: usize,
     font_manager: &mut FontManager,
+) -> Result<PageFrame, RenderInputError> {
+    layout_slide_with_fonts_and_text_directions(input, index, font_manager, None)
+}
+
+fn layout_slide_with_fonts_and_text_directions(
+    input: &RenderInput,
+    index: usize,
+    font_manager: &mut FontManager,
+    text_directions: Option<&[Vec<Vec<oxml_layout::TextDirection>>]>,
 ) -> Result<PageFrame, RenderInputError> {
     let slide = input
         .slides
@@ -307,7 +347,18 @@ fn layout_slide_with_fonts(
         slide
             .shapes
             .iter()
-            .map(|shape| lower_shape(input, shape, font_manager, index + 1))
+            .enumerate()
+            .map(|(shape_index, shape)| {
+                lower_shape(
+                    input,
+                    shape,
+                    font_manager,
+                    index + 1,
+                    text_directions
+                        .and_then(|directions| directions.get(shape_index))
+                        .map(Vec::as_slice),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?,
     );
     let mut page = PageFrame::new(index + 1, slide.size.0, slide.size.1, elements);
@@ -320,6 +371,7 @@ fn lower_shape(
     shape: &ResolvedShape,
     font_manager: &mut FontManager,
     page_number: usize,
+    text_directions: Option<&[Vec<oxml_layout::TextDirection>]>,
 ) -> Result<PositionedElement, RenderInputError> {
     let paths = if matches!(shape.content, ResolvedContent::Table(_)) {
         Vec::new()
@@ -357,11 +409,20 @@ fn lower_shape(
             let content_box = text::content_box(shape, text_body);
             let (content_box, text_transform) =
                 text::oriented_content_box(content_box, text_body.vertical);
-            let stacked =
-                text::stack_text_for_page(font_manager, content_box, text_body, page_number)
-                    .map_err(|error| RenderInputError::TextLayout {
-                        detail: error.to_string(),
-                    })?;
+            let paragraph_directions = text_directions
+                .and_then(|directions| directions.first())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let stacked = text::stack_text_for_page_with_directions(
+                font_manager,
+                content_box,
+                text_body,
+                page_number,
+                paragraph_directions,
+            )
+            .map_err(|error| RenderInputError::TextLayout {
+                detail: error.to_string(),
+            })?;
             debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
             text_children = if let Some(transform) = text_transform {
                 vec![PositionedElement::Group(GroupElement {
@@ -376,7 +437,12 @@ fn lower_shape(
             };
         }
         ResolvedContent::Table(table) => {
-            children.extend(lower_table(table, font_manager, page_number)?);
+            children.extend(lower_table(
+                table,
+                font_manager,
+                page_number,
+                text_directions.unwrap_or(&[]),
+            )?);
         }
         ResolvedContent::Group(group) => {
             children.push(PositionedElement::Group(group.clone()));
@@ -429,6 +495,7 @@ fn lower_table(
     table: &ResolvedTable,
     font_manager: &mut FontManager,
     page_number: usize,
+    text_directions: &[Vec<oxml_layout::TextDirection>],
 ) -> Result<Vec<PositionedElement>, RenderInputError> {
     let mut physical_column_widths = table.column_widths.clone();
     if table.right_to_left {
@@ -440,9 +507,15 @@ fn lower_table(
     let mut fills = Vec::new();
     let mut texts = Vec::new();
     let mut borders: HashMap<(bool, usize, usize), TableBorderCandidate> = HashMap::new();
+    let mut cell_index = 0usize;
 
     for (row_index, row) in table.rows.iter().enumerate() {
         for (column_index, cell) in row.cells.iter().enumerate() {
+            let paragraph_directions = text_directions
+                .get(cell_index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            cell_index += 1;
             if cell.horizontal_merge
                 || cell.vertical_merge
                 || column_index >= table.column_widths.len()
@@ -490,11 +563,16 @@ fn lower_table(
                         .max(0.0),
                 };
                 let (content, transform) = text::oriented_content_box(content, text_body.vertical);
-                let stacked =
-                    text::stack_text_for_page(font_manager, content, &text_body, page_number)
-                        .map_err(|error| RenderInputError::TextLayout {
-                            detail: error.to_string(),
-                        })?;
+                let stacked = text::stack_text_for_page_with_directions(
+                    font_manager,
+                    content,
+                    &text_body,
+                    page_number,
+                    paragraph_directions,
+                )
+                .map_err(|error| RenderInputError::TextLayout {
+                    detail: error.to_string(),
+                })?;
                 if let Some(transform) = transform {
                     texts.push(PositionedElement::Group(GroupElement {
                         transform,
@@ -3104,6 +3182,77 @@ mod tests {
                 slide_count: 1,
             }
         );
+    }
+
+    #[test]
+    fn resolved_rtl_numeric_forced_breaks_reach_rich_line_layout() {
+        const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let shape = r#"<p:sp><p:nvSpPr><p:cNvPr id="1" name="rtl"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="1828800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr rtl="1"/><a:r><a:rPr sz="1800"/><a:t>123</a:t></a:r><a:br/><a:r><a:rPr sz="1800"/><a:t>456</a:t></a:r></a:p></p:txBody></p:sp>"#;
+        let slide = CT_Slide::from_xml(
+            format!(
+                "<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{shape}</p:spTree></p:cSld></p:sld>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let empty_tree = "<p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree>";
+        let layout = CT_SlideLayout::from_xml(
+            format!(
+                "<p:sldLayout xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{empty_tree}</p:cSld></p:sldLayout>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let master = CT_SlideMaster::from_xml(
+            format!(
+                "<p:sldMaster xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{empty_tree}</p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/></p:sldMaster>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let theme = CT_OfficeStyleSheet::office_default();
+        let default_text_style = CT_TextListStyle::default();
+        let media = rpptx_layout::ScopedMediaIds::default();
+        let hyperlinks = rpptx_layout::ScopedHyperlinkTargets::default();
+        let charts = rpptx_layout::ScopedChartResources::default();
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let (resolved, directions) = ResolveCtx::new(
+            &theme,
+            ColorMap::default(),
+            &master,
+            &layout,
+            &slide,
+            &default_text_style,
+        )
+        .resolve_slide_with_chart_resources_and_text_directions(
+            (720.0, 144.0),
+            &media,
+            &hyperlinks,
+            &charts,
+            &mut fonts,
+        )
+        .unwrap();
+        let rendered = layout_presentation_with_font_manager_and_text_directions(
+            &render_input(vec![resolved]),
+            fonts,
+            &[directions],
+        )
+        .unwrap();
+        let mut runs = Vec::new();
+        walk(&rendered.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::MultilingualText(run) = element {
+                runs.push((run.logical_text.clone(), run.bidi_level, run.origin.y));
+            }
+        });
+
+        assert_eq!(
+            runs.iter()
+                .map(|(text, level, _)| (text.as_str(), *level))
+                .collect::<Vec<_>>(),
+            [("123", 2), ("456", 2)]
+        );
+        assert!(runs[0].2 < runs[1].2);
     }
 
     #[test]

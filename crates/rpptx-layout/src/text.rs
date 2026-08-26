@@ -167,6 +167,9 @@ fn merge_paragraph(effective: &mut EffectiveTextProperties, source: &CT_TextPara
     if source.alignment.is_some() {
         effective.paragraph.alignment = source.alignment;
     }
+    if source.right_to_left.is_some() {
+        effective.paragraph.right_to_left = source.right_to_left;
+    }
     if source.line_spacing.is_some() {
         effective.paragraph.line_spacing = source.line_spacing.clone();
     }
@@ -333,6 +336,16 @@ mod tests {
         assert_eq!(effective.paragraph.right_margin, Some(200));
         assert_eq!(effective.run.font_size, Some(2200));
         assert_eq!(effective.run.bold, Some(true));
+    }
+
+    #[test]
+    fn paragraph_direction_inherits_and_direct_ltr_overrides_it() {
+        let mut effective = EffectiveTextProperties::default();
+        merge_paragraph(&mut effective, &paragraph("<a:pPr rtl=\"1\"></a:pPr>"));
+        assert_eq!(effective.paragraph.right_to_left, Some(true));
+
+        merge_paragraph(&mut effective, &paragraph("<a:pPr rtl=\"0\"></a:pPr>"));
+        assert_eq!(effective.paragraph.right_to_left, Some(false));
     }
 
     #[test]

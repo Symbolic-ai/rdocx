@@ -86,6 +86,12 @@ fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) 
                 insert_alpha(keys, run.color.a)
             }
             PositionedElement::Text(_) => {}
+            PositionedElement::MultilingualText(run)
+                if !(run.logical_text.is_empty() && run.glyph_ids.is_empty()) =>
+            {
+                insert_alpha(keys, run.color.a)
+            }
+            PositionedElement::MultilingualText(_) => {}
             PositionedElement::Line { color, .. } | PositionedElement::FilledRect { color, .. } => {
                 insert_alpha(keys, color.a)
             }
@@ -934,6 +940,11 @@ fn layout_uses_notdef(layout: &LayoutResult) -> bool {
             {
                 found = true;
             }
+            if let PositionedElement::MultilingualText(run) = element
+                && run.glyph_ids.contains(&0)
+            {
+                found = true;
+            }
         });
         found
     })
@@ -1092,6 +1103,7 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
         let elem_idx = state.leaf_index;
         if !matches!(element, PositionedElement::Group(_))
             && !matches!(element, PositionedElement::Text(run) if run.text.is_empty() && run.glyph_ids.is_empty())
+            && !matches!(element, PositionedElement::MultilingualText(run) if run.logical_text.is_empty() && run.glyph_ids.is_empty())
         {
             state.leaf_index += 1;
         }
@@ -1140,6 +1152,30 @@ fn emit_elements(content: &mut Content, elements: &[PositionedElement], state: &
                 }
             }
             PositionedElement::Text(_) => {}
+            PositionedElement::MultilingualText(run) => {
+                content
+                    .begin_marked_content_with_properties(Name(b"Span"))
+                    .properties()
+                    .actual_text(TextStr(&run.logical_text));
+                if let Some(prepared) = state.prepared_fonts.get(&run.font_id)
+                    && state.font_refs.contains_key(&run.font_id)
+                {
+                    let font_name = format!("F{}", run.font_id.0);
+                    content.save_state();
+                    content.set_fill_rgb(
+                        run.color.r as f32,
+                        run.color.g as f32,
+                        run.color.b as f32,
+                    );
+                    apply_alpha(content, run.color.a, state.alpha_states);
+                    content.begin_text();
+                    content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
+                    emit_multilingual_glyphs(content, run, &prepared.remapper, &prepared.widths);
+                    content.end_text();
+                    content.restore_state();
+                }
+                content.end_marked_content();
+            }
             PositionedElement::Line {
                 start,
                 end,
@@ -1473,6 +1509,40 @@ fn emit_glyphs(
     positioned.finish();
 }
 
+/// Emit a rich run at its shaped per-glyph positions.
+fn emit_multilingual_glyphs(
+    content: &mut Content,
+    run: &oxml_layout::output::MultilingualGlyphRun,
+    remapper: &subsetter::GlyphRemapper,
+    widths: &[(u16, f64)],
+) {
+    if !run.is_valid() {
+        return;
+    }
+    let mut x = run.origin.x;
+    let mut y = run.origin.y;
+    for (index, &glyph_id) in run.glyph_ids.iter().enumerate() {
+        content.set_text_matrix([
+            1.0,
+            0.0,
+            0.0,
+            -1.0,
+            (x + run.x_offsets[index]) as f32,
+            (y - run.y_offsets[index]) as f32,
+        ]);
+        emit_glyphs(
+            content,
+            std::slice::from_ref(&glyph_id),
+            std::slice::from_ref(&run.x_advances[index]),
+            run.font_size,
+            remapper,
+            widths,
+        );
+        x += run.x_advances[index];
+        y -= run.y_advances[index];
+    }
+}
+
 /// Write the outline tree (bookmarks) with hierarchical structure.
 ///
 /// H2 entries become children of the preceding H1, H3 of the preceding H2, etc.
@@ -1622,9 +1692,10 @@ fn sanitize_font_name(family: &str, bold: bool, italic: bool) -> String {
 mod tests {
     use super::*;
     use oxml_layout::{
-        Color, DocumentStructure, Effect, FillRule, FontData, GlyphRun, GradientStop, GroupElement,
-        LineCap, LineJoin, MediaId, PageFrame, Paint, Path, PathCommand, PathElement, Point, Rect,
-        Stroke, StructureId, StructureNode, StructureRole, Transform,
+        Color, DocumentStructure, Effect, FillRule, FontData, GlyphCluster, GlyphRun, GradientStop,
+        GroupElement, LineCap, LineJoin, MediaId, MultilingualGlyphRun, PageFrame, Paint, Path,
+        PathCommand, PathElement, Point, Rect, Stroke, StructureId, StructureNode, StructureRole,
+        TextDirection, TextScript, Transform,
     };
 
     fn page_with(elements: Vec<PositionedElement>) -> PageFrame {
@@ -1682,6 +1753,46 @@ mod tests {
             fill,
             stroke,
         })
+    }
+
+    #[test]
+    fn multilingual_pdf_content_uses_logical_actual_text() {
+        let run = MultilingualGlyphRun {
+            origin: Point { x: 10.0, y: 20.0 },
+            font_id: FontId(9),
+            font_size: 12.0,
+            glyph_ids: vec![2, 1],
+            x_advances: vec![6.0, 6.0],
+            y_advances: vec![0.0, 0.0],
+            x_offsets: vec![0.0, 0.0],
+            y_offsets: vec![0.0, 0.0],
+            clusters: vec![GlyphCluster {
+                glyph_start: 0,
+                glyph_end: 2,
+                char_start: 0,
+                char_end: 2,
+            }],
+            logical_text: "אב".to_owned(),
+            logical_index: 0,
+            source: None,
+            script: TextScript::Hebrew,
+            language: Some("he".to_owned()),
+            direction: TextDirection::RightToLeft,
+            bidi_level: 1,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            note: None,
+        };
+        assert!(run.is_valid());
+        let mut invalid = run.clone();
+        invalid.x_offsets.clear();
+        assert!(!invalid.is_valid());
+        let content = content_for(vec![PositionedElement::MultilingualText(run)]);
+
+        assert!(content.contains("/ActualText <FEFF05D005D1>"), "{content}");
+        assert!(content.contains("/Span <<"), "{content}");
     }
 
     fn solid_stroke() -> Stroke {

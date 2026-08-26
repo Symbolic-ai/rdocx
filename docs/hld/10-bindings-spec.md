@@ -611,6 +611,17 @@ break for the next stable family. They expose renderer input, not a second
 authoring surface. Opened header XML remains the serialization authority, and
 callers should use the native `Document` methods for mutation.
 
+The pre-1.0 shared layout surface also provides additive multilingual text
+types for native renderer producers. Direction, script, clusters, logical
+source ranges, and two-dimensional glyph positions are available without
+changing any established layout struct or entrypoint shape. PowerPoint exposes
+resolved paragraph directions through `ResolvedSlideTextDirections` and
+sibling resolver and renderer entrypoints. The sidecar leaves the exhaustive
+`ResolvedParagraph` shape and all established entrypoints unchanged. Python,
+WASM, and CLI surfaces gain no multilingual authoring method. Both WASM graphs
+retain their host-font-free target contract while consuming the same bundled
+fallback inventory transitively.
+
 The next stable Rust family includes the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. `ST_NumberFormat::Other(String)`

@@ -1,7 +1,7 @@
 use oxml_layout::{
     Align, Color, FieldKind, FontManager, GlyphRun, InlineItem, LayoutError, LayoutLine,
-    LineBreakParams, LineItem, LineSpacing, Paint, Point, PositionedElement, Rect, TextSegment,
-    Underline, break_into_lines,
+    LineBreakParams, LineItem, LineSpacing, MultilingualGlyphRun, Paint, Point, PositionedElement,
+    Rect, TextSegment, Underline, break_multilingual_into_lines,
 };
 use rpptx_layout::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedParagraph,
@@ -399,13 +399,25 @@ pub(super) fn stack_text(
     stack_text_for_page(font_manager, content, text, 1)
 }
 
+#[cfg(test)]
 pub(super) fn stack_text_for_page(
     font_manager: &mut FontManager,
     content: Rect,
     text: &ResolvedTextBody,
     page_number: usize,
 ) -> Result<StackedText, LayoutError> {
-    let shaped_paragraphs = shape_paragraphs(font_manager, text, page_number)?;
+    stack_text_for_page_with_directions(font_manager, content, text, page_number, &[])
+}
+
+pub(super) fn stack_text_for_page_with_directions(
+    font_manager: &mut FontManager,
+    content: Rect,
+    text: &ResolvedTextBody,
+    page_number: usize,
+    paragraph_directions: &[oxml_layout::TextDirection],
+) -> Result<StackedText, LayoutError> {
+    let shaped_paragraphs =
+        shape_paragraphs(font_manager, text, page_number, paragraph_directions)?;
     match text.autofit {
         ResolvedAutofit::None | ResolvedAutofit::Shape => {
             stack_shaped_text(font_manager, content, text, &shaped_paragraphs, 1.0, None)
@@ -454,18 +466,39 @@ fn shape_paragraphs(
     font_manager: &mut FontManager,
     text: &ResolvedTextBody,
     page_number: usize,
-) -> Result<Vec<Vec<InlineItem>>, LayoutError> {
+    paragraph_directions: &[oxml_layout::TextDirection],
+) -> Result<Vec<(Vec<InlineItem>, oxml_layout::TextDirection)>, LayoutError> {
     let mut numbering = NumberingState::default();
     let mut shaping_cache = ShapingCache::default();
     text.paragraphs
         .iter()
-        .map(|paragraph| {
+        .enumerate()
+        .map(|(paragraph_index, paragraph)| {
+            let base_direction = paragraph_directions
+                .get(paragraph_index)
+                .copied()
+                .unwrap_or(oxml_layout::TextDirection::Auto);
             let marker = numbering.marker(font_manager, &mut shaping_cache, paragraph)?;
-            let mut items =
+            let legacy_items =
                 inline_items_cached(font_manager, &mut shaping_cache, paragraph, page_number)?;
-            let has_visible_text = items
-                .iter()
-                .any(|item| matches!(item, InlineItem::Text(segment) if !segment.text.is_empty()));
+            let uses_rich_text = base_direction != oxml_layout::TextDirection::Auto
+                || legacy_items.iter().any(|item| {
+                    matches!(item, InlineItem::Text(segment) if needs_multilingual_layout(&segment.text))
+                });
+            let mut items = if uses_rich_text {
+                shape_multilingual_items_preserving_controls(
+                    font_manager,
+                    legacy_items,
+                    base_direction,
+                )?
+            } else {
+                legacy_items
+            };
+            let has_visible_text = items.iter().any(|item| match item {
+                InlineItem::Text(segment) => !segment.text.is_empty(),
+                InlineItem::MultilingualText(segment) => !segment.text().is_empty(),
+                _ => false,
+            });
             if items.is_empty() {
                 items.push(InlineItem::Text(shaping_cache.shape(
                     font_manager,
@@ -476,16 +509,80 @@ fn shape_paragraphs(
             if let Some(marker) = marker.filter(|_| has_visible_text) {
                 items.insert(0, InlineItem::Marker(marker));
             }
-            Ok(items)
+            Ok((items, base_direction))
         })
         .collect()
+}
+
+fn shape_multilingual_items_preserving_controls(
+    font_manager: &mut FontManager,
+    legacy_items: Vec<InlineItem>,
+    base_direction: oxml_layout::TextDirection,
+) -> Result<Vec<InlineItem>, LayoutError> {
+    let styled = legacy_items
+        .iter()
+        .filter_map(|item| match item {
+            InlineItem::Text(segment) => Some((segment.clone(), None)),
+            _ => None,
+        })
+        .collect();
+    let mut shaped = std::collections::VecDeque::from(font_manager.shape_multilingual_paragraph(
+        styled,
+        base_direction,
+        false,
+    )?);
+    let mut items = Vec::new();
+    for item in legacy_items {
+        let InlineItem::Text(segment) = item else {
+            items.push(item);
+            continue;
+        };
+        let target_bytes = segment.text.len();
+        let mut consumed_bytes = 0usize;
+        while consumed_bytes < target_bytes {
+            let Some(span) = shaped.pop_front() else {
+                return Err(LayoutError::Layout(
+                    "multilingual paragraph shaping lost a styled text run".to_owned(),
+                ));
+            };
+            consumed_bytes = consumed_bytes
+                .checked_add(span.text().len())
+                .filter(|consumed| *consumed <= target_bytes)
+                .ok_or_else(|| {
+                    LayoutError::Layout(
+                        "multilingual paragraph shaping crossed a styled text boundary".to_owned(),
+                    )
+                })?;
+            items.push(InlineItem::MultilingualText(span));
+        }
+    }
+    if !shaped.is_empty() {
+        return Err(LayoutError::Layout(
+            "multilingual paragraph shaping produced an unmatched text run".to_owned(),
+        ));
+    }
+    Ok(items)
+}
+
+fn needs_multilingual_layout(text: &str) -> bool {
+    text.chars().any(|character| {
+        matches!(
+            character as u32,
+            0x0590..=0x08ff
+                | 0x0900..=0x097f
+                | 0x0e00..=0x0e7f
+                | 0x3000..=0x30ff
+                | 0x3400..=0x9fff
+                | 0xf900..=0xfaff
+        )
+    })
 }
 
 fn stack_shaped_text(
     font_manager: &FontManager,
     content: Rect,
     text: &ResolvedTextBody,
-    shaped_paragraphs: &[Vec<InlineItem>],
+    shaped_paragraphs: &[(Vec<InlineItem>, oxml_layout::TextDirection)],
     font_scale: f64,
     line_spacing_reduction: Option<f64>,
 ) -> Result<StackedText, LayoutError> {
@@ -496,7 +593,7 @@ fn stack_shaped_text(
     let mut width_fits = true;
 
     let last_paragraph = text.paragraphs.len().saturating_sub(1);
-    for (index, (paragraph, shaped_items)) in
+    for (index, (paragraph, (shaped_items, base_direction))) in
         text.paragraphs.iter().zip(shaped_paragraphs).enumerate()
     {
         let font_size = first_run_font_size(paragraph) * font_scale;
@@ -505,7 +602,8 @@ fn stack_shaped_text(
         }
         let items = scaled_inline_items(shaped_items, font_scale, paragraph.indent);
         let params = line_break_params(paragraph, content.width, text.wrap);
-        let mut lines = break_into_lines(&items, &params, font_manager)?;
+        let mut lines =
+            break_multilingual_into_lines(&items, &params, font_manager, *base_direction)?;
         if let Some(reduction) = line_spacing_reduction {
             reduce_line_spacing(&mut lines, paragraph.line_spacing.as_ref(), reduction);
         }
@@ -555,6 +653,43 @@ fn scaled_inline_items(items: &[InlineItem], scale: f64, indent: f64) -> Vec<Inl
             InlineItem::Text(mut segment) => {
                 scale_segment(&mut segment, scale);
                 InlineItem::Text(segment)
+            }
+            InlineItem::MultilingualText(segment) => {
+                let mut base = segment.base().clone();
+                scale_segment(&mut base, scale);
+                InlineItem::MultilingualText(
+                    oxml_layout::MultilingualTextSegment::new(
+                        base,
+                        segment.logical_index(),
+                        segment.language().map(str::to_owned),
+                        segment.script(),
+                        segment.direction(),
+                        segment.bidi_level(),
+                        segment
+                            .x_advances()
+                            .iter()
+                            .map(|value| value * scale)
+                            .collect(),
+                        segment
+                            .y_advances()
+                            .iter()
+                            .map(|value| value * scale)
+                            .collect(),
+                        segment
+                            .x_offsets()
+                            .iter()
+                            .map(|value| value * scale)
+                            .collect(),
+                        segment
+                            .y_offsets()
+                            .iter()
+                            .map(|value| value * scale)
+                            .collect(),
+                        segment.clusters().to_vec(),
+                        segment.break_after(),
+                    )
+                    .expect("scaling preserves multilingual segment invariants"),
+                )
             }
             InlineItem::Marker(mut segment) => {
                 scale_segment(&mut segment, scale);
@@ -628,6 +763,7 @@ fn anchor_lines(
 fn translate_element_y(element: &mut PositionedElement, offset: f64) {
     match element {
         PositionedElement::Text(run) => run.origin.y += offset,
+        PositionedElement::MultilingualText(run) => run.origin.y += offset,
         PositionedElement::Line { start, end, .. } => {
             start.y += offset;
             end.y += offset;
@@ -709,6 +845,7 @@ fn emit_line_items(
     baseline: f64,
     elements: &mut Vec<PositionedElement>,
 ) -> f64 {
+    let element_start = elements.len();
     let remaining = line.available_width - line.width;
     let distribute = match alignment {
         ParagraphAlignment::Justified if !line.is_last => {
@@ -748,6 +885,10 @@ fn emit_line_items(
                 );
                 x += effective_width;
             }
+            LineItem::MultilingualText(segment) => {
+                emit_multilingual_segment(segment, x, baseline, line.height, elements);
+                x += segment.width();
+            }
             LineItem::Marker(segment) => {
                 emit_segment(
                     segment,
@@ -778,6 +919,20 @@ fn emit_line_items(
             LineItem::Group { width, .. } => x += width,
             _ => x += item.width(),
         }
+    }
+    let rich_positions = (element_start..elements.len())
+        .filter(|index| matches!(elements[*index], PositionedElement::MultilingualText(_)))
+        .collect::<Vec<_>>();
+    let mut logical_runs = rich_positions
+        .iter()
+        .filter_map(|index| match &elements[*index] {
+            PositionedElement::MultilingualText(run) => Some(run.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    logical_runs.sort_by_key(|run| run.logical_index);
+    for (position, run) in rich_positions.into_iter().zip(logical_runs) {
+        elements[position] = PositionedElement::MultilingualText(run);
     }
     x - start_x
 }
@@ -863,6 +1018,95 @@ fn emit_segment(
     }
 }
 
+fn emit_multilingual_segment(
+    segment: &oxml_layout::MultilingualTextSegment,
+    x: f64,
+    baseline: f64,
+    line_height: f64,
+    elements: &mut Vec<PositionedElement>,
+) {
+    let base = segment.base();
+    if base.text.is_empty() {
+        return;
+    }
+    let adjusted_baseline = baseline - base.baseline_offset;
+    if let Some(color) = base.highlight {
+        elements.push(PositionedElement::FilledRect {
+            rect: Rect {
+                x,
+                y: baseline - base.ascent,
+                width: segment.width(),
+                height: line_height,
+            },
+            color,
+        });
+    }
+    elements.push(PositionedElement::MultilingualText(MultilingualGlyphRun {
+        origin: Point {
+            x,
+            y: adjusted_baseline,
+        },
+        font_id: segment.font_id(),
+        font_size: base.font_size,
+        glyph_ids: segment.glyph_ids().to_vec(),
+        x_advances: segment.x_advances().to_vec(),
+        y_advances: segment.y_advances().to_vec(),
+        x_offsets: segment.x_offsets().to_vec(),
+        y_offsets: segment.y_offsets().to_vec(),
+        clusters: segment.clusters().to_vec(),
+        logical_text: segment.text().to_owned(),
+        logical_index: segment.logical_index(),
+        source: base.source,
+        script: segment.script(),
+        language: segment.language().map(str::to_owned),
+        direction: segment.direction(),
+        bidi_level: segment.bidi_level(),
+        color: base.color,
+        bold: base.bold,
+        italic: base.italic,
+        field_kind: base.field_kind,
+        note: base.note,
+    }));
+
+    if base.underline.is_some() {
+        let y = adjusted_baseline + base.descent * 0.3;
+        elements.push(PositionedElement::Line {
+            start: Point { x, y },
+            end: Point {
+                x: x + segment.width(),
+                y,
+            },
+            width: base.font_size / 18.0,
+            color: base.color,
+            dash_pattern: None,
+        });
+    }
+    if base.strike {
+        let y = adjusted_baseline - base.ascent * 0.3;
+        elements.push(PositionedElement::Line {
+            start: Point { x, y },
+            end: Point {
+                x: x + segment.width(),
+                y,
+            },
+            width: base.font_size / 24.0,
+            color: base.color,
+            dash_pattern: None,
+        });
+    }
+    if let Some(url) = &base.hyperlink_url {
+        elements.push(PositionedElement::LinkAnnotation {
+            rect: Rect {
+                x,
+                y: baseline - base.ascent,
+                width: segment.width(),
+                height: line_height,
+            },
+            url: url.clone(),
+        });
+    }
+}
+
 fn word_gap_count(items: &[LineItem]) -> usize {
     items
         .iter()
@@ -889,6 +1133,7 @@ fn glyph_gap_count(items: &[LineItem]) -> usize {
 fn text_segment(item: &LineItem) -> Option<&TextSegment> {
     match item {
         LineItem::Text(segment) => Some(segment),
+        LineItem::MultilingualText(segment) => Some(segment.base()),
         LineItem::Marker(_)
         | LineItem::Tab { .. }
         | LineItem::Image { .. }
@@ -2851,6 +3096,142 @@ mod tests {
 
         assert_close(run.font_size, 5.0);
         assert!(stacked.width > content.width || stacked.height > content.height);
+    }
+
+    #[test]
+    fn rich_powerpoint_text_path_keeps_visual_runs_and_logical_text_together() {
+        let source = "abc العربية कि ภาษาไทย 〈中〉、 אבג 123";
+        let body = ResolvedTextBody {
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![ResolvedTextRun::Text {
+                    text: source.to_owned(),
+                    style: ResolvedRunStyle {
+                        font_size: Some(18.0),
+                        latin_typeface: Some("Carlito".to_owned()),
+                        ..ResolvedRunStyle::default()
+                    },
+                }],
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let stacked = stack_text(&mut fonts, test_content_box(2_000.0), &body)
+            .expect("shape multilingual PowerPoint text");
+        let runs = stacked
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::MultilingualText(run) => Some(run),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(runs.len() > 4);
+        assert!(runs.iter().all(|run| {
+            run.glyph_ids.len() == run.x_advances.len()
+                && run.glyph_ids.len() == run.x_offsets.len()
+                && run.glyph_ids.len() == run.y_offsets.len()
+        }));
+        assert!(runs.iter().any(|run| run.bidi_level % 2 == 1));
+        let logical_indices = runs.iter().map(|run| run.logical_index).collect::<Vec<_>>();
+        let logical = runs
+            .iter()
+            .map(|run| run.logical_text.as_str())
+            .collect::<String>();
+
+        assert_eq!(logical, source);
+        assert_eq!(
+            logical_indices,
+            (0..logical_indices.len()).collect::<Vec<_>>()
+        );
+        assert!(
+            runs.windows(2)
+                .any(|pair| pair[0].origin.x > pair[1].origin.x),
+            "logical extraction order must coexist with visual positions"
+        );
+
+        let layout = oxml_layout::LayoutResult::new(
+            vec![oxml_layout::PageFrame::new(1, 2_000.0, 200.0, stacked.elements).into()],
+            fonts.all_font_data(),
+            None,
+            Vec::new(),
+        );
+        let pdf = oxml_pdf::render_to_pdf(&layout);
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0)
+            .expect("raster consumes positioned multilingual runs");
+        assert!(pdf.starts_with(b"%PDF"));
+        assert!(png.starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn explicit_rtl_styled_runs_around_a_forced_break_keep_logical_order() {
+        let body = ResolvedTextBody {
+            paragraphs: vec![ResolvedParagraph {
+                runs: vec![
+                    ResolvedTextRun::Text {
+                        text: "אב".to_owned(),
+                        style: ResolvedRunStyle {
+                            font_size: Some(18.0),
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                    ResolvedTextRun::Text {
+                        text: "גד".to_owned(),
+                        style: ResolvedRunStyle {
+                            font_size: Some(18.0),
+                            italic: true,
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                    ResolvedTextRun::Break,
+                    ResolvedTextRun::Text {
+                        text: "הו".to_owned(),
+                        style: ResolvedRunStyle {
+                            font_size: Some(18.0),
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                    ResolvedTextRun::Text {
+                        text: "זח".to_owned(),
+                        style: ResolvedRunStyle {
+                            font_size: Some(18.0),
+                            bold: true,
+                            ..ResolvedRunStyle::default()
+                        },
+                    },
+                ],
+                ..ResolvedParagraph::default()
+            }],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let stacked = stack_text_for_page_with_directions(
+            &mut fonts,
+            test_content_box(2_000.0),
+            &body,
+            1,
+            &[oxml_layout::TextDirection::RightToLeft],
+        )
+        .unwrap();
+        let runs = stacked
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::MultilingualText(run) => Some(run),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            runs.iter()
+                .map(|run| { (run.logical_text.as_str(), run.logical_index, run.bidi_level,) })
+                .collect::<Vec<_>>(),
+            [("אב", 0, 1), ("גד", 1, 1), ("הו", 2, 1), ("זח", 3, 1)]
+        );
+        assert!(runs[0].origin.x > runs[1].origin.x);
+        assert!(runs[2].origin.x > runs[3].origin.x);
+        assert!(runs[0].origin.y < runs[2].origin.y);
     }
 
     fn bullet_paragraph(

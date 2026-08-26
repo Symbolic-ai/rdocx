@@ -224,12 +224,84 @@ pub struct GlyphRun {
     pub note: Option<crate::line::NoteRef>,
 }
 
+/// A positioned multilingual span with complete two-axis glyph positioning.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultilingualGlyphRun {
+    pub origin: Point,
+    pub font_id: FontId,
+    pub font_size: f64,
+    pub glyph_ids: Vec<u16>,
+    pub x_advances: Vec<f64>,
+    pub y_advances: Vec<f64>,
+    pub x_offsets: Vec<f64>,
+    pub y_offsets: Vec<f64>,
+    pub clusters: Vec<crate::font::GlyphCluster>,
+    pub logical_text: String,
+    pub logical_index: usize,
+    pub source: Option<SourceSpan>,
+    pub script: crate::font::TextScript,
+    pub language: Option<String>,
+    pub direction: crate::font::TextDirection,
+    pub bidi_level: u8,
+    pub color: Color,
+    pub bold: bool,
+    pub italic: bool,
+    pub field_kind: Option<FieldKind>,
+    pub note: Option<crate::line::NoteRef>,
+}
+
+impl MultilingualGlyphRun {
+    /// Whether all glyph-position and logical-cluster vectors form one complete run.
+    pub fn is_valid(&self) -> bool {
+        let glyph_count = self.glyph_ids.len();
+        self.x_advances.len() == glyph_count
+            && self.y_advances.len() == glyph_count
+            && self.x_offsets.len() == glyph_count
+            && self.y_offsets.len() == glyph_count
+            && unicode_bidi::Level::new(self.bidi_level).is_ok()
+            && crate::font::position_values_are_finite(
+                &self.x_advances,
+                &self.y_advances,
+                &self.x_offsets,
+                &self.y_offsets,
+                self.x_advances.iter().sum(),
+            )
+            && crate::font::cluster_ranges_are_valid(
+                &self.clusters,
+                glyph_count,
+                self.logical_text.chars().count(),
+                self.bidi_level % 2 == 1,
+            )
+    }
+
+    /// Return a legacy horizontal projection for backends that cannot consume
+    /// the richer positioning and cluster metadata directly.
+    pub fn legacy_projection(&self) -> GlyphRun {
+        GlyphRun {
+            origin: self.origin,
+            font_id: self.font_id,
+            font_size: self.font_size,
+            glyph_ids: self.glyph_ids.clone(),
+            advances: self.x_advances.clone(),
+            text: self.logical_text.clone(),
+            source: self.source,
+            color: self.color,
+            bold: self.bold,
+            italic: self.italic,
+            field_kind: self.field_kind,
+            note: self.note,
+        }
+    }
+}
+
 /// A positioned element on a page.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum PositionedElement {
     /// A run of shaped text glyphs.
     Text(GlyphRun),
+    /// A visually positioned span that retains logical text and clusters.
+    MultilingualText(MultilingualGlyphRun),
     /// A line segment (for borders, underlines, strikethrough).
     Line {
         start: Point,

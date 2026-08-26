@@ -6717,7 +6717,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertIn("system-fonts", features)
         self.assertNotIn("bundled-fonts", features)
         claimed_font_count = re.findall(r"([0-9]+) bundled TTFs", claude)
-        self.assertEqual(claimed_font_count, ["20"])
+        self.assertEqual(claimed_font_count, ["24"])
         fonts = font_path / "fonts"
         self.assertEqual(len(tuple(fonts.glob("*.ttf"))), int(claimed_font_count[0]))
         for legal_file in (
@@ -6725,6 +6725,9 @@ Pedro Assumpcao and the rdocx maintainers.
             "NOTICE-Caladea",
             "LICENSE-Carlito",
             "LICENSE-Liberation",
+            "LICENSE-Noto",
+            "NOTICE-Noto",
+            "SUBSET-NotoSansSC.md",
         ):
             self.assertTrue((fonts / legal_file).is_file(), legal_file)
 

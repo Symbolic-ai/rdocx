@@ -926,6 +926,16 @@ outcomes as mandatory manual evidence.
 - `FontManager` with no fonts returns an error rather than panicking, and
   `--no-default-features` is in the CI matrix so the system-font-discovery-off
   path is exercised while bundled deterministic fonts remain available.
+- Multilingual fixtures cover Arabic joining, Indic cluster integrity, Thai
+  word boundaries, CJK prohibited punctuation, conditional hyphens, and mixed
+  bidi lines. Every fixture compares logical source intervals separately from
+  line-local visual order and requires equal glyph-array lengths.
+- The DrawingML direction round trip rejects a foreign same-local-name
+  attribute and preserves unknown attributes, children, and schema order.
+- The rich PowerPoint fixture exercises the shared PDF, raster, and SVG paths
+  with deterministic bundled fonts. PDF extraction and SVG text stay logical
+  while painted bidi positions are visual. The stable source fixture and full
+  49-entry hash harness protect the legacy Latin path.
 
 **`oxml-pdf`**
 - Three-deep groups balance `q` and `Q`, emit each `cm` before child content,

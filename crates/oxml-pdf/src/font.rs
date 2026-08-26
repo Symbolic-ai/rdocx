@@ -52,6 +52,28 @@ pub(crate) fn collect_glyph_usage(layout: &LayoutResult) -> HashMap<FontId, Font
                     }
                 }
             }
+            if let PositionedElement::MultilingualText(run) = element
+                && !(run.logical_text.is_empty() && run.glyph_ids.is_empty())
+                && run.is_valid()
+            {
+                let entry = usage.entry(run.font_id).or_insert_with(|| FontUsage {
+                    glyph_to_unicode: BTreeMap::new(),
+                    remapper: GlyphRemapper::new(),
+                });
+                let chars = run.logical_text.chars().collect::<Vec<_>>();
+                for cluster in &run.clusters {
+                    let Some(&character) = chars.get(cluster.char_start as usize) else {
+                        continue;
+                    };
+                    for glyph in cluster.glyph_start..cluster.glyph_end {
+                        let Some(&gid) = run.glyph_ids.get(glyph as usize) else {
+                            continue;
+                        };
+                        entry.remapper.remap(gid);
+                        entry.glyph_to_unicode.entry(gid).or_insert(character);
+                    }
+                }
+            }
         });
     }
 
