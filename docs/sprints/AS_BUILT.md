@@ -9400,3 +9400,80 @@ Poppler 26.01.0 identities.
 18 pages at SSIM 0.95 or greater. The 5.56 percent trend is deliberately
 visible but advisory. Future shaping stories should improve or intentionally
 explain this evidence without weakening complete-union coverage.
+
+### F-202, Incremental layout
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Restart pagination now retains up to 1,024 page and
+checkpoint entries under the existing 8 MiB restart and 64 MiB aggregate byte
+ceilings. Editing one paragraph in the source-built thousand-page document
+rebuilds at most two pages through both the engine and public facade paths.
+
+**Non-obvious choices.** The retained partition keeps exact body, provenance,
+font, substitution, tail-context, and suffix equality. Oversized or unsafe
+state still falls back to full pagination. Substituted-page reuse stays bounded
+at the 1,024 and 1,025 page boundary, and retained page frames use shared
+`Arc` identity without changing the public API.
+
+**Deviations from the design plan.** None. Microscope tightened the invocation
+gate so it proves 1,000 initial page layouts and only one or two warm page
+layouts instead of accepting a zero-work false positive.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The engine and facade thousand-page restart regressions,
+substituted-page boundary equality, the existing locked F-201 release gate,
+and the dependency-prefix full workspace gate passed. The latter included
+no-default fonts, both WASM targets, warning-free docs, 27 README inventories,
+the exact 22-package dry run, archive size checks, and cargo-deny.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The 1,024 entry ceiling is an explicit bounded
+editor contract. F-X062 may widen restart eligibility for unchanged related
+stories, but it must preserve the same byte ceilings and exact fresh equality.
+
+### F-X061, Support staged dependency checkpoints in run-sprint
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `/run-sprint` now finalises an integrated dependency prefix
+before claiming its consumer, then resumes the same sprint state. Release
+dependencies extend that route with prepared-release evidence, separate final
+approval, verified publication, and post-publication delivery records.
+
+**Non-obvious choices.** A clean review file is committed first, the clean
+verdict is recorded at that resulting HEAD, and full verification is rerun at
+the same HEAD. No self-confirming review is added for the evidence-only commit.
+Each scheduled boundary keeps its own remediation bound while global pass
+numbers remain monotonic. `init --resume` refreshes canonical title and size
+metadata while preserving state, ownership, worker, review, and verification
+facts.
+
+**Deviations from the design plan.** The approved release-only repair was
+generalised before integration after an independent A to B to C forward test
+proved that ordinary dependencies had the same finalisation deadlock.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Eighty-four workflow regressions and an independent forward test
+covered ordinary A to B to C chains, release R to D chains, review commit
+ordering, and resume preservation. The dependency-prefix full workspace gate
+also passed with all package, documentation, WASM, hash, and supply-chain
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Use the dependency-prefix route before every
+consumer whose formal prerequisite is reviewed but not completed. Earlier
+HEAD-bound evidence remains historical and cannot satisfy a later boundary.

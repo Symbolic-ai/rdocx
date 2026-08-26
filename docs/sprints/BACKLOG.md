@@ -35,11 +35,11 @@ regenerated, never hand-edited.
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
-| M20, Fidelity at scale                         | 7  | 3 | 2 | 2  |
+| M20, Fidelity at scale                         | 7  | 4 | 1 | 2  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 66 | 55 | 3 | 6  |
-| **Total** | **313** | **247** | **8** | **56** |
+| X, Cross-cutting (opportunistic)            | 66 | 56 | 2 | 6  |
+| **Total** | **313** | **249** | **6** | **56** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -401,7 +401,7 @@ regenerated, never hand-edited.
 | F-199 | Complex script shaping                       | S58  | L | pending |
 | F-200 | Vertical and bidirectional text              | S58  | M | pending |
 | F-201 | Large document performance                   | S57  | L | done |
-| F-202 | Incremental layout                           | S58  | L | in-progress |
+| F-202 | Incremental layout                           | S58  | L | done |
 <!-- AUTOGEN:backlog-M20 END -->
 
 ### M21, Presentation depth
@@ -513,7 +513,7 @@ regenerated, never hand-edited.
 | F-X058 | Shared multilingual text substrate        | S58 | L | in-progress |
 | F-X059 | Tag rpptx-v0.7.0                          | S58 | S | pending |
 | F-X060 | Tag v0.11.0                               | S58 | S | pending |
-| F-X061 | Support staged dependency checkpoints in run-sprint | S58 | S | in-progress |
+| F-X061 | Support staged dependency checkpoints in run-sprint | S58 | S | done |
 | F-X062 | Reuse restart pagination with notes and headers | S58 | M | pending |
 | F-X063 | Avoid duplicate caller-font byte comparisons | S58 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

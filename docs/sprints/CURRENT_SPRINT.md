@@ -30,14 +30,14 @@ protection at the reviewed sprint SHA.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X061 | Support staged dependency checkpoints in run-sprint | S | in-progress | codex |
+| F-X061 | Support staged dependency checkpoints in run-sprint | S | done | - |
 | F-X062 | Reuse restart pagination with notes and headers | M | pending | - |
 | F-X063 | Avoid duplicate caller-font byte comparisons | S | pending | - |
 | F-X058 | Shared multilingual text substrate | L | in-progress | codex |
 | F-X059 | Tag rpptx-v0.7.0 | S | pending | - |
 | F-198 | Hyphenation | L | in-progress | codex |
 | F-199 | Complex script shaping | L | pending | - |
-| F-202 | Incremental layout | L | in-progress | codex |
+| F-202 | Incremental layout | L | done | - |
 | F-200 | Vertical and bidirectional text | M | pending | - |
 | F-X060 | Tag v0.11.0 | S | pending | - |
 | F-X031 | Require the CI gate in branch protection | S | pending | - |

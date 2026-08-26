@@ -329,6 +329,8 @@ defended.
 | F-196 | S57 | M | 2 | 1 | 2026-08-25 | Five-document pinned Word corpus with strict provenance and checksum verification |
 | F-201 | S57 | L | 4 | 1 | 2026-08-25 | Thousand-page deterministic layout and PDF performance gate |
 | F-197 | S57 | L | 4 | 1 | 2026-08-25 | Complete-union Word SSIM harness against pinned Writer and Poppler |
+| F-202 | S58 | L | 4 | 1 | 2026-08-26 | Bounded thousand-page restart pagination with exact warm and fresh equality |
+| F-X061 | S58 | S | 1 | 1 | 2026-08-26 | Resumable ordinary and release dependency-prefix checkpoints |
 
 ## Velocity
 
