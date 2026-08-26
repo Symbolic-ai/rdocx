@@ -21,7 +21,7 @@ protection at the reviewed sprint SHA.
   SSIM evidence, deliberate render sensitivity, performance regression gates,
   and the always-reporting `ci-gate` contract.
 - `docs/hld/14-development-backlog.md`, for the exact F-198, F-199, F-200,
-  F-202, F-X031, and F-X058 through F-X063 dependencies and acceptance gates.
+  F-202, F-X031, and F-X058 through F-X066 dependencies and acceptance gates.
 - `docs/hld/15-build-and-toolchain.md`, for bundled-font deterministic output,
   cache ceilings, pinned corpus and oracle runtimes, the CI matrix, and the
   separation between tracked workflow state and repository protection state.
@@ -35,6 +35,9 @@ protection at the reviewed sprint SHA.
 | F-X063 | Avoid duplicate caller-font byte comparisons | S | done | - |
 | F-X058 | Shared multilingual text substrate | L | in-progress | codex |
 | F-X059 | Tag rpptx-v0.7.0 | S | pending | - |
+| F-X064 | Accept whole-valued decimal table measurements | S | pending | - |
+| F-X065 | Expose tracked table grid changes | S | pending | - |
+| F-X066 | Classify legacy VML horizontal rules | S | pending | - |
 | F-198 | Hyphenation | L | in-progress | codex |
 | F-199 | Complex script shaping | L | pending | - |
 | F-202 | Incremental layout | L | done | - |
@@ -49,7 +52,9 @@ Rows are listed in dependency order, not F-ID order.
 F-X061 first makes ordinary and release dependency checkpoints resumable.
 F-X062 and F-X063 then close the two reported retained-layout cliffs. F-X058
 establishes the complete shared text contract, and F-X059 publishes it as
-the incubating 0.7.0 family. F-198, F-199, and then F-200 consume that published
+the incubating 0.7.0 family. F-X064 through F-X066 land hardened equivalents
+of PRs 55 through 57 in serial order before the paused stable Word work is
+reconstructed. F-198, F-199, and then F-200 consume the published shared
 boundary. F-202 is already independently reviewed. F-X060 publishes the
 settled stable family at 0.11.0. F-X031 is the final operational step
 because the stable `ci-gate`, reviewed workflow, releases, and sprint SHA must
@@ -72,6 +77,9 @@ move rendered output, so its hash delta must be isolated and declared.
   pagination, and changed related stories invalidate it exactly.
 - Warm caller-font relayout avoids the redundant retained-context byte pass
   while exact changed-font and transfer checks remain authoritative.
+- Whole-valued decimal table measurements parse exactly, historical table-grid
+  revisions remain inspectable but inactive, and unambiguous legacy VML
+  horizontal rules are classified without weakening raw XML preservation.
 - Editing one paragraph of the thousand-page document re-lays out a bounded
   number of pages while the established memory and throughput limits remain
   green.

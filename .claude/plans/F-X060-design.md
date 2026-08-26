@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S58
 **Size**: S
-**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063
+**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063, F-X064, F-X065, F-X066
 
 ## Problem
 
@@ -49,6 +49,20 @@ The reviewed inventory must include Issues 53 and 54, authenticate
 `@emptinessform`, classify the final F-X062 and F-X063 fixes, credit the
 specific reporter evidence, and prepare one stable-release notification for
 each issue. This story does not close either issue without separate authority.
+
+The inventory must also include
+`https://github.com/tensorbee/rdocx/pull/55` at
+`056d48fdf23f35e3538ef3d6ff78cf9e3863e3a5`,
+`https://github.com/tensorbee/rdocx/pull/56` at
+`8b79c4cd0452defafe0a58e86b332c98e7fe52d7`, and
+`https://github.com/tensorbee/rdocx/pull/57` at
+`44498f042a2290ef40c7a6c26025f38e38e9ce2a`. Authenticate contributor
+`@pedroassumpcao` and classify each final outcome as a hardened equivalent or
+direct adoption. Credit the specific table measurement, tracked-grid, and VML
+reader contributions and prepare one release-bound thank-you for each open PR.
+Publication must leave each PR open unless separate authority changes its
+state. Record the intentional pre-1.0 `CT_TblGrid` literal impact if F-X065
+adds the approved field. Do not claim that F-X066 renders horizontal rules.
 
 Update the stable metadata regression for 0.11.0 and update the registry proof
 so packaged `rdocx-layout@0.11.0` resolves published `oxml-layout@0.7.0`

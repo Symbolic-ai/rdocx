@@ -3289,7 +3289,7 @@ regression, and changelog section together. Pin every shared dependency to the
 verified 0.7.0 family from F-X059. Python, WASM, npm, and PyPI packages remain
 outside publication authority.
 
-**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063.
+**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063, F-X064, F-X065, F-X066.
 **Test gate**: release. All seven stable registry entries resolve at 0.11.0
 against incubating 0.7.0 dependencies, their owners match the authenticated
 registry inventory, the annotated tag targets the reviewed SHA, the GitHub
@@ -3347,6 +3347,51 @@ and 40 aliases perform zero repeated retained-context font-byte work on warm
 layout, same-length changed bytes still invalidate reuse, checked transfer stays
 exact, and warm output equals fresh output across positioned pages, font data,
 diagnostics, outlines, provenance, and PDF bytes.
+
+### F-X064, Accept whole-valued decimal table measurements (S)
+
+PR 55 reports Word-produced table measurements such as `9345.0`. Extend the
+existing signed integer projection with an exact string parser that accepts an
+integer or a decimal whose nonempty fractional portion contains only zeroes.
+Apply it consistently to table widths and default cell margins. Missing values
+retain their existing default. Fractional decimals, exponent forms, overflow,
+malformed input, percentages, and universal measures fail explicitly rather
+than becoming zero. The latter two remain unsupported union arms until a
+lossless public model is designed.
+
+**Depends on**: F-X059.
+**Test gate**: regression. Namespace-aware parser and canonical round-trip
+tests cover every table-width site, negative lexical forms, unsupported union
+arms, and the current Word corpus with 49 of 49 output hashes unchanged.
+
+### F-X065, Expose tracked table grid changes (S)
+
+PR 56 exposes the historical grid carried by `w:tblGridChange`. Recognize the
+grid, active columns, and historical change by WordprocessingML namespace URI,
+preserve exactly one change subtree after active columns in schema order, and
+fail closed on a duplicate modeled change. The active columns remain the only
+layout grid. Native callers can query `TableRef::has_grid_change()`, while the
+historical bytes remain inspection and round-trip data.
+
+**Depends on**: F-X064.
+**Test gate**: regression. Aliased and foreign namespace cases, duplicate
+rejection, package save-reopen, and layout prove the historical grid is
+preserved without changing active column widths or the 49 output hashes.
+
+### F-X066, Classify legacy VML horizontal rules (S)
+
+PR 57 adds a native reader classification for an unambiguous legacy horizontal
+rule. Recognize a WordprocessingML `pict` containing exactly one VML `rect`
+whose Office `hr` attribute is enabled by expanded namespace URI, not lexical
+prefix. Accept the VML true forms `t` and `true`, and preserve and expose the
+exact raw bytes. Numeric `1`, false, missing, malformed, foreign,
+multiple-shape, visible-child, and ambiguous input remains `UnsupportedXml`.
+This story does not add layout or rendering support.
+
+**Depends on**: F-X065.
+**Test gate**: regression. Canonical and aliased positive cases, adversarial
+foreign and ambiguous cases, item-order preservation, package save-reopen, and
+the current Word corpus pass with 49 of 49 output hashes unchanged.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
