@@ -9475,3 +9475,78 @@ checks.
 **Notes for future sessions.** Use the dependency-prefix route before every
 consumer whose formal prerequisite is reviewed but not completed. Earlier
 HEAD-bound evidence remains historical and cannot satisfy a later boundary.
+
+### F-X062, Reuse restart pagination with notes and headers
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Restart pagination now reuses unchanged footnote, endnote,
+header, and footer context at note-clean page boundaries. The reporter-scale
+700-paragraph facade workload retains all but at most two pages while remaining
+exactly equal to a fresh layout.
+
+**Non-obvious choices.** Exact related-story and body note-reference equality
+is required before reuse. Note-bearing tables and other traversal-sensitive
+content keep conservative full pagination. Restarted completion appends
+endnotes exactly once with final page numbers offset by the retained prefix,
+while exact cached tails keep their attached endnote pages.
+
+**Deviations from the design plan.** Microscope pass 1 found that restarted
+completion appended endnotes before accounting for the retained prefix. The
+remediation added a no-cached-tail regression and supplies the full selected
+note sequence plus retained-prefix page offset only on that completion path.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Five planned engine and facade regressions, the restarted-completion
+endnote regression, 175 `rdocx-layout` tests, the full `rdocx` and workspace
+suites, the F-201 release performance gate, no-default fonts, both WASM
+targets, documentation, README, package, archive-size, and dependency-policy
+gates passed. Microscope pass 2 reported zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Restart checkpoints remain note-clean. Changed
+related stories, changed note-reference sequences, and note-bearing tables are
+intentional full-pagination boundaries.
+
+### F-X063, Avoid duplicate caller-font byte comparisons
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Normal warm layout now skips the second retained-context
+font byte equality after `FontManager::load_additional_fonts` has already
+proved the ordered caller-font family and byte set unchanged. The measured
+duplicate work for the 22 MiB reporter workload falls from 23,068,672 bytes to
+zero.
+
+**Non-obvious choices.** The optimization is private and applies only after the
+font manager's authoritative exact comparison. Checked engine transfer still
+uses the complete ordered family and byte comparison, and equal-length changed
+font bytes still invalidate reusable work.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Three exact byte-accounting controls and the public five-font,
+40-alias regression passed with complete warm and fresh equality. All 178
+`rdocx-layout` tests, full `rdocx` and workspace suites, the F-201 release
+performance gate, no-default fonts, both WASM targets, documentation, README,
+package, archive-size, and dependency-policy gates passed. Microscope pass 1
+reported zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not replace the exact comparison with family
+and length checks or a full-input hash. Any new warm path must prove the font
+manager has already accepted the exact bytes before using the font-elided
+retained-context comparison.

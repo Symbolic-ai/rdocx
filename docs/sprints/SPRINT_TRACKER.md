@@ -331,6 +331,8 @@ defended.
 | F-197 | S57 | L | 4 | 1 | 2026-08-25 | Complete-union Word SSIM harness against pinned Writer and Poppler |
 | F-202 | S58 | L | 4 | 1 | 2026-08-26 | Bounded thousand-page restart pagination with exact warm and fresh equality |
 | F-X061 | S58 | S | 1 | 1 | 2026-08-26 | Resumable ordinary and release dependency-prefix checkpoints |
+| F-X062 | S58 | M | 2 | 1 | 2026-08-26 | Note-clean restart pagination for unchanged related stories |
+| F-X063 | S58 | S | 1 | 1 | 2026-08-26 | Eliminate the redundant 22 MiB retained-font comparison |
 
 ## Velocity
 
