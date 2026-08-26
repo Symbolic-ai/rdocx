@@ -30,7 +30,7 @@ protection at the reviewed sprint SHA.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X061 | Support staged release checkpoints in run-sprint | S | pending | - |
+| F-X061 | Support staged release checkpoints in run-sprint | S | in-progress | codex |
 | F-X058 | Shared multilingual text substrate | L | in-progress | codex |
 | F-X059 | Tag rpptx-v0.7.0 | S | pending | - |
 | F-198 | Hyphenation | L | in-progress | codex |
