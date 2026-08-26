@@ -1445,6 +1445,36 @@ pub fn append_endnote_pages(
         });
     }
 
+    append_ordered_endnote_pages(pages, &ordered, notes, geometry, 0);
+}
+
+pub(crate) fn append_endnote_pages_for_references(
+    pages: &mut Vec<PageFrame>,
+    references: &[NoteRef],
+    notes: &NoteRegistry,
+    geometry: PageGeometry,
+    preceding_page_count: usize,
+) {
+    let mut ordered = Vec::new();
+    for &note in references {
+        if note.stream == NoteStream::Endnote
+            && notes.get(note, geometry.content_width()).is_some()
+            && !ordered.contains(&note)
+        {
+            ordered.push(note);
+        }
+    }
+
+    append_ordered_endnote_pages(pages, &ordered, notes, geometry, preceding_page_count);
+}
+
+fn append_ordered_endnote_pages(
+    pages: &mut Vec<PageFrame>,
+    ordered: &[NoteRef],
+    notes: &NoteRegistry,
+    geometry: PageGeometry,
+    preceding_page_count: usize,
+) {
     if ordered.is_empty() {
         return;
     }
@@ -1452,7 +1482,7 @@ pub fn append_endnote_pages(
     let content_height = geometry.content_height();
     let mut elements: Vec<PositionedElement> = Vec::new();
     let mut cursor_y = 0.0;
-    let mut page_number = pages.len() + 1;
+    let mut page_number = preceding_page_count + pages.len() + 1;
 
     let mut flush = |elements: &mut Vec<PositionedElement>, page_number: &mut usize| {
         pages.push(PageFrame::new(
@@ -1464,7 +1494,7 @@ pub fn append_endnote_pages(
         *page_number += 1;
     };
 
-    for note_ref in ordered {
+    for &note_ref in ordered {
         let Some(note) = notes.get(note_ref, geometry.content_width()) else {
             continue;
         };

@@ -3318,14 +3318,13 @@ release approval or HEAD-bound evidence.
 
 ### F-X062, Reuse restart pagination with notes and headers (M)
 
-Issue 53 reports two independent restart cliffs. F-202 already raises the
-32-page ceiling to 1,024. The remaining global eligibility predicate still
-rejects any document with footnotes, endnotes, headers, or footers even when
-those related stories are unchanged. Admit them when the retained context is
-exactly equal and restart only at the paginator's existing note-clean page
-boundaries. Preserve conservative fallback for changed related stories,
-note-bearing tables, and other traversal-sensitive content. Append endnote
-pages exactly once after a complete restarted body.
+The restart paginator admits documents with footnotes, endnotes, headers, and
+footers when their retained context and body note-reference sequence are
+exactly equal. It restarts only at note-clean page boundaries. Changed related
+stories, changed note references, note-bearing tables, and other
+traversal-sensitive content retain conservative full fallback. Endnote pages
+append exactly once after a complete restarted body or arrive through an exact
+cached tail. F-202 separately owns the 1,024-page capacity.
 
 **Depends on**: F-202.
 **Test gate**: regression. Source-built 700-paragraph note and header/footer

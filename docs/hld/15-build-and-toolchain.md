@@ -88,8 +88,13 @@ entries and 8 MiB. Its aggregate retained state stays within 5,216 entries and
 64 MiB. Both pending and published queues use retained-capacity accounting.
 The thousand-page incremental gate exercises the deterministic bundled-fallback
 facade and requires a middle edit to paginate at most two pages while matching
-a fresh layout exactly. These caches add no feature flag or dependency and
-remain available in the default-off graphs without enabling host discovery.
+a fresh layout exactly. The related-story gate source-builds 700 paragraphs
+with a footnote, endnote, default header, and page-number footer. An unchanged
+context retains all but at most two page frames and equals a fresh deterministic
+layout. Changed stories and note-reference sequences fall back fully, and
+continued notes publish only clean boundaries. These caches add no feature flag
+or dependency and remain available in the default-off graphs without enabling
+host discovery.
 
 `rpptx-render::layout_presentation_deterministic` applies the same rule to a
 whole presentation. It shares page lowering with

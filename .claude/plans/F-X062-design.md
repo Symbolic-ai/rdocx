@@ -1,6 +1,6 @@
 # F-X062, Reuse restart pagination with notes and headers
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: M
 **Depends on**: F-202
@@ -101,14 +101,14 @@ Any visible output delta or fresh-result difference blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add real failing engine and facade regressions in existing test files.
-- [ ] Remove only the three global related-story disqualifiers.
-- [ ] Admit safe paragraph note references and retain conservative table fallback.
-- [ ] Append endnote pages exactly once on restarted completion.
-- [ ] Prove changed related stories invalidate restart state.
-- [ ] Prove note continuations never create dirty checkpoints.
-- [ ] Run focused suites, F-201 release gate, WASM, hash, full verification, and microscope.
-- [ ] Update exactly the four listed HLD files.
+- [x] Add real failing engine and facade regressions in existing test files.
+- [x] Remove only the three global related-story disqualifiers.
+- [x] Admit safe paragraph note references and retain conservative table fallback.
+- [x] Append endnote pages exactly once on restarted completion.
+- [x] Prove changed related stories invalidate restart state.
+- [x] Prove note continuations never create dirty checkpoints.
+- [x] Run focused suites, F-201 release gate, WASM, hash, full verification, and microscope.
+- [x] Update exactly the four listed HLD files.
 
 ## Open questions
 

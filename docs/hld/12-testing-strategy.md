@@ -373,9 +373,14 @@ It requires complete equality of pages, fonts, diagnostics, provenance,
 numbering, notes, fields, outlines, and rendered inputs. A middle edit must
 share the unchanged page prefix and tail while reporting only its bounded
 rebuilt range. Insertions and deletions have the same complete-equality check.
-Multi-section content, tables, split paragraphs, floating drawings, note
-continuations, keep constraints, headers, footers, backgrounds, and mismatched
-boundary state must use the full paginator.
+Source-built 700-paragraph cases prove unchanged footnotes, endnotes, default
+headers, and page-number footers keep bounded restart work through both the
+engine and bundled-fallback facade. They also prove endnotes append once,
+changed related stories and note-reference sequences invalidate reuse, and a
+footnote continuation cannot publish a dirty checkpoint. Multi-section
+content, note-bearing tables, split paragraphs, floating drawings, keep
+constraints, backgrounds, and mismatched boundary state must use the full
+paginator.
 
 The incremental-layout scale gate builds 1,000 one-page paragraphs through the
 public deterministic bundled-fallback facade, edits paragraph 500, and compares

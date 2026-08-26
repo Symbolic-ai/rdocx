@@ -713,6 +713,48 @@ impl RestartBodyEntry {
             Self::Paragraph { bytes, .. } | Self::Table { bytes, .. } => *bytes,
         }
     }
+
+    fn note_references(&self, view: RevisionView) -> Vec<NoteRef> {
+        match self {
+            Self::Paragraph { value, .. } => paragraph_note_references(value, view),
+            Self::Table { .. } => Vec::new(),
+        }
+    }
+}
+
+fn paragraph_note_references(paragraph: &CT_P, view: RevisionView) -> Vec<NoteRef> {
+    project_paragraph_runs(paragraph, view)
+        .into_iter()
+        .flat_map(|projected| projected.run.content.iter())
+        .filter_map(|content| match content {
+            RunContent::FootnoteRef { id } => Some(NoteRef {
+                stream: NoteStream::Footnote,
+                id: *id,
+            }),
+            RunContent::EndnoteRef { id } => Some(NoteRef {
+                stream: NoteStream::Endnote,
+                id: *id,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn body_note_references(input: &LayoutInput) -> Vec<NoteRef> {
+    input
+        .document
+        .body
+        .content
+        .iter()
+        .flat_map(|content| match content {
+            BodyContent::Paragraph(paragraph) => {
+                paragraph_note_references(paragraph, input.revision_view)
+            }
+            BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                Vec::new()
+            }
+        })
+        .collect()
 }
 
 const fn arc_allocation_bytes<T>() -> usize {
@@ -1240,10 +1282,7 @@ impl Engine {
         let mut font_trace = self.font_manager.current_layout_fonts().to_vec();
         let restart_record_eligible = sections.len() == 1
             && input.document.background_xml.is_none()
-            && input.footnotes.is_none()
-            && input.endnotes.is_none()
             && !document_wraps
-            && sections[0].header_footer.is_none()
             && input
                 .document
                 .body
@@ -1266,6 +1305,11 @@ impl Engine {
             && self.restart_cache.as_ref().is_some_and(|cache| {
                 cache.font_trace == font_trace
                     && cache.with_provenance == sources.is_some()
+                    && cache
+                        .body
+                        .iter()
+                        .flat_map(|entry| entry.note_references(input.revision_view))
+                        .eq(body_note_references(input))
                     && (sources.is_none() || cache.body.len() == input.document.body.content.len())
             });
         let reusable_restart = restart_eligible && reusable_restart_record;
@@ -1357,6 +1401,20 @@ impl Engine {
             #[cfg(test)]
             {
                 self.page_layout_invocations = recorded.pages.len();
+            }
+            if recorded.stopped_at.is_none() {
+                if let Some(checkpoint) = restart_checkpoint {
+                    let references = body_note_references(input);
+                    paginator::append_endnote_pages_for_references(
+                        &mut recorded.pages,
+                        &references,
+                        &notes,
+                        final_geometry,
+                        checkpoint.page_count,
+                    );
+                } else {
+                    paginator::append_endnote_pages(&mut recorded.pages, &notes, final_geometry);
+                }
             }
             for page in &mut recorded.pages {
                 mark_remaining_artifacts(&mut page.elements);
@@ -2894,10 +2952,10 @@ fn restart_record_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
             && !paragraph.keep_lines
             && paragraph.lines.iter().all(|line| {
                 line.items.iter().all(|item| match item {
-                    LineItem::Text(text) | LineItem::Marker(text) => text.note.is_none(),
+                    LineItem::Text(_) | LineItem::Marker(_) => true,
                     LineItem::Tab {
-                        leader: Some(text), ..
-                    } => text.note.is_none(),
+                        leader: Some(_), ..
+                    } => true,
                     LineItem::Tab { leader: None, .. } => true,
                     LineItem::Image { .. } | LineItem::Group { .. } => false,
                     _ => false,
@@ -8471,6 +8529,317 @@ mod tests {
         input
     }
 
+    fn related_story_restart_input(paragraph_count: usize) -> LayoutInput {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
+
+        let mut input = make_input_with_text("paragraph 000 stable line");
+        for index in 1..paragraph_count {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("paragraph {index:03} stable line"));
+            input.document.body.add_paragraph(paragraph);
+        }
+
+        for (index, content) in [
+            (20, RunContent::FootnoteRef { id: 1 }),
+            (40, RunContent::EndnoteRef { id: 2 }),
+        ] {
+            let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[index] else {
+                panic!("related story reference belongs to a paragraph");
+            };
+            let mut run = CT_R::new("");
+            run.content = vec![content];
+            paragraph.runs.push(run);
+        }
+
+        let mut footnote = CT_P::new();
+        footnote.add_run("stable footnote text");
+        input.footnotes = Some(CT_Footnotes {
+            footnotes: vec![CT_Footnote {
+                id: 1,
+                note_type: NoteType::Normal,
+                paragraphs: vec![footnote],
+            }],
+        });
+        let mut endnote = CT_P::new();
+        endnote.add_run("stable endnote text");
+        input.endnotes = Some(CT_Footnotes {
+            footnotes: vec![CT_Footnote {
+                id: 2,
+                note_type: NoteType::Normal,
+                paragraphs: vec![endnote],
+            }],
+        });
+
+        let mut section = CT_SectPr::default_letter();
+        section.header_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdHeader".to_owned(),
+        });
+        section.footer_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdFooter".to_owned(),
+        });
+        input.document.body.sect_pr = Some(section);
+
+        let mut header = CT_HdrFtr::new();
+        let mut header_paragraph = CT_P::new();
+        header_paragraph.add_run("stable header text");
+        header.paragraphs.push(header_paragraph);
+        input.headers.insert("rIdHeader".to_owned(), header);
+
+        let mut footer = CT_HdrFtr::new();
+        let mut footer_paragraph = CT_P::new();
+        let mut page_run = CT_R::new("");
+        page_run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
+        footer_paragraph.runs.push(page_run);
+        footer.paragraphs.push(footer_paragraph);
+        input.footers.insert("rIdFooter".to_owned(), footer);
+        input
+    }
+
+    #[test]
+    fn unchanged_footnote_and_endnote_context_restarts_only_at_note_clean_boundaries() {
+        let mut input = related_story_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("initial related-story layout");
+        let initial_pages = initial.pages.clone();
+        assert!(
+            engine.restart_cache.is_some(),
+            "unchanged note context must permit a restart record"
+        );
+
+        set_body_paragraph_text(&mut input, 350, "paragraph 350 changed line");
+        let warm = engine.layout(&input).expect("warm related-story layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh related-story layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert!((1..=2).contains(&engine.page_layout_invocation_count()));
+        assert!(
+            warm.pages
+                .iter()
+                .zip(&initial_pages)
+                .filter(|(current, retained)| Arc::ptr_eq(current, retained))
+                .count()
+                >= warm.pages.len().saturating_sub(2)
+        );
+        let rendered_text = warm
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(
+            rendered_text.matches("stable endnote text").count(),
+            1,
+            "endnote pages append exactly once: {rendered_text}"
+        );
+    }
+
+    #[test]
+    fn restarted_body_completion_appends_prefix_and_suffix_endnotes_with_final_page_numbers() {
+        use rdocx_oxml::footnotes::{CT_Footnote, NoteType};
+
+        let mut input = related_story_restart_input(700);
+        let BodyContent::Paragraph(last) = &mut input.document.body.content[699] else {
+            panic!("last body entry is a paragraph");
+        };
+        let mut marker = CT_R::new("");
+        marker.content = vec![RunContent::EndnoteRef { id: 3 }];
+        last.runs.push(marker);
+        let mut suffix_endnote = CT_P::new();
+        suffix_endnote.add_run("suffix endnote text");
+        input
+            .endnotes
+            .as_mut()
+            .expect("endnote stream")
+            .footnotes
+            .push(CT_Footnote {
+                id: 3,
+                note_type: NoteType::Normal,
+                paragraphs: vec![suffix_endnote],
+            });
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("initial endnote layout");
+        set_body_paragraph_text(&mut input, 699, "paragraph 699 changed line");
+        let warm = engine.layout(&input).expect("completed warm body layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh completed body layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert!((1..=2).contains(&engine.page_layout_invocation_count()));
+        assert_eq!(
+            warm.pages.last().map(|page| page.page_number),
+            Some(warm.pages.len()),
+            "the final endnote page keeps its document-wide page number"
+        );
+        assert!(
+            !Arc::ptr_eq(
+                warm.pages.last().expect("warm final endnote page"),
+                initial.pages.last().expect("initial final endnote page")
+            ),
+            "completion must append endnotes instead of attaching the cached tail"
+        );
+        let rendered_text = warm
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(rendered_text.matches("stable endnote text").count(), 1);
+        assert_eq!(rendered_text.matches("suffix endnote text").count(), 1);
+    }
+
+    #[test]
+    fn unchanged_header_and_footer_context_keeps_restart_pagination_eligible() {
+        let mut input = related_story_restart_input(700);
+        input.footnotes = None;
+        input.endnotes = None;
+        for content in &mut input.document.body.content {
+            let BodyContent::Paragraph(paragraph) = content else {
+                continue;
+            };
+            for run in &mut paragraph.runs {
+                run.content.retain(|content| {
+                    !matches!(
+                        content,
+                        RunContent::FootnoteRef { .. } | RunContent::EndnoteRef { .. }
+                    )
+                });
+            }
+        }
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("initial header-footer layout");
+        assert!(
+            engine.restart_cache.is_some(),
+            "default headers and footers must permit a restart record"
+        );
+
+        set_body_paragraph_text(&mut input, 350, "paragraph 350 changed line");
+        let warm = engine.layout(&input).expect("warm header-footer layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh header-footer layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert!((1..=2).contains(&engine.page_layout_invocation_count()));
+    }
+
+    #[test]
+    fn changed_related_story_context_invalidates_restart_state() {
+        fn assert_invalidated(label: &str, mutate: impl FnOnce(&mut LayoutInput)) {
+            let mut input = related_story_restart_input(700);
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine
+                .layout(&input)
+                .unwrap_or_else(|error| panic!("prime {label}: {error}"));
+            assert!(engine.restart_cache.is_some(), "prime {label}");
+            mutate(&mut input);
+            let warm = engine
+                .layout(&input)
+                .unwrap_or_else(|error| panic!("warm {label}: {error}"));
+            let fresh = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .unwrap_or_else(|error| panic!("fresh {label}: {error}"));
+            assert_layout_results_equal(&warm, &fresh);
+            assert!(
+                engine.page_layout_invocation_count() > 2,
+                "changed {label} must force full pagination"
+            );
+        }
+
+        assert_invalidated("footnote", |input| {
+            set_body_paragraph_text_in_story(
+                &mut input.footnotes.as_mut().expect("footnote stream").footnotes[0].paragraphs[0],
+                "changed footnote text",
+            );
+        });
+        assert_invalidated("endnote", |input| {
+            set_body_paragraph_text_in_story(
+                &mut input.endnotes.as_mut().expect("endnote stream").footnotes[0].paragraphs[0],
+                "changed endnote text",
+            );
+        });
+        assert_invalidated("header", |input| {
+            set_body_paragraph_text_in_story(
+                &mut input
+                    .headers
+                    .get_mut("rIdHeader")
+                    .expect("header")
+                    .paragraphs[0],
+                "changed header text",
+            );
+        });
+        assert_invalidated("footer", |input| {
+            let footer = input.footers.get_mut("rIdFooter").expect("footer");
+            footer.paragraphs[0].add_run("changed footer text");
+        });
+    }
+
+    fn set_body_paragraph_text_in_story(paragraph: &mut CT_P, text: &str) {
+        paragraph.runs[0].content = vec![RunContent::Text(rdocx_oxml::text::CT_Text {
+            text: text.to_owned(),
+            preserve_space: false,
+        })];
+    }
+
+    #[test]
+    fn a_footnote_continuation_never_creates_a_dirty_restart_boundary() {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+
+        let mut input = make_input_with_text("body carrying a long note");
+        let BodyContent::Paragraph(first) = &mut input.document.body.content[0] else {
+            panic!("first body entry is a paragraph");
+        };
+        let mut marker = CT_R::new("");
+        marker.content = vec![RunContent::FootnoteRef { id: 1 }];
+        first.runs.push(marker);
+        for index in 1..8 {
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                page_break_before: Some(true),
+                ..Default::default()
+            });
+            paragraph.add_run(&format!("body page {index}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let mut long_note = CT_P::new();
+        long_note.add_run(&"continuing footnote text ".repeat(2_000));
+        input.footnotes = Some(CT_Footnotes {
+            footnotes: vec![CT_Footnote {
+                id: 1,
+                note_type: NoteType::Normal,
+                paragraphs: vec![long_note],
+            }],
+        });
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let output = engine.layout(&input).expect("continued footnote layout");
+        assert!(output.pages.len() > 2, "fixture must continue the footnote");
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("continued notes retain only clean boundaries");
+        assert!(
+            retained
+                .checkpoints
+                .iter()
+                .all(|checkpoint| checkpoint.next_block_index != 1),
+            "the boundary carrying pending note state must not be retained"
+        );
+    }
+
     fn set_body_paragraph_text(input: &mut LayoutInput, index: usize, text: &str) {
         let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[index] else {
             panic!("body entry is a paragraph");
@@ -8949,7 +9318,19 @@ mod tests {
             "floating drawing",
             make_wrapping_document(WrapType::Square, None, 120.0, 60.0, 5.0),
         );
-        assert_fallback("note continuation", make_input_with_footnote(&["note"]));
+
+        let note_source = make_input_with_footnote(&["note in table"]);
+        let BodyContent::Paragraph(note_paragraph) = &note_source.document.body.content[0] else {
+            panic!("note source is a paragraph");
+        };
+        let mut note_table_input = make_input_with_text("before note table");
+        let mut note_table = safe_table("table text");
+        note_table.rows[0].cells[0].paragraphs_mut()[0]
+            .runs
+            .push(note_paragraph.runs[1].clone());
+        note_table_input.document.body.add_table(note_table);
+        note_table_input.footnotes = note_source.footnotes;
+        assert_fallback("note-bearing table", note_table_input);
 
         let mut sections = restart_input();
         let BodyContent::Paragraph(first) = &mut sections.document.body.content[20] else {
@@ -8982,38 +9363,6 @@ mod tests {
             retained.checkpoints.is_empty(),
             "fields must not become pagination restart boundaries"
         );
-
-        let mut header_footer = restart_input();
-        let mut section = CT_SectPr::default_letter();
-        section
-            .header_refs
-            .push(rdocx_oxml::header_footer::HdrFtrRef {
-                hdr_ftr_type: rdocx_oxml::header_footer::HdrFtrType::Default,
-                rel_id: "rIdHeader".to_owned(),
-            });
-        section
-            .footer_refs
-            .push(rdocx_oxml::header_footer::HdrFtrRef {
-                hdr_ftr_type: rdocx_oxml::header_footer::HdrFtrType::Default,
-                rel_id: "rIdFooter".to_owned(),
-            });
-        header_footer.document.body.sect_pr = Some(section);
-        for (relationship_id, is_header) in [("rIdHeader", true), ("rIdFooter", false)] {
-            let mut part = rdocx_oxml::header_footer::CT_HdrFtr::new();
-            let mut paragraph = CT_P::new();
-            paragraph.add_run(relationship_id);
-            part.paragraphs.push(paragraph);
-            if is_header {
-                header_footer
-                    .headers
-                    .insert(relationship_id.to_owned(), part);
-            } else {
-                header_footer
-                    .footers
-                    .insert(relationship_id.to_owned(), part);
-            }
-        }
-        assert_fallback("header and footer", header_footer);
 
         let mut boundary = restart_input();
         let mut boundary_engine = Engine::new_deterministic().expect("bundled fonts load");

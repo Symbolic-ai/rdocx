@@ -710,19 +710,25 @@ font ids, font bytes, diagnostics, revision view, and resolved source provenance
 equal.
 
 The engine also records restart checkpoints for one safe section containing
-one-line or two-line context-independent paragraphs and cache-safe tables. A
-checkpoint exists only before a complete block at an empty page boundary. The
-paginator never records one inside a table. It records the next block, page
-count, and displayed header page number. Headers, footers, backgrounds, notes,
-fields, headings, drawings, multi-section content, split paragraphs, keep
-constraints, and any unrepresented state use the full paginator. A warm edit
-restarts at the last checkpoint before its first changed block. It stops at the
-first safe page boundary inside an unchanged suffix only when the complete
-retained context, font-resolution trace, page count, displayed header page
-number, and exact typed body suffix all match. Retained prefix and tail page
-frames keep their `Arc` ownership through pagination. Newly paginated pages are
-allocated once. If any equality or capacity check fails, pagination continues
-through the normal full path.
+one-line or two-line context-independent paragraphs, safe paragraph note
+references, and cache-safe tables. A checkpoint exists only before a complete
+block at an empty page boundary after the current and pending note queues have
+drained. The paginator never records one inside a table. It records the next
+block, page count, and displayed header page number. Unchanged footnote,
+endnote, header, and footer stories participate through exact retained-context
+equality. A changed related story or body note-reference sequence uses the full
+paginator. Note-bearing tables, backgrounds, fields, headings, drawings,
+multi-section content, split paragraphs, keep constraints, and any
+unrepresented state also use the full paginator. A warm edit restarts at the
+last checkpoint before its first changed block. It stops at the first safe page
+boundary inside an unchanged suffix only when the complete retained context,
+font-resolution trace, page count, displayed header page number, and exact
+typed body suffix all match. Retained prefix and tail page frames keep their
+`Arc` ownership through pagination. Newly paginated pages are allocated once.
+When restarted body pagination reaches the end, endnote pages are appended
+once. An attached exact cached tail already carries those pages. If any
+equality or capacity check fails, pagination continues through the normal full
+path.
 
 The same restart record retains aligned pristine and field-substituted page
 pairs. PAGE, NUMPAGES, and PAGEREF pages bypass reshaping only when exact page

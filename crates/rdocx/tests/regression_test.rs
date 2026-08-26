@@ -266,6 +266,117 @@ fn editing_one_paragraph_of_a_thousand_page_document_rebuilds_at_most_two_pages(
 }
 
 #[test]
+fn issue_53_related_stories_keep_the_700_paragraph_facade_workload_bounded() {
+    fn issue_53_document() -> Document {
+        let mut seed = Document::new();
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+            seed.to_bytes().expect("serialize seed document"),
+        ))
+        .expect("open seed package");
+        let (header_id, footer_id) = {
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            let header_id =
+                relationships.add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+            let footer_id =
+                relationships.add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml");
+            relationships.add(
+                oxml_opc::relationship::rel_types::FOOTNOTES,
+                "footnotes.xml",
+            );
+            (header_id, footer_id)
+        };
+        package.set_part(
+            "/word/header1.xml",
+            br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Issue 53 header</w:t></w:r></w:p></w:hdr>"#.to_vec(),
+        );
+        package.set_part(
+            "/word/footer1.xml",
+            br#"<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p></w:ftr>"#.to_vec(),
+        );
+        package.set_part(
+            "/word/footnotes.xml",
+            br#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="1"><w:p><w:r><w:t>Issue 53 footnote</w:t></w:r></w:p></w:footnote></w:footnotes>"#.to_vec(),
+        );
+        package.content_types.add_override(
+            "/word/header1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        package.content_types.add_override(
+            "/word/footer1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        );
+        package.content_types.add_override(
+            "/word/footnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+        );
+
+        let mut body = String::new();
+        for index in 0..700 {
+            let note = if index == 20 {
+                r#"<w:footnoteReference w:id="1"/>"#
+            } else {
+                ""
+            };
+            body.push_str(&format!(
+                "<w:p><w:r><w:t>Issue 53 paragraph {index:03}</w:t>{note}</w:r></w:p>"
+            ));
+        }
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package
+            .write_to(&mut bytes)
+            .expect("serialize Issue 53 package");
+        Document::from_bytes(bytes.get_ref()).expect("open Issue 53 document")
+    }
+
+    let mut warm_document = issue_53_document();
+    let initial = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("initial Issue 53 layout");
+    assert!(initial.layout.pages.len() > 2);
+    warm_document
+        .paragraph_mut(349)
+        .expect("paragraph 350")
+        .run_mut(0)
+        .expect("paragraph text run")
+        .set_text("Issue 53 paragraph 350 changed");
+    let warm = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("warm Issue 53 layout");
+
+    let mut fresh_document = issue_53_document();
+    fresh_document
+        .paragraph_mut(349)
+        .expect("fresh paragraph 350")
+        .run_mut(0)
+        .expect("fresh paragraph text run")
+        .set_text("Issue 53 paragraph 350 changed");
+    let fresh = fresh_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("fresh Issue 53 layout");
+
+    assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+    let retained_pages = warm
+        .layout
+        .pages
+        .iter()
+        .zip(&initial.layout.pages)
+        .filter(|(current, retained)| Arc::ptr_eq(current, retained))
+        .count();
+    assert!(
+        retained_pages >= warm.layout.pages.len().saturating_sub(2),
+        "expected bounded Issue 53 page work, retained {retained_pages} of {} pages",
+        warm.layout.pages.len()
+    );
+}
+
+#[test]
 fn unsupported_html_css_is_diagnosed_without_dropping_supported_siblings() {
     let parsed = Document::from_html(
         "<!doctype html><html><head><link rel='STYLESHEET' href='external.css'><script>head()</script><style>@media print { p { color: red } } p:hover { color: blue } p { color: rgb(1, 2, 3); made-up: yes }</style></head><body><p>before<blink style='unknown-value: yes'>kept</blink>after<a href='https://example.invalid'>link</a><img alt='picture'><script>ignored()</script><input value='field'><iframe>frame</iframe></p><form>form text</form><p><b><i>repaired</b></p></body></html>",
