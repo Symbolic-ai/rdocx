@@ -749,6 +749,13 @@ equals a fresh layout exactly. The edit yields 999 paragraph-cache hits and one
 paragraph build. A 1,025-page record exceeds the slot ceiling and uses the safe
 full-pagination path.
 
+Before every normal reusable layout, `FontManager::load_additional_fonts`
+compares the ordered caller-font family names and bytes exactly. When that
+authoritative comparison reports no change, the retained-work context compares
+every other input without repeating the same font-byte pass. A changed set,
+including equal-length changed bytes, rebuilds font-dependent state and cannot
+reuse retained work. The retained context still owns the exact font bytes.
+
 `Document::transfer_reusable_layout_from` builds the receiver input before it
 takes anything. It moves the source's normal engine only when that complete
 retained-work context is compatible. Failure preserves both engines. Success

@@ -96,6 +96,15 @@ continued notes publish only clean boundaries. These caches add no feature flag
 or dependency and remain available in the default-off graphs without enabling
 host discovery.
 
+The caller-font relayout gate passes five generated fonts totalling 22 MiB and
+40 aliases through the deterministic bundled-fallback engine. Structural test
+accounting requires zero repeated retained-context font bytes on an unchanged
+warm call while exact font-manager invalidation and checked transfer remain
+byte-exact. The unchanged 49-entry hash harness, both WASM target checks, the
+no-default-features suite, and the existing release-mode 1,000-page performance
+test cover this private comparison split. No binding metadata, feature, public
+type, dependency, or package inventory changes.
+
 `rpptx-render::layout_presentation_deterministic` applies the same rule to a
 whole presentation. It shares page lowering with
 `layout_presentation`, bypasses system-font discovery, and adds only explicit

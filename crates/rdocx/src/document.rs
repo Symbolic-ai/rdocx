@@ -7070,7 +7070,8 @@ mod tests {
             .layout_with_fonts_and_bundled_fallback(&fonts)
             .expect("prime font receiver");
         let mut changed_bytes = caller_bytes.clone();
-        changed_bytes.push(0);
+        let last = changed_bytes.last_mut().expect("caller font has bytes");
+        *last ^= 1;
         assert!(
             !font_receiver.transfer_reusable_bundled_fallback_layout_from(
                 &mut font_source,

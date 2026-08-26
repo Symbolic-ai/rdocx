@@ -329,6 +329,16 @@ cases prove publication and recovery remain safe. Both WASM targets, the
 package dry run and archive ceiling, and the unchanged 49-entry hash harness
 are required riders.
 
+The caller-font comparison regression generates five valid font files totalling
+exactly 22 MiB and supplies 40 aliases through the deterministic
+bundled-fallback facade. Test-only structural accounting surrounds only the
+retained-context exact font equality. An unchanged warm layout must report zero
+bytes through that second comparison, retain bounded page identities, and equal
+a fresh layout across pages, fonts, diagnostics, outlines, provenance, and PDF
+bytes. Equal-length changed font bytes must still invalidate normal reuse, and
+checked engine transfer must still compare the ordered family names and bytes
+exactly.
+
 The `document_facing_aliases_share_one_caller_font` gate uses caller bytes that
 differ from bundled same-family bytes. Multiple document-facing names must
 select that one caller face with exact bytes, diagnostics, provenance, and

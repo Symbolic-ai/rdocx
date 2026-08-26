@@ -3335,16 +3335,18 @@ changed related stories and dirty note continuations invalidate reuse.
 
 Issue 54 isolates a WASM relayout regression to a second exact comparison of
 caller font bytes. `FontManager::load_additional_fonts` already performs the
-authoritative ordered family-and-byte comparison. The retained engine context
-then repeats it on every warm relayout. Skip only that redundant second pass
-after the font manager reports an unchanged context. Keep exact bytes in the
-retained context and keep checked engine transfer byte-exact.
+authoritative ordered family-and-byte comparison. Normal warm relayout uses a
+private font-elided retained-context comparison only after the font manager
+reports that exact set unchanged. The retained context keeps exact bytes, and
+checked engine transfer retains the complete ordered family-and-byte check.
+Equal-length changed bytes invalidate both normal reuse and checked transfer.
 
 **Depends on**: F-X052.
 **Test gate**: regression. Five generated caller fonts totalling about 22 MiB
 and 40 aliases perform zero repeated retained-context font-byte work on warm
 layout, same-length changed bytes still invalidate reuse, checked transfer stays
-exact, and warm output equals fresh output.
+exact, and warm output equals fresh output across positioned pages, font data,
+diagnostics, outlines, provenance, and PDF bytes.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

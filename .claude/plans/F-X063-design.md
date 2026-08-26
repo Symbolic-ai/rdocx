@@ -1,6 +1,6 @@
 # F-X063, Avoid duplicate caller-font byte comparisons
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X052
@@ -96,12 +96,12 @@ work only. Any output delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add real failing work-count, changed-byte, transfer, and facade regressions.
-- [ ] Separate warm context comparison from authoritative font equality.
-- [ ] Preserve exact checked-transfer font comparison.
-- [ ] Prove zero repeated context byte work and complete fresh equality.
-- [ ] Run focused suites, WASM, hash, full verification, and microscope.
-- [ ] Update exactly the four listed HLD files.
+- [x] Add real failing work-count, changed-byte, transfer, and facade regressions.
+- [x] Separate warm context comparison from authoritative font equality.
+- [x] Preserve exact checked-transfer font comparison.
+- [x] Prove zero repeated context byte work and complete fresh equality.
+- [x] Run focused suites, WASM, hash, full verification, and microscope.
+- [x] Update exactly the four listed HLD files.
 
 ## Open questions
 

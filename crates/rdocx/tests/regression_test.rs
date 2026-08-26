@@ -7682,6 +7682,144 @@ fn document_facing_aliases_share_one_caller_font() {
     assert!(result.layout.diagnostics.is_empty());
 }
 
+#[test]
+fn five_large_caller_fonts_and_forty_aliases_keep_warm_and_fresh_layouts_equal() {
+    const TOTAL_FONT_BYTES: usize = 22 * 1024 * 1024;
+    let bundled = oxml_layout::bundled_fonts::bundled_font_data();
+    let generated_fonts = [0, 4, 8, 12, 16]
+        .into_iter()
+        .enumerate()
+        .map(|(index, bundled_index)| {
+            let (family, source) = bundled[bundled_index];
+            let mut data = source.to_vec();
+            let target = TOTAL_FONT_BYTES / 5 + usize::from(index < TOTAL_FONT_BYTES % 5);
+            data.resize(
+                target,
+                u8::try_from(index).expect("five font indices fit in u8"),
+            );
+            (family.to_owned(), data)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        generated_fonts
+            .iter()
+            .map(|(_, data)| data.len())
+            .sum::<usize>(),
+        TOTAL_FONT_BYTES
+    );
+    let font_files = generated_fonts
+        .iter()
+        .map(|(family, data)| (family.as_str(), data.as_slice()))
+        .collect::<Vec<_>>();
+    let owned_aliases = (0..40)
+        .map(|index| {
+            (
+                format!("Editor Family {index}"),
+                generated_fonts[index % generated_fonts.len()].0.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let aliases = owned_aliases
+        .iter()
+        .map(|(requested, target)| (requested.as_str(), target.as_str()))
+        .collect::<Vec<_>>();
+
+    let make_document = |changed: bool| {
+        let mut document = Document::new();
+        for index in 0..40 {
+            let text = if changed && index == 20 {
+                format!("paragraph {index:03} stable line changed")
+            } else {
+                format!("paragraph {index:03} stable line")
+            };
+            document.add_paragraph("").page_break_before(index > 0);
+            document
+                .paragraph_mut(index)
+                .expect("generated paragraph")
+                .add_run(&text)
+                .font(&owned_aliases[index % owned_aliases.len()].0);
+        }
+        document
+    };
+
+    let mut warm_document = make_document(false);
+    let initial = warm_document
+        .layout_with_fonts_aliases_and_bundled_fallback(&font_files, &aliases)
+        .expect("prime large caller-font layout");
+    warm_document
+        .paragraph_mut(20)
+        .expect("middle paragraph")
+        .run_mut(0)
+        .expect("middle paragraph text run")
+        .set_text("paragraph 020 stable line changed");
+    let fresh_document = make_document(true);
+    let warm = warm_document
+        .layout_with_fonts_aliases_and_bundled_fallback(&font_files, &aliases)
+        .expect("warm large caller-font layout");
+    let fresh = fresh_document
+        .layout_with_fonts_aliases_and_bundled_fallback(&font_files, &aliases)
+        .expect("fresh large caller-font layout");
+
+    let retained_pages = warm
+        .layout
+        .pages
+        .iter()
+        .zip(&initial.layout.pages)
+        .filter(|(current, previous)| Arc::ptr_eq(current, previous))
+        .count();
+    assert!(
+        retained_pages >= warm.layout.pages.len().saturating_sub(2),
+        "the bounded edit retained {retained_pages} of {} pages",
+        warm.layout.pages.len()
+    );
+    assert_eq!(warm.revision_view, fresh.revision_view);
+    assert_eq!(warm.layout.pages.len(), fresh.layout.pages.len());
+    for (warm_page, fresh_page) in warm.layout.pages.iter().zip(&fresh.layout.pages) {
+        assert_eq!(warm_page.page_number, fresh_page.page_number);
+        assert_eq!(warm_page.width, fresh_page.width);
+        assert_eq!(warm_page.height, fresh_page.height);
+        assert_eq!(warm_page.elements, fresh_page.elements);
+        assert_eq!(warm_page.background, fresh_page.background);
+    }
+    assert_eq!(warm.layout.fonts.len(), fresh.layout.fonts.len());
+    for (warm_font, fresh_font) in warm.layout.fonts.iter().zip(&fresh.layout.fonts) {
+        assert_eq!(warm_font.id, fresh_font.id);
+        assert_eq!(warm_font.family, fresh_font.family);
+        assert_eq!(warm_font.data, fresh_font.data);
+        assert_eq!(warm_font.face_index, fresh_font.face_index);
+        assert_eq!(warm_font.bold, fresh_font.bold);
+        assert_eq!(warm_font.italic, fresh_font.italic);
+    }
+    assert_eq!(warm.layout.diagnostics, fresh.layout.diagnostics);
+    assert_eq!(
+        format!("{:?}", warm.layout.outlines),
+        format!("{:?}", fresh.layout.outlines)
+    );
+    for (warm_page, fresh_page) in warm.layout.pages.iter().zip(&fresh.layout.pages) {
+        let mut warm_sources = Vec::new();
+        oxml_layout::walk(&warm_page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && let Some(source) = run.source
+            {
+                warm_sources.push(warm.source_node(source.node).cloned());
+            }
+        });
+        let mut fresh_sources = Vec::new();
+        oxml_layout::walk(&fresh_page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && let Some(source) = run.source
+            {
+                fresh_sources.push(fresh.source_node(source.node).cloned());
+            }
+        });
+        assert_eq!(warm_sources, fresh_sources);
+    }
+    assert_eq!(
+        oxml_pdf::render_to_pdf(&warm.layout),
+        oxml_pdf::render_to_pdf(&fresh.layout)
+    );
+}
+
 fn redaction_fixture() -> Document {
     let mut seed = Document::new();
     seed.set_title("secret core title");

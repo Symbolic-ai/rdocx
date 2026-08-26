@@ -3,6 +3,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_SectPr};
@@ -486,6 +489,34 @@ struct ReusableEngineContext {
     background_xml: Option<Vec<u8>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static RETAINED_CONTEXT_FONT_BYTES_COMPARED: Cell<usize> = const { Cell::new(0) };
+}
+
+fn retained_context_fonts_match(
+    retained: &[oxml_layout::FontFile],
+    input: &[oxml_layout::FontFile],
+) -> bool {
+    #[cfg(test)]
+    RETAINED_CONTEXT_FONT_BYTES_COMPARED.set(
+        RETAINED_CONTEXT_FONT_BYTES_COMPARED
+            .get()
+            .saturating_add(retained.iter().map(|font| font.data.len()).sum::<usize>()),
+    );
+    retained == input
+}
+
+#[cfg(test)]
+fn reset_retained_context_font_bytes_compared() {
+    RETAINED_CONTEXT_FONT_BYTES_COMPARED.set(0);
+}
+
+#[cfg(test)]
+fn retained_context_font_bytes_compared() -> usize {
+    RETAINED_CONTEXT_FONT_BYTES_COMPARED.get()
+}
+
 impl ReusableEngineContext {
     #[cfg(test)]
     fn for_input(input: &LayoutInput, caller_font_aliases: &[(String, String)]) -> Self {
@@ -544,6 +575,16 @@ impl ReusableEngineContext {
         caller_font_aliases: &[(String, String)],
         has_wrapping_drawing: bool,
     ) -> bool {
+        self.matches_input_after_unchanged_fonts(input, caller_font_aliases, has_wrapping_drawing)
+            && retained_context_fonts_match(&self.fonts, &input.fonts)
+    }
+
+    fn matches_input_after_unchanged_fonts(
+        &self,
+        input: &LayoutInput,
+        caller_font_aliases: &[(String, String)],
+        has_wrapping_drawing: bool,
+    ) -> bool {
         let sections_match = self.sections.iter().eq(input
             .document
             .body
@@ -575,7 +616,6 @@ impl ReusableEngineContext {
             && self.footnotes == input.footnotes
             && self.endnotes == input.endnotes
             && self.theme == input.theme
-            && self.fonts == input.fonts
             && self.caller_font_aliases == caller_font_aliases
             && self.background_xml == input.document.background_xml
     }
@@ -994,7 +1034,11 @@ impl Engine {
                 .paragraph_cache_context
                 .as_ref()
                 .is_some_and(|context| {
-                    context.matches_input(input, &self.caller_font_aliases, has_wrapping_drawing)
+                    context.matches_input_after_unchanged_fonts(
+                        input,
+                        &self.caller_font_aliases,
+                        has_wrapping_drawing,
+                    )
                 });
         self.paragraph_cache_reads_enabled = context_matches;
         self.header_footer_cache_reads_enabled = context_matches;
@@ -6729,6 +6773,93 @@ mod tests {
             theme: None,
             fonts: Vec::new(),
         }
+    }
+
+    fn five_large_caller_fonts() -> Vec<oxml_layout::FontFile> {
+        const TOTAL_BYTES: usize = 22 * 1024 * 1024;
+        let bundled = oxml_layout::bundled_fonts::bundled_font_data();
+        [0, 4, 8, 12, 16]
+            .into_iter()
+            .enumerate()
+            .map(|(index, bundled_index)| {
+                let (family, source) = bundled[bundled_index];
+                let mut data = source.to_vec();
+                let target = TOTAL_BYTES / 5 + usize::from(index < TOTAL_BYTES % 5);
+                data.resize(
+                    target,
+                    u8::try_from(index).expect("five font indices fit in u8"),
+                );
+                oxml_layout::FontFile {
+                    family: family.to_owned(),
+                    data,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn warm_layout_does_not_repeat_retained_context_font_byte_equality() {
+        let mut input = make_input_with_text("warm caller-font comparison");
+        input.fonts = five_large_caller_fonts();
+        let aliases = (0..40)
+            .map(|index| {
+                (
+                    format!("Editor Family {index}"),
+                    input.fonts[index % input.fonts.len()].family.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.set_caller_font_aliases(&aliases);
+        engine.layout(&input).expect("prime caller-font layout");
+
+        reset_retained_context_font_bytes_compared();
+        engine.layout(&input).expect("warm caller-font layout");
+
+        assert_eq!(retained_context_font_bytes_compared(), 0);
+    }
+
+    #[test]
+    fn same_length_changed_font_bytes_still_invalidate_reusable_work() {
+        let mut input = make_input_with_text("changed caller-font bytes");
+        input.fonts = five_large_caller_fonts();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("prime caller-font layout");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 1));
+
+        let last = input.fonts[0]
+            .data
+            .last_mut()
+            .expect("generated font has padding");
+        *last ^= 1;
+        let warm = engine.layout(&input).expect("changed-font layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh changed-font layout");
+
+        assert_eq!(engine.paragraph_cache_counts(), (0, 2));
+        assert_layout_results_equal(&warm, &fresh);
+    }
+
+    #[test]
+    fn checked_transfer_keeps_exact_ordered_caller_font_bytes() {
+        let mut input = make_input_with_text("checked caller-font transfer");
+        input.fonts = five_large_caller_fonts();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("prime caller-font layout");
+        let mut source = Some(engine);
+
+        let last = input.fonts[0]
+            .data
+            .last_mut()
+            .expect("generated font has padding");
+        *last ^= 1;
+
+        reset_retained_context_font_bytes_compared();
+        assert!(Engine::take_if_compatible(&mut source, &input).is_none());
+        assert!(source.is_some(), "rejected transfer preserves its source");
+        assert_eq!(retained_context_font_bytes_compared(), 22 * 1024 * 1024);
     }
 
     #[test]
