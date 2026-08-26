@@ -32,7 +32,7 @@ protection at the reviewed sprint SHA.
 |------|-------|------|--------|-------|
 | F-X061 | Support staged dependency checkpoints in run-sprint | S | done | - |
 | F-X062 | Reuse restart pagination with notes and headers | M | in-progress | codex |
-| F-X063 | Avoid duplicate caller-font byte comparisons | S | pending | - |
+| F-X063 | Avoid duplicate caller-font byte comparisons | S | in-progress | codex |
 | F-X058 | Shared multilingual text substrate | L | in-progress | codex |
 | F-X059 | Tag rpptx-v0.7.0 | S | pending | - |
 | F-198 | Hyphenation | L | in-progress | codex |
