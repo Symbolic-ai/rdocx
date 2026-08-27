@@ -1102,7 +1102,7 @@ workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
 15-package publication preflight at 0.7.0. It separately proves the stable
 workspace remains at its published 0.10.1 boundary and `rpptx-wasm` remains
-unpublished.
+ineligible for publication.
 The stable dependency recovery gate constructs an isolated registry consumer
 of exact `rdocx-layout@0.10.1` and inspects its unpatched normal dependency
 tree. It requires registry `oxml-layout@0.6.0` and rejects 0.7.0, so the
@@ -1121,8 +1121,9 @@ pull-request closures.
 The 0.7.0 release gate verified all 15 incubating registry entries under sole
 owner `mantissaman (Atul Sharma)`, the annotated `rpptx-v0.7.0` tag at
 reviewed SHA `1b076c16fb494fe47b054d761e061181a1ea0b15`, the stable-family
-exclusion, and byte-identical GitHub release notes. Its selected contribution
-inventory is empty, so it requires no external notification.
+exclusion, byte-identical GitHub release notes, and the absence of
+`rpptx-wasm@0.7.0` from crates.io. Its selected contribution inventory is
+empty, so it requires no external notification.
 
 The large-document regression source-builds 1,000 one-page paragraphs and
 measures deterministic pagination separately from direct PDF rendering. Its
