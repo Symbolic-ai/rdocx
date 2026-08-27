@@ -1,6 +1,6 @@
 # F-X064, Accept whole-valued decimal table measurements
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X059
@@ -87,13 +87,13 @@ rendered by the engine.
 
 ## Implementation checklist
 
-- [ ] Add failing exact lexical-form and namespace tests in the existing table test module.
-- [ ] Replace malformed-to-zero parsing with the shared checked string parser.
-- [ ] Apply the parser to table widths and default cell margins.
-- [ ] Preserve canonical serialization and unmodelled XML.
-- [ ] Run focused parser tests, current Word corpus evidence, and risk riders.
-- [ ] Run microscope and `/verify --full`.
-- [ ] Record PR 55 and its exact source SHA in the handoff and delivery evidence.
+- [x] Add failing exact lexical-form and namespace tests in the existing table test module.
+- [x] Replace malformed-to-zero parsing with the shared checked string parser.
+- [x] Apply the parser to table widths and default cell margins.
+- [x] Preserve canonical serialization and unmodelled XML.
+- [x] Run focused parser tests, current Word corpus evidence, and risk riders.
+- [x] Run microscope and `/verify --full`.
+- [x] Record PR 55 and its exact source SHA in the handoff and delivery evidence.
 
 ## Open questions
 

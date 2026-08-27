@@ -3354,14 +3354,15 @@ diagnostics, outlines, provenance, and PDF bytes.
 
 ### F-X064, Accept whole-valued decimal table measurements (S)
 
-PR 55 reports Word-produced table measurements such as `9345.0`. Extend the
-existing signed integer projection with an exact string parser that accepts an
-integer or a decimal whose nonempty fractional portion contains only zeroes.
-Apply it consistently to table widths and default cell margins. Missing values
-retain their existing default. Fractional decimals, exponent forms, overflow,
-malformed input, percentages, and universal measures fail explicitly rather
-than becoming zero. The latter two remain unsupported union arms until a
-lossless public model is designed.
+PR 55 supplies the Word-produced `9345.0` compatibility case. The existing
+signed integer projection uses one exact string parser for table widths, cell
+widths, table indents, and default cell margins. It accepts integers and
+decimals whose nonempty fractional portion contains only zeroes, then
+checked-parses the integer portion into `i32` without floating point. Missing
+values retain their existing default. Fractional decimals, exponent forms,
+empty fractions, overflow, malformed input, percentages, and universal
+measures fail explicitly rather than becoming zero. The latter two remain
+unsupported union arms until a lossless public model is designed.
 
 **Depends on**: F-X059.
 **Test gate**: regression. Namespace-aware parser and canonical round-trip

@@ -175,12 +175,29 @@ pub struct CT_TblCellMar {
     pub right: Option<Twips>,
 }
 
+fn parse_table_measurement(value: &str) -> Result<i32> {
+    let integer = if let Some((integer, fraction)) = value.split_once('.') {
+        if integer.is_empty() || fraction.is_empty() || !fraction.bytes().all(|byte| byte == b'0') {
+            return Err(OxmlError::InvalidValue(format!(
+                "unsupported table measurement: {value:?}"
+            )));
+        }
+        integer
+    } else {
+        value
+    };
+
+    integer
+        .parse::<i32>()
+        .map_err(|_| OxmlError::InvalidValue(format!("invalid table measurement: {value:?}")))
+}
+
 impl CT_TblCellMar {
     fn parse_edge(e: &BytesStart, word_prefixes: &[String]) -> Result<Option<Twips>> {
         for attr in e.attributes() {
             let attr = attr?;
             if is_word_attribute(attr.key.as_ref(), b"w", word_prefixes) {
-                let val: i32 = std::str::from_utf8(&attr.value)?.parse()?;
+                let val = parse_table_measurement(std::str::from_utf8(&attr.value)?)?;
                 return Ok(Some(Twips(val)));
             }
         }
@@ -298,21 +315,8 @@ impl CT_TblWidth {
     }
 
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
-        let mut w = 0;
-        let mut width_type = "dxa".to_string();
-
-        for attr in e.attributes() {
-            let attr = attr?;
-            let key = attr.key.as_ref();
-            let val = std::str::from_utf8(&attr.value)?;
-            if matches_local_name(key, b"w") {
-                w = val.parse().unwrap_or(0);
-            } else if matches_local_name(key, b"type") {
-                width_type = val.to_string();
-            }
-        }
-
-        Ok(CT_TblWidth { w, width_type })
+        let word_prefixes = word_prefixes_at(e, &["w".to_owned()])?;
+        Self::from_xml_attrs_with_prefixes(e, &word_prefixes)
     }
 
     fn from_xml_attrs_with_prefixes(e: &BytesStart, word_prefixes: &[String]) -> Result<Self> {
@@ -324,7 +328,7 @@ impl CT_TblWidth {
             let key = attr.key.as_ref();
             let val = std::str::from_utf8(&attr.value)?;
             if is_word_attribute(key, b"w", word_prefixes) {
-                w = val.parse().unwrap_or(0);
+                w = parse_table_measurement(val)?;
             } else if is_word_attribute(key, b"type", word_prefixes) {
                 width_type = val.to_string();
             }
@@ -1789,7 +1793,7 @@ impl Default for CT_Tbl {
 mod tests {
     use super::*;
 
-    fn parse_table(xml: &str) -> CT_Tbl {
+    fn parse_table_result(xml: &str) -> Result<CT_Tbl> {
         let full = format!("<w:tbl>{xml}</w:tbl>");
         let mut reader = Reader::from_str(&full);
         reader.config_mut().trim_text(true);
@@ -1801,7 +1805,11 @@ mod tests {
             }
             buf.clear();
         }
-        CT_Tbl::from_xml(&mut reader).unwrap()
+        CT_Tbl::from_xml(&mut reader)
+    }
+
+    fn parse_table(xml: &str) -> CT_Tbl {
+        parse_table_result(xml).unwrap()
     }
 
     #[test]
@@ -1829,6 +1837,149 @@ mod tests {
 
         let pr = tbl.properties.unwrap();
         assert_eq!(pr.width.as_ref().unwrap().w, 5000);
+    }
+
+    #[test]
+    fn whole_valued_decimal_table_measurements_parse_exactly() {
+        let table = parse_table(
+            r#"<w:tblPr>
+                 <w:tblW w:w="9345.0" w:type="dxa"/>
+                 <w:tblInd w:w="-240.000" w:type="dxa"/>
+                 <w:tblCellMar>
+                   <w:top w:w="120.0" w:type="dxa"/>
+                   <w:left w:w="180.00" w:type="dxa"/>
+                   <w:bottom w:w="120.000" w:type="dxa"/>
+                   <w:right w:w="180" w:type="dxa"/>
+                 </w:tblCellMar>
+               </w:tblPr>
+               <w:tr><w:tc><w:tcPr><w:tcW w:w="4675.00" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+
+        let properties = table.properties.as_ref().expect("table properties");
+        assert_eq!(properties.width.as_ref().map(|width| width.w), Some(9345));
+        assert_eq!(properties.indent.as_ref().map(|width| width.w), Some(-240));
+        assert_eq!(
+            properties.cell_margin,
+            Some(CT_TblCellMar {
+                top: Some(Twips(120)),
+                bottom: Some(Twips(120)),
+                left: Some(Twips(180)),
+                right: Some(Twips(180)),
+            })
+        );
+        assert_eq!(
+            table.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.width.as_ref())
+                .map(|width| width.w),
+            Some(4675)
+        );
+    }
+
+    #[test]
+    fn table_measurement_attributes_are_namespace_aware() {
+        let word_namespace = crate::namespace::W_NS;
+        let table = parse_table(&format!(
+            r#"<q:tblPr xmlns:q="{word_namespace}" xmlns:ext="urn:producer">
+                 <q:tblW ext:w="777" ext:type="pct" q:w="9345.0" q:type="dxa"/>
+                 <q:tblCellMar><q:top ext:w="999" q:w="120.00" q:type="dxa"/></q:tblCellMar>
+               </q:tblPr>"#
+        ));
+        let properties = table.properties.as_ref().expect("table properties");
+        let width = properties.width.as_ref().expect("table width");
+        assert_eq!((width.w, width.width_type.as_str()), (9345, "dxa"));
+        assert_eq!(
+            properties
+                .cell_margin
+                .as_ref()
+                .and_then(|margins| margins.top),
+            Some(Twips(120))
+        );
+
+        let xml = format!(
+            r#"<q:tblW xmlns:q="{word_namespace}" xmlns:ext="urn:producer" ext:w="777" q:type="dxa"/>"#
+        );
+        let mut reader = Reader::from_str(&xml);
+        let mut buffer = Vec::new();
+        let parsed = loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Empty(element)) => break CT_TblWidth::from_xml_attrs(&element).unwrap(),
+                Ok(Event::Eof) => panic!("missing table width"),
+                Ok(_) => {}
+                Err(error) => panic!("invalid fixture: {error}"),
+            }
+            buffer.clear();
+        };
+        assert_eq!(parsed.w, 0, "foreign ext:w must not populate Word width");
+    }
+
+    #[test]
+    fn unsupported_or_malformed_table_measurements_fail() {
+        let cases = [
+            (
+                "fractional",
+                r#"<w:tblPr><w:tblW w:w="9345.5" w:type="dxa"/></w:tblPr>"#,
+            ),
+            (
+                "exponent",
+                r#"<w:tr><w:tc><w:tcPr><w:tcW w:w="1e3" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+            ),
+            (
+                "empty fraction",
+                r#"<w:tblPr><w:tblInd w:w="9345." w:type="dxa"/></w:tblPr>"#,
+            ),
+            (
+                "overflow",
+                r#"<w:tblPr><w:tblCellMar><w:top w:w="2147483648.0" w:type="dxa"/></w:tblCellMar></w:tblPr>"#,
+            ),
+            (
+                "percent",
+                r#"<w:tblPr><w:tblW w:w="50%" w:type="pct"/></w:tblPr>"#,
+            ),
+            (
+                "unit",
+                r#"<w:tr><w:tc><w:tcPr><w:tcW w:w="2cm" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+            ),
+            (
+                "malformed",
+                r#"<w:tblPr><w:tblCellMar><w:left w:w="--1" w:type="dxa"/></w:tblCellMar></w:tblPr>"#,
+            ),
+            (
+                "empty",
+                r#"<w:tblPr><w:tblInd w:w="" w:type="dxa"/></w:tblPr>"#,
+            ),
+        ];
+
+        for (name, xml) in cases {
+            assert!(parse_table_result(xml).is_err(), "{name} must fail");
+        }
+    }
+
+    #[test]
+    fn whole_valued_decimal_table_measurements_serialize_canonically() {
+        let table = parse_table(
+            r#"<w:tblPr><w:tblW w:w="9345.0" w:type="dxa"/><w:tblInd w:w="-240.00" w:type="dxa"/><w:tblCellMar><w:top w:w="120.000" w:type="dxa"/></w:tblCellMar></w:tblPr><ext:kept xmlns:ext="urn:producer"/><w:tr><w:tc><w:tcPr><w:tcW w:w="4675.0" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+        let mut output = Vec::new();
+        table
+            .to_xml(&mut Writer::new(&mut output))
+            .expect("table writes");
+        let output = String::from_utf8(output).expect("XML is UTF-8");
+
+        assert!(output.contains(r#"<w:tblW w:w="9345" w:type="dxa"/>"#));
+        assert!(output.contains(r#"<w:tblInd w:w="-240" w:type="dxa"/>"#));
+        assert!(output.contains(r#"<w:top w:w="120" w:type="dxa"/>"#));
+        assert!(output.contains(r#"<w:tcW w:w="4675" w:type="dxa"/>"#));
+        assert!(output.contains(r#"<ext:kept xmlns:ext="urn:producer"/>"#));
+        let width = output.find("<w:tblW").expect("table width writes");
+        let indent = output.find("<w:tblInd").expect("table indent writes");
+        let margins = output.find("<w:tblCellMar").expect("cell margins write");
+        let properties_end = output.find("</w:tblPr>").expect("table properties close");
+        let extension = output.find("<ext:kept").expect("extension writes");
+        let row = output.find("<w:tr>").expect("table row writes");
+        assert!(width < indent && indent < margins && margins < properties_end);
+        assert!(properties_end < extension && extension < row);
     }
 
     #[test]

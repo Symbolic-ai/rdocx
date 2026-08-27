@@ -65,6 +65,15 @@ round-trip without an invented marker and require malformed encoded `w:t` or
 coverage confirms that malformed document XML keeps the existing `XmlError`,
 while HTML and ODT import failures keep the generic `RdocxError`.
 
+The table-measurement parser gate covers integer and whole-valued decimal forms
+at table width, cell width, table indent, and default cell-margin sites. Aliased
+Word attributes are accepted, foreign same-local attributes are ignored, and
+fractional, exponent, empty-fraction, overflow, percentage, universal-unit,
+malformed, and empty forms return errors rather than zero. Round-trip evidence
+requires canonical integer output in schema order and byte-identical unmodelled
+table content. The pinned Word corpus and the 49-entry hash harness remain the
+integration and output-stability gates.
+
 The release-notes regression gate validates both release tag families through
 the same deterministic parser used by publication. It requires one exact
 version section, the complete ordered heading set, meaningful rendered

@@ -377,6 +377,17 @@ relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
 
+Word table widths, cell widths, table indents, and default cell margins share
+one exact signed-integer projection. The parser accepts integer lexical forms
+and decimals only when the nonempty fractional portion contains zeroes. It
+checked-parses the integer portion into `i32` without floating point. Fractional
+values, exponent forms, empty fractions, overflow, percentages, universal
+measures, and malformed input fail explicitly instead of becoming zero. Missing
+widths retain their existing default. Attributes are selected by the bound
+WordprocessingML namespace, and serialization writes the canonical integer with
+fixed `w` attributes in schema order while unmodelled table content retains its
+stored bytes.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,
