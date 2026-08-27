@@ -3293,7 +3293,11 @@ regression, and changelog section together. Pin every shared dependency to the
 verified 0.7.0 family from F-X059. Python, WASM, npm, and PyPI packages remain
 outside publication authority.
 
-**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063, F-X064, F-X065, F-X066.
+The stable contribution inventory credits Issues 53 and 54 and open PRs 55
+through 58 for their included outcomes. Release-bound notifications leave the
+issue and pull-request states unchanged unless separately authorized.
+
+**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063, F-X064, F-X065, F-X066, F-X067.
 **Test gate**: release. All seven stable registry entries resolve at 0.11.0
 against incubating 0.7.0 dependencies, their owners match the authenticated
 registry inventory, the annotated tag targets the reviewed SHA, the GitHub
@@ -3397,6 +3401,22 @@ This story does not add layout or rendering support.
 **Test gate**: regression. Canonical and aliased positive cases, adversarial
 foreign and ambiguous cases, item-order preservation, package save-reopen, and
 the current Word corpus pass with 49 of 49 output hashes unchanged.
+
+### F-X067, Prime Word fidelity Cargo dependencies (S)
+
+PR 58 identifies that a cold hosted runner can reach the intentional locked
+offline `rdocx` build before the complete Cargo graph is present. The Word
+fidelity job fetches the exact locked graph after its pinned Rust cache and
+before the corpus harness. The harness remains locked and offline, so network
+preparation stays explicit and render evidence cannot depend on an incidental
+warm cache. The direct submitted outcome is hardened with exact workflow order,
+cardinality, and mutation regressions. PR 58 remains open and unchanged.
+
+**Depends on**: F-X064.
+**Test gate**: regression. Workflow tests reject missing, unlocked, misplaced,
+or wrong-job dependency priming. The current pinned Word corpus and PR 58 hosted
+run emit nonempty evidence, and all 49 output hashes remain unchanged. The
+integrated hosted Word job remains a sprint-completion rider.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

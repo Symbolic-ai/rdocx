@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 4 | 1 | 2  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 69 | 60 | 2 | 5  |
-| **Total** | **316** | **253** | **6** | **55** |
+| X, Cross-cutting (opportunistic)            | 70 | 60 | 2 | 6  |
+| **Total** | **317** | **253** | **6** | **56** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -519,4 +519,5 @@ regenerated, never hand-edited.
 | F-X064 | Accept whole-valued decimal table measurements | S58 | S | done |
 | F-X065 | Expose tracked table grid changes             | S58 | S | pending |
 | F-X066 | Classify legacy VML horizontal rules          | S58 | S | pending |
+| F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
