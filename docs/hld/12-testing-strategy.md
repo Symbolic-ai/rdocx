@@ -1095,8 +1095,8 @@ docs job and canonical non-fast verification call this same runner.
 The stable 0.10.1 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the current incubating workspace and
-published family are 0.7.0 while `rpptx-wasm` remains unpublished.
+README requirement. It also proves the current incubating workspace carriers
+are 0.7.0 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
