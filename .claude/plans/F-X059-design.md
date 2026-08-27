@@ -1,6 +1,6 @@
 # F-X059, Tag rpptx-v0.7.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X058
@@ -119,9 +119,9 @@ story changes release metadata only. Any output delta blocks preparation.
 - [x] Preserve the historical stable registry proof without requiring unpublished 0.7.0.
 - [x] Prepare selected-family notes and contribution inventory.
 - [x] Verify metadata, order, bindings, packages, assets, and supply chain.
-- [ ] Run full verification, microscope, and clean sprint review at one SHA.
-- [ ] Stop at `/release rpptx-v0.7.0` for separate final approval.
-- [ ] Verify all publications, owners, tag, body, and notifications.
+- [x] Run full verification, microscope, and clean sprint review at one SHA.
+- [x] Stop at `/release rpptx-v0.7.0` for separate final approval.
+- [x] Verify all publications, owners, tag, body, and notifications.
 
 ## Open questions
 

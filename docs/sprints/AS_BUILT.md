@@ -9595,3 +9595,50 @@ archive limits, and cargo-deny also pass.
 **Notes for future sessions.** F-X059 must publish the complete 0.7.0 shared
 family before stable Word consumers opt into this rich path. F-198 owns the
 first declared rendering-baseline movement.
+
+### F-X059, Tag rpptx-v0.7.0
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete fifteen-package shared OOXML and PowerPoint
+family was published at 0.7.0 from reviewed SHA
+`1b076c16fb494fe47b054d761e061181a1ea0b15`. The release publishes the shared
+multilingual shaping, breaking, direction, deterministic font, and rich
+backend substrate. `rpptx-wasm` remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[33049354630](https://github.com/tensorbee/rdocx/actions/runs/33049354630)
+passed output stability, release metadata, reviewed notes, archive
+verification, the exact fifteen-crate publication, and GitHub Release jobs.
+Every selected 0.7.0 registry entry resolved under owner
+`mantissaman (Atul Sharma)`. The annotated
+[`rpptx-v0.7.0`](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.7.0)
+tag dereferenced to the reviewed SHA, and its 2,529-byte body was
+byte-identical to the committed changelog render.
+
+**Contribution inventory.** The selected F-X058 substrate added no new
+authenticated external issue or pull-request record after `rpptx-v0.6.0`.
+PRs 55 through 57 remain open and belong to later F-X064 through F-X066
+stable-reader stories, so they are not part of this release inventory.
+
+**Notifications.** None. The reviewed contribution inventory was empty, and
+no issue or pull-request state changed during this release.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed SHA with all workspace,
+no-default, WASM, documentation, README, exact 22-package dry-run, archive,
+and cargo-deny gates. The hash harness remained unchanged at 49 of 49. The
+publication workflow and independent registry, owner, tag, release-target,
+and byte-for-byte release-body checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.7.0` tag.
+F-X064 through F-X066 may now land the three open contributor PR outcomes,
+and F-198 through F-200 may consume the published shared 0.7.0 boundary.
