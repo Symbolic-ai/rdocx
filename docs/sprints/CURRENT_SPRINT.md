@@ -37,7 +37,7 @@ protection at the reviewed sprint SHA.
 | F-X059 | Tag rpptx-v0.7.0 | S | done | - |
 | F-X064 | Accept whole-valued decimal table measurements | S | done | - |
 | F-X067 | Prime Word fidelity Cargo dependencies | S | in-progress | codex |
-| F-X065 | Expose tracked table grid changes | S | pending | - |
+| F-X065 | Expose tracked table grid changes | S | in-progress | codex |
 | F-X066 | Classify legacy VML horizontal rules | S | pending | - |
 | F-198 | Hyphenation | L | in-progress | codex |
 | F-199 | Complex script shaping | L | pending | - |
