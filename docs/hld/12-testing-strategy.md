@@ -1155,7 +1155,7 @@ parallel, or failure-swallowing invocation.
 | release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
-| word-fidelity | Fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler |
+| word-fidelity | Restore the pinned Rust cache, run `cargo fetch --locked`, fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler with its locked offline helper |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
@@ -1181,6 +1181,17 @@ detector makes the aggregate gate fail. On the scheduled route, it requires
 the detector to be skipped and the supply-chain job to succeed. The stable
 aggregate check exists in the tracked workflow. Repository branch-protection
 configuration is separate external state.
+
+The Word fidelity job has one explicit Cargo network boundary. Its exact
+`cargo fetch --locked` step follows the pinned Rust cache and precedes corpus
+and harness work. The later acceptor build remains `--locked --offline`.
+Workflow regressions require that order and cardinality and reject a missing,
+unlocked, duplicated, post-harness, or wrong-job fetch. The accepted
+contribution evidence is PR 58 at source SHA
+`c8fed1d1268fd765d602bac2da6524900c1c1cfd`, hosted run `33025657609`, Word
+job `98366252284`. That job uploaded both required evidence files in one
+nonempty 1,420-byte artifact. The integrated hosted Word job remains a separate
+sprint-completion rider.
 
 The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host

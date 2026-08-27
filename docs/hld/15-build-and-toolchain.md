@@ -608,19 +608,23 @@ retains the gate JSON, render manifest, and per-slide score TSV as its evidence
 artifact.
 
 **A dedicated Word fidelity job** runs on Ubuntu 24.04 with exact Rust 1.97.1,
-LibreOffice Writer 26.2.5.2, and Poppler 26.01.0. It fetches and verifies the
-five-document corpus, runs `scripts/docx_ssim_harness.py --check`, and retains
-the required JSON and TSV evidence. The harness rejects corpus or tool drift,
-renderer or oracle failure, zero output, and a missing or empty evidence
-artifact. It records page-count and dimension differences through union-index
-SSIM scoring and does not fail solely because the 0.95 on 80 percent trend is
-missed. The aggregate CI gate requires success when the path filter selects the
-job.
+LibreOffice Writer 26.2.5.2, and Poppler 26.01.0. Immediately after the pinned
+Rust cache, one `cargo fetch --locked` step materializes the reviewed Cargo
+graph before corpus and harness work. It fetches and verifies the five-document
+corpus, runs `scripts/docx_ssim_harness.py --check`, and retains the required
+JSON and TSV evidence. The harness rejects corpus or tool drift, renderer or
+oracle failure, zero output, and a missing or empty evidence artifact. It
+records page-count and dimension differences through union-index SSIM scoring
+and does not fail solely because the 0.95 on 80 percent trend is missed. The
+aggregate CI gate requires success when the path filter selects the job.
 The harness prepares each Writer input through a locked, offline helper that
 calls the existing `rdocx::Document::accept_all` API. It reopens the resulting
 untracked copy and rejects remaining modeled revisions before the isolated
 Writer profile exports it. This helper shares the workspace Cargo lock and
 target directory and adds no published dependency or production entry point.
+Workflow regressions keep the fetch singular and immediately after the cache,
+reject weakened or misplaced commands, and keep all dependency network access
+ahead of the offline helper.
 
 ## Dependency policy
 

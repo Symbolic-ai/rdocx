@@ -1,6 +1,6 @@
 # F-X067, Prime Word fidelity Cargo dependencies
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X064
@@ -97,14 +97,14 @@ only and must not change generated output or baselines.
 
 ## Implementation checklist
 
-- [ ] Add failing dependency-priming and mutation regressions in the existing workflow test module.
-- [ ] Add the exact locked fetch step to the Word fidelity job.
-- [ ] Preserve the locked offline harness invocation and retained evidence contract.
-- [ ] Run the workflow suite, current Word fidelity gate, and hash harness.
-- [ ] Update exactly the three plan-listed HLD files.
-- [ ] Run microscope and `/verify --full`.
-- [ ] Record PR 58 and its exact source SHA in handoff and release inventory evidence.
-- [ ] Record the integrated hosted Word fidelity job as a sprint-completion rider.
+- [x] Add failing dependency-priming and mutation regressions in the existing workflow test module.
+- [x] Add the exact locked fetch step to the Word fidelity job.
+- [x] Preserve the locked offline harness invocation and retained evidence contract.
+- [x] Run the workflow suite, current Word fidelity gate, and hash harness.
+- [x] Update exactly the three plan-listed HLD files.
+- [x] Run microscope and `/verify --full`.
+- [x] Record PR 58 and its exact source SHA in handoff and release inventory evidence.
+- [x] Record the integrated hosted Word fidelity job as a sprint-completion rider.
 
 ## Open questions
 

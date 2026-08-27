@@ -620,6 +620,19 @@ class SprintWorkflowTests(unittest.TestCase):
             ("dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",),
         )
         self.assertIn("toolchain: 1.97.1", self.operative_lines(steps[1]))
+        self.assertEqual(
+            self.yaml_step_actions(steps[2]),
+            ("Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",),
+        )
+        prime = self.yaml_step(job, "Prime locked Cargo dependencies")
+        self.assertEqual(
+            self.yaml_direct_lines(prime, 8),
+            ("run: cargo fetch --locked",),
+        )
+        self.assertEqual(steps[3], prime)
+        self.assertEqual(
+            self.operative_lines(job).count("run: cargo fetch --locked"), 1
+        )
         fetch = self.yaml_step(job, "Fetch pinned Word corpus")
         gate = self.yaml_step(
             job, "Run all-page Word SSIM trend and completeness gate"
@@ -645,8 +658,15 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("${{ runner.temp }}/word-fidelity/ssim-results.tsv", upload)
         self.assertIn("if-no-files-found: error", self.operative_lines(upload))
         self.assertNotIn("continue-on-error", job)
+        self.assertLess(job.index(prime), job.index(fetch))
         self.assertLess(job.index(fetch), job.index(gate))
         self.assertLess(job.index(gate), job.index(upload))
+
+    def test_word_fidelity_primes_locked_dependencies_before_offline_build(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_word_fidelity_ci_contract(ci)
 
     def test_word_fidelity_ci_gate_rejects_weakened_invocations(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
@@ -658,7 +678,24 @@ class SprintWorkflowTests(unittest.TestCase):
             job, "Run all-page Word SSIM trend and completeness gate"
         )
         upload = self.yaml_step(job, "Retain Word fidelity evidence")
+        prime = self.yaml_step(job, "Prime locked Cargo dependencies")
+        test_job = self.yaml_block(ci, "  test:")
+        test_checkout = self.yaml_steps(test_job)[0]
+        wrong_job_test = test_job.replace(
+            test_checkout, test_checkout + prime, 1
+        )
         mutations = {
+            "missing-fetch": ci.replace(prime, "", 1),
+            "unlocked-fetch": ci.replace(
+                prime, prime.replace("cargo fetch --locked", "cargo fetch", 1), 1
+            ),
+            "duplicate-fetch": ci.replace(prime, prime + prime, 1),
+            "misplaced-fetch": ci.replace(prime, "", 1).replace(
+                gate, gate + prime, 1
+            ),
+            "wrong-job-fetch": ci.replace(prime, "", 1).replace(
+                test_job, wrong_job_test, 1
+            ),
             "missing-gate": ci.replace(gate, "", 1),
             "self-test-only": ci.replace(
                 gate, gate.replace("--check", "--self-test", 1), 1
