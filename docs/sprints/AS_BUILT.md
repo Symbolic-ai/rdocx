@@ -9684,3 +9684,93 @@ advisory SSIM trend remained 1 of 18 pages at or above 0.95.
 **Notes for future sessions.** Keep unsupported union arms explicit. Do not
 restore malformed-to-zero behavior or replace exact lexical parsing with
 floating-point conversion.
+
+### F-X067, Prime Word fidelity Cargo dependencies
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The Word fidelity job now runs one named
+`cargo fetch --locked` step immediately after the pinned Rust cache restore and
+before corpus setup or the locked offline harness. Existing workflow tests
+prove the step is present exactly once, locked, and in the correct job and
+position.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 58](https://github.com/tensorbee/rdocx/pull/58) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`c8fed1d1268fd765d602bac2da6524900c1c1cfd`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** Dependency priming is the only network boundary. The
+fidelity helper remains locked and offline, so a cold hosted runner cannot
+silently resolve a different graph while producing oracle evidence.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The complete 86-test workflow module passed, including missing,
+unlocked, duplicate, misplaced, and wrong-job mutations. The full workspace,
+no-default, WASM, rustdoc, README, 22-package dry-run, archive-size, and
+supply-chain gates passed. The integrated pinned Word gate fetched the locked
+graph first and produced nonempty JSON and TSV evidence for five documents and
+18 union pages.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the single explicit network boundary
+before the offline helper. The integrated hosted Word job remains a sprint
+completion rider.
+
+### F-X065, Expose tracked table grid changes
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Table-grid parsing now recognizes `w:tblGrid`,
+`w:gridCol`, and `w:tblGridChange` by namespace URI. One historical grid
+subtree is preserved exactly and written after active columns, duplicates fail
+closed, and foreign same-local children remain raw. The public table facade can
+report the presence of tracked grid history, while layout continues to use
+only active columns.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 56](https://github.com/tensorbee/rdocx/pull/56) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`8b79c4cd0452defafe0a58e86b332c98e7fe52d7`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** Historical grid XML remains a preservation sidecar
+and never changes active layout widths. Captured historical and foreign
+subtrees receive the ancestor namespace bindings they need to serialize as
+self-contained XML. Adding the optional historical field to the pre-1.0 public
+`CT_TblGrid` literal is an intentional source compatibility change for v0.11.0.
+
+**Deviations from the design plan.** Microscope pass 1 found that raw grid
+subtrees could lose namespace bindings declared only by ancestors. The
+remediation reused the existing owner-binding normalization and added a
+save, reparse, and repeated-serialization regression. Microscope pass 2
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** Six focused namespace, preservation, duplicate, facade, and
+active-layout regressions passed. The full `rdocx-oxml`, `rdocx-layout`,
+`rdocx`, and workspace suites passed. The no-default, WASM, rustdoc, README,
+22-package dry-run, archive-size, and supply-chain gates passed. The pinned
+five-document Word corpus produced nonempty evidence for all 18 union pages.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep historical grid data inert for layout and
+preserve its namespace context. Do not accept a second modeled grid change by
+discarding bytes.

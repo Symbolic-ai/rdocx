@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 4 | 1 | 2  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 70 | 60 | 4 | 4  |
-| **Total** | **317** | **253** | **8** | **54** |
+| X, Cross-cutting (opportunistic)            | 70 | 62 | 2 | 4  |
+| **Total** | **317** | **255** | **6** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -517,7 +517,7 @@ regenerated, never hand-edited.
 | F-X062 | Reuse restart pagination with notes and headers | S58 | M | done |
 | F-X063 | Avoid duplicate caller-font byte comparisons | S58 | S | done |
 | F-X064 | Accept whole-valued decimal table measurements | S58 | S | done |
-| F-X065 | Expose tracked table grid changes             | S58 | S | in-progress |
+| F-X065 | Expose tracked table grid changes             | S58 | S | done |
 | F-X066 | Classify legacy VML horizontal rules          | S58 | S | pending |
-| F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | in-progress |
+| F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | done |
 <!-- AUTOGEN:backlog-MX END -->
