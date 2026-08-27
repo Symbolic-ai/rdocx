@@ -253,10 +253,9 @@ The exact incubating crates.io allowlist now contains 15 implemented shared
 and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are prepared at
-0.7.0. The last published complete family remains 0.6.0 from the annotated
-`rpptx-v0.6.0` tag at reviewed SHA
-`55fb2f54caf91d7dedc8936b4c7b116354590628`. The earlier 0.5.0 and 0.4.0
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
+at 0.7.0 from the annotated `rpptx-v0.7.0` tag at reviewed SHA
+`1b076c16fb494fe47b054d761e061181a1ea0b15`. The earlier 0.6.0, 0.5.0, and 0.4.0
 registry releases remain available, and no existing version or tag was moved. Manifest
 eligibility and allowlist membership do not authorize a later publication
 without a separately approved `/release` invocation at the exact reviewed
@@ -363,9 +362,11 @@ The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.7.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 preparation group contains unpublished `rpptx-wasm`, while the crates.io
 allowlist remains exactly 15 packages. The last published complete family is
-the immutable `rpptx-v0.6.0` release at reviewed SHA
-`55fb2f54caf91d7dedc8936b4c7b116354590628`, and earlier registry releases
-remain available.
+the immutable `rpptx-v0.7.0` release at reviewed SHA
+`1b076c16fb494fe47b054d761e061181a1ea0b15`, and earlier registry releases
+remain available. The stable 0.10.1 registry consumer proof remains pinned to
+the immutable `oxml-layout@0.6.0` dependency rather than the current workspace
+family.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.

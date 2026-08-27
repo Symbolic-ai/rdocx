@@ -1095,8 +1095,8 @@ docs job and canonical non-fast verification call this same runner.
 The stable 0.10.1 regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the incubating family is published at 0.6.0
-while its current preparation is 0.7.0 and `rpptx-wasm` remains unpublished.
+README requirement. It also proves the current incubating workspace and
+published family are 0.7.0 while `rpptx-wasm` remains unpublished.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
@@ -1118,6 +1118,11 @@ owner `mantissaman (Atul Sharma)`, the annotated tag at reviewed SHA
 `ae0dcb162a7805e59e5890464b226765645ad547`, byte-identical GitHub release
 notes, nine contribution notifications, and six authorized unmerged
 pull-request closures.
+The 0.7.0 release gate verified all 15 incubating registry entries under sole
+owner `mantissaman (Atul Sharma)`, the annotated `rpptx-v0.7.0` tag at
+reviewed SHA `1b076c16fb494fe47b054d761e061181a1ea0b15`, the stable-family
+exclusion, and byte-identical GitHub release notes. Its selected contribution
+inventory is empty, so it requires no external notification.
 
 The large-document regression source-builds 1,000 one-page paragraphs and
 measures deterministic pagination separately from direct PDF rendering. Its
