@@ -338,6 +338,7 @@ defended.
 | F-X064 | S58 | S | 1 | 1 | 2026-08-27 | Hardened PR 55 table measurement parsing with exact whole-decimal tolerance |
 | F-X067 | S58 | S | 1 | 1 | 2026-08-27 | Prime the locked Word fidelity graph before the offline harness |
 | F-X065 | S58 | S | 1 | 1 | 2026-08-27 | Preserve tracked table grids without changing active layout widths |
+| F-X066 | S58 | S | 1 | 1 | 2026-08-28 | Classify strict namespace-aware legacy VML horizontal rules without rendering them |
 
 ## Velocity
 

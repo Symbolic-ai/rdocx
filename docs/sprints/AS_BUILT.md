@@ -9774,3 +9774,53 @@ five-document Word corpus produced nonempty evidence for all 18 union pages.
 **Notes for future sessions.** Keep historical grid data inert for layout and
 preserve its namespace context. Do not accept a second modeled grid change by
 discarding bytes.
+
+### F-X066, Classify legacy VML horizontal rules
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Native run inspection now classifies the narrow legacy
+horizontal-rule form as `RunItemRef::LegacyHorizontalRule` and exposes its
+exact raw XML. Classification resolves WordprocessingML, VML, and Office names
+by namespace URI, accepts only the documented true lexical forms, and leaves
+all foreign, malformed, ambiguous, or visible-content cases unsupported. No
+layout or renderer draws the rule.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 57](https://github.com/tensorbee/rdocx/pull/57) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`44498f042a2290ef40c7a6c26025f38e38e9ce2a`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** Classification occurs once at the OXML parse boundary
+and is encoded in the existing raw-position sidecar. This preserves the
+published `CT_R` struct-literal shape, makes equality reflect observable
+classification, and avoids retaining namespace-scope allocations on ordinary
+runs. `RunItemRef` was already non-exhaustive, so the new variant is additive.
+
+**Deviations from the design plan.** Microscope pass 1 found that reparsing a
+raw child lost namespace bindings declared by ancestors. The first remediation
+threaded namespace scope into `CT_R`, but microscope pass 2 found a published
+struct-literal break, equality drift, and eager scope cloning. The final
+parse-boundary sidecar design remediated all three findings. Microscope pass 3
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** URI-aware positive, negative, raw-order, equality, allocation, and
+package save-reopen regressions passed. The full workspace, no-default, WASM,
+rustdoc, README, 22-package dry-run, archive-size, and supply-chain gates
+passed. The pinned five-document Word corpus produced nonempty evidence for
+all 18 union pages. Its advisory SSIM trend remained 1 of 18 pages at or above
+0.95.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the classification reader-only and
+namespace-aware. Rendering legacy VML horizontal rules requires a separate
+story with its own output contract.
