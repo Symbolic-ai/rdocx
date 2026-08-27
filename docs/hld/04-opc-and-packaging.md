@@ -388,6 +388,13 @@ WordprocessingML namespace, and serialization writes the canonical integer with
 fixed `w` attributes in schema order while unmodelled table content retains its
 stored bytes.
 
+Word table grids recognize `tblGrid`, active `gridCol` children, their width
+attributes, and `tblGridChange` by the bound WordprocessingML namespace.
+Foreign same-local children remain unmodelled and retain their exact bytes.
+One historical grid-change subtree is preserved, while a second modeled change
+fails parsing rather than discarding history. Serialization writes active
+columns first and the historical change after them in schema order.
+
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML
 with every inherited namespace binding they use. Typed table, cell, border,

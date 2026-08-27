@@ -7,7 +7,9 @@ use crate::borders::CT_BorderEdge;
 use crate::content_control::CT_Sdt;
 use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
-use crate::numbering::{local_namespace_overrides, merged_owner_bindings, word_prefixes_at};
+use crate::numbering::{
+    local_namespace_overrides, merged_owner_bindings, namespace_bindings, word_prefixes_at,
+};
 use crate::properties::{
     CT_Shd, get_val_attr, get_word_val_attr, is_word_attribute, is_word_element,
 };
@@ -60,6 +62,13 @@ fn write_boundary<W: std::io::Write>(
         }
     }
     Ok(())
+}
+
+fn preserved_table_raw_bindings(scope: &[String]) -> Vec<(String, String)> {
+    namespace_bindings(scope)
+        .into_iter()
+        .filter(|(prefix, namespace)| prefix != "w" || namespace != crate::namespace::W_NS)
+        .collect()
 }
 
 // ---- Table border types ----
@@ -676,30 +685,84 @@ impl CT_TblPr {
 /// `CT_TblGrid` — Defines the column structure of a table.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CT_TblGrid {
+    /// Active columns used for current table layout.
     pub columns: Vec<CT_TblGridCol>,
+    /// The preserved historical `w:tblGridChange` subtree, when present.
+    ///
+    /// Historical columns are retained for round-trip fidelity and never
+    /// participate in current table layout.
+    pub grid_change_xml: Option<Vec<u8>>,
+    /// Unmodelled direct children retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
 impl CT_TblGrid {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &["w".to_owned()])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+    ) -> Result<Self> {
         let mut columns = Vec::new();
+        let mut grid_change_xml = None;
+        let mut extra_xml = Vec::new();
         let mut buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
-                    if matches_local_name(e.name().as_ref(), b"gridCol") {
-                        let mut width = Twips(0);
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if matches_local_name(attr.key.as_ref(), b"w") {
-                                width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
-                            }
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(e.name().as_ref(), b"gridCol", &prefixes) {
+                        columns.push(Self::parse_grid_column(e, &prefixes)?);
+                    } else if is_word_element(e.name().as_ref(), b"tblGridChange", &prefixes) {
+                        if grid_change_xml.is_some() {
+                            return Err(OxmlError::InvalidValue(
+                                "duplicate w:tblGridChange".to_owned(),
+                            ));
                         }
-                        columns.push(CT_TblGridCol { width });
+                        let raw = capture_empty_element(e)?;
+                        grid_change_xml = Some(crate::text::raw_with_external_bindings(
+                            &raw,
+                            &preserved_table_raw_bindings(&prefixes),
+                        )?);
+                    } else {
+                        let raw = capture_empty_element(e)?;
+                        extra_xml.push(crate::text::raw_with_external_bindings(
+                            &raw,
+                            &preserved_table_raw_bindings(&prefixes),
+                        )?);
                     }
                 }
-                Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblGrid") => {
+                Ok(Event::Start(ref e)) => {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(e.name().as_ref(), b"gridCol", &prefixes) {
+                        columns.push(Self::parse_grid_column(e, &prefixes)?);
+                        capture_element(reader, e)?;
+                    } else if is_word_element(e.name().as_ref(), b"tblGridChange", &prefixes) {
+                        if grid_change_xml.is_some() {
+                            return Err(OxmlError::InvalidValue(
+                                "duplicate w:tblGridChange".to_owned(),
+                            ));
+                        }
+                        let raw = capture_element(reader, e)?;
+                        grid_change_xml = Some(crate::text::raw_with_external_bindings(
+                            &raw,
+                            &preserved_table_raw_bindings(&prefixes),
+                        )?);
+                    } else {
+                        let raw = capture_element(reader, e)?;
+                        extra_xml.push(crate::text::raw_with_external_bindings(
+                            &raw,
+                            &preserved_table_raw_bindings(&prefixes),
+                        )?);
+                    }
+                }
+                Ok(Event::End(ref e))
+                    if is_word_element(e.name().as_ref(), b"tblGrid", word_prefixes) =>
+                {
                     break;
                 }
                 Ok(Event::Eof) => break,
@@ -709,7 +772,25 @@ impl CT_TblGrid {
             buf.clear();
         }
 
-        Ok(CT_TblGrid { columns })
+        Ok(CT_TblGrid {
+            columns,
+            grid_change_xml,
+            extra_xml,
+        })
+    }
+
+    fn parse_grid_column(
+        element: &BytesStart<'_>,
+        word_prefixes: &[String],
+    ) -> Result<CT_TblGridCol> {
+        let mut width = Twips(0);
+        for attr in element.attributes() {
+            let attr = attr?;
+            if is_word_attribute(attr.key.as_ref(), b"w", word_prefixes) {
+                width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
+            }
+        }
+        Ok(CT_TblGridCol { width })
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -720,6 +801,13 @@ impl CT_TblGrid {
             let mut e = BytesStart::new("w:gridCol");
             e.push_attribute(("w:w", buf.format(col.width.0)));
             writer.write_event(Event::Empty(e))?;
+        }
+
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
+        }
+        if let Some(raw) = &self.grid_change_xml {
+            writer.get_mut().write_all(raw)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblGrid")))?;
@@ -1655,8 +1743,8 @@ impl CT_Tbl {
                             &prefixes,
                             &owner_bindings,
                         )?);
-                    } else if matches_local_name(name.as_ref(), b"tblGrid") {
-                        grid = Some(CT_TblGrid::from_xml(reader)?);
+                    } else if is_word_element(name.as_ref(), b"tblGrid", &prefixes) {
+                        grid = Some(CT_TblGrid::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
                         rows.push(CT_Row::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
@@ -1668,6 +1756,15 @@ impl CT_Tbl {
                         } else {
                             extra_xml.push((rows.len(), raw));
                         }
+                    } else if matches_local_name(name.as_ref(), b"tblGrid") {
+                        let raw = capture_element(reader, e)?;
+                        extra_xml.push((
+                            rows.len(),
+                            crate::text::raw_with_external_bindings(
+                                &raw,
+                                &preserved_table_raw_bindings(&prefixes),
+                            )?,
+                        ));
                     } else {
                         // Rows wrapped in a content control used to be dropped
                         // here, which silently deleted whole tables.
@@ -1676,11 +1773,21 @@ impl CT_Tbl {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
                     // tblPr and tblGrid have fixed positions ahead of the rows,
                     // so a self-closing one must not be re-emitted from here.
-                    if !matches_local_name(name.as_ref(), b"tblPr")
-                        && !matches_local_name(name.as_ref(), b"tblGrid")
-                    {
+                    if is_word_element(name.as_ref(), b"tblGrid", &prefixes) {
+                        grid = Some(CT_TblGrid::default());
+                    } else if matches_local_name(name.as_ref(), b"tblGrid") {
+                        let raw = capture_empty_element(e)?;
+                        extra_xml.push((
+                            rows.len(),
+                            crate::text::raw_with_external_bindings(
+                                &raw,
+                                &preserved_table_raw_bindings(&prefixes),
+                            )?,
+                        ));
+                    } else if !is_word_element(name.as_ref(), b"tblPr", &prefixes) {
                         extra_xml.push((rows.len(), capture_empty_element(e)?));
                     }
                 }
@@ -1812,6 +1919,26 @@ mod tests {
         parse_table_result(xml).unwrap()
     }
 
+    fn parse_scoped_table(xml: &str) -> Result<CT_Tbl> {
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref element)) if element.local_name().as_ref() == b"tbl" => {
+                    let prefixes = word_prefixes_at(element, &["w".to_owned()])?;
+                    return CT_Tbl::from_xml_with_prefixes(&mut reader, &prefixes);
+                }
+                Ok(Event::Eof) => {
+                    return Err(OxmlError::MissingElement("table".to_string()));
+                }
+                Err(error) => return Err(error.into()),
+                Ok(_) => {}
+            }
+            buf.clear();
+        }
+    }
+
     #[test]
     fn parse_simple_table() {
         let tbl = parse_table(
@@ -1837,6 +1964,124 @@ mod tests {
 
         let pr = tbl.properties.unwrap();
         assert_eq!(pr.width.as_ref().unwrap().w, 5000);
+    }
+
+    #[test]
+    fn tracked_table_grid_change_is_namespace_aware() {
+        let word_namespace = crate::namespace::W_NS;
+        let canonical = parse_scoped_table(&format!(
+            r#"<w:tbl xmlns:w="{word_namespace}"><w:tblGrid><w:gridCol w:w="600"/><w:tblGridChange w:id="3"><w:tblGrid/></w:tblGridChange></w:tblGrid></w:tbl>"#
+        ))
+        .expect("canonical Word table parses");
+        assert_eq!(
+            canonical.grid.as_ref().unwrap().columns,
+            vec![CT_TblGridCol { width: Twips(600) }]
+        );
+        assert!(canonical.grid.unwrap().grid_change_xml.is_some());
+
+        let foreign_grid =
+            br#"<ext:tblGrid xmlns:ext="urn:producer"><ext:gridCol ext:w="700"/></ext:tblGrid>"#
+                .as_slice();
+        let foreign_column = br#"<ext:gridCol ext:w="800" xmlns:ext="urn:producer"/>"#.as_slice();
+        let foreign_change =
+            br#"<ext:tblGridChange ext:id="foreign" xmlns:ext="urn:producer"/>"#.as_slice();
+        let table = parse_scoped_table(&format!(
+            r#"<q:tbl xmlns:q="{word_namespace}" xmlns:ext="urn:producer">
+                 <ext:tblGrid><ext:gridCol ext:w="700"/></ext:tblGrid>
+                 <q:tblGrid>
+                   <ext:gridCol ext:w="800"/>
+                   <q:gridCol ext:w="999" q:w="1200"/>
+                   <ext:tblGridChange ext:id="foreign"/>
+                   <q:tblGridChange q:id="4"><q:tblGrid><q:gridCol q:w="9000"/></q:tblGrid></q:tblGridChange>
+                 </q:tblGrid>
+                 <q:tr><q:tc><q:p/></q:tc></q:tr>
+               </q:tbl>"#
+        ))
+        .expect("aliased Word table parses");
+
+        let grid = table.grid.as_ref().expect("Word grid is modeled");
+        assert_eq!(grid.columns, vec![CT_TblGridCol { width: Twips(1200) }]);
+        assert_eq!(
+            grid.grid_change_xml.as_deref(),
+            Some(
+                format!(
+                    r#"<q:tblGridChange q:id="4" xmlns:q="{word_namespace}"><q:tblGrid><q:gridCol q:w="9000"/></q:tblGrid></q:tblGridChange>"#
+                )
+                .as_bytes()
+            )
+        );
+        assert!(grid.extra_xml.iter().any(|raw| raw == foreign_column));
+        assert!(grid.extra_xml.iter().any(|raw| raw == foreign_change));
+        assert!(table.extra_xml.iter().any(|(_, raw)| raw == foreign_grid));
+    }
+
+    #[test]
+    fn tracked_table_grid_raw_xml_retains_ancestor_namespace_bindings() {
+        let word_namespace = crate::namespace::W_NS;
+        let table = parse_scoped_table(&format!(
+            r#"<q:tbl xmlns:q="{word_namespace}" xmlns:ext="urn:producer">
+                 <ext:tblGrid><ext:gridCol ext:w="700"/></ext:tblGrid>
+                 <q:tblGrid>
+                   <q:gridCol q:w="1200"/>
+                   <ext:gridCol ext:w="800"/>
+                   <q:tblGridChange q:id="4"><q:tblGrid><q:gridCol q:w="9000"/><ext:marker/></q:tblGrid></q:tblGridChange>
+                 </q:tblGrid>
+                 <q:tr><q:tc><q:p/></q:tc></q:tr>
+               </q:tbl>"#
+        ))
+        .expect("ancestor-bound grid XML parses");
+
+        let first = table_to_xml(&table);
+        assert!(first.contains(&format!(r#"xmlns:q="{word_namespace}""#)));
+        assert!(first.contains(r#"xmlns:ext="urn:producer""#));
+
+        let reparsed = parse_scoped_table(&first).expect("bound grid XML reparses");
+        let grid = reparsed.grid.as_ref().expect("active grid remains modeled");
+        assert_eq!(grid.columns, vec![CT_TblGridCol { width: Twips(1200) }]);
+        assert!(grid.grid_change_xml.is_some());
+        assert_eq!(grid.extra_xml.len(), 1);
+        assert_eq!(reparsed.extra_xml.len(), 1);
+
+        let second = table_to_xml(&reparsed);
+        assert_eq!(second, first, "normalized raw XML remains byte-identical");
+    }
+
+    #[test]
+    fn duplicate_modeled_table_grid_changes_fail_closed() {
+        let result = parse_table_result(
+            r#"<w:tblGrid>
+                 <w:gridCol w:w="1200"/>
+                 <w:tblGridChange w:id="4"><w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid></w:tblGridChange>
+                 <w:tblGridChange w:id="5"><w:tblGrid><w:gridCol w:w="8000"/></w:tblGrid></w:tblGridChange>
+               </w:tblGrid>"#,
+        );
+        assert!(
+            matches!(result, Err(OxmlError::InvalidValue(message)) if message.contains("duplicate w:tblGridChange")),
+            "duplicate modeled history must fail before publishing a partial table"
+        );
+    }
+
+    #[test]
+    fn tracked_table_grid_change_round_trips_after_active_columns() {
+        let historical = br#"<w:tblGridChange w:id="4"><w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid></w:tblGridChange>"#;
+        let table = parse_table(&format!(
+            r#"<w:tblGrid><w:gridCol w:w="1200"/><w:gridCol w:w="2400"/>{}</w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr>"#,
+            std::str::from_utf8(historical).unwrap()
+        ));
+
+        let output = table_to_xml(&table);
+        let first = output.find(r#"<w:gridCol w:w="1200"/>"#).unwrap();
+        let second = output.find(r#"<w:gridCol w:w="2400"/>"#).unwrap();
+        let change = output
+            .find(std::str::from_utf8(historical).unwrap())
+            .unwrap();
+        assert!(first < second && second < change);
+
+        let reparsed = parse_scoped_table(&output).expect("serialized table reparses");
+        assert_eq!(
+            reparsed.grid.unwrap().grid_change_xml.as_deref(),
+            Some(historical.as_slice())
+        );
     }
 
     #[test]
@@ -2463,6 +2708,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(4500) },
                 CT_TblGridCol { width: Twips(4500) },
             ],
+            ..Default::default()
         });
 
         let mut row = CT_Row::new();
@@ -2513,6 +2759,7 @@ mod tests {
         let mut nested_tbl = CT_Tbl::new();
         nested_tbl.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(2000) }],
+            ..Default::default()
         });
         let mut nested_row = CT_Row::new();
         let mut nested_cell = CT_Tc::new();

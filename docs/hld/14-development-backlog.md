@@ -3378,9 +3378,11 @@ arms, and the current Word corpus with 49 of 49 output hashes unchanged.
 PR 56 exposes the historical grid carried by `w:tblGridChange`. Recognize the
 grid, active columns, and historical change by WordprocessingML namespace URI,
 preserve exactly one change subtree after active columns in schema order, and
-fail closed on a duplicate modeled change. The active columns remain the only
+fail closed on a duplicate modeled change. Foreign same-local children remain
+unmodelled with their exact bytes preserved. The active columns remain the only
 layout grid. Native callers can query `TableRef::has_grid_change()`, while the
-historical bytes remain inspection and round-trip data.
+historical bytes remain inspection and round-trip data. The public low-level
+grid fields are an intentional pre-1.0 exhaustive-literal source impact.
 
 **Depends on**: F-X064.
 **Test gate**: regression. Aliased and foreign namespace cases, duplicate

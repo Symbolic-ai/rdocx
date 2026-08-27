@@ -351,6 +351,14 @@ stable APIs. Existing binding surfaces do not gain new methods implicitly, but
 their owned `rdocx::Document` remains package-preserving when native code uses
 the new operations.
 
+Native Word table inspection includes additive
+`TableRef::has_grid_change()`. It reports whether the low-level grid preserves
+one historical `w:tblGridChange` and does not expose that historical snapshot
+as active layout input. `CT_TblGrid` carries public historical and unmodelled
+raw preservation fields. Full literals written against the earlier pre-1.0
+shape must initialize those fields or use `Default`. This intentional low-level
+Rust source impact does not add Python, WASM, or CLI methods.
+
 Native Word callers can inspect comments through `Document::comments` and
 author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run

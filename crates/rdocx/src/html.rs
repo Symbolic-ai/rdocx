@@ -904,6 +904,7 @@ impl Importer<'_> {
         });
         output.grid = Some(CT_TblGrid {
             columns: (0..column_count).map(|_| CT_TblGridCol { width }).collect(),
+            ..Default::default()
         });
         for model in models {
             let mut row = CT_Row::new();

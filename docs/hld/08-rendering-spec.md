@@ -533,10 +533,12 @@ an annotation, but their visible text remains in the line.
 ## Tables
 
 Table lowering derives cumulative row and column offsets from the resolved
-grid. Right-to-left tables reverse visual column placement without changing
-logical cell ownership. Cell payloads retain paragraphs and nested tables in
-source order. A nested table resolves its own grid, fills, borders, text,
-provenance, anchors, and logical structure inside the owning cell content box.
+active grid columns. A preserved historical table-grid change is inspection and
+round-trip metadata and never participates in width calculation. Right-to-left
+tables reverse visual column placement without changing logical cell ownership.
+Cell payloads retain paragraphs and nested tables in source order. A nested
+table resolves its own active grid, fills, borders, text, provenance, anchors,
+and logical structure inside the owning cell content box.
 
 Vertical merge groups match the exact starting grid column and grid span. A
 continuation emits no content or paint. The restart paints across the resolved

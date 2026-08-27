@@ -584,7 +584,7 @@ fn split_namespace_binding(value: &str) -> Option<(&str, &str)> {
     value.strip_prefix('\0')?.split_once('\0')
 }
 
-fn namespace_bindings(scope: &[String]) -> Vec<(String, String)> {
+pub(crate) fn namespace_bindings(scope: &[String]) -> Vec<(String, String)> {
     scope
         .iter()
         .filter_map(|value| split_namespace_binding(value))

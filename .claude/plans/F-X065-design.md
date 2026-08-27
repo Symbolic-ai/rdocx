@@ -1,6 +1,6 @@
 # F-X065, Expose tracked table grid changes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X064
@@ -94,13 +94,13 @@ inspection and save-reopen only. It is never consumed by layout.
 
 ## Implementation checklist
 
-- [ ] Add failing URI, foreign-element, duplicate, and schema-order tests in existing files.
-- [ ] Preserve one exact historical grid-change subtree.
-- [ ] Keep active columns as the only layout input.
-- [ ] Add the native presence accessor and document its additive API impact.
-- [ ] Run focused OXML, facade, layout, corpus, package, and risk-rider gates.
-- [ ] Run microscope and `/verify --full`.
-- [ ] Record PR 56 and its exact source SHA in the handoff and delivery evidence.
+- [x] Add failing URI, foreign-element, duplicate, and schema-order tests in existing files.
+- [x] Preserve one exact historical grid-change subtree.
+- [x] Keep active columns as the only layout input.
+- [x] Add the native presence accessor and document its additive API impact.
+- [x] Run focused OXML, facade, layout, corpus, package, and risk-rider gates.
+- [x] Run microscope and `/verify --full`.
+- [x] Record PR 56 and its exact source SHA in the handoff and delivery evidence.
 
 ## Open questions
 

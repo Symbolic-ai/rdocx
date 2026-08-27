@@ -74,6 +74,14 @@ requires canonical integer output in schema order and byte-identical unmodelled
 table content. The pinned Word corpus and the 49-entry hash harness remain the
 integration and output-stability gates.
 
+The tracked table-grid gate parses canonical and aliased Word grid elements,
+rejects foreign same-local names from the modeled projection while preserving
+their bytes, and fails closed on duplicate modeled grid changes. Save and reopen
+evidence requires active columns before one byte-identical historical subtree.
+Facade and deterministic layout regressions prove presence inspection without
+allowing historical widths to alter the active grid. The public package dry run,
+pinned Word corpus, and unchanged 49-entry hash set complete the gate.
+
 The release-notes regression gate validates both release tag families through
 the same deterministic parser used by publication. It requires one exact
 version section, the complete ordered heading set, meaningful rendered
