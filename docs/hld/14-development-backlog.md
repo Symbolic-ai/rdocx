@@ -3397,11 +3397,15 @@ whose Office `hr` attribute is enabled by expanded namespace URI, not lexical
 prefix. Accept the VML true forms `t` and `true`, and preserve and expose the
 exact raw bytes. Numeric `1`, false, missing, malformed, foreign,
 multiple-shape, visible-child, and ambiguous input remains `UnsupportedXml`.
+Classification occurs once at the OXML parse boundary and records a compact
+semantic flag in the existing raw-child position sidecar. Ordinary modeled
+runs retain no namespace scope, and run equality includes the classification.
 This story does not add layout or rendering support.
 
 **Depends on**: F-X065.
 **Test gate**: regression. Canonical and aliased positive cases, adversarial
-foreign and ambiguous cases, item-order preservation, package save-reopen, and
+foreign and ambiguous cases, public-literal and equality compatibility,
+item-order preservation, package save-reopen, and
 the current Word corpus pass with 49 of 49 output hashes unchanged.
 
 ### F-X067, Prime Word fidelity Cargo dependencies (S)

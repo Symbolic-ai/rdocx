@@ -704,6 +704,7 @@ impl<'a> RtfWriter<'a> {
             self.scan_run_properties(properties, &location);
         }
         for index in &run.extra_xml_positions {
+            let index = CT_R::raw_child_position(*index);
             self.diagnose(
                 &format!("{location}/raw[{index}]"),
                 "unmodelled run XML was dropped during RTF export",

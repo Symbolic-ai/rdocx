@@ -114,6 +114,19 @@ pub struct FieldRef<'a> {
     inner: &'a Field,
 }
 
+/// An immutable legacy VML horizontal rule retained by a run.
+#[derive(Debug, Clone, Copy)]
+pub struct LegacyHorizontalRuleRef<'a> {
+    raw_xml: &'a [u8],
+}
+
+impl LegacyHorizontalRuleRef<'_> {
+    /// The exact preserved `<w:pict>` subtree.
+    pub fn raw_xml(&self) -> &[u8] {
+        self.raw_xml
+    }
+}
+
 impl FieldRef<'_> {
     /// The retained field instruction text.
     pub fn instruction(&self) -> &str {
@@ -158,8 +171,18 @@ pub enum RunItemRef<'a> {
     EndnoteReference(i32),
     /// A comment reference ID.
     CommentReference(i32),
+    /// An unambiguous legacy VML horizontal rule.
+    LegacyHorizontalRule(LegacyHorizontalRuleRef<'a>),
     /// A preserved run child that rdocx does not model.
     UnsupportedXml(&'a [u8]),
+}
+
+fn classify_raw_run_item(raw_xml: &[u8], encoded_position: Option<usize>) -> RunItemRef<'_> {
+    if encoded_position.is_some_and(CT_R::raw_child_is_legacy_horizontal_rule) {
+        RunItemRef::LegacyHorizontalRule(LegacyHorizontalRuleRef { raw_xml })
+    } else {
+        RunItemRef::UnsupportedXml(raw_xml)
+    }
 }
 
 /// Underline style for runs.
@@ -574,8 +597,8 @@ impl<'a> RunRef<'a> {
                     .extra_xml_positions
                     .iter()
                     .zip(&self.inner.extra_xml)
-                    .filter(|(position, _)| **position == 0)
-                    .map(|(_, raw)| RunItemRef::UnsupportedXml(raw.as_slice())),
+                    .filter(|(position, _)| CT_R::raw_child_position(**position) == 0)
+                    .map(|(position, raw)| classify_raw_run_item(raw, Some(*position))),
             );
         }
         for index in 0..=self.inner.content.len() {
@@ -586,8 +609,8 @@ impl<'a> RunRef<'a> {
                         .extra_xml_positions
                         .iter()
                         .zip(&self.inner.extra_xml)
-                        .filter(|(position, _)| **position == boundary)
-                        .map(|(_, raw)| RunItemRef::UnsupportedXml(raw.as_slice())),
+                        .filter(|(position, _)| CT_R::raw_child_position(**position) == boundary)
+                        .map(|(position, raw)| classify_raw_run_item(raw, Some(*position))),
                 );
             }
             if let Some(content) = self.inner.content.get(index) {
@@ -615,7 +638,7 @@ impl<'a> RunRef<'a> {
                 self.inner
                     .extra_xml
                     .iter()
-                    .map(|raw| RunItemRef::UnsupportedXml(raw.as_slice())),
+                    .map(|raw| classify_raw_run_item(raw, None)),
             );
         }
         items.into_iter()
@@ -755,6 +778,112 @@ impl<'a> RunRef<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rdocx_oxml::CT_Document;
+    use rdocx_oxml::document::BodyContent;
+
+    #[test]
+    fn ct_r_public_struct_literal_keeps_its_existing_shape() {
+        let run = CT_R {
+            properties: None,
+            content: Vec::new(),
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        };
+
+        assert!(run.content.is_empty());
+    }
+
+    fn run_with_raw(raw: &[u8]) -> CT_R {
+        let raw = std::str::from_utf8(raw).unwrap();
+        run_with_inner_xml(raw)
+    }
+
+    fn run_with_inner_xml(inner_xml: &str) -> CT_R {
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r>{inner_xml}</w:r></w:p></w:body></w:document>"#
+        );
+        let mut document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let BodyContent::Paragraph(mut paragraph) = document.body.content.remove(0) else {
+            panic!("expected paragraph");
+        };
+        paragraph.runs.remove(0)
+    }
+
+    #[test]
+    fn legacy_horizontal_rule_classification_is_namespace_aware() {
+        let cases = [
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t"/></w:pict>"#.as_slice(),
+            br#"<word:pict xmlns:word="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:shape="urn:schemas-microsoft-com:vml" xmlns:office="urn:schemas-microsoft-com:office:office"><shape:rect office:hr="true"></shape:rect></word:pict>"#.as_slice(),
+            br#"<pict xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:o="urn:schemas-microsoft-com:office:office"><rect xmlns="urn:schemas-microsoft-com:vml" o:hr="t"/></pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:foreign" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect xmlns:v="urn:schemas-microsoft-com:vml" o:hr="true"/></w:pict>"#.as_slice(),
+        ];
+
+        for raw in cases {
+            let run = run_with_raw(raw);
+            let run = RunRef { inner: &run };
+            let item = run.items().next().unwrap();
+            let RunItemRef::LegacyHorizontalRule(rule) = item else {
+                panic!("namespace-qualified legacy rule was not classified");
+            };
+            assert_eq!(rule.raw_xml(), raw);
+        }
+    }
+
+    #[test]
+    fn ambiguous_or_foreign_vml_stays_unsupported() {
+        let cases = [
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="1"/></w:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="false"/></w:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml"><v:rect/></w:pict>"#.as_slice(),
+            br#"<x:pict xmlns:x="urn:foreign" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t"/></x:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:foreign" xmlns:o="urn:schemas-microsoft-com:office:office"><x:rect o:hr="t"/></w:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:foreign"><v:rect x:hr="t"/></w:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect xmlns:v="urn:foreign" o:hr="t"/></w:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t"/><v:rect o:hr="t"/></w:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t">visible</v:rect></w:pict>"#.as_slice(),
+            br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><!-- ambiguous --><v:rect o:hr="t"/></w:pict>"#.as_slice(),
+        ];
+
+        for raw in cases {
+            let run = run_with_raw(raw);
+            assert!(matches!(
+                RunRef { inner: &run }.items().next().unwrap(),
+                RunItemRef::UnsupportedXml(bytes) if bytes == raw
+            ));
+        }
+
+        let malformed = br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t"></w:pict>"#;
+        let run = CT_R {
+            properties: None,
+            content: Vec::new(),
+            extra_xml: vec![malformed.to_vec()],
+            extra_xml_positions: vec![0],
+            alt_drawings: Vec::new(),
+        };
+        assert!(matches!(
+            RunRef { inner: &run }.items().next().unwrap(),
+            RunItemRef::UnsupportedXml(bytes) if bytes == malformed
+        ));
+    }
+
+    #[test]
+    fn legacy_horizontal_rule_keeps_exact_raw_xml_and_item_order() {
+        let raw = br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t"/></w:pict>"#;
+        let run = run_with_inner_xml(&format!(
+            "<w:t>before</w:t>{}<w:t>after</w:t>",
+            std::str::from_utf8(raw).unwrap()
+        ));
+        let run = RunRef { inner: &run };
+        let items = run.items().collect::<Vec<_>>();
+
+        assert!(matches!(items[0], RunItemRef::Text("before")));
+        let RunItemRef::LegacyHorizontalRule(rule) = items[1] else {
+            panic!("legacy rule did not retain its ordered item slot");
+        };
+        assert_eq!(rule.raw_xml(), raw);
+        assert!(matches!(items[2], RunItemRef::Text("after")));
+    }
 
     #[test]
     fn unordered_legacy_raw_children_follow_typed_run_content() {

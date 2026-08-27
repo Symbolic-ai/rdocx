@@ -175,6 +175,14 @@ namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
 
+Raw Word run children receive semantic classification only at the OXML parse
+boundary. A WordprocessingML `pict` is classified as a legacy horizontal rule
+only when its in-scope expanded names identify exactly one VML `rect` with an
+enabled Office `hr` attribute and whitespace otherwise. The classification is
+stored in the existing raw-child position sidecar, while the subtree bytes and
+ancestor namespace ownership remain unchanged. Foreign, malformed, numeric,
+false, visible, or structurally ambiguous content stays unmodelled raw XML.
+
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes
 the typed comments model back to that target with its content-type override.

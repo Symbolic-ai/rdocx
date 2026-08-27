@@ -3,13 +3,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer, XmlVersion};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::{NsReader, Reader, Writer, XmlVersion};
 
 use crate::content_control::CT_Sdt;
 use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
 use crate::namespace::{R_NS, matches_local_name};
-use crate::numbering::{parse_scoped_ppr, word_prefixes_at};
+use crate::numbering::{namespace_bindings, parse_scoped_ppr, word_prefixes_at};
 use crate::properties::{CT_PPr, CT_RPr, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
@@ -426,7 +427,7 @@ pub struct CT_R {
     pub content: Vec<RunContent>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
-    /// Parsed raw-child positions among properties and typed run content.
+    /// Encoded raw-child positions among properties and typed run content.
     #[doc(hidden)]
     pub extra_xml_positions: Vec<usize>,
     /// Drawings read out of an `mc:AlternateContent` block, for layout only.
@@ -434,6 +435,168 @@ pub struct CT_R {
     /// Never serialised. The verbatim copy in `extra_xml` is what gets
     /// written, so emitting these as well would duplicate the element.
     pub alt_drawings: Vec<CT_Drawing>,
+}
+
+const RAW_LEGACY_HORIZONTAL_RULE_FLAG: usize = 1usize << (usize::BITS - 1);
+const RAW_CHILD_POSITION_MASK: usize = !RAW_LEGACY_HORIZONTAL_RULE_FLAG;
+const VML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:vml";
+const OFFICE_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:office";
+
+fn resolved_name_matches(
+    namespace: &ResolveResult<'_>,
+    local_name: &[u8],
+    expected_namespace: &[u8],
+    expected_local_name: &[u8],
+) -> bool {
+    local_name == expected_local_name
+        && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == expected_namespace)
+}
+
+fn rect_has_enabled_horizontal_rule(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> bool {
+    let mut enabled = None;
+    for attribute in element.attributes() {
+        let Ok(attribute) = attribute else {
+            return false;
+        };
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        if resolved_name_matches(&namespace, local_name.as_ref(), OFFICE_NAMESPACE, b"hr") {
+            if enabled.is_some() {
+                return false;
+            }
+            let Ok(value) =
+                attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+            else {
+                return false;
+            };
+            enabled = Some(matches!(value.as_bytes(), b"t" | b"true"));
+        }
+    }
+    enabled == Some(true)
+}
+
+fn is_legacy_horizontal_rule(raw_xml: &[u8], inherited_namespaces: &[(String, String)]) -> bool {
+    let scoped_xml = if inherited_namespaces.is_empty() {
+        None
+    } else {
+        let mut wrapper = BytesStart::new("rdocx-scope");
+        let names = inherited_namespaces
+            .iter()
+            .map(|(prefix, _)| {
+                if prefix.is_empty() {
+                    "xmlns".to_owned()
+                } else {
+                    format!("xmlns:{prefix}")
+                }
+            })
+            .collect::<Vec<_>>();
+        for ((_, namespace), name) in inherited_namespaces.iter().zip(&names) {
+            wrapper.push_attribute((name.as_str(), namespace.as_str()));
+        }
+        let mut writer = Writer::new(Vec::new());
+        if writer.write_event(Event::Start(wrapper)).is_err() {
+            return false;
+        }
+        writer.get_mut().extend_from_slice(raw_xml);
+        if writer
+            .write_event(Event::End(BytesEnd::new("rdocx-scope")))
+            .is_err()
+        {
+            return false;
+        }
+        Some(writer.into_inner())
+    };
+    let mut reader = NsReader::from_reader(scoped_xml.as_deref().unwrap_or(raw_xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut state = u8::from(scoped_xml.is_some()) * 4;
+    let mut found_rect = false;
+
+    loop {
+        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
+            return false;
+        };
+        match event {
+            Event::Start(element) if state == 4 && element.name().as_ref() == b"rdocx-scope" => {
+                state = 0;
+            }
+            Event::Start(element) if state == 0 => {
+                if !resolved_name_matches(
+                    &namespace,
+                    element.local_name().as_ref(),
+                    crate::namespace::W_NS.as_bytes(),
+                    b"pict",
+                ) {
+                    return false;
+                }
+                state = 1;
+            }
+            Event::Start(element) if state == 1 && !found_rect => {
+                if !resolved_name_matches(
+                    &namespace,
+                    element.local_name().as_ref(),
+                    VML_NAMESPACE,
+                    b"rect",
+                ) || !rect_has_enabled_horizontal_rule(&reader, &element)
+                {
+                    return false;
+                }
+                found_rect = true;
+                state = 2;
+            }
+            Event::Empty(element) if state == 1 && !found_rect => {
+                if !resolved_name_matches(
+                    &namespace,
+                    element.local_name().as_ref(),
+                    VML_NAMESPACE,
+                    b"rect",
+                ) || !rect_has_enabled_horizontal_rule(&reader, &element)
+                {
+                    return false;
+                }
+                found_rect = true;
+            }
+            Event::End(element) if state == 2 => {
+                if !resolved_name_matches(
+                    &namespace,
+                    element.local_name().as_ref(),
+                    VML_NAMESPACE,
+                    b"rect",
+                ) {
+                    return false;
+                }
+                state = 1;
+            }
+            Event::End(element) if state == 1 && found_rect => {
+                if !resolved_name_matches(
+                    &namespace,
+                    element.local_name().as_ref(),
+                    crate::namespace::W_NS.as_bytes(),
+                    b"pict",
+                ) {
+                    return false;
+                }
+                state = 3;
+            }
+            Event::End(element)
+                if state == 3
+                    && scoped_xml.is_some()
+                    && element.name().as_ref() == b"rdocx-scope" =>
+            {
+                state = 4;
+            }
+            Event::Text(text) if text.as_ref().iter().all(u8::is_ascii_whitespace) => {}
+            Event::Eof => {
+                let finished = if scoped_xml.is_some() {
+                    state == 4
+                } else {
+                    state == 3
+                };
+                return finished && found_rect;
+            }
+            _ => return false,
+        }
+        buffer.clear();
+    }
 }
 
 #[allow(non_snake_case)]
@@ -446,6 +609,36 @@ impl CT_R {
             extra_xml_positions: Vec::new(),
             alt_drawings: Vec::new(),
         }
+    }
+
+    /// Decode a raw-child boundary stored in `extra_xml_positions`.
+    #[doc(hidden)]
+    pub fn raw_child_position(encoded: usize) -> usize {
+        encoded & RAW_CHILD_POSITION_MASK
+    }
+
+    /// Report whether a raw child was parsed as a legacy horizontal rule.
+    #[doc(hidden)]
+    pub fn raw_child_is_legacy_horizontal_rule(encoded: usize) -> bool {
+        encoded & RAW_LEGACY_HORIZONTAL_RULE_FLAG != 0
+    }
+
+    /// Replace a raw-child boundary without changing its parsed classification.
+    #[doc(hidden)]
+    pub fn set_raw_child_position(encoded: &mut usize, position: usize) {
+        debug_assert_eq!(position & RAW_LEGACY_HORIZONTAL_RULE_FLAG, 0);
+        *encoded =
+            (position & RAW_CHILD_POSITION_MASK) | (*encoded & RAW_LEGACY_HORIZONTAL_RULE_FLAG);
+    }
+
+    fn encode_raw_child_position(position: usize, legacy_horizontal_rule: bool) -> usize {
+        debug_assert_eq!(position & RAW_LEGACY_HORIZONTAL_RULE_FLAG, 0);
+        position
+            | if legacy_horizontal_rule {
+                RAW_LEGACY_HORIZONTAL_RULE_FLAG
+            } else {
+                0
+            }
     }
 
     /// Get the combined text of all text content in this run.
@@ -476,8 +669,8 @@ impl CT_R {
         let property_boundary = usize::from(self.properties.is_some());
         let replacement_end = property_boundary + content.len();
         for position in &mut self.extra_xml_positions {
-            if *position > property_boundary {
-                *position = replacement_end;
+            if Self::raw_child_position(*position) > property_boundary {
+                Self::set_raw_child_position(position, replacement_end);
             }
         }
         self.content = content;
@@ -494,7 +687,8 @@ impl CT_R {
     pub fn ensure_properties(&mut self) -> &mut CT_RPr {
         if self.properties.is_none() {
             for position in &mut self.extra_xml_positions {
-                *position += 1;
+                let shifted = Self::raw_child_position(*position) + 1;
+                Self::set_raw_child_position(position, shifted);
             }
             self.properties = Some(CT_RPr::default());
         }
@@ -506,14 +700,16 @@ impl CT_R {
     pub fn remap_removed_content(&mut self, removed: &[bool]) {
         let property_boundary = usize::from(self.properties.is_some());
         for position in &mut self.extra_xml_positions {
-            let content_boundary = position.saturating_sub(property_boundary);
-            *position = position.saturating_sub(
+            let decoded = Self::raw_child_position(*position);
+            let content_boundary = decoded.saturating_sub(property_boundary);
+            let remapped = decoded.saturating_sub(
                 removed
                     .iter()
                     .take(content_boundary.min(removed.len()))
                     .filter(|remove| **remove)
                     .count(),
             );
+            Self::set_raw_child_position(position, remapped);
         }
     }
 
@@ -558,7 +754,6 @@ impl CT_R {
         let mut alt_drawings = Vec::new();
         let mut modeled_children = 0usize;
         let mut buf = Vec::new();
-
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
@@ -634,8 +829,15 @@ impl CT_R {
                         extra_xml_positions.push(modeled_children);
                     } else {
                         // Capture unknown child elements as raw XML
-                        extra_xml.push(capture_element(reader, e)?);
-                        extra_xml_positions.push(modeled_children);
+                        let is_word_pict = is_word_element(name.as_ref(), b"pict", &prefixes);
+                        let raw = capture_element(reader, e)?;
+                        let legacy_horizontal_rule = is_word_pict
+                            && is_legacy_horizontal_rule(&raw, &namespace_bindings(word_prefixes));
+                        extra_xml.push(raw);
+                        extra_xml_positions.push(Self::encode_raw_child_position(
+                            modeled_children,
+                            legacy_horizontal_rule,
+                        ));
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
@@ -829,7 +1031,7 @@ fn write_run_raw_boundary<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
 ) -> Result<()> {
     for (position, raw) in run.extra_xml_positions.iter().zip(&run.extra_xml) {
-        if *position == boundary {
+        if CT_R::raw_child_position(*position) == boundary {
             write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
         }
     }

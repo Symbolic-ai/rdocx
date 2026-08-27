@@ -836,6 +836,10 @@ layout. Named VML colours and six-digit RGB values lower to shared colour.
 Unsupported colours and unresolved image relationships suppress that watermark
 and add a stable diagnostic.
 
+Legacy horizontal rules retained as run-level `w:pict` children are a native
+inspection classification only. They remain absent from Word layout and every
+render backend, so classification does not create pixels or alter pagination.
+
 Text watermarks shape with the deterministic font manager and image watermarks
 reuse the scoped relationship entry in the layout's collision-safe
 `MediaRegistry`. Both lower to an opacity-bearing `GroupElement` centered in the

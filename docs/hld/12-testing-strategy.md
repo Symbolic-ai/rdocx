@@ -59,6 +59,17 @@ subtree, including namespace shadowing and owner insertion, removal, and
 reordering. Unsafe namespace replay must fail closed without changing the
 opened package.
 
+The legacy horizontal-rule reader regression classifies canonical, aliased,
+default, locally shadowed, and ancestor-bound Word, VML, and Office names by
+expanded namespace URI. Its negative matrix keeps false, numeric, missing,
+foreign, multiple-shape, visible-child, comment, and malformed forms as
+unsupported XML. Adjacent regressions preserve the exact raw subtree and item
+boundary through save and reopen, retain the earlier public `CT_R` literal
+shape, include classification in equality, and prove ordinary modeled runs
+retain no namespace-classification allocation. The pinned Word corpus, public
+package dry run, archive ceiling, and unchanged 49-entry hash set complete the
+gate.
+
 Adjacent parser regressions require producer-defined numbering formats to
 round-trip without an invented marker and require malformed encoded `w:t` or
 `w:delText` values to fail before a partial document is published. Binding

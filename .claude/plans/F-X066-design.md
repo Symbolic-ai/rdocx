@@ -1,6 +1,6 @@
 # F-X066, Classify legacy VML horizontal rules
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X065
@@ -89,12 +89,12 @@ No layout or rendering path consumes the item.
 
 ## Implementation checklist
 
-- [ ] Add failing URI-aware positive and negative cases in the existing run test module.
-- [ ] Add the native classification and exact raw accessor without a new module.
-- [ ] Preserve unsupported fallback, item order, and package bytes.
-- [ ] Run focused reader, package, corpus, publish, and risk-rider gates.
-- [ ] Run microscope and `/verify --full`.
-- [ ] Record PR 57 and its exact source SHA in the handoff and delivery evidence.
+- [x] Add failing URI-aware positive and negative cases in the existing run test module.
+- [x] Add the native classification and exact raw accessor without a new module.
+- [x] Preserve unsupported fallback, item order, and package bytes.
+- [x] Run focused reader, package, corpus, publish, and risk-rider gates.
+- [x] Run microscope and `/verify --full`.
+- [x] Record PR 57 and its exact source SHA in the handoff and delivery evidence.
 
 ## Open questions
 

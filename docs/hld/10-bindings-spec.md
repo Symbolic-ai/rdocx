@@ -465,6 +465,12 @@ URI, and whether child content exists. Raw bytes are available only for an
 actual preserved raw subtree. Existing flattened accessors remain unchanged,
 and Python, WASM, and CLI gain no corresponding methods.
 
+`RunItemRef::LegacyHorizontalRule` identifies the narrow run-level
+WordprocessingML `pict` form containing one enabled VML horizontal rule. Its
+borrowed accessor returns the exact preserved subtree bytes. Classification is
+additive on the existing non-exhaustive Rust enum. Python, WASM, CLI, layout,
+and rendering surfaces remain unchanged and continue to preserve the raw XML.
+
 Native Word callers inspect tracked changes through `Document::revisions`.
 Each immutable `RevisionRef` exposes the revision id, author, optional
 timestamp, and `RevisionKind`. Results recursively cover the main document

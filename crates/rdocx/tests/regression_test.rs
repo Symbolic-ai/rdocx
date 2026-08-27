@@ -17,6 +17,7 @@ use rdocx::{
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
+use rdocx_oxml::text::CT_R;
 
 struct MeasuredAllocator;
 
@@ -1891,6 +1892,86 @@ fn caller_font_layout_options_select_the_tracked_revision_projection() {
 
 fn document_with_content_controls(document_xml: &str) -> Document {
     document_with_bound_content_controls(document_xml, None)
+}
+
+#[test]
+fn legacy_horizontal_rule_package_reopens_with_exact_raw_xml() {
+    let raw = br#"<w:pict><v:rect o:hr="true"/></w:pict>"#;
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p xmlns:v="urn:schemas-microsoft-com:vml"><w:r xmlns:o="urn:schemas-microsoft-com:office:office"><w:t>before</w:t>{}<w:t>after</w:t></w:r></w:p></w:body></w:document>"#,
+        std::str::from_utf8(raw).unwrap()
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    let snapshot = |document: &Document| {
+        document
+            .paragraph(0)
+            .unwrap()
+            .run(0)
+            .unwrap()
+            .items()
+            .map(|item| match item {
+                RunItemRef::Text(text) => format!("text:{text}"),
+                RunItemRef::LegacyHorizontalRule(rule) => {
+                    format!("rule:{}", std::str::from_utf8(rule.raw_xml()).unwrap())
+                }
+                RunItemRef::UnsupportedXml(bytes) => {
+                    format!("unsupported:{}", std::str::from_utf8(bytes).unwrap())
+                }
+                _ => panic!("unexpected run item"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = [
+        "text:before".to_owned(),
+        format!("rule:{}", std::str::from_utf8(raw).unwrap()),
+        "text:after".to_owned(),
+    ];
+    assert_eq!(snapshot(&document), expected);
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(snapshot(&reopened), expected);
+}
+
+#[test]
+fn legacy_horizontal_rule_classification_participates_in_run_equality() {
+    let raw = r#"<w:pict><v:rect o:hr="true"/></w:pict>"#;
+    let parsed_run = |vml_namespace: &str| {
+        let body = body_from_xml(&format!(
+            r#"<w:p xmlns:v="{vml_namespace}" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r>{raw}</w:r></w:p>"#
+        ));
+        let BodyContent::Paragraph(paragraph) = &body.content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.runs[0].clone()
+    };
+
+    let legacy = parsed_run("urn:schemas-microsoft-com:vml");
+    let foreign = parsed_run("urn:foreign");
+    assert!(CT_R::raw_child_is_legacy_horizontal_rule(
+        legacy.extra_xml_positions[0]
+    ));
+    assert!(!CT_R::raw_child_is_legacy_horizontal_rule(
+        foreign.extra_xml_positions[0]
+    ));
+    assert_ne!(legacy, foreign);
+}
+
+#[test]
+fn namespace_classification_metadata_exists_only_for_raw_children() {
+    let body = body_from_xml(
+        r#"<w:p xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r><w:t>ordinary</w:t></w:r><w:r><w:pict><v:rect o:hr="true"/></w:pict></w:r></w:p>"#,
+    );
+    let BodyContent::Paragraph(paragraph) = &body.content[0] else {
+        panic!("expected paragraph");
+    };
+
+    assert!(paragraph.runs[0].extra_xml.is_empty());
+    assert!(paragraph.runs[0].extra_xml_positions.is_empty());
+    assert_eq!(paragraph.runs[1].extra_xml_positions.len(), 1);
+    assert!(CT_R::raw_child_is_legacy_horizontal_rule(
+        paragraph.runs[1].extra_xml_positions[0]
+    ));
 }
 
 fn ordered_reader_fixture() -> &'static str {
