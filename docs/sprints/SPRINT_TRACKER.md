@@ -335,6 +335,7 @@ defended.
 | F-X063 | S58 | S | 1 | 1 | 2026-08-26 | Eliminate the redundant 22 MiB retained-font comparison |
 | F-X058 | S58 | L | 4 | 1 | 2026-08-26 | Additive multilingual shaping, breaking, direction, fonts, and rich backend output |
 | F-X059 | S58 | S | 1 | 1 | 2026-08-27 | Published and verified the complete 15-package rpptx 0.7.0 family |
+| F-X064 | S58 | S | 1 | 1 | 2026-08-27 | Hardened PR 55 table measurement parsing with exact whole-decimal tolerance |
 
 ## Velocity
 

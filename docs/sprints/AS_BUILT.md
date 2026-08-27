@@ -9642,3 +9642,45 @@ and byte-for-byte release-body checks then passed.
 **Notes for future sessions.** Preserve the immutable `rpptx-v0.7.0` tag.
 F-X064 through F-X066 may now land the three open contributor PR outcomes,
 and F-198 through F-200 may consume the published shared 0.7.0 boundary.
+
+### F-X064, Accept whole-valued decimal table measurements
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Word table widths, cell widths, table indents, and default
+cell margins now accept whole-valued decimal lexical forms such as `9345.0`
+through one exact string parser. Fractional decimals, exponent forms, overflow,
+percentages, universal measures, and malformed values return explicit errors
+instead of becoming zero. Serialization retains the canonical integer form.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 55](https://github.com/tensorbee/rdocx/pull/55) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`056d48fdf23f35e3538ef3d6ff78cf9e3863e3a5`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** The existing signed integer public projection remains
+unchanged. Valid percentage and universal-measure union arms are reported as
+unsupported until a separate lossless model is designed. Parsing is
+namespace-aware and does not use floating point.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** Four focused lexical, namespace, negative, and round-trip
+regressions passed. The full workspace, no-default, WASM, rustdoc, README,
+22-package dry-run, archive-size, and supply-chain gates passed. The pinned
+five-document Word corpus produced all 18 expected evidence pages. Its
+advisory SSIM trend remained 1 of 18 pages at or above 0.95.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep unsupported union arms explicit. Do not
+restore malformed-to-zero behavior or replace exact lexical parsing with
+floating-point conversion.
