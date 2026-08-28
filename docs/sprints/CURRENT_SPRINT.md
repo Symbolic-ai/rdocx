@@ -39,7 +39,7 @@ protection at the reviewed sprint SHA.
 | F-X067 | Prime Word fidelity Cargo dependencies | S | done | - |
 | F-X065 | Expose tracked table grid changes | S | done | - |
 | F-X066 | Classify legacy VML horizontal rules | S | done | - |
-| F-198 | Hyphenation | L | in-progress | codex |
+| F-198 | Hyphenation | L | done | - |
 | F-199 | Complex script shaping | L | pending | - |
 | F-202 | Incremental layout | L | done | - |
 | F-200 | Vertical and bidirectional text | M | pending | - |

@@ -339,6 +339,7 @@ defended.
 | F-X067 | S58 | S | 1 | 1 | 2026-08-27 | Prime the locked Word fidelity graph before the offline harness |
 | F-X065 | S58 | S | 1 | 1 | 2026-08-27 | Preserve tracked table grids without changing active layout widths |
 | F-X066 | S58 | S | 1 | 1 | 2026-08-28 | Classify strict namespace-aware legacy VML horizontal rules without rendering them |
+| F-198 | S58 | L | 4 | 1 | 2026-08-28 | Automatic English hyphenation with exact source spans and pinned Writer parity |
 
 ## Velocity
 

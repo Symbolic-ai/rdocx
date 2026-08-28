@@ -9824,3 +9824,56 @@ all 18 union pages. Its advisory SSIM trend remained 1 of 18 pages at or above
 **Notes for future sessions.** Keep the classification reader-only and
 namespace-aware. Rendering legacy VML horizontal rules requires a separate
 story with its own output contract.
+
+### F-198, Hyphenation
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Word settings and run properties now project, preserve,
+and author automatic hyphenation plus all four language attributes. The layout
+path uses the effective run language to select the farthest fitting Liang
+opportunity and emits a generated hyphen without claiming a source character.
+The page-one showcase enables English hyphenation and renders
+`representation` as consecutive `repre-` and `sentation` lines.
+
+**Non-obvious choices.** Automatic hyphenation remains off unless the document
+enables it, and unsupported languages remain unchanged. Restart pagination
+retains a compact canonical XML identity plus current-view note references,
+then performs exact byte equality after its fingerprint accelerator. This keeps
+all four 700-paragraph related-story gates within the unchanged 8 MiB budget
+without weakening retained-context identity.
+
+**Deviations from the design plan.** Recovery discarded the obsolete local
+shared-layout implementation and consumed the published `oxml-layout` 0.7.0
+contract from F-X058. Microscope passes 3 and 4 found settings preservation,
+target allocation, malformed-language ordering, source-compatibility prose,
+and retained-state budget defects. Each received a red regression and a
+separate remediation. Microscope pass 5 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Parser, round-trip, authoring, language inheritance, conditional
+hyphen, source-span, no-wrap, field exclusion, cache-identity, and all four
+700-paragraph related-story regressions passed. The deterministic golden gate
+matched 7 of 7 page-one buffers. LibreOffice Writer 26.2.5.2 rendered exact
+consecutive `repre-` and `sentation` lines. The pinned Word corpus produced
+complete evidence for five documents and 18 union pages. The 1,000-page release
+gate, current 0.7.0 registry carrier, immutable 0.6.0 historical carrier, full
+workspace, no-default, WASM, documentation, 22-package dry-run, archive-size,
+and supply-chain gates passed.
+
+**Hash harness.** The reviewed delta changes exactly five
+`feature_showcase` keys: page-one PNG, PDF bytes, PDF pages, PDF resources, and
+Word document XML. The reason is the explicit page-one English hyphenation
+example. All 49 baseline entries match after accepting that isolated delta.
+
+**Notes for future sessions.** Preserve generated hyphens as `source: None`,
+keep regional English tags mapped to the approved language data, and retain
+the exact 700-paragraph restart boundary and 8 MiB budget. The recovery stash
+and patch remain available until sprint close for auditability.
