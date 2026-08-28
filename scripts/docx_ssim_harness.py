@@ -736,6 +736,24 @@ def assert_expected_artifacts(paths: list[Path]) -> None:
             raise ValueError(f"missing expected artifact {path}")
 
 
+def assert_rtl_oracle_evidence(evidence: Path) -> None:
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    if not payload["multi_script"]["gate_met"]:
+        raise ValueError("multi-script oracle gate did not pass")
+    results = Path(payload["results"]).read_text(encoding="utf-8").splitlines()
+    header = results[0].split("\t")
+    rows = [dict(zip(header, row.split("\t"))) for row in results[1:]]
+    bidi_scores = [
+        float(row["ssim"])
+        for row in rows
+        if row["category"] == "bidirectional"
+    ]
+    if not bidi_scores:
+        raise ValueError("bidirectional oracle evidence is missing")
+    if any(score < SSIM_TARGET for score in bidi_scores):
+        raise ValueError("bidirectional oracle page missed the 0.95 SSIM threshold")
+
+
 def run_gate(corpus: Path, output: Path) -> tuple[dict[str, object], Path]:
     entries = load_manifest(CORPUS_MANIFEST)
     if len(entries) != EXPECTED_COUNT:
@@ -1090,7 +1108,7 @@ except TimeoutError:
         self.assertTrue(multi_script_gate_met([0.95] * 4 + [0.94]))
         self.assertFalse(multi_script_gate_met([0.95] * 3 + [0.94] * 2))
 
-    def test_rtl_corpus_document_matches_the_reviewed_oracle(self) -> None:
+    def test_rtl_corpus_document_contains_directional_fixture_xml(self) -> None:
         with TemporaryDirectory() as temporary:
             fixtures = build_multi_script_fixtures(Path(temporary))
             rtl = fixtures[-1]
@@ -1103,6 +1121,36 @@ except TimeoutError:
             self.assertIn('<w:jc w:val="start"/>', document_xml)
             self.assertIn('<w:ind w:start="360" w:end="720"/>', document_xml)
             self.assertIn("ABC 123", document_xml)
+
+    def test_rtl_corpus_document_matches_the_reviewed_oracle(self) -> None:
+        evidence = os.environ.get(EVIDENCE_ENV)
+        if evidence is None:
+            self.skipTest("requires corpus gate evidence")
+        assert_rtl_oracle_evidence(Path(evidence))
+
+    def test_rtl_oracle_gate_rejects_below_threshold_render_evidence(self) -> None:
+        with TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            results = directory / "ssim-results.tsv"
+            results.write_text(
+                RESULT_HEADER
+                + "\n"
+                + "bidirectional.docx\tbidirectional\t1\t10\t10\t10\t10\tnone"
+                + "\t0.949999999\trust.png\toracle.png\n",
+                encoding="utf-8",
+            )
+            evidence = directory / "gate-evidence.json"
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "multi_script": {"gate_met": True},
+                        "results": str(results),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "missed the 0.95 SSIM"):
+                assert_rtl_oracle_evidence(evidence)
 
     def test_missing_expected_artifact_is_a_hard_failure(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -1189,7 +1237,10 @@ def main(argv: list[str] | None = None) -> int:
         payload, evidence = run_gate(args.corpus_dir.resolve(), output)
         os.environ[EVIDENCE_ENV] = str(evidence)
         if not run_suite(
-            ["DocxSsimHarnessTests.test_full_corpus_evidence_is_complete"]
+            [
+                "DocxSsimHarnessTests.test_full_corpus_evidence_is_complete",
+                "DocxSsimHarnessTests.test_rtl_corpus_document_matches_the_reviewed_oracle",
+            ]
         ):
             return 1
         print(
