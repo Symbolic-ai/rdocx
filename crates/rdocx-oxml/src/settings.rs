@@ -6,6 +6,7 @@ use quick_xml::{Reader, Writer, XmlVersion};
 use crate::error::{OxmlError, Result};
 use crate::namespace::W_NS;
 use crate::properties::{is_word_attribute, is_word_element, word_prefixes_at};
+use crate::raw_xml::capture_element;
 
 /// The editing operation permitted by `w:documentProtection`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +140,7 @@ pub struct DocumentVariable {
 pub struct CT_Settings {
     document_protection: Option<DocumentProtection>,
     document_variables: Vec<DocumentVariable>,
+    automatic_hyphenation: Option<bool>,
     /// Parsed parts keep their complete producer bytes as the serialization
     /// source. This retains root attributes, child order, whitespace, and all
     /// unmodelled content without interpreting it.
@@ -158,6 +160,8 @@ impl CT_Settings {
         let mut protection = None;
         let mut protection_count = 0usize;
         let mut document_variables = Vec::new();
+        let mut automatic_hyphenation = None;
+        let mut automatic_hyphenation_count = 0usize;
         let mut doc_vars_depth = None;
         let mut doc_vars_prefixes = Vec::new();
         let mut saw_root = false;
@@ -190,6 +194,15 @@ impl CT_Settings {
                         {
                             protection_count += 1;
                             protection = parse_document_protection(&element, &prefixes);
+                        } else if depth == 1
+                            && is_word_element(
+                                element.name().as_ref(),
+                                b"autoHyphenation",
+                                &prefixes,
+                            )
+                        {
+                            automatic_hyphenation_count += 1;
+                            automatic_hyphenation = parse_toggle(&element, &prefixes)?;
                         } else if depth == 1
                             && is_word_element(element.name().as_ref(), b"docVars", &prefixes)
                         {
@@ -225,6 +238,11 @@ impl CT_Settings {
                     {
                         protection_count += 1;
                         protection = parse_document_protection(&element, &prefixes);
+                    } else if depth == 1
+                        && is_word_element(element.name().as_ref(), b"autoHyphenation", &prefixes)
+                    {
+                        automatic_hyphenation_count += 1;
+                        automatic_hyphenation = parse_toggle(&element, &prefixes)?;
                     } else if doc_vars_depth == Some(depth)
                         && is_word_element(element.name().as_ref(), b"docVar", &prefixes)
                         && let Some(variable) = parse_document_variable(&element, &prefixes)
@@ -251,9 +269,13 @@ impl CT_Settings {
         if protection_count != 1 {
             protection = None;
         }
+        if automatic_hyphenation_count != 1 {
+            automatic_hyphenation = None;
+        }
         Ok(Self {
             document_protection: protection,
             document_variables,
+            automatic_hyphenation,
             source_xml: Some(xml.to_vec()),
         })
     }
@@ -266,6 +288,25 @@ impl CT_Settings {
     /// Return every valid document variable in package order.
     pub fn document_variables(&self) -> &[DocumentVariable] {
         &self.document_variables
+    }
+
+    /// Return whether Word automatic hyphenation is enabled.
+    ///
+    /// OOXML defines omission as disabled.
+    pub fn automatic_hyphenation(&self) -> bool {
+        self.automatic_hyphenation.unwrap_or(false)
+    }
+
+    /// Set the document automatic-hyphenation toggle.
+    ///
+    /// Parsed settings retain every unrelated producer byte. The one modeled
+    /// toggle is rewritten with the fixed `w:` prefix at its schema position.
+    pub fn set_automatic_hyphenation(&mut self, enabled: bool) -> Result<()> {
+        if let Some(source) = &self.source_xml {
+            self.source_xml = Some(rewrite_automatic_hyphenation(source, enabled)?);
+        }
+        self.automatic_hyphenation = Some(enabled);
+        Ok(())
     }
 
     /// Serialize settings with fixed Word prefixes and schema child order.
@@ -286,9 +327,200 @@ impl CT_Settings {
         if let Some(protection) = &self.document_protection {
             write_document_protection(&mut writer, protection)?;
         }
+        if let Some(enabled) = self.automatic_hyphenation {
+            write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+        }
         writer.write_event(Event::End(BytesEnd::new("w:settings")))?;
         Ok(writer.into_inner())
     }
+}
+
+fn parse_toggle(element: &BytesStart<'_>, prefixes: &[String]) -> Result<Option<bool>> {
+    Ok(match word_attribute(element, b"val", prefixes)? {
+        Some(value) => parse_on_off(&value),
+        None => Some(true),
+    })
+}
+
+fn write_toggle(writer: &mut Writer<Vec<u8>>, name: &str, value: bool) -> Result<()> {
+    let mut element = BytesStart::new(name);
+    if !value {
+        element.push_attribute(("w:val", "false"));
+    }
+    writer.write_event(Event::Empty(element))?;
+    Ok(())
+}
+
+fn rewrite_automatic_hyphenation(source: &[u8], enabled: bool) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::with_capacity(source.len() + 64));
+    let mut root_prefixes = Vec::new();
+    let mut depth = 0usize;
+    let mut inserted = false;
+    let mut buffer = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if depth == 0 => {
+                root_prefixes = word_prefixes_at(&element, &[])?;
+                let mut root = element.into_owned();
+                ensure_fixed_word_prefix(&mut root)?;
+                writer.write_event(Event::Start(root))?;
+                depth = 1;
+            }
+            Event::Empty(element) if depth == 0 => {
+                let root_name = std::str::from_utf8(element.name().as_ref())?.to_owned();
+                let mut root = element.into_owned();
+                ensure_fixed_word_prefix(&mut root)?;
+                writer.write_event(Event::Start(root))?;
+                write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+                writer.write_event(Event::End(BytesEnd::new(root_name)))?;
+                inserted = true;
+            }
+            Event::Start(element) if depth == 1 => {
+                let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                if is_word_element(element.name().as_ref(), b"autoHyphenation", &prefixes) {
+                    if !inserted {
+                        write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+                        inserted = true;
+                    }
+                    capture_element(&mut reader, &element)?;
+                } else {
+                    if !inserted && setting_follows_auto_hyphenation(&element, &prefixes) {
+                        write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+                        inserted = true;
+                    }
+                    writer.write_event(Event::Start(element.into_owned()))?;
+                    depth += 1;
+                }
+            }
+            Event::Empty(element) if depth == 1 => {
+                let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                if is_word_element(element.name().as_ref(), b"autoHyphenation", &prefixes) {
+                    if !inserted {
+                        write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+                        inserted = true;
+                    }
+                } else {
+                    if !inserted && setting_follows_auto_hyphenation(&element, &prefixes) {
+                        write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+                        inserted = true;
+                    }
+                    writer.write_event(Event::Empty(element.into_owned()))?;
+                }
+            }
+            Event::End(element) if depth == 1 => {
+                if !inserted {
+                    write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
+                }
+                writer.write_event(Event::End(element.into_owned()))?;
+                depth = 0;
+            }
+            Event::Start(element) => {
+                writer.write_event(Event::Start(element.into_owned()))?;
+                depth += 1;
+            }
+            Event::End(element) => {
+                writer.write_event(Event::End(element.into_owned()))?;
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            event => writer.write_event(event.into_owned())?,
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner())
+}
+
+fn ensure_fixed_word_prefix(root: &mut BytesStart<'_>) -> Result<()> {
+    let mut fixed_binding = false;
+    let mut conflicting_binding = false;
+    for attribute in root.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() == b"xmlns:w" {
+            let value =
+                attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, root.decoder())?;
+            fixed_binding = value.as_bytes() == W_NS.as_bytes();
+            conflicting_binding = !fixed_binding;
+        }
+    }
+    if conflicting_binding {
+        return Err(OxmlError::InvalidValue(
+            "settings binds the reserved w prefix to a foreign namespace".to_owned(),
+        ));
+    }
+    if !fixed_binding {
+        root.push_attribute(("xmlns:w", W_NS));
+    }
+    Ok(())
+}
+
+fn setting_follows_auto_hyphenation(element: &BytesStart<'_>, prefixes: &[String]) -> bool {
+    const FOLLOWING: &[&[u8]] = &[
+        b"consecutiveHyphenLimit",
+        b"hyphenationZone",
+        b"doNotHyphenateCaps",
+        b"showEnvelope",
+        b"summaryLength",
+        b"clickAndTypeStyle",
+        b"defaultTableStyle",
+        b"evenAndOddHeaders",
+        b"bookFoldRevPrinting",
+        b"bookFoldPrinting",
+        b"bookFoldPrintingSheets",
+        b"drawingGridHorizontalSpacing",
+        b"drawingGridVerticalSpacing",
+        b"displayHorizontalDrawingGridEvery",
+        b"displayVerticalDrawingGridEvery",
+        b"doNotUseMarginsForDrawingGridOrigin",
+        b"drawingGridHorizontalOrigin",
+        b"drawingGridVerticalOrigin",
+        b"doNotShadeFormData",
+        b"noPunctuationKerning",
+        b"characterSpacingControl",
+        b"printTwoOnOne",
+        b"strictFirstAndLastChars",
+        b"noLineBreaksAfter",
+        b"noLineBreaksBefore",
+        b"savePreviewPicture",
+        b"doNotValidateAgainstSchema",
+        b"saveInvalidXml",
+        b"ignoreMixedContent",
+        b"alwaysShowPlaceholderText",
+        b"doNotDemarcateInvalidXml",
+        b"saveXmlDataOnly",
+        b"useXSLTWhenSaving",
+        b"saveThroughXslt",
+        b"showXMLTags",
+        b"alwaysMergeEmptyNamespace",
+        b"updateFields",
+        b"hdrShapeDefaults",
+        b"footnotePr",
+        b"endnotePr",
+        b"compat",
+        b"docVars",
+        b"rsids",
+        b"mathPr",
+        b"attachedSchema",
+        b"themeFontLang",
+        b"clrSchemeMapping",
+        b"doNotIncludeSubdocsInStats",
+        b"doNotAutoCompressPictures",
+        b"forceUpgrade",
+        b"captions",
+        b"readModeInkLockDown",
+        b"smartTagType",
+        b"schemaLibrary",
+        b"shapeDefaults",
+        b"doNotEmbedSmartTags",
+        b"decimalSymbol",
+        b"listSeparator",
+    ];
+    FOLLOWING
+        .iter()
+        .any(|local| is_word_element(element.name().as_ref(), local, prefixes))
 }
 
 fn parse_document_variable(
@@ -507,6 +739,7 @@ mod tests {
                 salt: Some("SALT".to_owned()),
             }),
             document_variables: Vec::new(),
+            automatic_hyphenation: None,
             source_xml: None,
         };
         let xml = String::from_utf8(settings.to_xml().unwrap()).unwrap();
@@ -515,5 +748,56 @@ mod tests {
         assert!(xml.find("w:formatting").unwrap() < xml.find("w:enforcement").unwrap());
         assert!(xml.find("w:cryptAlgorithmSid").unwrap() < xml.find("w:cryptSpinCount").unwrap());
         assert!(xml.find("w:cryptSpinCount").unwrap() < xml.find("w:hash").unwrap());
+    }
+
+    #[test]
+    fn automatic_hyphenation_defaults_off_and_parses_only_word_settings() {
+        let omitted =
+            CT_Settings::from_xml(format!(r#"<w:settings xmlns:w="{W_NS}"/>"#).as_bytes()).unwrap();
+        assert!(!omitted.automatic_hyphenation());
+
+        let xml = format!(
+            r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:foreign"><x:autoHyphenation/><q:autoHyphenation q:val="on"/></q:settings>"#,
+        );
+        let parsed = CT_Settings::from_xml(xml.as_bytes()).unwrap();
+        assert!(parsed.automatic_hyphenation());
+        assert_eq!(parsed.to_xml().unwrap(), xml.as_bytes());
+    }
+
+    #[test]
+    fn authored_automatic_hyphenation_uses_schema_order_and_preserves_raw_children() {
+        let xml = format!(
+            r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:defaultTabStop q:val="720"/><x:kept x:value="raw"/><q:consecutiveHyphenLimit q:val="2"/></q:settings>"#,
+        );
+        let mut parsed = CT_Settings::from_xml(xml.as_bytes()).unwrap();
+        parsed.set_automatic_hyphenation(true).unwrap();
+        let output = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(output.contains(r#"<x:kept x:value="raw"/>"#));
+        assert!(output.contains("<w:autoHyphenation/>"));
+        assert!(output.find("defaultTabStop").unwrap() < output.find("autoHyphenation").unwrap());
+        assert!(
+            output.find("autoHyphenation").unwrap()
+                < output.find("consecutiveHyphenLimit").unwrap()
+        );
+    }
+
+    #[test]
+    fn authored_automatic_hyphenation_expands_a_self_closing_settings_root() {
+        let xml = format!(r#"<q:settings xmlns:q="{W_NS}"/>"#);
+        let mut parsed = CT_Settings::from_xml(xml.as_bytes()).unwrap();
+
+        parsed.set_automatic_hyphenation(true).unwrap();
+
+        let output = parsed.to_xml().unwrap();
+        assert!(
+            std::str::from_utf8(&output)
+                .unwrap()
+                .contains("<w:autoHyphenation/>")
+        );
+        assert!(
+            CT_Settings::from_xml(&output)
+                .unwrap()
+                .automatic_hyphenation()
+        );
     }
 }

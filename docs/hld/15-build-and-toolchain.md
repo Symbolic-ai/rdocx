@@ -115,6 +115,14 @@ The `oxml-layout` `--no-default-features` path disables host system font
 discovery while retaining bundled fonts for deterministic construction. This is
 also the same font-isolation path the WASM build needs.
 
+`oxml-layout` pins `hypher` exactly at 0.1.7 with default features disabled and
+only `alloc`, `english`, `french`, `german`, and `spanish` enabled. Its Liang
+pattern data is embedded in the published crate graph, adds no runtime file or
+network lookup, and is covered by the repository licence policy. Package dry
+runs and the archive-size gate cover the added pattern payload. The dependency
+lives only in `oxml-layout`, so it does not add a format-family edge or feature
+flag.
+
 Builds otherwise stay native. There is no development container. The Linux-only
 work, manylinux wheels, `wasm32` checks and the LibreOffice render oracle, runs
 on CI runners as it always would have.

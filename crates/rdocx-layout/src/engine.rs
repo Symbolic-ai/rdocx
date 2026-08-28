@@ -8,7 +8,7 @@ use std::cell::Cell;
 
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
-use rdocx_oxml::document::{BodyContent, CT_SectPr};
+use rdocx_oxml::document::{BodyContent, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
 use rdocx_oxml::numbering::ST_LvlSuffix;
@@ -469,6 +469,7 @@ pub struct Engine {
 #[derive(Clone, PartialEq)]
 struct ReusableEngineContext {
     revision_view: RevisionView,
+    automatic_hyphenation: bool,
     has_wrapping_drawing: bool,
     styles: CT_Styles,
     numbering: Option<rdocx_oxml::numbering::CT_Numbering>,
@@ -548,6 +549,7 @@ impl ReusableEngineContext {
         sections.extend(input.document.body.sect_pr.iter().cloned());
         Self {
             revision_view: input.revision_view,
+            automatic_hyphenation: input.automatic_hyphenation,
             has_wrapping_drawing,
             styles: input.styles.clone(),
             numbering: input.numbering.clone(),
@@ -601,6 +603,7 @@ impl ReusableEngineContext {
             })
             .chain(input.document.body.sect_pr.iter()));
         self.revision_view == input.revision_view
+            && self.automatic_hyphenation == input.automatic_hyphenation
             && self.has_wrapping_drawing == has_wrapping_drawing
             && self.styles == input.styles
             && self.numbering == input.numbering
@@ -701,12 +704,13 @@ struct RestartCache {
 enum RestartBodyEntry {
     Paragraph {
         fingerprint: u64,
-        value: Arc<CT_P>,
+        identity: Vec<u8>,
+        note_references: Vec<NoteRef>,
         bytes: usize,
     },
     Table {
         fingerprint: u64,
-        value: Arc<CT_Tbl>,
+        identity: Vec<u8>,
         bytes: usize,
     },
 }
@@ -716,33 +720,52 @@ impl RestartBodyEntry {
         match (self, content) {
             (
                 Self::Paragraph {
-                    fingerprint, value, ..
+                    fingerprint,
+                    identity,
+                    ..
                 },
                 BodyContent::Paragraph(paragraph),
-            ) => *fingerprint == paragraph_fingerprint(paragraph) && value.as_ref() == paragraph,
+            ) => {
+                *fingerprint == paragraph_fingerprint(paragraph)
+                    && restart_body_identity(content).as_ref() == Some(identity)
+            }
             (
                 Self::Table {
-                    fingerprint, value, ..
+                    fingerprint,
+                    identity,
+                    ..
                 },
                 BodyContent::Table(table),
-            ) => *fingerprint == table_fingerprint(table) && value.as_ref() == table,
+            ) => {
+                *fingerprint == table_fingerprint(table)
+                    && restart_body_identity(content).as_ref() == Some(identity)
+            }
             _ => false,
         }
     }
 
-    fn for_content(content: &BodyContent) -> Option<Self> {
+    fn for_content(content: &BodyContent, view: RevisionView) -> Option<Self> {
+        let identity = restart_body_identity(content)?;
         match content {
-            BodyContent::Paragraph(paragraph) => Some(Self::Paragraph {
-                fingerprint: paragraph_fingerprint(paragraph),
-                bytes: arc_allocation_bytes::<CT_P>()
-                    .saturating_add(paragraph_key_retained_bytes(paragraph)),
-                value: Arc::new(paragraph.clone()),
-            }),
+            BodyContent::Paragraph(paragraph) => {
+                let mut note_references = paragraph_note_references(paragraph, view);
+                note_references.shrink_to_fit();
+                let bytes = identity.capacity().saturating_add(
+                    note_references
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<NoteRef>()),
+                );
+                Some(Self::Paragraph {
+                    fingerprint: paragraph_fingerprint(paragraph),
+                    identity,
+                    note_references,
+                    bytes,
+                })
+            }
             BodyContent::Table(table) => Some(Self::Table {
                 fingerprint: table_fingerprint(table),
-                bytes: arc_allocation_bytes::<CT_Tbl>()
-                    .saturating_add(table_key_retained_bytes(table)),
-                value: Arc::new(table.clone()),
+                bytes: identity.capacity(),
+                identity,
             }),
             BodyContent::ContentControl(_) | BodyContent::RawXml(_) => None,
         }
@@ -754,12 +777,26 @@ impl RestartBodyEntry {
         }
     }
 
-    fn note_references(&self, view: RevisionView) -> Vec<NoteRef> {
+    fn note_references(&self) -> &[NoteRef] {
         match self {
-            Self::Paragraph { value, .. } => paragraph_note_references(value, view),
-            Self::Table { .. } => Vec::new(),
+            Self::Paragraph {
+                note_references, ..
+            } => note_references,
+            Self::Table { .. } => &[],
         }
     }
+}
+
+fn restart_body_identity(content: &BodyContent) -> Option<Vec<u8>> {
+    if !matches!(content, BodyContent::Paragraph(_) | BodyContent::Table(_)) {
+        return None;
+    }
+    let mut document = CT_Document::new();
+    document.body.sect_pr = None;
+    document.body.content.push(content.clone());
+    let mut identity = document.to_xml().ok()?;
+    identity.shrink_to_fit();
+    Some(identity)
 }
 
 fn paragraph_note_references(paragraph: &CT_P, view: RevisionView) -> Vec<NoteRef> {
@@ -1352,7 +1389,7 @@ impl Engine {
                     && cache
                         .body
                         .iter()
-                        .flat_map(|entry| entry.note_references(input.revision_view))
+                        .flat_map(|entry| entry.note_references().iter().copied())
                         .eq(body_note_references(input))
                     && (sources.is_none() || cache.body.len() == input.document.body.content.len())
             });
@@ -1749,9 +1786,10 @@ impl Engine {
                         let old_index = old_len.saturating_sub(new_len - index);
                         return old_body.and_then(|body| body.get(old_index)).cloned();
                     }
-                    RestartBodyEntry::for_content(content)
+                    RestartBodyEntry::for_content(content, input.revision_view)
                 })
                 .collect::<Vec<_>>();
+            let body_complete = body.len() == new_len;
             body.shrink_to_fit();
             raw_pages.shrink_to_fit();
             retained_pages.shrink_to_fit();
@@ -1775,7 +1813,11 @@ impl Engine {
                 inputs.bookmark_pages.shrink_to_fit();
                 inputs.font_identity.shrink_to_fit();
             }
-            let bytes = restart_cache_bytes(&candidate);
+            let bytes = if body_complete {
+                restart_cache_bytes(&candidate)
+            } else {
+                usize::MAX
+            };
             #[cfg(test)]
             {
                 self.last_restart_candidate_bytes = bytes;
@@ -4321,6 +4363,8 @@ fn layout_paragraph_with_source_and_table(
     let page_break_before = effective_ppr.page_break_before.unwrap_or(false);
     let widow_control = effective_ppr.widow_control.unwrap_or(true);
     let jc = convert::alignment(effective_ppr.jc);
+    let automatic_hyphenation =
+        input.automatic_hyphenation && effective_ppr.suppress_auto_hyphens != Some(true);
 
     // Parse shading color
     let shading = effective_ppr
@@ -4577,7 +4621,7 @@ fn layout_paragraph_with_source_and_table(
                         shaped.width += extra * shaped.advances.len() as f64;
                     }
 
-                    inline_items.push(InlineItem::Text(TextSegment {
+                    let segment = TextSegment {
                         text,
                         source,
                         font_id,
@@ -4599,7 +4643,16 @@ fn layout_paragraph_with_source_and_table(
                         hyperlink_url: current_hyperlink_url.clone(),
                         field_kind: None,
                         note: None,
-                    }));
+                    };
+                    if automatic_hyphenation && let Some(language) = effective_rpr.language.as_ref()
+                    {
+                        inline_items.push(InlineItem::HyphenatedText {
+                            segment,
+                            language: language.clone(),
+                        });
+                    } else {
+                        inline_items.push(InlineItem::Text(segment));
+                    }
                 }
                 RunContent::Tab => {
                     inline_items.push(InlineItem::Tab);
@@ -5418,6 +5471,9 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     }
     if direct.widow_control.is_some() {
         effective.widow_control = direct.widow_control;
+    }
+    if direct.suppress_auto_hyphens.is_some() {
+        effective.suppress_auto_hyphens = direct.suppress_auto_hyphens;
     }
     if direct.borders.is_some() {
         effective.borders = direct.borders.clone();
@@ -6757,6 +6813,7 @@ mod tests {
 
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -6860,6 +6917,130 @@ mod tests {
         assert!(Engine::take_if_compatible(&mut source, &input).is_none());
         assert!(source.is_some(), "rejected transfer preserves its source");
         assert_eq!(retained_context_font_bytes_compared(), 22 * 1024 * 1024);
+    }
+
+    fn hyphenation_input(enabled: bool, language: Option<&str>, suppressed: bool) -> LayoutInput {
+        let mut input = make_input_with_text("representation");
+        input.automatic_hyphenation = enabled;
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            ind_right: Some(rdocx_oxml::units::Twips(8_500)),
+            suppress_auto_hyphens: suppressed.then_some(true),
+            ..Default::default()
+        });
+        paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+            language: language.map(str::to_owned),
+            ..Default::default()
+        });
+        input
+    }
+
+    #[test]
+    fn document_enablement_language_and_paragraph_suppression_gate_hyphenation() {
+        let enabled = output_text(&deterministic_layout(&hyphenation_input(
+            true,
+            Some("en-US"),
+            false,
+        )))
+        .concat();
+        assert_eq!(enabled, "repre-sentation");
+
+        for input in [
+            hyphenation_input(false, Some("en-US"), false),
+            hyphenation_input(true, None, false),
+            hyphenation_input(true, Some("it-IT"), false),
+            hyphenation_input(true, Some("en-US"), true),
+        ] {
+            let text = output_text(&deterministic_layout(&input)).concat();
+            assert_eq!(text, "representation");
+        }
+    }
+
+    #[test]
+    fn changed_document_hyphenation_state_invalidates_reusable_paragraph_work() {
+        let mut input = hyphenation_input(false, Some("en-US"), false);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        assert_eq!(
+            output_text(&engine.layout(&input).expect("disabled layout")).concat(),
+            "representation"
+        );
+
+        input.automatic_hyphenation = true;
+        let warm = engine.layout(&input).expect("enabled warm layout");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("enabled fresh layout");
+        assert_layout_results_equal(&warm, &fresh);
+        assert!(output_text(&warm).concat().contains('-'));
+    }
+
+    #[test]
+    fn inherited_run_language_hyphenates_but_generated_fields_do_not() {
+        let mut inherited = hyphenation_input(true, None, false);
+        inherited
+            .styles
+            .doc_defaults
+            .as_mut()
+            .unwrap()
+            .rpr
+            .as_mut()
+            .unwrap()
+            .language = Some("en-GB".to_owned());
+        assert!(
+            output_text(&deterministic_layout(&inherited))
+                .concat()
+                .contains('-')
+        );
+
+        let mut field = hyphenation_input(true, Some("en-US"), false);
+        let BodyContent::Paragraph(paragraph) = &mut field.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.runs[0].content = vec![RunContent::Field(Field::new("DATE", "representation"))];
+        assert_eq!(
+            output_text(&deterministic_layout(&field)).concat(),
+            "representation"
+        );
+    }
+
+    #[test]
+    fn mixed_languages_and_table_paragraphs_keep_hyphenation_run_local() {
+        use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
+        use rdocx_oxml::text::CT_R;
+
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            ind_right: Some(rdocx_oxml::units::Twips(8_500)),
+            ..Default::default()
+        });
+        for (text, language) in [("representation ", "en-US"), ("rappresentazione", "it-IT")] {
+            let mut run = CT_R::new(text);
+            run.properties = Some(rdocx_oxml::properties::CT_RPr {
+                language: Some(language.to_owned()),
+                ..Default::default()
+            });
+            paragraph.runs.push(run);
+        }
+
+        let mut cell = CT_Tc::new();
+        cell.content = vec![CellContent::Paragraph(paragraph)];
+        let mut row = CT_Row::new();
+        row.cells.push(cell);
+        let mut table = CT_Tbl::new();
+        table.rows.push(row);
+        let mut input = make_input_with_text("");
+        input.automatic_hyphenation = true;
+        input.document.body.content = vec![BodyContent::Table(table)];
+
+        let text = output_text(&deterministic_layout(&input));
+        assert!(text.iter().any(|item| item == "-"), "{text:?}");
+        assert!(
+            text.iter().any(|item| item == "rappresentazione"),
+            "{text:?}"
+        );
     }
 
     #[test]
@@ -8340,8 +8521,11 @@ mod tests {
             style_id: Some("p".repeat(RESTART_CACHE_MAX_BYTES + 1)),
             ..CT_PPr::default()
         });
-        let paragraph_entry = RestartBodyEntry::for_content(&BodyContent::Paragraph(paragraph))
-            .expect("paragraph has restart identity");
+        let paragraph_entry = RestartBodyEntry::for_content(
+            &BodyContent::Paragraph(paragraph),
+            RevisionView::Accepted,
+        )
+        .expect("paragraph has restart identity");
         assert!(paragraph_entry.bytes() > RESTART_CACHE_MAX_BYTES);
 
         let mut table = safe_table("property accounting");
@@ -8350,6 +8534,7 @@ mod tests {
             ..rdocx_oxml::table::CT_TblPr::default()
         });
         table.rows[0].properties = Some(rdocx_oxml::table::CT_TrPr {
+            height: Some(rdocx_oxml::units::Twips(1)),
             height_rule: Some("r".repeat(4_096)),
             ..rdocx_oxml::table::CT_TrPr::default()
         });
@@ -8357,9 +8542,54 @@ mod tests {
             text_direction: Some("c".repeat(4_096)),
             ..rdocx_oxml::table::CT_TcPr::default()
         });
-        let table_entry = RestartBodyEntry::for_content(&BodyContent::Table(table))
-            .expect("table has restart identity");
+        let table_entry =
+            RestartBodyEntry::for_content(&BodyContent::Table(table), RevisionView::Accepted)
+                .expect("table has restart identity");
         assert!(table_entry.bytes() >= 3 * 4_096);
+    }
+
+    #[test]
+    fn restart_body_identity_is_exact_for_all_run_language_state() {
+        let mut paragraph = CT_P::new();
+        let mut run = CT_R::new("representation");
+        run.properties = Some(CT_RPr {
+            language: Some("en-US".to_owned()),
+            language_east_asia: Some("ja-JP".to_owned()),
+            language_bidi: Some("ar-SA".to_owned()),
+            language_extra_attributes: vec![("data".to_owned(), "one".to_owned())],
+            ..CT_RPr::default()
+        });
+        paragraph.runs.push(run);
+        let retained = RestartBodyEntry::for_content(
+            &BodyContent::Paragraph(paragraph.clone()),
+            RevisionView::Accepted,
+        )
+        .expect("paragraph has restart identity");
+
+        let mut changed = Vec::new();
+        for field in 0..4 {
+            let mut candidate = paragraph.clone();
+            let properties = candidate.runs[0]
+                .properties
+                .as_mut()
+                .expect("run properties exist");
+            match field {
+                0 => properties.language = Some("en-GB".to_owned()),
+                1 => properties.language_east_asia = Some("zh-CN".to_owned()),
+                2 => properties.language_bidi = Some("he-IL".to_owned()),
+                3 => properties.language_extra_attributes[0].1 = "two".to_owned(),
+                _ => unreachable!(),
+            }
+            changed.push(candidate);
+        }
+
+        for candidate in changed {
+            assert_eq!(
+                paragraph_fingerprint(&paragraph),
+                paragraph_fingerprint(&candidate)
+            );
+            assert!(!retained.matches(&BodyContent::Paragraph(candidate)));
+        }
     }
 
     #[test]
@@ -8737,7 +8967,8 @@ mod tests {
         let initial_pages = initial.pages.clone();
         assert!(
             engine.restart_cache.is_some(),
-            "unchanged note context must permit a restart record"
+            "unchanged note context must permit a restart record, candidate {} bytes",
+            engine.last_restart_candidate_bytes
         );
 
         set_body_paragraph_text(&mut input, 350, "paragraph 350 changed line");
@@ -8853,7 +9084,8 @@ mod tests {
         engine.layout(&input).expect("initial header-footer layout");
         assert!(
             engine.restart_cache.is_some(),
-            "default headers and footers must permit a restart record"
+            "default headers and footers must permit a restart record, candidate {} bytes",
+            engine.last_restart_candidate_bytes
         );
 
         set_body_paragraph_text(&mut input, 350, "paragraph 350 changed line");
@@ -8874,7 +9106,11 @@ mod tests {
             engine
                 .layout(&input)
                 .unwrap_or_else(|error| panic!("prime {label}: {error}"));
-            assert!(engine.restart_cache.is_some(), "prime {label}");
+            assert!(
+                engine.restart_cache.is_some(),
+                "prime {label}, candidate {} bytes",
+                engine.last_restart_candidate_bytes
+            );
             mutate(&mut input);
             let warm = engine
                 .layout(&input)
@@ -9266,7 +9502,8 @@ mod tests {
         assert_capacity_rejected("body payload capacity is charged", |cache| {
             cache.body.push(RestartBodyEntry::Paragraph {
                 fingerprint: 0,
-                value: Arc::new(CT_P::new()),
+                identity: Vec::new(),
+                note_references: Vec::new(),
                 bytes: RESTART_CACHE_MAX_BYTES + 1,
             });
         });
@@ -10489,6 +10726,7 @@ mod tests {
 
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -10995,6 +11233,7 @@ mod tests {
 
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -11056,6 +11295,7 @@ mod tests {
 
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -11148,6 +11388,7 @@ mod tests {
 
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -11170,6 +11411,24 @@ mod tests {
             theme: None,
             fonts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn automatic_hyphenation_reaches_note_story_paragraphs() {
+        let mut input = make_input_with_footnote(&["representation"]);
+        input.automatic_hyphenation = true;
+        let note = &mut input.footnotes.as_mut().unwrap().footnotes[0].paragraphs[0];
+        note.properties = Some(CT_PPr {
+            ind_right: Some(rdocx_oxml::units::Twips(8_500)),
+            ..Default::default()
+        });
+        note.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+
+        let text = output_text(&deterministic_layout(&input));
+        assert!(text.iter().any(|item| item == "-"), "{text:?}");
     }
 
     /// The x origin of every glyph run sitting below the footnote separator,
@@ -11305,6 +11564,7 @@ mod tests {
 
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
+                automatic_hyphenation: false,
                 document: doc,
                 styles: CT_Styles::new_default(),
                 numbering: None,
@@ -11432,6 +11692,7 @@ mod tests {
 
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -11723,6 +11984,7 @@ mod tests {
 
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -11865,6 +12127,7 @@ mod tests {
             note.add_run("An endnote that would be tall in the margin.");
             LayoutInput {
                 revision_view: crate::input::RevisionView::Accepted,
+                automatic_hyphenation: false,
                 document: doc,
                 styles: CT_Styles::new_default(),
                 numbering: None,
@@ -11991,6 +12254,7 @@ mod tests {
 
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -12061,6 +12325,26 @@ mod tests {
             (last.0 - geometry.margin_left).abs() < 1.0,
             "the last line should return to the margin, got {last:?}"
         );
+    }
+
+    #[test]
+    fn drawing_reflow_can_select_a_conditional_hyphen() {
+        use rdocx_oxml::drawing::{AnchorAlignH, WrapType};
+
+        let mut input =
+            make_wrapping_document(WrapType::Square, Some(AnchorAlignH::Left), 400.0, 40.0, 5.0);
+        input.automatic_hyphenation = true;
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.runs[0] = rdocx_oxml::text::CT_R::new("representation representation");
+        paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+
+        let text = output_text(&deterministic_layout(&input));
+        assert!(text.iter().any(|item| item == "-"), "{text:?}");
     }
 
     #[test]
@@ -12214,6 +12498,7 @@ mod tests {
 
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -12296,6 +12581,7 @@ mod tests {
 
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -12398,6 +12684,7 @@ mod tests {
         };
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -12592,6 +12879,7 @@ mod tests {
 
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,

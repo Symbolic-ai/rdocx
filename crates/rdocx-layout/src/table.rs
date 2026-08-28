@@ -832,6 +832,7 @@ mod tests {
     fn layout_with_styles(table: &CT_Tbl, width: f64, styles: &CT_Styles) -> TableBlock {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
@@ -1015,6 +1016,7 @@ mod tests {
         let styles = rdocx_oxml::styles::CT_Styles::default();
         let input = crate::input::LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),

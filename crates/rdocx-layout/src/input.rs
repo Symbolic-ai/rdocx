@@ -110,6 +110,8 @@ impl MediaRegistry {
 pub struct LayoutInput {
     /// The parsed document content.
     pub document: CT_Document,
+    /// Whether document settings enable automatic hyphenation.
+    pub automatic_hyphenation: bool,
     /// The tracked-revision projection to lay out.
     pub revision_view: RevisionView,
     /// Style definitions.

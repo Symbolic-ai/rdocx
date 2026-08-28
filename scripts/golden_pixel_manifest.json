@@ -4,7 +4,7 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "F-X041 corrects Word break-run glyph vectors through shared exact reshaping",
+  "reason": "F-198 adds the page-one English hyphenation example, rendering representation as repre- and sentation",
   "samples": {
     "contract": {
       "height": 1650,
@@ -13,7 +13,7 @@
     },
     "feature_showcase": {
       "height": 1650,
-      "rgba_sha256": "0ac0cae173dbfe52550d267ee44697cf53ff55a22c0d74486f5a9d944c2d075e",
+      "rgba_sha256": "248ee1e604ac75fe19f8ecb5430a93e51a8d8d15b5d03e26dca4d560c413313d",
       "width": 1275
     },
     "invoice": {

@@ -407,6 +407,25 @@ impl<'a> Run<'a> {
         rpr.font_cs = name.map(str::to_owned);
     }
 
+    /// Set the run language used by language-aware text layout.
+    pub fn language(mut self, language: &str) -> Self {
+        self.set_language(language);
+        self
+    }
+
+    /// Set the run language in place.
+    pub fn set_language(&mut self, language: &str) {
+        self.set_language_value(Some(language));
+    }
+
+    /// Set or clear the direct Latin and high-ANSI run language.
+    pub fn set_language_value(&mut self, language: Option<&str>) {
+        if language.is_none() && self.inner.properties.is_none() {
+            return;
+        }
+        self.ensure_rpr().language = language.map(str::to_owned);
+    }
+
     /// Set text color as a hex string (e.g., "FF0000" for red).
     pub fn color(mut self, hex: &str) -> Self {
         self.set_color(hex);
@@ -715,6 +734,14 @@ impl<'a> RunRef<'a> {
             .and_then(|rpr| rpr.font_ascii.as_deref())
     }
 
+    /// Get the direct Latin and high-ANSI run language, if set.
+    pub fn language(&self) -> Option<&str> {
+        self.inner
+            .properties
+            .as_ref()
+            .and_then(|rpr| rpr.language.as_deref())
+    }
+
     /// Get text color, if set.
     pub fn color(&self) -> Option<&str> {
         self.inner
@@ -898,5 +925,23 @@ mod tests {
         let items = run.items().collect::<Vec<_>>();
         assert!(matches!(items[0], RunItemRef::Text("typed")));
         assert!(matches!(items[1], RunItemRef::UnsupportedXml(b"<x:raw/>")));
+    }
+
+    #[test]
+    fn run_language_authoring_sets_and_clears_the_complete_word_language_value() {
+        let mut inner = CT_R::new("hyphenation");
+        {
+            let mut run = Run { inner: &mut inner };
+            run.set_language_value(Some("en-US"));
+        }
+        assert_eq!(
+            inner.properties.as_ref().unwrap().language.as_deref(),
+            Some("en-US")
+        );
+        {
+            let mut run = Run { inner: &mut inner };
+            run.set_language_value(None);
+        }
+        assert_eq!(inner.properties.as_ref().unwrap().language, None);
     }
 }

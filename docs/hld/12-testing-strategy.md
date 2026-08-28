@@ -576,6 +576,14 @@ suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
 pixel comparison is unconditional, failure-propagating, and bound to the
 reviewed rasteriser identity.
 
+The `feature_showcase` page-one golden is also the automatic-hyphenation
+acceptance case. It enables the Word setting, assigns `en-US` to
+`representation`, and constrains the line so deterministic output is `repre-`
+followed by `sentation`. The reviewed LibreOffice Writer 26.2.5.2 oracle makes
+the same break. The hash and pixel manifests may move only for that declared
+sample after the source-built layout, XML round trip, deterministic raster, and
+pinned Writer evidence agree.
+
 ## The SVG page golden gate
 
 `svg_page_rasterises_like_the_png_backend` constructs one representative page

@@ -36,7 +36,14 @@ glyph-cluster positions. Word assigns spans before shaping. Its initial text
 projection assigns one shaped segment to each formatting and provenance span.
 The shared line breaker alone discovers UAX 14 opportunities, reshapes each
 exact byte slice, and subdivides the scalar source range, so every wrapped
-fragment retains an exact contiguous source range. Generated text uses `None`.
+fragment retains an exact contiguous source range. A language-aware inline
+item additionally exposes embedded Liang opportunities for the `en`, `fr`,
+`de`, and `es` BCP 47 primary subtags. On overflow it tries candidates from
+right to left and selects the farthest opportunity whose prefix plus a shaped
+hyphen fits. Unsupported languages, omitted document enablement, paragraph
+suppression, and ordinary text retain UAX 14 behavior. The chosen prefix and
+suffix keep exact source spans. The separately shaped conditional hyphen has
+the preceding run's formatting and `source: None`, as all generated text does.
 
 An empty Word paragraph contributes one `TextSegment` with empty text, zero
 width, no glyph ids, and the resolved paragraph-mark font metrics. Its source

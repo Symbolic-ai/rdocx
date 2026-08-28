@@ -90,6 +90,20 @@ cannot back a Python property setter. The facade exposes 61 non-consuming
 borrowed nested handle can mutate without a rebind:
 `doc.paragraph_mut(3).unwrap().add_run("text").set_bold(true)`.
 
+The Rust facade also exposes the minimum automatic-hyphenation authoring
+surface. `Document::set_auto_hyphenation` writes the Word document setting,
+while `Run::language` and `Run::set_language` assign the direct `w:lang` value.
+`Run::set_language_value` assigns or clears it. Omission remains off. These
+additions do not create a parallel binding model or make language inference
+part of the API contract.
+
+At the public low-level Rust boundary, `CT_RPr` includes the complete language
+attribute set and its retained foreign attributes, while `LayoutInput` includes
+the document automatic-hyphenation boolean. Full struct literals must provide
+these fields. These are intentional pre-1.0 source breaks for the next stable
+family. Established `TextSegment` construction and layout entrypoints retain
+their existing shapes.
+
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
 deterministic layouts live in separate
 `Mutex<Option<Arc<WordLayoutResult>>>` caches. One private normal-font engine

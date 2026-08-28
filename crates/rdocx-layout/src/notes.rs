@@ -265,6 +265,7 @@ mod tests {
 
         LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: rdocx_oxml::document::CT_Document::new(),
             styles: CT_Styles::new_default(),
             numbering: None,

@@ -111,6 +111,8 @@ fn generate_feature_showcase(_samples_dir: &Path) -> Document {
     doc.set_author("rdocx Sample Generator");
     doc.set_subject("Comprehensive feature demonstration");
     doc.set_keywords("rdocx, docx, rust, sample, showcase");
+    doc.set_auto_hyphenation(true)
+        .expect("feature showcase settings are valid");
 
     // Headers & Footers with different first page
     doc.set_different_first_page(true);
@@ -147,6 +149,17 @@ fn generate_feature_showcase(_samples_dir: &Path) -> Document {
     {
         let mut p = doc.add_paragraph("").alignment(Alignment::Center);
         p.add_run("demonstrated in a single document.")
+            .size(13.0)
+            .color("B0C4DE");
+    }
+    {
+        let mut p = doc
+            .add_paragraph("")
+            .alignment(Alignment::Center)
+            .indent_left(Length::inches(2.9))
+            .indent_right(Length::inches(2.9));
+        p.add_run("representation")
+            .language("en-US")
             .size(13.0)
             .color("B0C4DE");
     }

@@ -132,6 +132,14 @@ HarfRust shaping, and line-local UAX 9 visual ordering therefore remain shared
 by document formats. Logical order is the extraction contract. Visual order is
 applied only to completed lines for painting.
 
+Language-aware automatic hyphenation keeps that boundary intact. `rdocx-oxml`
+owns the Word `w:autoHyphenation`, `w:lang`, and paragraph suppression values.
+`rdocx-layout` resolves them and projects only a boolean plus a BCP 47 language
+tag into `oxml-layout`. The shared line breaker maps the `en`, `fr`, `de`, and
+`es` primary subtags to embedded `hypher` 0.1.7 Liang patterns. The dependency
+therefore stays inside the format-neutral crate and creates no reverse edge to
+a Word crate.
+
 Completed layout results share each immutable page frame and each font byte
 buffer through `Arc`. Word and Presentation producers establish that ownership
 at their format boundary. PDF, raster, SVG, facade page access, diagnostics,

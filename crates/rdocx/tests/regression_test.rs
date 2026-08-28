@@ -7159,6 +7159,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
     };
 
     rdocx_layout::LayoutInput {
+        automatic_hyphenation: false,
         document,
         styles: rdocx_oxml::styles::CT_Styles::new_default(),
         numbering: None,
@@ -8378,5 +8379,26 @@ fn svg_facade_options_share_the_existing_layout_paths_and_bounds_contract() {
             .render_page_to_svg_deterministic(usize::MAX)
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn automatic_hyphenation_authoring_round_trips_with_run_language() {
+    let mut document = Document::new();
+    document.set_auto_hyphenation(true).unwrap();
+    document
+        .add_paragraph("")
+        .add_run("representation")
+        .language("en-US");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let settings = std::str::from_utf8(package.get_part("/word/settings.xml").unwrap()).unwrap();
+    assert!(settings.contains("<w:autoHyphenation/>"));
+
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened.paragraphs()[0].run(0).unwrap().language(),
+        Some("en-US")
     );
 }

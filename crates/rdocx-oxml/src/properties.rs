@@ -170,6 +170,7 @@ const RPR_HIGHLIGHT_SLOT: u8 = 25;
 const RPR_UNDERLINE_SLOT: u8 = 26;
 const RPR_SHADING_SLOT: u8 = 29;
 const RPR_VERT_ALIGN_SLOT: u8 = 31;
+const RPR_LANG_SLOT: u8 = 35;
 const RPR_MARKER_SLOT: u8 = 39;
 const RPR_CHANGE_SLOT: u8 = 40;
 const RPR_END_SLOT: u8 = 41;
@@ -787,6 +788,15 @@ pub struct CT_RPr {
     pub shading: Option<CT_Shd>,
     /// Vanish/hidden text (vanish)
     pub vanish: Option<bool>,
+    /// Language for Latin and high-ANSI text (`lang/@w:val`).
+    pub language: Option<String>,
+    /// Language for East Asian text (`lang/@w:eastAsia`).
+    pub language_east_asia: Option<String>,
+    /// Language for complex-script text (`lang/@w:bidi`).
+    pub language_bidi: Option<String>,
+    /// Namespace declarations and foreign attributes retained from `w:lang`.
+    #[doc(hidden)]
+    pub language_extra_attributes: Vec<(String, String)>,
     /// Contextual insertion and deletion markers retained in schema order.
     pub revision_markers: Vec<CT_Revision>,
     /// Prior run properties from the schema-final `w:rPrChange`.
@@ -1037,6 +1047,14 @@ impl CT_RPr {
                             RPR_VANISH_SLOT,
                         );
                         rpr.vanish = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"lang", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_LANG_SLOT,
+                        );
+                        parse_language_attributes(&mut rpr, e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
                         || is_word_element(name.as_ref(), b"del", &prefixes)
                     {
@@ -1093,7 +1111,27 @@ impl CT_RPr {
                 }
                 Ok(Event::Start(ref e)) => {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(e.name().as_ref(), b"ins", &prefixes)
+                    if is_word_element(e.name().as_ref(), b"lang", &prefixes) {
+                        let captured = capture_element(reader, e)?;
+                        let raw =
+                            crate::text::raw_with_external_bindings(&captured, owner_bindings)?;
+                        if language_element_is_explicitly_empty(&captured)? {
+                            record_rpr_modeled(
+                                &mut rpr,
+                                &mut pending_raw,
+                                &mut occurrences,
+                                RPR_LANG_SLOT,
+                            );
+                            parse_language_attributes(&mut rpr, e, &prefixes)?;
+                        } else {
+                            record_rpr_raw_at(
+                                &mut rpr,
+                                raw,
+                                RPR_LANG_SLOT,
+                                occurrences[RPR_LANG_SLOT as usize],
+                            );
+                        }
+                    } else if is_word_element(e.name().as_ref(), b"ins", &prefixes)
                         || is_word_element(e.name().as_ref(), b"del", &prefixes)
                     {
                         let raw = crate::text::raw_with_external_bindings(
@@ -1326,6 +1364,27 @@ impl CT_RPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if self.language.is_some()
+            || self.language_east_asia.is_some()
+            || self.language_bidi.is_some()
+            || !self.language_extra_attributes.is_empty()
+        {
+            let mut e = BytesStart::new("w:lang");
+            if let Some(language) = &self.language {
+                e.push_attribute(("w:val", language.as_str()));
+            }
+            if let Some(language) = &self.language_east_asia {
+                e.push_attribute(("w:eastAsia", language.as_str()));
+            }
+            if let Some(language) = &self.language_bidi {
+                e.push_attribute(("w:bidi", language.as_str()));
+            }
+            for (name, value) in &self.language_extra_attributes {
+                e.push_attribute((name.as_str(), value.as_str()));
+            }
+            writer.write_event(Event::Empty(e))?;
+        }
+
         for revision in &self.revision_markers {
             revision.write_xml_with_word_override(writer, foreign_word_namespace)?;
         }
@@ -1368,6 +1427,10 @@ impl CT_RPr {
             && self.position.is_none()
             && self.shading.is_none()
             && self.vanish.is_none()
+            && self.language.is_none()
+            && self.language_east_asia.is_none()
+            && self.language_bidi.is_none()
+            && self.language_extra_attributes.is_empty()
             && self.revision_markers.is_empty()
             && self.change.is_none()
             && self.revision_xml.is_empty()
@@ -1457,7 +1520,57 @@ impl CT_RPr {
         if other.vanish.is_some() {
             self.vanish = other.vanish;
         }
+        if other.language.is_some() {
+            self.language = other.language.clone();
+        }
+        if other.language_east_asia.is_some() {
+            self.language_east_asia = other.language_east_asia.clone();
+        }
+        if other.language_bidi.is_some() {
+            self.language_bidi = other.language_bidi.clone();
+        }
+        if !other.language_extra_attributes.is_empty() {
+            self.language_extra_attributes = other.language_extra_attributes.clone();
+        }
     }
+}
+
+fn parse_language_attributes(
+    rpr: &mut CT_RPr,
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .into_owned();
+        if is_word_attribute(key, b"val", prefixes) {
+            rpr.language = Some(value);
+        } else if is_word_attribute(key, b"eastAsia", prefixes) {
+            rpr.language_east_asia = Some(value);
+        } else if is_word_attribute(key, b"bidi", prefixes) {
+            rpr.language_bidi = Some(value);
+        } else {
+            rpr.language_extra_attributes
+                .push((std::str::from_utf8(key)?.to_owned(), value));
+        }
+    }
+    Ok(())
+}
+
+fn language_element_is_explicitly_empty(xml: &[u8]) -> Result<bool> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    if !matches!(reader.read_event_into(&mut buffer)?, Event::Start(_)) {
+        return Ok(false);
+    }
+    buffer.clear();
+    Ok(matches!(
+        reader.read_event_into(&mut buffer)?,
+        Event::End(_)
+    ))
 }
 
 fn write_rpr_with_positioned_raw<W: std::io::Write>(
@@ -1610,7 +1723,7 @@ fn rpr_slot_for_name(local: &[u8]) -> u8 {
         b"rtl" => 32,
         b"cs" => 33,
         b"em" => 34,
-        b"lang" => 35,
+        b"lang" => RPR_LANG_SLOT,
         b"eastAsianLayout" => 36,
         b"specVanish" => 37,
         b"oMath" => 38,
@@ -1904,5 +2017,80 @@ mod tests {
         assert_eq!(base.bold, Some(true)); // kept
         assert_eq!(base.sz, Some(HalfPoint(28))); // overridden
         assert_eq!(base.italic, Some(true)); // added
+    }
+
+    #[test]
+    fn run_language_parses_aliases_and_rejects_foreign_same_local_attributes() {
+        let rpr = parse_rpr(&format!(
+            r#"<q:lang xmlns:q="{}" xmlns:x="urn:foreign" q:val="en-US" q:eastAsia="zh-CN" q:bidi="ar-SA" x:val="ignored" x:kept="raw"/>"#,
+            W_NS
+        ));
+        assert_eq!(rpr.language.as_deref(), Some("en-US"));
+        assert_eq!(rpr.language_east_asia.as_deref(), Some("zh-CN"));
+        assert_eq!(rpr.language_bidi.as_deref(), Some("ar-SA"));
+
+        let mut output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"<w:lang w:val="en-US" w:eastAsia="zh-CN" w:bidi="ar-SA""#));
+        assert!(output.contains(r#"x:kept="raw""#));
+        assert!(!output.contains(r#"w:val="ignored""#));
+
+        let explicit = parse_rpr(&format!(
+            r#"<q:lang xmlns:q="{}" q:val="en-GB"></q:lang>"#,
+            W_NS
+        ));
+        assert_eq!(explicit.language.as_deref(), Some("en-GB"));
+    }
+
+    #[test]
+    fn run_language_round_trips_at_its_schema_slot_and_cascades() {
+        let mut base = CT_RPr {
+            language: Some("fr-FR".to_owned()),
+            language_east_asia: Some("ja-JP".to_owned()),
+            ..Default::default()
+        };
+        base.merge_from(&CT_RPr {
+            language: Some("de-DE".to_owned()),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        assert_eq!(base.language.as_deref(), Some("de-DE"));
+        assert_eq!(base.language_east_asia.as_deref(), Some("ja-JP"));
+        assert_eq!(base.language_bidi.as_deref(), Some("ar-SA"));
+
+        let mut output = Vec::new();
+        base.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.find("w:vertAlign").is_none());
+        assert!(output.find("w:lang").unwrap() < output.rfind("</w:rPr>").unwrap());
+    }
+
+    #[test]
+    fn malformed_language_after_the_modeled_occurrence_keeps_its_relative_position() {
+        let rpr = parse_rpr(r#"<w:lang w:val="en-US"/><w:lang><w:producerExtension/></w:lang>"#);
+
+        let mut output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output_text = std::str::from_utf8(&output).unwrap();
+        assert!(
+            output_text.find(r#"w:val="en-US""#).unwrap()
+                < output_text.find("w:producerExtension").unwrap()
+        );
+
+        let mut reader = Reader::from_reader(output.as_slice());
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer).unwrap() {
+                Event::Start(element) if element.local_name().as_ref() == b"rPr" => break,
+                Event::Eof => panic!("serialized run properties have no root"),
+                _ => {}
+            }
+            buffer.clear();
+        }
+        let reparsed = CT_RPr::from_xml(&mut reader).unwrap();
+        let mut repeated = Vec::new();
+        reparsed.to_xml(&mut Writer::new(&mut repeated)).unwrap();
+        assert_eq!(repeated, output);
     }
 }

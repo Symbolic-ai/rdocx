@@ -1,6 +1,6 @@
 # F-198, Hyphenation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: L
 **Depends on**: F-197, F-X059, F-X066
@@ -121,14 +121,14 @@ LibreOffice comparison explain the movement.
 
 ## Implementation checklist
 
-- [ ] Project `w:autoHyphenation` without losing preserved settings XML.
-- [ ] Model and round-trip the complete `w:lang` attribute set.
-- [ ] Carry automatic hyphenation and effective run language into layout.
-- [ ] Map effective Word languages onto F-X058's published supported-language path.
-- [ ] Retain regressions for selected conditional hyphens and exact source spans.
-- [ ] Preserve suppression, unsupported-language, and no-wrap behavior.
-- [ ] Add unit, round-trip, integration, golden, differential, and hash evidence.
-- [ ] Run every risk rider and update exactly the listed HLD files.
+- [x] Project `w:autoHyphenation` without losing preserved settings XML.
+- [x] Model and round-trip the complete `w:lang` attribute set.
+- [x] Carry automatic hyphenation and effective run language into layout.
+- [x] Map effective Word languages onto F-X058's published supported-language path.
+- [x] Retain regressions for selected conditional hyphens and exact source spans.
+- [x] Preserve suppression, unsupported-language, and no-wrap behavior.
+- [x] Add unit, round-trip, integration, golden, differential, and hash evidence.
+- [x] Run every risk rider and update exactly the listed HLD files.
 
 ## Open questions
 
