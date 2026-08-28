@@ -639,10 +639,12 @@ break for the next stable family. They expose renderer input, not a second
 authoring surface. Opened header XML remains the serialization authority, and
 callers should use the native `Document` methods for mutation.
 
-The pre-1.0 shared layout surface also provides additive multilingual text
-types for native renderer producers. Direction, script, clusters, logical
-source ranges, and two-dimensional glyph positions are available without
-changing any established layout struct or entrypoint shape. PowerPoint exposes
+The pre-1.0 shared layout surface provides multilingual text types for native
+renderer producers. Direction, script, clusters, logical source ranges, and
+two-dimensional glyph positions are available through the existing rich
+values. `TextSegment` includes a required `direction` field so exhaustive
+external literals must provide `TextDirection::Auto` when no override exists.
+This is an intentional pre-1.0 Rust source break. PowerPoint exposes
 resolved paragraph directions through `ResolvedSlideTextDirections` and
 sibling resolver and renderer entrypoints. The sidecar leaves the exhaustive
 `ResolvedParagraph` shape and all established entrypoints unchanged. Python,
@@ -652,10 +654,14 @@ fallback inventory transitively.
 
 Word layout emits the same existing `MultilingualTextSegment` and
 `MultilingualGlyphRun` values for paragraphs containing complex scripts. This
-activates the already additive pre-1.0 rich-layout surface for native Word
-consumers without adding a public type, field, entrypoint, binding method, or
-dependency. Consumers that inspect positioned elements handle the existing
-multilingual variant for both Word and Presentation results.
+activates the existing rich-layout surface for native Word consumers without a
+new entrypoint, binding method, or dependency. Low-level Word callers gain
+`CT_PPr::bidi`, `ind_start`, and `ind_end`, plus `CT_RPr::rtl` and the paragraph
+raw-position sidecar required for exact unknown-child replay. Exhaustive public
+Word property literals must add the new fields or use `Default`. These are
+intentional pre-1.0 Rust source breaks. Consumers that inspect positioned
+elements handle the existing multilingual variant for both Word and
+Presentation results.
 
 The next stable Rust family includes the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so

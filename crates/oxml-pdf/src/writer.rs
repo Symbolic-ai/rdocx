@@ -1756,10 +1756,11 @@ mod tests {
     }
 
     #[test]
-    fn multilingual_pdf_content_uses_logical_actual_text() {
+    fn rtl_pdf_paints_visual_order_but_maps_search_text_logically() {
+        let font_id = FontId(9);
         let run = MultilingualGlyphRun {
             origin: Point { x: 10.0, y: 20.0 },
-            font_id: FontId(9),
+            font_id,
             font_size: 12.0,
             glyph_ids: vec![2, 1],
             x_advances: vec![6.0, 6.0],
@@ -1789,10 +1790,66 @@ mod tests {
         let mut invalid = run.clone();
         invalid.x_offsets.clear();
         assert!(!invalid.is_valid());
-        let content = content_for(vec![PositionedElement::MultilingualText(run)]);
+        assert_eq!(run.glyph_ids, [2, 1]);
+
+        let mut remapper = subsetter::GlyphRemapper::new();
+        remapper.remap(1);
+        remapper.remap(2);
+        let prepared = PreparedFont {
+            font_data: FontData {
+                id: font_id,
+                family: "Test".to_owned(),
+                data: Vec::new().into(),
+                face_index: 0,
+                bold: false,
+                italic: false,
+            },
+            subset_bytes: Vec::new(),
+            remapper,
+            cmap_bytes: Vec::new(),
+            widths: vec![(1, 500.0), (2, 500.0)],
+        };
+        let page = Arc::new(page_with(vec![PositionedElement::MultilingualText(run)]));
+        let prepared_fonts = BTreeMap::from([(font_id, prepared)]);
+        let font_refs = BTreeMap::from([(
+            font_id,
+            (
+                Ref::new(1),
+                Ref::new(2),
+                Ref::new(3),
+                Ref::new(4),
+                Ref::new(5),
+            ),
+        )]);
+        let mut next_ref = 100;
+        let alpha_states = AlphaStates::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
+        let gradients = GradientRegistry::new(std::slice::from_ref(&page), &mut || {
+            let reference = Ref::new(next_ref);
+            next_ref += 1;
+            reference
+        });
+        let content = String::from_utf8(build_page_content(
+            0,
+            &page,
+            PageContentResources {
+                prepared_fonts: &prepared_fonts,
+                font_refs: &font_refs,
+                image_map: &HashMap::new(),
+                alpha_states: &alpha_states,
+                gradients: &gradients,
+                structure: None,
+            },
+        ))
+        .expect("PDF content operators are ASCII");
 
         assert!(content.contains("/ActualText <FEFF05D005D1>"), "{content}");
         assert!(content.contains("/Span <<"), "{content}");
+        assert!(content.contains("1 0 0 -1 10 20 Tm"), "{content}");
+        assert!(content.contains("1 0 0 -1 16 20 Tm"), "{content}");
     }
 
     fn solid_stroke() -> Stroke {

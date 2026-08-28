@@ -208,7 +208,10 @@ inserted properties without changing its bytes.
 DrawingML attribute only in its unqualified schema form, while a foreign
 same-local-name attribute remains opaque. Writing places the canonical typed
 attribute with the other paragraph attributes and preserves unknown attributes
-and children at their established boundaries.
+and children at their established boundaries. Resolution carries the typed
+value beside the paragraph model into shared paragraph-wide bidi shaping, so
+numeric and Latin spans follow the explicit base direction without changing
+their stored logical text.
 
 `CT_TextListStyle` types `a:defPPr` separately from its nine optional level
 properties. The reader accepts any prefix, and the writer emits `a:defPPr`

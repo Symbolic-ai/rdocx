@@ -220,6 +220,31 @@ def build_multi_script_fixtures(output: Path) -> list[dict[str, object]]:
                 "path": path,
             }
         )
+    rtl_filename = "bidirectional.docx"
+    rtl_language = "ar-SA"
+    rtl_family = "Noto Sans Arabic"
+    rtl_text = "العربية"
+    rtl_paragraphs = "".join(
+        f'''<w:p><w:pPr><w:bidi/><w:spacing w:after="0" w:line="480" w:lineRule="exact"/><w:ind w:start="360" w:end="720"/><w:jc w:val="start"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="{rtl_family}" w:hAnsi="{rtl_family}" w:eastAsia="{rtl_family}" w:cs="{rtl_family}"/><w:rtl/><w:sz w:val="48"/><w:szCs w:val="48"/><w:lang w:val="en-US" w:bidi="{rtl_language}"/></w:rPr><w:t xml:space="preserve">العربية </w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="{rtl_family}" w:hAnsi="{rtl_family}" w:eastAsia="{rtl_family}" w:cs="{rtl_family}"/><w:rtl w:val="0"/><w:sz w:val="48"/><w:szCs w:val="48"/><w:lang w:val="en-US" w:bidi="{rtl_language}"/></w:rPr><w:t>ABC 123</w:t></w:r></w:p>'''
+        for _ in range(6)
+    )
+    rtl_document_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{rtl_paragraphs}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>'''
+    rtl_path = output / rtl_filename
+    with zipfile.ZipFile(rtl_path, "w") as archive:
+        write_deterministic_zip_member(archive, "[Content_Types].xml", content_types)
+        write_deterministic_zip_member(archive, "_rels/.rels", relationships)
+        write_deterministic_zip_member(archive, "word/document.xml", rtl_document_xml)
+    fixtures.append(
+        {
+            "document": rtl_filename,
+            "category": "bidirectional",
+            "language": rtl_language,
+            "font": rtl_family,
+            "text": rtl_text,
+            "path": rtl_path,
+        }
+    )
     return fixtures
 
 
@@ -1047,7 +1072,13 @@ except TimeoutError:
             fixtures = build_multi_script_fixtures(Path(temporary))
             self.assertEqual(
                 [fixture["category"] for fixture in fixtures],
-                ["arabic", "devanagari", "thai", "simplified-chinese"],
+                [
+                    "arabic",
+                    "devanagari",
+                    "thai",
+                    "simplified-chinese",
+                    "bidirectional",
+                ],
             )
             for fixture in fixtures:
                 path = Path(fixture["path"])
@@ -1058,6 +1089,20 @@ except TimeoutError:
                 self.assertIn(str(fixture["font"]), document_xml)
         self.assertTrue(multi_script_gate_met([0.95] * 4 + [0.94]))
         self.assertFalse(multi_script_gate_met([0.95] * 3 + [0.94] * 2))
+
+    def test_rtl_corpus_document_matches_the_reviewed_oracle(self) -> None:
+        with TemporaryDirectory() as temporary:
+            fixtures = build_multi_script_fixtures(Path(temporary))
+            rtl = fixtures[-1]
+            self.assertEqual(rtl["category"], "bidirectional")
+            with zipfile.ZipFile(Path(rtl["path"])) as archive:
+                document_xml = archive.read("word/document.xml").decode("utf-8")
+            self.assertIn("<w:bidi/>", document_xml)
+            self.assertIn("<w:rtl/>", document_xml)
+            self.assertIn('<w:rtl w:val="0"/>', document_xml)
+            self.assertIn('<w:jc w:val="start"/>', document_xml)
+            self.assertIn('<w:ind w:start="360" w:end="720"/>', document_xml)
+            self.assertIn("ABC 123", document_xml)
 
     def test_missing_expected_artifact_is_a_hard_failure(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -1105,7 +1150,7 @@ except TimeoutError:
         self.assertEqual(payload["revision_view"], REVISION_VIEW)
         self.assertEqual(payload["libreoffice"], SOFFICE_VERSION)
         self.assertEqual(payload["pdftoppm"], PDFTOPPM_VERSION)
-        self.assertEqual(payload["multi_script"]["fixtures"], 4)
+        self.assertEqual(payload["multi_script"]["fixtures"], 5)
         self.assertGreater(payload["multi_script"]["pages"], 0)
         self.assertTrue(payload["multi_script"]["gate_met"])
         self.assertGreaterEqual(payload["multi_script"]["coverage"], COVERAGE_TARGET)

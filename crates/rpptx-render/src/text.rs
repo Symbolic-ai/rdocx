@@ -191,6 +191,7 @@ fn shape_run(
 
     Ok(TextSegment {
         text: rendered_text,
+        direction: oxml_layout::TextDirection::Auto,
         source: None,
         font_id,
         font_size,
@@ -2094,6 +2095,7 @@ mod tests {
     fn horizontal_alignment_and_distribution_use_the_available_line_width() {
         let segment = TextSegment {
             text: "ab".to_owned(),
+            direction: oxml_layout::TextDirection::Auto,
             source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,

@@ -1035,6 +1035,11 @@ fn ppr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_PPr, bool)> 
     {
         tab.source_occurrence = Some(index);
     }
+    // Numbering's raw property overlay is the sole preservation source.
+    // Keeping the same unmodelled children in the typed projection would
+    // duplicate them when canonical properties are merged back into it.
+    ppr.revision_xml.clear();
+    ppr.revision_xml_positions.clear();
     Ok((ppr, has_producer))
 }
 

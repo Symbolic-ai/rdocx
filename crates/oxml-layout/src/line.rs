@@ -3,7 +3,7 @@
 //! Uses a greedy algorithm with unicode-linebreak for break opportunities.
 
 use crate::error::{LayoutError, Result};
-use crate::font::{FontManager, MultilingualTextSegment, TextDirection};
+use crate::font::{FontManager, MultilingualTextSegment, TextDirection, explicit_direction_levels};
 use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId, SourceSpan, StructureId};
 
 /// A tab stop positioned in typographic points.
@@ -137,6 +137,8 @@ pub struct NoteRef {
 #[derive(Debug, Clone)]
 pub struct TextSegment {
     pub text: String,
+    /// Requested character direction before paragraph-wide bidi resolution.
+    pub direction: TextDirection,
     /// Exact source range for this segment, when directly attributable.
     pub source: Option<SourceSpan>,
     pub font_id: FontId,
@@ -619,16 +621,45 @@ pub fn break_multilingual_into_lines(
     base_direction: TextDirection,
 ) -> Result<Vec<LayoutLine>> {
     let mut lines = break_into_lines(items, params, fm)?;
-    let paragraph_text = lines
-        .iter()
-        .flat_map(|line| &line.items)
-        .filter_map(|item| match item {
-            LineItem::Text(segment) => Some(segment.text.as_str()),
-            LineItem::MultilingualText(segment) => Some(segment.text()),
-            _ => None,
-        })
-        .collect::<String>();
-    if paragraph_text.is_empty() {
+    let mut paragraph_text = String::new();
+    let mut line_maps = Vec::with_capacity(lines.len());
+    let mut has_text = false;
+    for line in &lines {
+        let line_start = paragraph_text.len();
+        let mut positions = Vec::new();
+        for (index, item) in line.items.iter().enumerate() {
+            let (text, direction, shaped_level) = match item {
+                LineItem::Text(segment) | LineItem::Marker(segment) => {
+                    (segment.text.as_str(), segment.direction, None)
+                }
+                LineItem::MultilingualText(segment) => (
+                    segment.text(),
+                    segment.base().direction,
+                    Some(unicode_bidi::Level::new(segment.bidi_level()).map_err(|_| {
+                        LayoutError::Layout("rich text carried an invalid bidi level".to_owned())
+                    })?),
+                ),
+                LineItem::Tab { .. } => ("\t", TextDirection::Auto, None),
+                LineItem::Image { .. } | LineItem::Group { .. } | LineItem::Figure { .. } => {
+                    ("\u{fffc}", TextDirection::Auto, None)
+                }
+            };
+            has_text |= !text.is_empty();
+            let start = paragraph_text.len();
+            paragraph_text.push_str(text);
+            let end = paragraph_text.len();
+            positions.push((
+                index,
+                start,
+                end,
+                direction,
+                text.chars().all(char::is_whitespace),
+                shaped_level,
+            ));
+        }
+        line_maps.push((line_start..paragraph_text.len(), positions));
+    }
+    if !has_text {
         return Ok(lines);
     }
     let paragraph_level = match base_direction {
@@ -642,44 +673,38 @@ pub fn break_multilingual_into_lines(
             "multilingual line layout requires one bidi paragraph".to_owned(),
         ));
     };
-    let mut paragraph_offset = 0usize;
-    for line in &mut lines {
-        let positions = line
-            .items
+    for (line, (line_range, mapped_positions)) in lines.iter_mut().zip(line_maps) {
+        let positions = mapped_positions
             .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                matches!(item, LineItem::Text(_) | LineItem::MultilingualText(_)).then_some(index)
-            })
-            .collect::<Vec<_>>();
-        let line_start = paragraph_offset;
-        let span_starts = positions
-            .iter()
-            .map(|index| match &line.items[*index] {
-                LineItem::Text(segment) => {
-                    let start = paragraph_offset;
-                    paragraph_offset += segment.text.len();
-                    start
-                }
-                LineItem::MultilingualText(segment) => {
-                    let start = paragraph_offset;
-                    paragraph_offset += segment.text().len();
-                    start
-                }
-                _ => unreachable!("positions contain only text"),
-            })
+            .map(|(index, _, _, _, _, _)| *index)
             .collect::<Vec<_>>();
         if positions.is_empty() {
             continue;
         }
-        let adjusted_levels = bidi.reordered_levels(paragraph, line_start..paragraph_offset);
-        let levels = span_starts
+        let adjusted_levels = bidi.reordered_levels(paragraph, line_range);
+        let levels = mapped_positions
             .into_iter()
-            .map(|start| {
-                adjusted_levels.get(start).copied().ok_or_else(|| {
+            .map(|(_, start, end, direction, whitespace, shaped_level)| {
+                let adjusted = adjusted_levels.get(start).copied().ok_or_else(|| {
                     LayoutError::Layout(
                         "multilingual line range exceeded its bidi paragraph".to_owned(),
                     )
+                })?;
+                Ok(if whitespace {
+                    adjusted
+                } else if let Some(shaped_level) = shaped_level {
+                    shaped_level
+                } else if direction == TextDirection::Auto {
+                    adjusted
+                } else {
+                    explicit_direction_levels(
+                        &paragraph_text[start..end],
+                        direction,
+                        paragraph.level,
+                    )?
+                    .first()
+                    .copied()
+                    .unwrap_or(adjusted)
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -688,21 +713,15 @@ pub fn break_multilingual_into_lines(
             .iter()
             .zip(&levels)
             .map(|(index, level)| match &line.items[*index] {
-                LineItem::Text(segment) => Ok(LineItem::Text(segment.clone())),
                 LineItem::MultilingualText(segment) => Ok(LineItem::MultilingualText(
                     multilingual_segment_with_level(segment, *level)?,
                 )),
-                _ => unreachable!("positions contain only text"),
+                item => Ok(item.clone()),
             })
             .collect::<Result<Vec<_>>>()?;
         for (visual_slot, logical_index) in positions.into_iter().zip(visual_order) {
             line.items[visual_slot] = logical_items[logical_index].clone();
         }
-    }
-    if paragraph_offset != paragraph_text.len() {
-        return Err(LayoutError::Layout(
-            "multilingual lines did not consume their bidi paragraph".to_owned(),
-        ));
     }
     Ok(lines)
 }
@@ -971,6 +990,7 @@ fn split_text_subsegment(
 
     Ok(InlineItem::Text(TextSegment {
         text: sub_text,
+        direction: seg.direction,
         source,
         font_id: seg.font_id,
         font_size: seg.font_size,
@@ -1092,6 +1112,7 @@ fn generated_hyphen(segment: &TextSegment, spacing: f64, fm: &FontManager) -> Re
     shaped.width += spacing * shaped.advances.len() as f64;
     Ok(TextSegment {
         text: "-".to_owned(),
+        direction: segment.direction,
         source: None,
         font_id: segment.font_id,
         font_size: segment.font_size,
@@ -1333,6 +1354,7 @@ fn shape_leader(
 
     Some(TextSegment {
         text: leader_text,
+        direction: TextDirection::Auto,
         source: None,
         font_id,
         font_size,
@@ -1479,6 +1501,7 @@ mod tests {
     fn make_text_segment(text: &str, width: f64) -> TextSegment {
         TextSegment {
             text: text.to_string(),
+            direction: TextDirection::Auto,
             source: None,
             font_id: FontId(0),
             font_size: 12.0,
@@ -1518,6 +1541,7 @@ mod tests {
         shaped.width += spacing * shaped.advances.len() as f64;
         TextSegment {
             text: text.to_owned(),
+            direction: TextDirection::Auto,
             source: None,
             font_id,
             font_size: 30.0,
@@ -1701,6 +1725,204 @@ mod tests {
                 ("אבג", 2, 1)
             ]
         );
+    }
+
+    #[test]
+    fn explicit_run_directions_reorder_with_the_rtl_paragraph_once() {
+        let mut fm = deterministic_font_manager();
+        let mut arabic = shaped_text_segment(&mut fm, "العربية ", 0.0);
+        arabic.direction = TextDirection::RightToLeft;
+        let mut latin = shaped_text_segment(&mut fm, "ABC 123", 0.0);
+        latin.direction = TextDirection::LeftToRight;
+        let rich = fm
+            .shape_multilingual_paragraph(
+                vec![
+                    (arabic, Some("ar-SA".to_owned())),
+                    (latin, Some("en-US".to_owned())),
+                ],
+                TextDirection::RightToLeft,
+                false,
+            )
+            .unwrap();
+        let lines = break_multilingual_into_lines(
+            &rich
+                .into_iter()
+                .map(InlineItem::MultilingualText)
+                .collect::<Vec<_>>(),
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::RightToLeft,
+        )
+        .unwrap();
+
+        let visual = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) => {
+                    Some((span.text(), span.bidi_level(), span.base().direction))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visual.iter().map(|span| span.0).collect::<String>(),
+            "ABC 123 العربية",
+            "{visual:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_rtl_run_retains_numeric_levels_and_line_local_whitespace_reset() {
+        let mut fm = deterministic_font_manager();
+        let node = crate::SourceNodeId::new(13).unwrap();
+        let mut segment = shaped_text_segment(&mut fm, "אבג 123   ", 0.0);
+        segment.direction = TextDirection::RightToLeft;
+        segment.source = Some(SourceSpan {
+            node,
+            char_start: 40,
+            char_end: 50,
+        });
+        let rich = fm
+            .shape_multilingual_paragraph(
+                vec![(segment, Some("he-IL".to_owned()))],
+                TextDirection::LeftToRight,
+                false,
+            )
+            .unwrap();
+        assert!(
+            rich.iter()
+                .any(|span| span.text() == "123" && span.bidi_level() == 2),
+            "numeric span must retain its higher even level: {:?}",
+            rich.iter()
+                .map(|span| (span.text(), span.bidi_level()))
+                .collect::<Vec<_>>()
+        );
+
+        let lines = break_multilingual_into_lines(
+            &rich
+                .into_iter()
+                .map(InlineItem::MultilingualText)
+                .collect::<Vec<_>>(),
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::LeftToRight,
+        )
+        .unwrap();
+        let spans = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) => Some(span),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(spans.iter().any(|span| {
+            span.text().chars().all(char::is_whitespace) && span.bidi_level() == 0
+        }));
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.base().source.unwrap().node == node)
+        );
+    }
+
+    #[test]
+    fn inline_object_participates_in_rtl_visual_order_without_changing_text_source() {
+        let mut fm = deterministic_font_manager();
+        let node = crate::SourceNodeId::new(14).unwrap();
+        let mut segment = shaped_text_segment(&mut fm, "אבג", 0.0);
+        segment.source = Some(SourceSpan {
+            node,
+            char_start: 8,
+            char_end: 11,
+        });
+        let mut rich = fm
+            .shape_multilingual_text(segment, Some("he-IL"), TextDirection::RightToLeft, false)
+            .unwrap();
+        assert_eq!(rich.len(), 1);
+        let items = vec![
+            InlineItem::MultilingualText(rich.remove(0)),
+            InlineItem::Image {
+                width: 12.0,
+                height: 12.0,
+                media_id: MediaId(77),
+            },
+        ];
+
+        let lines = break_multilingual_into_lines(
+            &items,
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::RightToLeft,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            lines[0].items[0],
+            LineItem::Image {
+                media_id: MediaId(77),
+                ..
+            }
+        ));
+        let LineItem::MultilingualText(text) = &lines[0].items[1] else {
+            panic!("RTL text must paint after the inline object")
+        };
+        assert_eq!(text.text(), "אבג");
+        assert_eq!(
+            text.base().source.unwrap(),
+            SourceSpan {
+                node,
+                char_start: 8,
+                char_end: 11,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_rtl_hyphenatable_latin_spans_keep_their_natural_even_levels() {
+        let mut fm = deterministic_font_manager();
+        let mut letters = shaped_text_segment(&mut fm, "ABC ", 0.0);
+        letters.direction = TextDirection::RightToLeft;
+        let mut digits = shaped_text_segment(&mut fm, "123", 0.0);
+        digits.direction = TextDirection::RightToLeft;
+        let lines = break_multilingual_into_lines(
+            &[
+                InlineItem::HyphenatedText {
+                    segment: letters,
+                    language: "en-US".to_owned(),
+                },
+                InlineItem::HyphenatedText {
+                    segment: digits,
+                    language: "en-US".to_owned(),
+                },
+            ],
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::LeftToRight,
+        )
+        .unwrap();
+        let visual = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::Text(segment) => Some(segment.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(visual, "ABC 123");
     }
 
     #[test]

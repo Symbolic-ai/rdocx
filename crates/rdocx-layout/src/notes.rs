@@ -15,11 +15,13 @@ use std::collections::HashMap;
 use rdocx_oxml::styles::CT_Styles;
 
 use crate::WordStory;
-use crate::engine::{SourceRegistry, layout_paragraph_with_source};
+use crate::block::ParagraphBlock;
+use crate::engine::{SourceRegistry, layout_paragraph_with_source_and_direction};
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
 use oxml_layout::{
-    Color, Diagnostic, FontManager, LayoutLine, NoteRef, NoteStream, Result, TextSegment,
+    Color, Diagnostic, FontManager, LayoutLine, NoteRef, NoteStream, Result, TextDirection,
+    TextSegment,
 };
 
 /// Point size notes are set at.
@@ -80,8 +82,21 @@ type NoteKey = (NoteRef, u64);
 /// Every note the document defines, laid out once per distinct width.
 #[derive(Debug, Clone, Default)]
 pub struct NoteRegistry {
-    notes: HashMap<NoteKey, NoteLayout>,
+    notes: HashMap<NoteKey, NoteEntry>,
     continuation_separator: bool,
+}
+
+#[derive(Debug, Clone)]
+struct NoteEntry {
+    layout: NoteLayout,
+    paragraphs: Vec<NoteRenderParagraph>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NoteRenderParagraph {
+    pub block: ParagraphBlock,
+    pub direction: TextDirection,
+    pub lines: std::ops::Range<usize>,
 }
 
 impl NoteRegistry {
@@ -151,6 +166,7 @@ impl NoteRegistry {
 
                     let mut lines = Vec::new();
                     let mut revision_ranges = Vec::new();
+                    let mut render_paragraphs = Vec::new();
                     let story = match kind {
                         NoteStream::Footnote => WordStory::Footnote { id: note.id },
                         NoteStream::Endnote => WordStory::Endnote { id: note.id },
@@ -158,7 +174,7 @@ impl NoteRegistry {
                     for (paragraph_index, paragraph) in note.paragraphs.iter().enumerate() {
                         let source =
                             sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
-                        let block = layout_paragraph_with_source(
+                        let (block, direction) = layout_paragraph_with_source_and_direction(
                             paragraph,
                             note_width,
                             styles,
@@ -173,7 +189,13 @@ impl NoteRegistry {
                         if block.has_visible_revision && !block.lines.is_empty() {
                             revision_ranges.push(first..first + block.lines.len());
                         }
-                        lines.extend(block.lines);
+                        lines.extend(block.lines.iter().cloned());
+                        let last = lines.len();
+                        render_paragraphs.push(NoteRenderParagraph {
+                            block,
+                            direction,
+                            lines: first..last,
+                        });
                     }
 
                     let Some(marker) = shape_marker(note.id, fm)? else {
@@ -182,11 +204,14 @@ impl NoteRegistry {
 
                     notes.insert(
                         key,
-                        NoteLayout {
-                            marker,
-                            marker_rise: NOTE_FONT_SIZE * 0.33,
-                            lines,
-                            revision_ranges,
+                        NoteEntry {
+                            layout: NoteLayout {
+                                marker,
+                                marker_rise: NOTE_FONT_SIZE * 0.33,
+                                lines,
+                                revision_ranges,
+                            },
+                            paragraphs: render_paragraphs,
                         },
                     );
                 }
@@ -201,7 +226,19 @@ impl NoteRegistry {
 
     /// The note as broken for a section of this content width.
     pub fn get(&self, note: NoteRef, content_width: f64) -> Option<&NoteLayout> {
-        self.notes.get(&(note, content_width.to_bits()))
+        self.notes
+            .get(&(note, content_width.to_bits()))
+            .map(|entry| &entry.layout)
+    }
+
+    pub(crate) fn get_render(
+        &self,
+        note: NoteRef,
+        content_width: f64,
+    ) -> Option<(&NoteLayout, &[NoteRenderParagraph])> {
+        self.notes
+            .get(&(note, content_width.to_bits()))
+            .map(|entry| (&entry.layout, entry.paragraphs.as_slice()))
     }
 
     /// Whether either stream defined the rule drawn above a carried note.
@@ -225,6 +262,7 @@ fn shape_marker(id: i32, fm: &mut FontManager) -> Result<Option<TextSegment>> {
 
     Ok(Some(TextSegment {
         text,
+        direction: oxml_layout::TextDirection::Auto,
         source: None,
         font_id,
         font_size: size,

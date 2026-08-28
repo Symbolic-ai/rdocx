@@ -28,7 +28,7 @@ use crate::block::{
 use crate::convert;
 use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::notes::NoteRegistry;
-use crate::paginator::{self, HeaderFooterContent, PageGeometry};
+use crate::paginator::{self, HeaderFooterContent, HeaderFooterSemantics, PageGeometry};
 use crate::style_resolver::{self, NumberingState};
 use crate::table;
 use crate::{WordSourcePath, WordStory};
@@ -45,6 +45,7 @@ struct WordMultilingualStyle {
     language: Option<String>,
     language_east_asia: Option<String>,
     language_bidi: Option<String>,
+    direction: TextDirection,
     spacing: f64,
 }
 
@@ -651,6 +652,7 @@ struct ParagraphCacheEntry {
     block: Arc<ParagraphBlock>,
     diagnostics: Vec<Diagnostic>,
     font_trace: Vec<FontId>,
+    reflow_direction: TextDirection,
     bytes: usize,
 }
 
@@ -666,6 +668,7 @@ struct TableCacheEntry {
     fingerprint: u64,
     key: TableCacheKey,
     block: Arc<table::TableBlock>,
+    semantics: TableSemantics,
     diagnostics: Vec<Diagnostic>,
     font_trace: Vec<FontId>,
     bytes: usize,
@@ -691,6 +694,7 @@ struct HeaderFooterCacheKey {
 #[derive(Clone)]
 struct HeaderFooterVariantContent {
     blocks: Vec<ParagraphBlock>,
+    directions: Vec<TextDirection>,
     watermark: Option<GroupElement>,
 }
 
@@ -1239,7 +1243,7 @@ impl Engine {
                     if let Some(level) = detect_heading_level(para, styles) {
                         let heading_text = projected_paragraph_text(para, input.revision_view);
                         let replacement = match &mut block {
-                            SharedLayoutBlock::Owned(block) => match block.as_mut() {
+                            SharedLayoutBlock::Owned { block, .. } => match block.as_mut() {
                                 LayoutBlock::Paragraph(paragraph) => {
                                     paragraph.heading_level = Some(level);
                                     paragraph.heading_text = Some(heading_text);
@@ -1255,9 +1259,10 @@ impl Engine {
                                 rebind_paragraph_source(&mut paragraph, semantics.source_node)?;
                                 paragraph.heading_level = Some(level);
                                 paragraph.heading_text = Some(heading_text);
-                                Some(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(
-                                    paragraph,
-                                ))))
+                                Some(SharedLayoutBlock::Owned {
+                                    block: Box::new(LayoutBlock::Paragraph(paragraph)),
+                                    reflow_direction: semantics.reflow_direction,
+                                })
                             }
                             SharedLayoutBlock::Table { .. } => unreachable!(),
                         };
@@ -1282,10 +1287,15 @@ impl Engine {
                             sources,
                         )?;
                         let title_pg = sect_pr.title_pg.unwrap_or(false);
+                        let (header_footer, header_footer_semantics) = header_footer
+                            .map_or((None, None), |(content, semantics)| {
+                                (Some(content), Some(semantics))
+                            });
                         sections.push(paginator::SharedSection {
                             blocks: std::mem::take(&mut current_blocks),
                             geometry,
                             header_footer,
+                            header_footer_semantics,
                             title_pg,
                             page_number_start: section_page_number_start(&sect_pr),
                         });
@@ -1327,10 +1337,15 @@ impl Engine {
             sources,
         )?;
         let final_title_pg = final_sect_pr.title_pg.unwrap_or(false);
+        let (final_hf, final_hf_semantics) = final_hf
+            .map_or((None, None), |(content, semantics)| {
+                (Some(content), Some(semantics))
+            });
         sections.push(paginator::SharedSection {
             blocks: current_blocks,
             geometry: final_geometry,
             header_footer: final_hf,
+            header_footer_semantics: final_hf_semantics,
             title_pg: final_title_pg,
             page_number_start: section_page_number_start(&final_sect_pr),
         });
@@ -1347,7 +1362,7 @@ impl Engine {
                     SharedLayoutBlock::Table { block, .. } if Arc::strong_count(block) >= 2 => {
                         (paragraphs, tables + 1)
                     }
-                    SharedLayoutBlock::Owned(_)
+                    SharedLayoutBlock::Owned { .. }
                     | SharedLayoutBlock::Paragraph { .. }
                     | SharedLayoutBlock::Table { .. } => (paragraphs, tables),
                 });
@@ -1868,7 +1883,7 @@ impl Engine {
             // by later blocks. The conservative boundary is the first such
             // block, after which no retained block is read in this layout.
             self.paragraph_cache_reads_enabled = false;
-            return layout_paragraph_with_source(
+            let (block, reflow_direction) = layout_paragraph_with_source_and_direction(
                 paragraph,
                 content_width,
                 styles,
@@ -1878,8 +1893,11 @@ impl Engine {
                 numbering,
                 diagnostics,
                 source_node,
-            )
-            .map(|block| SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(block))));
+            )?;
+            return Ok(SharedLayoutBlock::Owned {
+                block: Box::new(LayoutBlock::Paragraph(block)),
+                reflow_direction,
+            });
         }
 
         let fingerprint = paragraph_fingerprint(paragraph);
@@ -1900,13 +1918,14 @@ impl Engine {
                 semantics: ParagraphSemantics {
                     source_node,
                     structure_id: None,
+                    reflow_direction: entry.reflow_direction,
                 },
             });
         }
 
         let diagnostics_start = diagnostics.len();
         self.font_manager.begin_paragraph_font_trace();
-        let block_result = layout_paragraph_with_source(
+        let block_result = layout_paragraph_with_source_and_direction(
             paragraph,
             content_width,
             styles,
@@ -1918,7 +1937,7 @@ impl Engine {
             Some(CACHE_SOURCE_NODE),
         );
         let font_trace = self.font_manager.finish_paragraph_font_trace();
-        let mut block = block_result?;
+        let (mut block, reflow_direction) = block_result?;
         self.paragraph_cache_builds += 1;
 
         let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
@@ -1940,6 +1959,7 @@ impl Engine {
                 block: Arc::clone(&block),
                 diagnostics: cached_diagnostics,
                 font_trace,
+                reflow_direction,
                 bytes,
             });
             return Ok(SharedLayoutBlock::Paragraph {
@@ -1947,14 +1967,16 @@ impl Engine {
                 semantics: ParagraphSemantics {
                     source_node,
                     structure_id: None,
+                    reflow_direction,
                 },
             });
         }
 
         rebind_paragraph_source(&mut block, source_node)?;
-        Ok(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(
-            block,
-        ))))
+        Ok(SharedLayoutBlock::Owned {
+            block: Box::new(LayoutBlock::Paragraph(block)),
+            reflow_direction,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1986,7 +2008,10 @@ impl Engine {
                 story,
                 path,
             )
-            .map(|block| SharedLayoutBlock::Owned(Box::new(LayoutBlock::Table(block))));
+            .map(|(block, semantics)| SharedLayoutBlock::Table {
+                block: Arc::new(block),
+                semantics,
+            });
         }
 
         let fingerprint = table_fingerprint(table);
@@ -2005,7 +2030,14 @@ impl Engine {
             self.table_cache_hits += 1;
             return Ok(SharedLayoutBlock::Table {
                 block: Arc::clone(&entry.block),
-                semantics: table_semantics(table, entry.block.as_ref(), sources, story, path),
+                semantics: table_semantics(
+                    table,
+                    entry.block.as_ref(),
+                    &entry.semantics,
+                    sources,
+                    story,
+                    path,
+                ),
             });
         }
 
@@ -2025,8 +2057,7 @@ impl Engine {
             path,
         );
         let font_trace = self.font_manager.finish_paragraph_font_trace();
-        let mut block = block_result?;
-        let semantics = table_semantics(table, &block, sources, story, path);
+        let (mut block, semantics) = block_result?;
         self.table_cache_builds += 1;
 
         let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
@@ -2038,22 +2069,29 @@ impl Engine {
                 revision_view: input.revision_view,
                 with_provenance: sources.is_some(),
             };
-            let bytes =
-                table_cache_entry_bytes(&key, &block, &cached_diagnostics, font_trace.len());
+            let bytes = table_cache_entry_bytes(
+                &key,
+                &block,
+                &semantics,
+                &cached_diagnostics,
+                font_trace.len(),
+            );
             let block = Arc::new(block);
             self.stage_table_cache_entry(TableCacheEntry {
                 fingerprint,
                 key,
                 block: Arc::clone(&block),
+                semantics: semantics.clone(),
                 diagnostics: cached_diagnostics,
                 font_trace,
                 bytes,
             });
             return Ok(SharedLayoutBlock::Table { block, semantics });
         }
-        Ok(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Table(
-            block,
-        ))))
+        Ok(SharedLayoutBlock::Table {
+            block: Arc::new(block),
+            semantics,
+        })
     }
 
     #[cfg(test)]
@@ -2464,6 +2502,7 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
 fn table_semantics(
     table: &CT_Tbl,
     block: &table::TableBlock,
+    retained: &TableSemantics,
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     table_path: &[usize],
@@ -2472,39 +2511,48 @@ fn table_semantics(
         .rows
         .iter()
         .zip(&block.rows)
+        .zip(&retained.rows)
         .enumerate()
-        .map(|(row_index, (row, block_row))| {
+        .map(|(row_index, ((row, block_row), retained_row))| {
             let cells = row
                 .cells
                 .iter()
                 .zip(&block_row.cells)
+                .zip(&retained_row.cells)
                 .enumerate()
-                .map(|(cell_index, (cell, block_cell))| {
+                .map(|(cell_index, ((cell, block_cell), retained_cell))| {
                     let blocks = cell
                         .content
                         .iter()
                         .zip(&block_cell.blocks)
+                        .zip(&retained_cell.blocks)
                         .enumerate()
-                        .map(|(content_index, (content, block_item))| {
+                        .map(|(content_index, ((content, block_item), retained_item))| {
                             let mut source_path = table_path.to_vec();
                             source_path.extend([row_index, cell_index, content_index]);
-                            match (content, block_item) {
-                                (CellContent::Paragraph(_), table::CellBlock::Paragraph(_)) => {
-                                    CellBlockSemantics::Paragraph(ParagraphSemantics {
-                                        source_node: sources
-                                            .and_then(|sources| sources.id(story, &source_path)),
-                                        structure_id: None,
-                                    })
-                                }
-                                (CellContent::Table(table), table::CellBlock::Table(block)) => {
-                                    CellBlockSemantics::Table(table_semantics(
-                                        table,
-                                        block,
-                                        sources,
-                                        story,
-                                        &source_path,
-                                    ))
-                                }
+                            match (content, block_item, retained_item) {
+                                (
+                                    CellContent::Paragraph(_),
+                                    table::CellBlock::Paragraph(_),
+                                    CellBlockSemantics::Paragraph(retained),
+                                ) => CellBlockSemantics::Paragraph(ParagraphSemantics {
+                                    source_node: sources
+                                        .and_then(|sources| sources.id(story, &source_path)),
+                                    structure_id: None,
+                                    reflow_direction: retained.reflow_direction,
+                                }),
+                                (
+                                    CellContent::Table(table),
+                                    table::CellBlock::Table(block),
+                                    CellBlockSemantics::Table(retained),
+                                ) => CellBlockSemantics::Table(table_semantics(
+                                    table,
+                                    block,
+                                    retained,
+                                    sources,
+                                    story,
+                                    &source_path,
+                                )),
                                 _ => unreachable!("cache-safe table topology stays aligned"),
                             }
                         })
@@ -2537,6 +2585,7 @@ fn canonicalize_table_sources(block: &mut table::TableBlock) -> Result<()> {
 fn table_cache_entry_bytes(
     key: &TableCacheKey,
     block: &table::TableBlock,
+    semantics: &TableSemantics,
     diagnostics: &[Diagnostic],
     font_trace_len: usize,
 ) -> usize {
@@ -2552,9 +2601,37 @@ fn table_cache_entry_bytes(
     std::mem::size_of::<TableCacheEntry>()
         .saturating_add(table_key_retained_bytes(&key.table))
         .saturating_add(table_block_retained_bytes(block))
+        .saturating_add(table_semantics_retained_bytes(semantics))
         .saturating_add(2 * std::mem::size_of::<usize>())
         .saturating_add(font_trace_len.saturating_mul(std::mem::size_of::<FontId>()))
         .saturating_add(diagnostic_bytes)
+}
+
+fn table_semantics_retained_bytes(semantics: &TableSemantics) -> usize {
+    let mut bytes = semantics
+        .rows
+        .capacity()
+        .saturating_mul(std::mem::size_of::<block::RowSemantics>());
+    for row in &semantics.rows {
+        bytes = bytes.saturating_add(
+            row.cells
+                .capacity()
+                .saturating_mul(std::mem::size_of::<block::CellSemantics>()),
+        );
+        for cell in &row.cells {
+            bytes = bytes.saturating_add(
+                cell.blocks
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CellBlockSemantics>()),
+            );
+            for block in &cell.blocks {
+                if let CellBlockSemantics::Table(table) = block {
+                    bytes = bytes.saturating_add(table_semantics_retained_bytes(table));
+                }
+            }
+        }
+    }
+    bytes
 }
 
 fn paragraph_key_retained_bytes(paragraph: &CT_P) -> usize {
@@ -3340,6 +3417,9 @@ fn rebind_paragraph_source(
                 InlineItem::MultilingualText(text) => {
                     rebind_multilingual_source(text, source_node)?
                 }
+                InlineItem::HyphenatedText { segment, .. } => {
+                    rebind_text_source(segment, source_node)
+                }
                 _ => {}
             }
         }
@@ -3383,6 +3463,10 @@ fn header_footer_cache_entry_bytes(
         .zip(&content.blocks)
         .map(|(paragraph, block)| paragraph_cache_entry_bytes(paragraph, block, &[], 0))
         .fold(0usize, usize::saturating_add);
+    let direction_bytes = content
+        .directions
+        .capacity()
+        .saturating_mul(std::mem::size_of::<TextDirection>());
     let diagnostic_bytes = diagnostics
         .capacity()
         .saturating_mul(std::mem::size_of::<Diagnostic>())
@@ -3546,6 +3630,7 @@ fn header_footer_cache_entry_bytes(
         .saturating_add(paragraph_raw_capacity)
         .saturating_add(watermark_capacity)
         .saturating_add(block_bytes)
+        .saturating_add(direction_bytes)
         .saturating_add(watermark_bytes)
         .saturating_add(diagnostic_bytes)
         .saturating_add(
@@ -4027,7 +4112,7 @@ fn assign_shared_document_structure(
                     lists.clear();
                     assign_shared_table_structure(&mut builder, block, semantics, root);
                 }
-                SharedLayoutBlock::Owned(block) => match block.as_mut() {
+                SharedLayoutBlock::Owned { block, .. } => match block.as_mut() {
                     LayoutBlock::Paragraph(paragraph) => {
                         assign_owned_paragraph_structure(&mut builder, paragraph, root, &mut lists);
                     }
@@ -4372,7 +4457,37 @@ pub(crate) fn layout_paragraph_with_source(
         diagnostics,
         source_node,
         None,
+        None,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn layout_paragraph_with_source_and_direction(
+    para: &CT_P,
+    available_width: f64,
+    styles: &CT_Styles,
+    input: &LayoutInput,
+    media: &MediaRegistry,
+    fm: &mut FontManager,
+    num_state: &mut NumberingState,
+    diagnostics: &mut Vec<Diagnostic>,
+    source_node: Option<SourceNodeId>,
+) -> Result<(ParagraphBlock, TextDirection)> {
+    let mut direction = TextDirection::Auto;
+    let block = layout_paragraph_with_source_and_table(
+        para,
+        available_width,
+        styles,
+        input,
+        media,
+        fm,
+        num_state,
+        diagnostics,
+        source_node,
+        None,
+        Some(&mut direction),
+    )?;
+    Ok((block, direction))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4387,8 +4502,9 @@ pub(crate) fn layout_paragraph_with_source_in_table(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
-) -> Result<ParagraphBlock> {
-    layout_paragraph_with_source_and_table(
+) -> Result<(ParagraphBlock, TextDirection)> {
+    let mut direction = TextDirection::Auto;
+    let block = layout_paragraph_with_source_and_table(
         para,
         available_width,
         styles,
@@ -4399,7 +4515,9 @@ pub(crate) fn layout_paragraph_with_source_in_table(
         diagnostics,
         source_node,
         table_properties,
-    )
+        Some(&mut direction),
+    )?;
+    Ok((block, direction))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4414,6 +4532,7 @@ fn layout_paragraph_with_source_and_table(
     diagnostics: &mut Vec<Diagnostic>,
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
+    reflow_direction_out: Option<&mut TextDirection>,
 ) -> Result<ParagraphBlock> {
     // Resolve paragraph properties
     let para_style_id = para.properties.as_ref().and_then(|p| p.style_id.as_deref());
@@ -4451,13 +4570,15 @@ fn layout_paragraph_with_source_and_table(
     // Convert paragraph properties to layout values
     let space_before = effective_ppr.space_before.map(|t| t.to_pt()).unwrap_or(0.0);
     let space_after = effective_ppr.space_after.map(|t| t.to_pt()).unwrap_or(0.0);
-    let ind_left = effective_ppr.ind_left.map(|t| t.to_pt()).unwrap_or(0.0);
-    let ind_right = effective_ppr.ind_right.map(|t| t.to_pt()).unwrap_or(0.0);
+    let base_direction = match effective_ppr.bidi {
+        Some(true) => TextDirection::RightToLeft,
+        Some(false) => TextDirection::LeftToRight,
+        None => TextDirection::Auto,
+    };
     let keep_next = effective_ppr.keep_next.unwrap_or(false);
     let keep_lines = effective_ppr.keep_lines.unwrap_or(false);
     let page_break_before = effective_ppr.page_break_before.unwrap_or(false);
     let widow_control = effective_ppr.widow_control.unwrap_or(true);
-    let jc = convert::alignment(effective_ppr.jc);
     let automatic_hyphenation =
         input.automatic_hyphenation && effective_ppr.suppress_auto_hyphens != Some(true);
 
@@ -4507,6 +4628,7 @@ fn layout_paragraph_with_source_and_table(
 
                 inline_items.push(InlineItem::Marker(TextSegment {
                     text: marker.marker_text,
+                    direction: TextDirection::Auto,
                     source: None,
                     font_id,
                     font_size: marker_font_size,
@@ -4535,6 +4657,7 @@ fn layout_paragraph_with_source_and_table(
                         let shaped = fm.shape_text(font_id, " ", marker_font_size)?;
                         inline_items.push(InlineItem::Text(TextSegment {
                             text: " ".to_owned(),
+                            direction: TextDirection::Auto,
                             source: None,
                             font_id,
                             font_size: marker_font_size,
@@ -4719,6 +4842,7 @@ fn layout_paragraph_with_source_and_table(
 
                     let segment = TextSegment {
                         text,
+                        direction: TextDirection::Auto,
                         source,
                         font_id,
                         font_size,
@@ -4747,6 +4871,7 @@ fn layout_paragraph_with_source_and_table(
                             language: effective_rpr.language.clone(),
                             language_east_asia: effective_rpr.language_east_asia.clone(),
                             language_bidi: effective_rpr.language_bidi.clone(),
+                            direction: word_text_direction(effective_rpr.rtl),
                             spacing: effective_rpr.spacing.map_or(0.0, |value| value.to_pt()),
                         },
                     );
@@ -4950,6 +5075,7 @@ fn layout_paragraph_with_source_and_table(
                                         language: segment_rpr.language.clone(),
                                         language_east_asia: segment_rpr.language_east_asia.clone(),
                                         language_bidi: segment_rpr.language_bidi.clone(),
+                                        direction: word_text_direction(segment_rpr.rtl),
                                         spacing: segment_rpr
                                             .spacing
                                             .map_or(0.0, |value| value.to_pt()),
@@ -4957,6 +5083,7 @@ fn layout_paragraph_with_source_and_table(
                                 );
                                 inline_items.push(InlineItem::Text(TextSegment {
                                     text,
+                                    direction: word_text_direction(segment_rpr.rtl),
                                     source: None,
                                     font_id: segment_font_id,
                                     font_size: segment_font_size,
@@ -5003,6 +5130,7 @@ fn layout_paragraph_with_source_and_table(
                         && projected.ordinary_run_index.is_none();
                     inline_items.push(InlineItem::Text(TextSegment {
                         text: marker,
+                        direction: TextDirection::Auto,
                         source: None,
                         font_id,
                         font_size: sup_size,
@@ -5057,6 +5185,7 @@ fn layout_paragraph_with_source_and_table(
         let metrics = fm.metrics(font_id, font_size)?;
         inline_items.push(InlineItem::Text(TextSegment {
             text: String::new(),
+            direction: TextDirection::Auto,
             source: source_node.map(|node| SourceSpan {
                 node,
                 char_start: 0,
@@ -5084,8 +5213,38 @@ fn layout_paragraph_with_source_and_table(
         }));
     }
 
+    let layout_direction = match base_direction {
+        TextDirection::Auto => inferred_word_base_direction(&inline_items),
+        direction => direction,
+    };
+    if let Some(reflow_direction_out) = reflow_direction_out {
+        *reflow_direction_out = layout_direction;
+    }
+    let logical_left = match layout_direction {
+        TextDirection::RightToLeft => effective_ppr.ind_end,
+        TextDirection::Auto | TextDirection::LeftToRight => effective_ppr.ind_start,
+    };
+    let logical_right = match layout_direction {
+        TextDirection::RightToLeft => effective_ppr.ind_start,
+        TextDirection::Auto | TextDirection::LeftToRight => effective_ppr.ind_end,
+    };
+    let ind_left = effective_ppr
+        .ind_left
+        .or(logical_left)
+        .map(|t| t.to_pt())
+        .unwrap_or(0.0);
+    let ind_right = effective_ppr
+        .ind_right
+        .or(logical_right)
+        .map(|t| t.to_pt())
+        .unwrap_or(0.0);
+    let jc = convert::alignment_for_direction(effective_ppr.jc, layout_direction);
+
     // Line breaking
-    let line_params = convert::line_break_params(&effective_ppr, available_width);
+    let mut line_params = convert::line_break_params(&effective_ppr, available_width);
+    line_params.ind_left = ind_left;
+    line_params.ind_right = ind_right;
+    line_params.jc = jc;
 
     let legacy_empty_line = if attributed_empty_paragraph
         && direct_ppr
@@ -5099,10 +5258,14 @@ fn layout_paragraph_with_source_and_table(
         None
     };
 
-    let uses_multilingual_layout = inline_items.iter().any(|item| {
-        multilingual_candidate(item)
-            .is_some_and(|segment| needs_word_multilingual_layout(&segment.text))
-    });
+    let uses_multilingual_layout = base_direction != TextDirection::Auto
+        || multilingual_styles
+            .values()
+            .any(|style| style.direction != TextDirection::Auto)
+        || inline_items.iter().any(|item| {
+            multilingual_candidate(item)
+                .is_some_and(|segment| needs_word_multilingual_layout(&segment.text))
+        });
     let uses_exact_word_baseline = uses_multilingual_layout
         && effective_ppr.line_rule.as_deref() == Some("exact")
         && effective_ppr.line_spacing.is_some();
@@ -5111,12 +5274,13 @@ fn layout_paragraph_with_source_and_table(
             fm,
             inline_items,
             &multilingual_styles,
+            layout_direction,
             !line_params.wrap,
             uses_exact_word_baseline,
         )?;
     }
     let mut lines = if uses_multilingual_layout {
-        break_multilingual_into_lines(&inline_items, &line_params, fm, TextDirection::Auto)?
+        break_multilingual_into_lines(&inline_items, &line_params, fm, layout_direction)?
     } else {
         break_into_lines(&inline_items, &line_params, fm)?
     };
@@ -5194,6 +5358,7 @@ fn push_targeted_bookmark_markers(
 fn push_bookmark_marker(items: &mut Vec<InlineItem>, target: usize, font_id: oxml_layout::FontId) {
     items.push(InlineItem::Text(TextSegment {
         text: "\u{2060}".to_owned(),
+        direction: TextDirection::Auto,
         source: None,
         font_id,
         font_size: 1.0,
@@ -5592,6 +5757,12 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     if direct.ind_right.is_some() {
         effective.ind_right = direct.ind_right;
     }
+    if direct.ind_start.is_some() {
+        effective.ind_start = direct.ind_start;
+    }
+    if direct.ind_end.is_some() {
+        effective.ind_end = direct.ind_end;
+    }
     if direct.ind_first_line.is_some() {
         effective.ind_first_line = direct.ind_first_line;
     }
@@ -5612,6 +5783,9 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     }
     if direct.suppress_auto_hyphens.is_some() {
         effective.suppress_auto_hyphens = direct.suppress_auto_hyphens;
+    }
+    if direct.bidi.is_some() {
+        effective.bidi = direct.bidi;
     }
     if direct.borders.is_some() {
         effective.borders = direct.borders.clone();
@@ -5831,7 +6005,7 @@ fn layout_header_footer(
     num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
     sources: Option<&SourceRegistry>,
-) -> Result<Option<HeaderFooterContent>> {
+) -> Result<Option<(HeaderFooterContent, HeaderFooterSemantics)>> {
     let mut has_content = false;
     let mut header_blocks = Vec::new();
     let mut footer_blocks = Vec::new();
@@ -5839,6 +6013,12 @@ fn layout_header_footer(
     let mut first_footer_blocks = Vec::new();
     let mut even_header_blocks = Vec::new();
     let mut even_footer_blocks = Vec::new();
+    let mut header_directions = Vec::new();
+    let mut footer_directions = Vec::new();
+    let mut first_header_directions = Vec::new();
+    let mut first_footer_directions = Vec::new();
+    let mut even_header_directions = Vec::new();
+    let mut even_footer_directions = Vec::new();
     let mut watermark = None;
     let mut first_watermark = None;
     let mut even_watermark = None;
@@ -5851,10 +6031,18 @@ fn layout_header_footer(
     let width = geometry.content_width();
 
     for href in &sect_pr.header_refs {
-        let (target_blocks, target_watermark) = match href.hdr_ftr_type {
-            HdrFtrType::Default => (&mut header_blocks, &mut watermark),
-            HdrFtrType::First => (&mut first_header_blocks, &mut first_watermark),
-            HdrFtrType::Even => (&mut even_header_blocks, &mut even_watermark),
+        let (target_blocks, target_directions, target_watermark) = match href.hdr_ftr_type {
+            HdrFtrType::Default => (&mut header_blocks, &mut header_directions, &mut watermark),
+            HdrFtrType::First => (
+                &mut first_header_blocks,
+                &mut first_header_directions,
+                &mut first_watermark,
+            ),
+            HdrFtrType::Even => (
+                &mut even_header_blocks,
+                &mut even_header_directions,
+                &mut even_watermark,
+            ),
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
             let content = layout_header_footer_variant(
@@ -5874,6 +6062,7 @@ fn layout_header_footer(
                 geometry,
             )?;
             target_blocks.extend(content.blocks);
+            target_directions.extend(content.directions);
             if target_watermark.is_none() {
                 *target_watermark = content.watermark;
             }
@@ -5882,10 +6071,10 @@ fn layout_header_footer(
     }
 
     for fref in &sect_pr.footer_refs {
-        let target_blocks = match fref.hdr_ftr_type {
-            HdrFtrType::Default => &mut footer_blocks,
-            HdrFtrType::First => &mut first_footer_blocks,
-            HdrFtrType::Even => &mut even_footer_blocks,
+        let (target_blocks, target_directions) = match fref.hdr_ftr_type {
+            HdrFtrType::Default => (&mut footer_blocks, &mut footer_directions),
+            HdrFtrType::First => (&mut first_footer_blocks, &mut first_footer_directions),
+            HdrFtrType::Even => (&mut even_footer_blocks, &mut even_footer_directions),
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
             let content = layout_header_footer_variant(
@@ -5905,23 +6094,34 @@ fn layout_header_footer(
                 geometry,
             )?;
             target_blocks.extend(content.blocks);
+            target_directions.extend(content.directions);
             has_content = true;
         }
     }
 
     if has_content {
-        Ok(Some(HeaderFooterContent {
-            header_blocks,
-            footer_blocks,
-            first_header_blocks,
-            first_footer_blocks,
-            even_header_blocks,
-            even_footer_blocks,
-            even_headers_active,
-            watermark,
-            first_watermark,
-            even_watermark,
-        }))
+        Ok(Some((
+            HeaderFooterContent {
+                header_blocks,
+                footer_blocks,
+                first_header_blocks,
+                first_footer_blocks,
+                even_header_blocks,
+                even_footer_blocks,
+                even_headers_active,
+                watermark,
+                first_watermark,
+                even_watermark,
+            },
+            HeaderFooterSemantics {
+                header_directions,
+                footer_directions,
+                first_header_directions,
+                first_footer_directions,
+                even_header_directions,
+                even_footer_directions,
+            },
+        )))
     } else {
         Ok(None)
     }
@@ -6090,13 +6290,14 @@ fn layout_header_footer_variant_uncached(
         },
     };
     let mut blocks = Vec::with_capacity(part.paragraphs.len());
+    let mut directions = Vec::with_capacity(part.paragraphs.len());
     for (paragraph_index, paragraph) in part.paragraphs.iter().enumerate() {
         let source = if cache_source {
             Some(CACHE_SOURCE_NODE)
         } else {
             sources.and_then(|sources| sources.id(&story, &[paragraph_index]))
         };
-        blocks.push(layout_paragraph_with_source(
+        let (block, direction) = layout_paragraph_with_source_and_direction(
             paragraph,
             width,
             styles,
@@ -6106,9 +6307,15 @@ fn layout_header_footer_variant_uncached(
             num_state,
             diagnostics,
             source,
-        )?);
+        )?;
+        blocks.push(block);
+        directions.push(direction);
     }
-    Ok(HeaderFooterVariantContent { blocks, watermark })
+    Ok(HeaderFooterVariantContent {
+        blocks,
+        directions,
+        watermark,
+    })
 }
 
 fn layout_watermark(
@@ -6329,6 +6536,14 @@ fn word_language_for_slot(style: &WordMultilingualStyle, slot: WordLanguageSlot)
     }
 }
 
+fn word_text_direction(rtl: Option<bool>) -> TextDirection {
+    match rtl {
+        Some(true) => TextDirection::RightToLeft,
+        Some(false) => TextDirection::LeftToRight,
+        None => TextDirection::Auto,
+    }
+}
+
 fn word_language_ranges(text: &str) -> Vec<(usize, usize, WordLanguageSlot)> {
     let mut ranges = Vec::new();
     let mut start = 0usize;
@@ -6408,6 +6623,38 @@ fn needs_word_multilingual_layout(text: &str) -> bool {
     })
 }
 
+fn inferred_word_base_direction(items: &[InlineItem]) -> TextDirection {
+    for character in items
+        .iter()
+        .filter_map(|item| match item {
+            InlineItem::Text(segment)
+            | InlineItem::HyphenatedText { segment, .. }
+            | InlineItem::Marker(segment) => Some(segment.text.as_str()),
+            _ => None,
+        })
+        .flat_map(str::chars)
+    {
+        if character == '\u{200e}' {
+            return TextDirection::LeftToRight;
+        }
+        if character == '\u{200f}' {
+            return TextDirection::RightToLeft;
+        }
+        if !character.is_alphabetic() {
+            continue;
+        }
+        return if matches!(
+            character as u32,
+            0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff
+        ) {
+            TextDirection::RightToLeft
+        } else {
+            TextDirection::LeftToRight
+        };
+    }
+    TextDirection::LeftToRight
+}
+
 fn multilingual_candidate(item: &InlineItem) -> Option<&TextSegment> {
     match item {
         InlineItem::Text(segment) | InlineItem::HyphenatedText { segment, .. }
@@ -6458,6 +6705,7 @@ fn shape_word_multilingual_items(
     font_manager: &mut FontManager,
     legacy_items: Vec<InlineItem>,
     styles: &HashMap<usize, WordMultilingualStyle>,
+    base_direction: TextDirection,
     no_wrap: bool,
     exact_word_baseline: bool,
 ) -> Result<Vec<InlineItem>> {
@@ -6468,10 +6716,9 @@ fn shape_word_multilingual_items(
         };
         if let Some(style) = styles.get(&index) {
             for (byte_start, byte_end, slot) in word_language_ranges(&segment.text) {
-                styled.push((
-                    word_multilingual_segment_slice(segment, byte_start, byte_end)?,
-                    word_language_for_slot(style, slot),
-                ));
+                let mut slice = word_multilingual_segment_slice(segment, byte_start, byte_end)?;
+                slice.direction = style.direction;
+                styled.push((slice, word_language_for_slot(style, slot)));
             }
         } else {
             let language = match item {
@@ -6483,7 +6730,7 @@ fn shape_word_multilingual_items(
     }
     let mut shaped = VecDeque::from(font_manager.shape_multilingual_paragraph(
         styled,
-        TextDirection::Auto,
+        base_direction,
         no_wrap,
     )?);
     let mut items = Vec::with_capacity(legacy_items.len());
@@ -7371,7 +7618,9 @@ mod tests {
         });
         paragraph.runs = vec![arabic, english];
 
-        let output = deterministic_layout(&input);
+        let output = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("hybrid bidi layout with sources")
+            .layout;
         let arabic_x = multilingual_runs(&output)
             .into_iter()
             .find(|run| run.logical_text == "العربية")
@@ -7392,6 +7641,414 @@ mod tests {
         assert!(
             english_x < arabic_x,
             "RTL paragraph paints English left of Arabic: English {english_x}, Arabic {arabic_x}"
+        );
+        let extraction_order = output
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.text.contains("representation") => {
+                    Some(run.text.as_str())
+                }
+                PositionedElement::MultilingualText(run)
+                    if run.logical_text.contains("العربية") =>
+                {
+                    Some(run.logical_text.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(extraction_order, ["العربية", "representation"]);
+    }
+
+    #[test]
+    fn explicit_rtl_hyphenatable_latin_spans_keep_resolved_even_level_order() {
+        let mut input = make_input_with_text("ABC 123");
+        input.automatic_hyphenation = true;
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            bidi: Some(false),
+            ..Default::default()
+        });
+        paragraph.runs[0].properties = Some(CT_RPr {
+            rtl: Some(true),
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+
+        let output = deterministic_layout(&input);
+        let positions = output
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.text.contains("ABC") => {
+                    Some(("ABC", run.origin.x))
+                }
+                PositionedElement::Text(run) if run.text.contains("123") => {
+                    Some(("123", run.origin.x))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(positions.len(), 2, "{positions:?}");
+        let abc_x = positions
+            .iter()
+            .find_map(|(text, x)| (*text == "ABC").then_some(*x))
+            .unwrap();
+        let digits_x = positions
+            .iter()
+            .find_map(|(text, x)| (*text == "123").then_some(*x))
+            .unwrap();
+        assert!(
+            abc_x < digits_x,
+            "resolved even-level spans stay LTR: {positions:?}"
+        );
+    }
+
+    #[test]
+    fn right_to_left_paragraph_resolves_start_alignment_and_indents_from_the_right() {
+        let mut input = make_input_with_text("123 العربية");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            bidi: Some(true),
+            jc: Some(rdocx_oxml::shared::ST_Jc::Start),
+            ind_start: Some(rdocx_oxml::units::Twips(720)),
+            ind_end: Some(rdocx_oxml::units::Twips(360)),
+            num_id: Some(1),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        let mut level = rdocx_oxml::numbering::CT_Lvl::new(0);
+        level.num_fmt = Some(rdocx_oxml::numbering::ST_NumberFormat::Bullet);
+        level.suffix = Some(rdocx_oxml::numbering::ST_LvlSuffix::Nothing);
+        level.lvl_text = Some("•".to_owned());
+        let mut abstract_num = rdocx_oxml::numbering::CT_AbstractNum::new(1);
+        abstract_num.levels.push(level);
+        input.numbering = Some(rdocx_oxml::numbering::CT_Numbering {
+            abstract_nums: vec![abstract_num],
+            nums: vec![rdocx_oxml::numbering::CT_Num {
+                num_id: 1,
+                abstract_num_id: 1,
+                extra_xml: Vec::new(),
+                extra_attributes: Vec::new(),
+            }],
+            root_attributes: Vec::new(),
+            extra_xml: Vec::new(),
+        });
+        let paragraph = paragraph.clone();
+
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let block = layout_paragraph(
+            &paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("RTL paragraph lays out");
+
+        assert_eq!(block.indent_left, 18.0);
+        assert_eq!(block.indent_right, 36.0);
+        assert_eq!(block.jc, Some(oxml_layout::Align::End));
+        assert!(matches!(
+            block.lines[0].items.last(),
+            Some(LineItem::Marker(marker)) if marker.text == "•"
+        ));
+        assert_eq!(
+            block.lines[0]
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    LineItem::Text(text) => Some(text.text.as_str()),
+                    LineItem::MultilingualText(text) => Some(text.text()),
+                    LineItem::Marker(marker) => Some(marker.text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>(),
+            "العربية 123•"
+        );
+    }
+
+    #[test]
+    fn run_level_direction_override_shapes_the_exact_source_span() {
+        let mut input = make_input_with_text("");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            bidi: Some(false),
+            ..Default::default()
+        });
+        let mut leading = CT_R::new("left ");
+        leading.properties = Some(CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+        let mut overridden = CT_R::new("123");
+        overridden.properties = Some(CT_RPr {
+            rtl: Some(true),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        let mut trailing = CT_R::new(" right");
+        trailing.properties = Some(CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+        paragraph.runs = vec![leading, overridden, trailing];
+
+        let output = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("directional layout with sources");
+        let overridden = multilingual_runs(&output.layout)
+            .into_iter()
+            .find(|run| run.logical_text == "123")
+            .expect("run override enters rich shaping");
+        assert_eq!(overridden.direction, TextDirection::LeftToRight);
+        assert_eq!(overridden.bidi_level, 2);
+        assert_eq!(overridden.source.expect("source span").char_start, 5);
+        assert_eq!(overridden.source.expect("source span").char_end, 8);
+    }
+
+    #[test]
+    fn computed_field_retains_its_stored_run_direction() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:bidi w:val="0"/></w:pPr><w:fldSimple w:instr=" PAGE "><w:r><w:rPr><w:rtl/><w:lang w:val="en-US" w:bidi="ar-SA"/></w:rPr><w:t>99</w:t></w:r></w:fldSimple></w:p></w:body></w:document>"#;
+        let mut input = make_input_with_text("");
+        input.document = rdocx_oxml::CT_Document::from_xml(xml).expect("field document parses");
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let block = layout_paragraph(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("directional field lays out");
+        let field = block
+            .lines
+            .iter()
+            .flat_map(|line| &line.items)
+            .find_map(|item| match item {
+                LineItem::Text(segment) if segment.field_kind == Some(FieldKind::Page) => {
+                    Some(segment)
+                }
+                _ => None,
+            })
+            .expect("computed field remains substitutable");
+        assert_eq!(field.text, "99");
+        assert_eq!(field.direction, TextDirection::RightToLeft);
+    }
+
+    #[test]
+    fn field_only_directional_paragraph_keeps_bidi_through_drawing_reflow() {
+        use rdocx_oxml::drawing::{AnchorAlignH, WrapType};
+        use rdocx_oxml::text::Field;
+
+        let mut input =
+            make_wrapping_document(WrapType::Square, Some(AnchorAlignH::Left), 100.0, 40.0, 5.0);
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            bidi: Some(true),
+            ..Default::default()
+        });
+        let drawing = paragraph.runs.pop().expect("wrapping drawing run");
+        let mut page = CT_R::new("");
+        page.properties = Some(CT_RPr {
+            rtl: Some(true),
+            ..Default::default()
+        });
+        page.content = vec![RunContent::Field(Field::new("PAGE", "אבג"))];
+        let mut pages = CT_R::new("");
+        pages.properties = Some(CT_RPr {
+            rtl: Some(false),
+            ..Default::default()
+        });
+        pages.content = vec![RunContent::Field(Field::new("NUMPAGES", "ABC"))];
+        paragraph.runs = vec![page, pages, drawing];
+
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let (block, direction) = layout_paragraph_with_source_and_direction(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+            None,
+        )
+        .expect("field-only paragraph lays out");
+        assert_eq!(direction, TextDirection::RightToLeft);
+        assert_eq!(
+            block.reflow.as_ref().expect("reflow state").items.len(),
+            2,
+            "private direction state must not masquerade as a public inline item"
+        );
+
+        let output = deterministic_layout(&input);
+        let fields = output.pages[0]
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => run.field_kind.map(|kind| (kind, run.origin.x)),
+                PositionedElement::MarkedContent { children, .. } => {
+                    children.iter().find_map(|child| match child {
+                        PositionedElement::Text(run) => {
+                            run.field_kind.map(|kind| (kind, run.origin.x))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fields.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+            vec![FieldKind::Page, FieldKind::NumPages],
+            "logical extraction keeps the stored field sequence"
+        );
+    }
+
+    #[test]
+    fn word_positioned_runs_keep_logical_order_with_visual_origins() {
+        let mut input = make_input_with_text("");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            bidi: Some(true),
+            ..Default::default()
+        });
+        let mut arabic = CT_R::new("العربية ");
+        arabic.properties = Some(CT_RPr {
+            rtl: Some(true),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        let mut latin = CT_R::new("ABC");
+        latin.properties = Some(CT_RPr {
+            rtl: Some(false),
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+        paragraph.runs = vec![arabic, latin];
+
+        let output = deterministic_layout(&input);
+        let runs = multilingual_runs(&output);
+        assert_eq!(
+            runs.iter()
+                .map(|run| run.logical_text.as_str())
+                .collect::<String>(),
+            "العربية ABC"
+        );
+        assert!(
+            runs.windows(2)
+                .all(|pair| pair[0].logical_index < pair[1].logical_index)
+        );
+        let arabic_x = runs
+            .iter()
+            .find(|run| run.logical_text.contains("العربية"))
+            .unwrap()
+            .origin
+            .x;
+        let latin_x = runs
+            .iter()
+            .find(|run| run.logical_text == "ABC")
+            .unwrap()
+            .origin
+            .x;
+        assert!(latin_x < arabic_x, "visual origins remain RTL");
+    }
+
+    #[test]
+    fn absent_word_bidi_infers_one_rtl_base_for_reordering_alignment_and_indents() {
+        let mut input = make_input_with_text("");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            jc: Some(rdocx_oxml::shared::ST_Jc::Start),
+            ind_start: Some(rdocx_oxml::units::Twips(720)),
+            ind_end: Some(rdocx_oxml::units::Twips(360)),
+            ..Default::default()
+        });
+        let mut arabic = CT_R::new("العربية ");
+        arabic.properties = Some(CT_RPr {
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        let mut latin = CT_R::new("ABC");
+        latin.properties = Some(CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+        paragraph.runs = vec![arabic, latin];
+        let paragraph = paragraph.clone();
+
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let block = layout_paragraph(
+            &paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+        )
+        .expect("default-direction paragraph lays out");
+        assert_eq!(block.indent_left, 18.0);
+        assert_eq!(block.indent_right, 36.0);
+        assert_eq!(block.jc, Some(oxml_layout::Align::End));
+
+        let output = deterministic_layout(&input);
+        let runs = multilingual_runs(&output);
+        let arabic_x = runs
+            .iter()
+            .find(|run| run.logical_text.contains("العربية"))
+            .unwrap()
+            .origin
+            .x;
+        let latin_x = runs
+            .iter()
+            .find(|run| run.logical_text == "ABC")
+            .unwrap()
+            .origin
+            .x;
+        assert!(
+            latin_x < arabic_x,
+            "absent w:bidi uses one inferred RTL base"
         );
     }
 
@@ -9222,6 +9879,57 @@ mod tests {
     }
 
     #[test]
+    fn cached_header_rebinds_hyphenated_reflow_sources() {
+        let input = hyphenation_input(true, Some("en-US"), false);
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let mut block = layout_paragraph_with_source(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+            Some(CACHE_SOURCE_NODE),
+        )
+        .expect("hyphenated header paragraph lays out");
+        assert!(
+            block
+                .reflow
+                .as_ref()
+                .expect("header retains reflow inputs")
+                .items
+                .iter()
+                .any(|item| matches!(item, InlineItem::HyphenatedText { .. }))
+        );
+
+        let rebound = SourceNodeId::new(74).expect("header source ID");
+        rebind_paragraph_source(&mut block, Some(rebound)).expect("source rebinding succeeds");
+        assert!(
+            block
+                .reflow
+                .as_ref()
+                .expect("header retains reflow inputs")
+                .items
+                .iter()
+                .all(|item| {
+                    !matches!(
+                        item,
+                        InlineItem::HyphenatedText { segment, .. }
+                            if !segment.source.is_some_and(|source| source.node == rebound)
+                    )
+                })
+        );
+    }
+
+    #[test]
     fn overflowed_table_font_trace_keeps_result_local_provenance() {
         let mut input = make_input_with_text("before overflow table");
         let mut table = safe_table("");
@@ -9429,6 +10137,260 @@ mod tests {
             .content
             .push(CellContent::Table(safe_table(nested_text)));
         table
+    }
+
+    fn rtl_multi_leader_paragraph(parts: [&str; 4]) -> CT_P {
+        use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
+        use rdocx_oxml::shared::{ST_TabJc, ST_TabLeader};
+        use rdocx_oxml::units::Twips;
+
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            bidi: Some(true),
+            tabs: Some(CT_Tabs {
+                tabs: vec![
+                    CT_TabStop {
+                        val: ST_TabJc::Left,
+                        pos: Twips(1_200),
+                        leader: None,
+                        source_occurrence: None,
+                    },
+                    CT_TabStop {
+                        val: ST_TabJc::Left,
+                        pos: Twips(2_400),
+                        leader: Some(ST_TabLeader::Dot),
+                        source_occurrence: None,
+                    },
+                    CT_TabStop {
+                        val: ST_TabJc::Left,
+                        pos: Twips(3_600),
+                        leader: Some(ST_TabLeader::Hyphen),
+                        source_occurrence: None,
+                    },
+                ],
+            }),
+            ..Default::default()
+        });
+        let mut run = CT_R::new("");
+        run.content = vec![
+            RunContent::Text(rdocx_oxml::text::CT_Text::new(parts[0])),
+            RunContent::Tab,
+            RunContent::Text(rdocx_oxml::text::CT_Text::new(parts[1])),
+            RunContent::Tab,
+            RunContent::Text(rdocx_oxml::text::CT_Text::new(parts[2])),
+            RunContent::Tab,
+            RunContent::Text(rdocx_oxml::text::CT_Text::new(parts[3])),
+        ];
+        paragraph.runs = vec![run];
+        paragraph
+    }
+
+    #[test]
+    fn cached_table_and_header_keep_resolved_rtl_for_logical_extraction() {
+        let mut table = CT_Tbl::new();
+        let mut row = CT_Row::new();
+        let mut cell = CT_Tc::new();
+        cell.content = vec![CellContent::Paragraph(rtl_multi_leader_paragraph([
+            "TA", "TB", "TC", "TD",
+        ]))];
+        row.cells.push(cell);
+        table.rows.push(row);
+        let mut table_input = make_input_with_text("body");
+        let media = MediaRegistry::new(&table_input.images);
+        let mut direction_engine = Engine::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let shared = direction_engine
+            .layout_body_table(
+                &table,
+                468.0,
+                &table_input.styles,
+                &table_input,
+                &media,
+                &mut numbering,
+                &mut diagnostics,
+                None,
+                &WordStory::Document,
+                &[0],
+            )
+            .expect("real table container lays out");
+        let SharedLayoutBlock::Table { semantics, .. } = shared else {
+            panic!("cache-safe table uses the shared table container")
+        };
+        let CellBlockSemantics::Paragraph(table_paragraph) = &semantics.rows[0].cells[0].blocks[0]
+        else {
+            panic!("table paragraph semantics")
+        };
+        assert_eq!(
+            table_paragraph.reflow_direction,
+            TextDirection::RightToLeft,
+            "the production table container retains its resolved paragraph base"
+        );
+        table_input
+            .document
+            .body
+            .content
+            .insert(0, BodyContent::Table(table));
+        let mut table_engine = Engine::new_deterministic().expect("bundled fonts load");
+        table_engine
+            .layout_with_provenance(&table_input)
+            .expect("cold table layout");
+        let (table_warm, table_sources) = table_engine
+            .layout_with_provenance(&table_input)
+            .expect("warm table layout");
+        assert_eq!(table_engine.table_cache_counts().1, 2);
+
+        let mut header_input = cacheable_header_footer_input(&"body line ".repeat(4_000));
+        for header in header_input.headers.values_mut() {
+            header.paragraphs = vec![rtl_multi_leader_paragraph(["HA", "HB", "HC", "HD"])];
+        }
+        let section = header_input
+            .document
+            .body
+            .sect_pr
+            .as_ref()
+            .expect("header section")
+            .clone();
+        let media = MediaRegistry::new(&header_input.images);
+        let mut direction_header_engine = Engine::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let (_, semantics) = layout_header_footer(
+            &mut direction_header_engine,
+            &section,
+            &header_input,
+            &header_input.styles,
+            &media,
+            &mut numbering,
+            &mut diagnostics,
+            None,
+        )
+        .expect("real header cache container lays out")
+        .expect("header content exists");
+        assert_eq!(
+            semantics.first_header_directions,
+            [TextDirection::RightToLeft],
+            "the production header cache container retains its resolved paragraph base"
+        );
+        let mut header_engine = Engine::new_deterministic().expect("bundled fonts load");
+        header_engine
+            .layout_with_provenance(&header_input)
+            .expect("cold header layout");
+        let (header_warm, header_sources) = header_engine
+            .layout_with_provenance(&header_input)
+            .expect("warm header layout");
+        let header_counts = header_engine.header_footer_cache_counts();
+        assert!(
+            header_counts.0 > 0,
+            "header cache is traversed: {header_counts:?}"
+        );
+
+        let assert_line = |warm: &LayoutResult,
+                           sources: &[WordSourcePath],
+                           story: &WordStory,
+                           children: &[usize],
+                           parts: [&str; 4]| {
+            let prefix = parts[0];
+            let mut located = None;
+            for (page_index, page) in warm.pages.iter().enumerate() {
+                for element in compatibility_page_elements(page) {
+                    let (text, source, y) = match element {
+                        PositionedElement::Text(run) => {
+                            (run.text.as_str(), run.source, run.origin.y)
+                        }
+                        PositionedElement::MultilingualText(run) => {
+                            (run.logical_text.as_str(), run.source, run.origin.y)
+                        }
+                        _ => continue,
+                    };
+                    if text == prefix {
+                        located = source.map(|source| (page_index, source.node, y));
+                        break;
+                    }
+                }
+                if located.is_some() {
+                    break;
+                }
+            }
+            let (page_index, node, line_y) = located.unwrap_or_else(|| {
+                let text = warm
+                    .pages
+                    .iter()
+                    .flat_map(|page| compatibility_page_elements(page))
+                    .filter_map(|element| match element {
+                        PositionedElement::Text(run) => Some(run.text.clone()),
+                        PositionedElement::MultilingualText(run) => Some(run.logical_text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                panic!("missing {prefix}: {text:?}")
+            });
+            let path = &sources[node.get() as usize - 1];
+            assert_eq!(&path.story, story);
+            assert_eq!(path.children, children);
+            let runs = compatibility_page_elements(&warm.pages[page_index])
+                .into_iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) if (run.origin.y - line_y).abs() < 0.01 => {
+                        Some((run.text.clone(), run.origin.x))
+                    }
+                    PositionedElement::MultilingualText(run)
+                        if (run.origin.y - line_y).abs() < 0.01 =>
+                    {
+                        Some((run.logical_text.clone(), run.origin.x))
+                    }
+                    _ => None,
+                })
+                .filter(|(text, _)| {
+                    parts.contains(&text.as_str())
+                        || (!text.is_empty()
+                            && text.chars().all(|character| matches!(character, '.' | '-')))
+                })
+                .collect::<Vec<_>>();
+            let text = runs
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<String>();
+            let positions = parts.map(|part| {
+                text.find(part)
+                    .unwrap_or_else(|| panic!("missing {part} in {text:?}"))
+            });
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "logical extraction for {story:?}: {runs:?}"
+            );
+            let dots = text.find('.').expect("dot leader");
+            let dashes = text.find('-').expect("hyphen leader");
+            assert!(
+                positions[1] < dots
+                    && dots < positions[2]
+                    && positions[2] < dashes
+                    && dashes < positions[3],
+                "leaders keep their logical tabs for {story:?}: {runs:?}"
+            );
+            assert!(
+                runs.iter().find(|run| run.0 == parts[0]).unwrap().1
+                    > runs.iter().find(|run| run.0 == parts[3]).unwrap().1,
+                "RTL visual origins survive for {story:?}: {runs:?}"
+            );
+        };
+
+        assert_line(
+            &table_warm,
+            &table_sources,
+            &WordStory::Document,
+            &[0, 0, 0, 0],
+            ["TA", "TB", "TC", "TD"],
+        );
+        assert_line(
+            &header_warm,
+            &header_sources,
+            &WordStory::Header {
+                relationship_id: "rId-first-header".to_owned(),
+            },
+            &[0],
+            ["HA", "HB", "HC", "HD"],
+        );
     }
 
     fn assert_layout_results_equal(left: &LayoutResult, right: &LayoutResult) {
@@ -10686,6 +11648,7 @@ mod tests {
                 block: template.block.clone(),
                 diagnostics: template.diagnostics.clone(),
                 font_trace: template.font_trace.clone(),
+                reflow_direction: template.reflow_direction,
                 bytes,
             });
         }
@@ -10778,6 +11741,7 @@ mod tests {
             block: Arc::new(block),
             diagnostics: Vec::new(),
             font_trace: Vec::new(),
+            reflow_direction: TextDirection::Auto,
             bytes,
         });
         assert!(engine.paragraph_cache.is_empty());
@@ -10881,6 +11845,7 @@ mod tests {
             block,
             diagnostics: Vec::new(),
             font_trace: Vec::new(),
+            reflow_direction: TextDirection::Auto,
             bytes,
         });
         assert!(engine.paragraph_cache.is_empty());
@@ -13131,6 +14096,57 @@ mod tests {
             (first.origin.y - 91.2).abs() < 0.001,
             "wrapped rich baseline was {}, expected 91.2",
             first.origin.y
+        );
+    }
+
+    #[test]
+    fn drawing_reflow_retains_the_explicit_ltr_paragraph_base() {
+        use rdocx_oxml::drawing::{AnchorAlignH, WrapType};
+
+        let mut input =
+            make_wrapping_document(WrapType::Square, Some(AnchorAlignH::Left), 100.0, 40.0, 5.0);
+        input.automatic_hyphenation = true;
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            bidi: Some(false),
+            ..Default::default()
+        });
+        let drawing = paragraph.runs.pop().expect("wrapping drawing run");
+        let mut arabic = CT_R::new("العربية ");
+        arabic.properties = Some(CT_RPr {
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        let mut english = CT_R::new(&"representation ".repeat(12));
+        english.properties = Some(CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+        paragraph.runs = vec![arabic, english, drawing];
+
+        let output = deterministic_layout(&input);
+        let arabic = multilingual_runs(&output)
+            .into_iter()
+            .min_by(|left, right| left.origin.y.total_cmp(&right.origin.y))
+            .expect("Arabic rich run");
+        let english = output
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.text.contains("repre") => Some(run),
+                _ => None,
+            })
+            .filter(|run| (run.origin.y - arabic.origin.y).abs() < 0.001)
+            .min_by(|left, right| left.origin.x.total_cmp(&right.origin.x))
+            .expect("hyphenatable English shares the first line");
+        assert!(
+            arabic.origin.x < english.origin.x,
+            "explicit LTR must survive drawing reflow: Arabic {}, English {}",
+            arabic.origin.x,
+            english.origin.x
         );
     }
 

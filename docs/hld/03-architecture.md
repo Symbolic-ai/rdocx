@@ -136,6 +136,10 @@ Word and Presentation both project complex text into those shared rich values.
 `rdocx-layout` selects the effective direct, bidirectional, or East Asian
 `w:lang` value for each logical run, retains its exact Word source interval,
 and leaves script, coverage, cluster, and line segmentation to `oxml-layout`.
+It also projects `w:bidi` as the paragraph base direction and `w:rtl` as an
+exact run-span override. Shared layout resolves the complete logical paragraph,
+applies line-local whitespace reset and visual ordering after fitting, and
+keeps the original text and source intervals authoritative.
 Paragraphs containing Arabic, Devanagari, Thai, or CJK use the rich path across
 PDF, raster, and SVG. Paragraphs on the established Latin path retain their
 legacy shaped values and byte identity.

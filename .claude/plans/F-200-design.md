@@ -1,6 +1,6 @@
 # F-200, Vertical and bidirectional text
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: M
 **Depends on**: F-199, F-X059
@@ -122,15 +122,15 @@ Do not re-record unrelated output or absorb F-198's delta.
 
 ## Implementation checklist
 
-- [ ] Type Word direction properties and retain DrawingML direction regressions.
-- [ ] Project Word paragraph and run direction into F-X058's published types.
-- [ ] Intersect the published bidi spans with F-199 script, font, cluster, and offset spans.
-- [ ] Consume F-X058's line-local visual order.
-- [ ] Resolve alignment, indents, bullets, and labels from base direction.
-- [ ] Paint visual order while preserving logical extraction and source spans.
-- [ ] Add structural, round-trip, integration, golden, and backend regressions.
-- [ ] Retain the documented quarter-turn vertical approximations.
-- [ ] Run all risk riders and update exactly the approved HLD files.
+- [x] Type Word direction properties and retain DrawingML direction regressions.
+- [x] Project Word paragraph and run direction into F-X058's published types.
+- [x] Intersect the published bidi spans with F-199 script, font, cluster, and offset spans.
+- [x] Consume F-X058's line-local visual order.
+- [x] Resolve alignment, indents, bullets, and labels from base direction.
+- [x] Paint visual order while preserving logical extraction and source spans.
+- [x] Add structural, round-trip, integration, golden, and backend regressions.
+- [x] Retain the documented quarter-turn vertical approximations.
+- [x] Run all risk riders and update exactly the approved HLD files.
 
 ## Open questions
 

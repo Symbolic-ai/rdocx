@@ -9,11 +9,12 @@ use crate::block::{
 };
 use std::collections::HashMap;
 
+#[cfg(test)]
+use oxml_layout::TextDirection;
 use oxml_layout::{
     Align, Color, FontManager, GlyphRun, GroupElement, LayoutLine, LineItem, MediaId,
     MultilingualGlyphRun, NoteRef, NoteStream, OutlineEntry, PageFrame, Path, Point,
-    PositionedElement, Rect, TextDirection, Transform, Underline, break_into_lines,
-    break_multilingual_into_lines,
+    PositionedElement, Rect, Transform, Underline, break_into_lines, break_multilingual_into_lines,
 };
 
 use rdocx_oxml::drawing::{
@@ -23,7 +24,8 @@ use rdocx_oxml::shared::ST_Border;
 
 use crate::input::{ImageData, MediaRegistry};
 use crate::notes::{
-    NOTE_INDENT, NOTE_SEPARATOR_OFFSET, NoteLayout, NoteRegistry, SEPARATOR_WIDTH_FRACTION,
+    NOTE_INDENT, NOTE_SEPARATOR_OFFSET, NoteLayout, NoteRegistry, NoteRenderParagraph,
+    SEPARATOR_WIDTH_FRACTION,
 };
 
 /// A wrapping drawing that has been placed on the page being built.
@@ -115,6 +117,16 @@ pub struct HeaderFooterContent {
     pub even_watermark: Option<oxml_layout::GroupElement>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HeaderFooterSemantics {
+    pub header_directions: Vec<oxml_layout::TextDirection>,
+    pub footer_directions: Vec<oxml_layout::TextDirection>,
+    pub first_header_directions: Vec<oxml_layout::TextDirection>,
+    pub first_footer_directions: Vec<oxml_layout::TextDirection>,
+    pub even_header_directions: Vec<oxml_layout::TextDirection>,
+    pub even_footer_directions: Vec<oxml_layout::TextDirection>,
+}
+
 /// A section with its blocks, geometry, and header/footer content.
 pub struct Section {
     pub blocks: Vec<LayoutBlock>,
@@ -130,6 +142,7 @@ pub(crate) struct SharedSection {
     pub blocks: Vec<SharedLayoutBlock>,
     pub geometry: PageGeometry,
     pub header_footer: Option<HeaderFooterContent>,
+    pub header_footer_semantics: Option<HeaderFooterSemantics>,
     pub title_pg: bool,
     pub page_number_start: Option<usize>,
 }
@@ -170,6 +183,7 @@ pub fn paginate_sections(
             &s.blocks,
             s.geometry,
             s.header_footer.as_ref(),
+            None,
             s.title_pg,
             fm,
             media,
@@ -193,6 +207,7 @@ pub fn paginate_sections(
             &section.blocks,
             section.geometry,
             section.header_footer.as_ref(),
+            None,
             section.title_pg,
             fm,
             media,
@@ -235,6 +250,7 @@ pub(crate) fn paginate_shared_sections(
             &section.blocks,
             section.geometry,
             section.header_footer.as_ref(),
+            section.header_footer_semantics.as_ref(),
             section.title_pg,
             fm,
             media,
@@ -256,6 +272,7 @@ pub(crate) fn paginate_shared_sections(
             &section.blocks,
             section.geometry,
             section.header_footer.as_ref(),
+            section.header_footer_semantics.as_ref(),
             section.title_pg,
             fm,
             media,
@@ -290,6 +307,7 @@ pub(crate) fn paginate_shared_single_section_recorded(
     let context = PassContext {
         geometry: section.geometry,
         header_footer: section.header_footer.as_ref(),
+        header_footer_semantics: section.header_footer_semantics.as_ref(),
         title_pg: section.title_pg,
         fm,
         media: media.media(),
@@ -331,6 +349,7 @@ pub fn paginate(
         blocks,
         geometry,
         header_footer,
+        None,
         title_pg,
         _fm,
         media.media(),
@@ -373,6 +392,7 @@ fn paginate_with_media<B: LayoutBlockLike>(
     blocks: &[B],
     geometry: PageGeometry,
     header_footer: Option<&HeaderFooterContent>,
+    header_footer_semantics: Option<&HeaderFooterSemantics>,
     title_pg: bool,
     _fm: &FontManager,
     media: &HashMap<MediaId, ImageData>,
@@ -383,6 +403,7 @@ fn paginate_with_media<B: LayoutBlockLike>(
     let context = PassContext {
         geometry,
         header_footer,
+        header_footer_semantics,
         title_pg,
         fm: _fm,
         media,
@@ -425,6 +446,7 @@ struct PassResult {
 struct PassContext<'a> {
     geometry: PageGeometry,
     header_footer: Option<&'a HeaderFooterContent>,
+    header_footer_semantics: Option<&'a HeaderFooterSemantics>,
     title_pg: bool,
     fm: &'a FontManager,
     media: &'a HashMap<MediaId, ImageData>,
@@ -462,6 +484,7 @@ fn paginate_pass_from<B: LayoutBlockLike>(
     let mut pager = Pager::new(
         geometry,
         context.header_footer,
+        context.header_footer_semantics,
         context.title_pg,
         context.media,
         context.notes,
@@ -585,6 +608,7 @@ struct Pager<'a> {
     content_height: f64,
     geometry: PageGeometry,
     header_footer: Option<&'a HeaderFooterContent>,
+    header_footer_semantics: Option<&'a HeaderFooterSemantics>,
     has_content_flag: bool,
     outlines: Vec<OutlineEntry>,
     /// Whether the current page is the first page of the section.
@@ -628,6 +652,7 @@ impl<'a> Pager<'a> {
     fn new(
         geometry: PageGeometry,
         header_footer: Option<&'a HeaderFooterContent>,
+        header_footer_semantics: Option<&'a HeaderFooterSemantics>,
         title_pg: bool,
         media: &'a HashMap<MediaId, ImageData>,
         notes: &'a NoteRegistry,
@@ -648,6 +673,7 @@ impl<'a> Pager<'a> {
             content_height: geometry.content_height(),
             geometry,
             header_footer,
+            header_footer_semantics,
             has_content_flag: false,
             outlines: Vec::new(),
             is_first_page,
@@ -1039,13 +1065,15 @@ impl<'a> Pager<'a> {
 
         let mut cursor_y = separator_y + NOTE_SEPARATOR_OFFSET;
         for (id, first, count, continued) in placed {
-            let Some(note) = self.notes.get(id, self.geometry.content_width()) else {
+            let Some((note, render)) = self.notes.get_render(id, self.geometry.content_width())
+            else {
                 continue;
             };
             cursor_y += draw_note(
                 &mut self.elements,
                 &self.geometry,
                 note,
+                render,
                 first,
                 count,
                 continued,
@@ -1084,10 +1112,20 @@ impl<'a> Pager<'a> {
             } else {
                 &hf.header_blocks
             };
+            let header_directions = self.header_footer_semantics.map(|semantics| {
+                if self.is_first_page && self.title_pg {
+                    semantics.first_header_directions.as_slice()
+                } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
+                    semantics.even_header_directions.as_slice()
+                } else {
+                    semantics.header_directions.as_slice()
+                }
+            });
             if !header_blocks.is_empty() {
                 let header_y = self.geometry.header_distance;
                 render_hf_blocks(
                     header_blocks,
+                    header_directions,
                     &self.geometry,
                     header_y,
                     self.page_number,
@@ -1108,12 +1146,22 @@ impl<'a> Pager<'a> {
             } else {
                 &hf.footer_blocks
             };
+            let footer_directions = self.header_footer_semantics.map(|semantics| {
+                if self.is_first_page && self.title_pg {
+                    semantics.first_footer_directions.as_slice()
+                } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
+                    semantics.even_footer_directions.as_slice()
+                } else {
+                    semantics.footer_directions.as_slice()
+                }
+            });
             if !footer_blocks.is_empty() {
                 let footer_height: f64 = footer_blocks.iter().map(|b| b.content_height()).sum();
                 let footer_y =
                     self.geometry.page_height - self.geometry.footer_distance - footer_height;
                 render_hf_blocks(
                     footer_blocks,
+                    footer_directions,
                     &self.geometry,
                     footer_y,
                     self.page_number,
@@ -1403,6 +1451,7 @@ fn draw_note(
     elements: &mut Vec<PositionedElement>,
     geometry: &PageGeometry,
     note: &NoteLayout,
+    render: &[NoteRenderParagraph],
     first: usize,
     count: usize,
     continued: bool,
@@ -1433,126 +1482,36 @@ fn draw_note(
     }
 
     let mut cursor_y = top;
-    for line in note.lines.iter().skip(first).take(count) {
-        let line_baseline = cursor_y + line.ascent;
-        let mut x = geometry.margin_left + NOTE_INDENT;
-        for item in &line.items {
-            if let LineItem::MultilingualText(segment) = item {
-                x += push_multilingual_text(
-                    elements,
-                    segment,
-                    x,
-                    line_baseline,
-                    cursor_y,
-                    line.height,
-                    None,
-                    0.0,
-                );
-                continue;
-            }
-            let (segment, advance) = match item {
-                LineItem::Text(seg) | LineItem::Marker(seg) => (Some(seg), seg.width),
-                LineItem::Tab { width, .. }
-                | LineItem::Image { width, .. }
-                | LineItem::Group { width, .. } => (None, *width),
-                _ => (None, item.width()),
-            };
-            if let Some(seg) = segment {
-                let adjusted_baseline = line_baseline - seg.baseline_offset;
-                if let Some(color) = seg.highlight {
-                    elements.push(PositionedElement::FilledRect {
-                        rect: Rect {
-                            x,
-                            y: cursor_y,
-                            width: seg.width,
-                            height: line.height,
-                        },
-                        color,
-                    });
-                }
-                elements.push(PositionedElement::Text(GlyphRun {
-                    origin: Point {
-                        x,
-                        y: adjusted_baseline,
-                    },
-                    font_id: seg.font_id,
-                    font_size: seg.font_size,
-                    glyph_ids: seg.glyph_ids.clone(),
-                    advances: seg.advances.clone(),
-                    text: seg.text.clone(),
-                    source: seg.source,
-                    color: seg.color,
-                    bold: seg.bold,
-                    italic: seg.italic,
-                    field_kind: None,
-                    note: None,
-                }));
-                if let Some(underline) = seg.underline {
-                    let underline_y = adjusted_baseline + seg.descent * 0.3;
-                    let thickness = match underline {
-                        Underline::Thick => seg.font_size / 12.0,
-                        Underline::Double => seg.font_size / 24.0,
-                        _ => seg.font_size / 18.0,
-                    };
-                    elements.push(PositionedElement::Line {
-                        start: Point { x, y: underline_y },
-                        end: Point {
-                            x: x + seg.width,
-                            y: underline_y,
-                        },
-                        width: thickness,
-                        color: seg.color,
-                        dash_pattern: None,
-                    });
-                    if underline == Underline::Double {
-                        let second_y = underline_y + thickness * 2.5;
-                        elements.push(PositionedElement::Line {
-                            start: Point { x, y: second_y },
-                            end: Point {
-                                x: x + seg.width,
-                                y: second_y,
-                            },
-                            width: thickness,
-                            color: seg.color,
-                            dash_pattern: None,
-                        });
-                    }
-                }
-                if seg.strike {
-                    let strike_y = adjusted_baseline - seg.ascent * 0.3;
-                    let thickness = seg.font_size / 24.0;
-                    elements.push(PositionedElement::Line {
-                        start: Point { x, y: strike_y },
-                        end: Point {
-                            x: x + seg.width,
-                            y: strike_y,
-                        },
-                        width: thickness,
-                        color: seg.color,
-                        dash_pattern: None,
-                    });
-                }
-                if seg.dstrike {
-                    let strike_y = adjusted_baseline - seg.ascent * 0.3;
-                    let thickness = seg.font_size / 24.0;
-                    let gap = thickness * 2.0;
-                    for y in [strike_y - gap / 2.0, strike_y + gap / 2.0] {
-                        elements.push(PositionedElement::Line {
-                            start: Point { x, y },
-                            end: Point {
-                                x: x + seg.width,
-                                y,
-                            },
-                            width: thickness,
-                            color: seg.color,
-                            dash_pattern: None,
-                        });
-                    }
-                }
-            }
-            x += advance;
+    let selected = first..first.saturating_add(count);
+    let note_geometry = PageGeometry {
+        margin_top: 0.0,
+        margin_left: geometry.margin_left + NOTE_INDENT,
+        ..*geometry
+    };
+    let empty_media = HashMap::new();
+    for paragraph in render {
+        let start = paragraph.lines.start.max(selected.start);
+        let end = paragraph.lines.end.min(selected.end);
+        if start >= end {
+            continue;
         }
-        cursor_y += line.height;
+        let local_start = start - paragraph.lines.start;
+        let local_end = end - paragraph.lines.start;
+        let lines = &paragraph.block.lines[local_start..local_end];
+        render_paragraph_lines(
+            lines,
+            ParagraphView {
+                block: &paragraph.block,
+                semantics: None,
+                reflow_direction: paragraph.direction,
+                reflow_allowed: false,
+            },
+            &note_geometry,
+            cursor_y,
+            elements,
+            &empty_media,
+        );
+        cursor_y += lines.iter().map(|line| line.height).sum::<f64>();
     }
 
     for range in &note.revision_ranges {
@@ -1661,7 +1620,7 @@ fn append_ordered_endnote_pages(
     };
 
     for &note_ref in ordered {
-        let Some(note) = notes.get(note_ref, geometry.content_width()) else {
+        let Some((note, render)) = notes.get_render(note_ref, geometry.content_width()) else {
             continue;
         };
 
@@ -1698,6 +1657,7 @@ fn append_ordered_endnote_pages(
                 &mut elements,
                 &geometry,
                 note,
+                render,
                 first,
                 count,
                 continued,
@@ -1785,6 +1745,8 @@ fn render_shape_text(
             ParagraphView {
                 block: para,
                 semantics: None,
+                reflow_direction: oxml_layout::TextDirection::Auto,
+                reflow_allowed: true,
             },
             geometry,
             y,
@@ -1891,12 +1853,14 @@ fn resolve_anchor_v(
 /// the paragraph it already has.
 fn reflow_around_wraps(
     para: &ParagraphBlock,
+    reflow_direction: oxml_layout::TextDirection,
     wraps: &[PlacedWrap],
     para_top: f64,
     geometry: &PageGeometry,
     fm: &FontManager,
 ) -> Option<ParagraphBlock> {
     let reflow = para.reflow.as_ref()?;
+    let reflow_items = reflow.items.as_slice();
     if wraps.is_empty() {
         return None;
     }
@@ -1964,14 +1928,20 @@ fn reflow_around_wraps(
         params.line_prefix_widths = prefix;
         params.line_suffix_widths = suffix;
 
-        let reflowed = if reflow
-            .items
-            .iter()
-            .any(|item| matches!(item, oxml_layout::InlineItem::MultilingualText(_)))
-        {
-            break_multilingual_into_lines(&reflow.items, &params, fm, TextDirection::Auto)
+        let reflowed = if reflow_direction != oxml_layout::TextDirection::Auto
+            || reflow_items.iter().any(|item| {
+                matches!(item, oxml_layout::InlineItem::MultilingualText(_))
+                    || matches!(
+                        item,
+                        oxml_layout::InlineItem::Text(segment)
+                            | oxml_layout::InlineItem::HyphenatedText { segment, .. }
+                            | oxml_layout::InlineItem::Marker(segment)
+                            if segment.direction != oxml_layout::TextDirection::Auto
+                    )
+            }) {
+            break_multilingual_into_lines(reflow_items, &params, fm, reflow_direction)
         } else {
-            break_into_lines(&reflow.items, &params, fm)
+            break_into_lines(reflow_items, &params, fm)
         };
         let Ok(reflowed) = reflowed else {
             return None;
@@ -1983,8 +1953,6 @@ fn reflow_around_wraps(
     let mut adjusted = para.clone();
     adjusted.lines = lines;
     adjusted.content_offset_top = offset_top;
-    // The paragraph has been reflowed. Re-entering would reserve twice.
-    adjusted.reflow = None;
     Some(adjusted)
 }
 
@@ -2008,11 +1976,24 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         let mut wraps = pager.page_wraps.clone();
         wraps.extend(pager.wrap_rects_for(&para.anchored, para_top, para.indent_left));
         wraps.extend(pager.lookahead_wraps(block_idx, blocks));
-        reflow_around_wraps(para.block, &wraps, para_top, &pager.geometry, pager.fm)
+        para.reflow_allowed
+            .then(|| {
+                reflow_around_wraps(
+                    para.block,
+                    para.reflow_direction,
+                    &wraps,
+                    para_top,
+                    &pager.geometry,
+                    pager.fm,
+                )
+            })
+            .flatten()
     };
     let para = reflowed.as_ref().map_or(para, |block| ParagraphView {
         block,
         semantics: para.semantics,
+        reflow_direction: para.reflow_direction,
+        reflow_allowed: false,
     });
 
     // Check if paragraph fits on current page. The note area its references
@@ -2242,15 +2223,17 @@ fn render_para_split(
                 heading_text: None,
                 list: para.list,
                 structure_id: para.structure_id(),
-                // The continuation was already reflowed as part of the whole
-                // paragraph, so it must not be reflowed again.
-                reflow: None,
+                // The continuation keeps the logical input sequence for text
+                // extraction. `reflow_allowed` below prevents a second break.
+                reflow: para.reflow.clone(),
                 content_offset_top: 0.0,
             };
             render_para_split(
                 ParagraphView {
                     block: &temp_para,
                     semantics: para.semantics,
+                    reflow_direction: para.reflow_direction,
+                    reflow_allowed: false,
                 },
                 lines_that_fit,
                 0.0,
@@ -2285,6 +2268,27 @@ fn render_para_split(
 }
 
 /// Render paragraph lines as positioned elements.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReflowTextProvenanceKind {
+    Text,
+    Marker,
+    Multilingual,
+    ConditionalHyphen,
+    TabLeader,
+}
+
+#[derive(Clone, Copy)]
+struct ReflowTextProvenance {
+    element_position: usize,
+    visual_item: usize,
+    kind: ReflowTextProvenanceKind,
+}
+
+#[derive(Clone, Copy)]
+struct ReflowTabProvenance {
+    visual_item: usize,
+}
+
 fn render_paragraph_lines(
     lines: &[LayoutLine],
     para: ParagraphView<'_>,
@@ -2298,6 +2302,15 @@ fn render_paragraph_lines(
     // first line down. `content_height` already counts the same offset.
     let mut y = start_y + para.content_offset_top;
     for line in lines {
+        let mut text_provenance = Vec::new();
+        let mut tab_provenance = Vec::new();
+        let conditional_hyphens = para
+            .reflow
+            .as_deref()
+            .map(|reflow| {
+                conditional_hyphen_visual_items(&line.items, &reflow.items, para.reflow_direction)
+            })
+            .unwrap_or_default();
         let baseline_y = geometry.margin_top + y + line.ascent;
 
         // Compute x offset based on justification
@@ -2331,7 +2344,7 @@ fn render_paragraph_lines(
         let mut x = x_offset;
         let mut _accumulated_extra = 0.0;
 
-        for item in &line.items {
+        for (visual_item, item) in line.items.iter().enumerate() {
             match item {
                 LineItem::Text(seg) | LineItem::Marker(seg) => {
                     let adjusted_baseline = baseline_y - seg.baseline_offset;
@@ -2389,6 +2402,17 @@ fn render_paragraph_lines(
                         field_kind: seg.field_kind,
                         note: seg.note,
                     }));
+                    text_provenance.push(ReflowTextProvenance {
+                        element_position: elements.len() - 1,
+                        visual_item,
+                        kind: if matches!(item, LineItem::Marker(_)) {
+                            ReflowTextProvenanceKind::Marker
+                        } else if conditional_hyphens.contains(&visual_item) {
+                            ReflowTextProvenanceKind::ConditionalHyphen
+                        } else {
+                            ReflowTextProvenanceKind::Text
+                        },
+                    });
 
                     // Render underline
                     if let Some(ul_style) = seg.underline {
@@ -2490,6 +2514,7 @@ fn render_paragraph_lines(
                     x += effective_width;
                 }
                 LineItem::MultilingualText(segment) => {
+                    let first = elements.len();
                     x += push_multilingual_text(
                         elements,
                         segment,
@@ -2500,6 +2525,16 @@ fn render_paragraph_lines(
                         para.source_node(),
                         justify_extra,
                     );
+                    let element_position = (first..elements.len())
+                        .find(|position| {
+                            matches!(elements[*position], PositionedElement::MultilingualText(_))
+                        })
+                        .expect("rich text rendering emits its positioned text");
+                    text_provenance.push(ReflowTextProvenance {
+                        element_position,
+                        visual_item,
+                        kind: ReflowTextProvenanceKind::Multilingual,
+                    });
                 }
                 LineItem::Tab { width, leader } => {
                     if let Some(leader_seg) = leader {
@@ -2519,7 +2554,13 @@ fn render_paragraph_lines(
                             field_kind: None,
                             note: None,
                         }));
+                        text_provenance.push(ReflowTextProvenance {
+                            element_position: elements.len() - 1,
+                            visual_item,
+                            kind: ReflowTextProvenanceKind::TabLeader,
+                        });
                     }
+                    tab_provenance.push(ReflowTabProvenance { visual_item });
                     x += width;
                 }
                 LineItem::Image {
@@ -2603,6 +2644,76 @@ fn render_paragraph_lines(
             }
         }
 
+        let text_positions = text_provenance
+            .iter()
+            .map(|provenance| provenance.element_position)
+            .collect::<Vec<_>>();
+        if let Some(logical_elements) = para.reflow.as_deref().and_then(|reflow| {
+            logical_reflow_elements(
+                elements,
+                &text_provenance,
+                &tab_provenance,
+                &reflow.items,
+                para.reflow_direction,
+                para.source_node(),
+            )
+        }) {
+            for (position, element) in text_positions.iter().copied().zip(logical_elements) {
+                elements[position] = element;
+            }
+            y += line.height;
+            continue;
+        }
+        let mut leading = Vec::new();
+        let mut logical_groups = Vec::<((u32, u32, u32), Vec<PositionedElement>)>::new();
+        for element in text_positions.iter().map(|index| elements[*index].clone()) {
+            let source = match &element {
+                PositionedElement::Text(run) => run.source,
+                PositionedElement::MultilingualText(run) => run.source,
+                _ => None,
+            };
+            if let Some(source) = source {
+                logical_groups.push((
+                    (source.node.get(), source.char_start, source.char_end),
+                    vec![element],
+                ));
+            } else if let Some((_, group)) = logical_groups.last_mut() {
+                group.push(element);
+            } else {
+                leading.push(element);
+            }
+        }
+        if logical_groups.is_empty() {
+            let rich_positions = text_positions
+                .into_iter()
+                .filter(|index| matches!(elements[*index], PositionedElement::MultilingualText(_)))
+                .collect::<Vec<_>>();
+            let mut logical_runs = rich_positions
+                .iter()
+                .map(|index| elements[*index].clone())
+                .collect::<Vec<_>>();
+            logical_runs.sort_by_key(|element| match element {
+                PositionedElement::MultilingualText(run) => run.logical_index,
+                _ => unreachable!("rich positions contain only multilingual text"),
+            });
+            for (position, element) in rich_positions.into_iter().zip(logical_runs) {
+                elements[position] = element;
+            }
+        } else {
+            logical_groups.sort_by_key(|(key, _)| *key);
+            let logical_elements = leading
+                .into_iter()
+                .chain(
+                    logical_groups
+                        .into_iter()
+                        .flat_map(|(_, elements)| elements),
+                )
+                .collect::<Vec<_>>();
+            for (position, element) in text_positions.into_iter().zip(logical_elements) {
+                elements[position] = element;
+            }
+        }
+
         y += line.height;
     }
 
@@ -2632,6 +2743,394 @@ fn render_paragraph_lines(
                 children: vec![element],
             },
         }));
+    }
+}
+
+fn logical_reflow_elements(
+    elements: &[PositionedElement],
+    provenance: &[ReflowTextProvenance],
+    tabs: &[ReflowTabProvenance],
+    logical_items: &[oxml_layout::InlineItem],
+    base_direction: oxml_layout::TextDirection,
+    source_node: Option<Option<oxml_layout::SourceNodeId>>,
+) -> Option<Vec<PositionedElement>> {
+    let has_source_less_text =
+        provenance
+            .iter()
+            .any(|provenance| match &elements[provenance.element_position] {
+                PositionedElement::Text(run) => run.source.is_none(),
+                PositionedElement::MultilingualText(run) => run.source.is_none(),
+                _ => false,
+            });
+    if !has_source_less_text {
+        return None;
+    }
+
+    let mut used_source_less = vec![false; logical_items.len()];
+    let mut ranked = Vec::with_capacity(provenance.len());
+    let mut known_visual_ranks = Vec::new();
+    for (visual_order, item_provenance) in provenance.iter().copied().enumerate() {
+        if item_provenance.kind == ReflowTextProvenanceKind::TabLeader {
+            continue;
+        }
+        let element = elements[item_provenance.element_position].clone();
+        let (source, field_kind, note, text, rich_logical_index) = match &element {
+            PositionedElement::Text(run) => (
+                run.source,
+                run.field_kind,
+                run.note,
+                run.text.as_str(),
+                None,
+            ),
+            PositionedElement::MultilingualText(run) => (
+                run.source,
+                run.field_kind,
+                run.note,
+                run.logical_text.as_str(),
+                Some(run.logical_index),
+            ),
+            _ => return None,
+        };
+        let key = if let Some(source) = source {
+            logical_items.iter().enumerate().find_map(|(index, item)| {
+                let item_source = normalize_reflow_source(inline_item_source(item)?, source_node)?;
+                (item_source.node == source.node
+                    && item_source.char_start <= source.char_start
+                    && item_source.char_end >= source.char_end)
+                    .then_some((index, source.char_start, source.char_end))
+            })
+        } else if let Some(field_kind) = field_kind {
+            let exact = logical_items.iter().enumerate().position(|(index, item)| {
+                !used_source_less[index]
+                    && inline_item_field(item) == Some(field_kind)
+                    && inline_item_note(item) == note
+                    && inline_item_text(item) == Some(text)
+            });
+            let index = exact.or_else(|| {
+                logical_items.iter().enumerate().position(|(index, item)| {
+                    !used_source_less[index] && inline_item_field(item) == Some(field_kind)
+                })
+            })?;
+            used_source_less[index] = true;
+            Some((index, 0, 0))
+        } else if let Some(logical_index) = rich_logical_index {
+            logical_items
+                .iter()
+                .enumerate()
+                .find(|(_, item)| {
+                    matches!(
+                        item,
+                        oxml_layout::InlineItem::MultilingualText(segment)
+                            if segment.logical_index() == logical_index
+                    )
+                })
+                .map(|(index, _)| (index, 0, 0))
+        } else if item_provenance.kind == ReflowTextProvenanceKind::ConditionalHyphen {
+            conditional_hyphen_key(elements, provenance, logical_items, source_node)
+        } else {
+            let exact = logical_items.iter().enumerate().position(|(index, item)| {
+                !used_source_less[index]
+                    && source_less_item_matches(item, item_provenance.kind, field_kind, note, text)
+            });
+            if let Some(index) = exact {
+                used_source_less[index] = true;
+                Some((index, 0, 0))
+            } else {
+                None
+            }
+        }?;
+        known_visual_ranks.push((item_provenance.visual_item, key.0));
+        ranked.push((key, visual_order, element));
+    }
+
+    let tab_ranks = logical_tab_ranks(tabs, &known_visual_ranks, logical_items, base_direction)?;
+    for (visual_order, item_provenance) in provenance.iter().copied().enumerate() {
+        if item_provenance.kind != ReflowTextProvenanceKind::TabLeader {
+            continue;
+        }
+        let logical_index = *tab_ranks.get(&item_provenance.visual_item)?;
+        ranked.push((
+            (logical_index, 0, 0),
+            visual_order,
+            elements[item_provenance.element_position].clone(),
+        ));
+    }
+    ranked.sort_by_key(|(key, visual_order, _)| (*key, *visual_order));
+    Some(ranked.into_iter().map(|(_, _, element)| element).collect())
+}
+
+fn normalize_reflow_source(
+    mut source: oxml_layout::SourceSpan,
+    source_node: Option<Option<oxml_layout::SourceNodeId>>,
+) -> Option<oxml_layout::SourceSpan> {
+    if let Some(source_node) = source_node {
+        source.node = source_node?;
+    }
+    Some(source)
+}
+
+fn conditional_hyphen_key(
+    elements: &[PositionedElement],
+    provenance: &[ReflowTextProvenance],
+    logical_items: &[oxml_layout::InlineItem],
+    source_node: Option<Option<oxml_layout::SourceNodeId>>,
+) -> Option<(usize, u32, u32)> {
+    logical_items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let oxml_layout::InlineItem::HyphenatedText { segment, .. } = item else {
+                return None;
+            };
+            let item_source = normalize_reflow_source(segment.source?, source_node)?;
+            let prefix_end = provenance
+                .iter()
+                .filter_map(|provenance| match &elements[provenance.element_position] {
+                    PositionedElement::Text(run) => run.source,
+                    PositionedElement::MultilingualText(run) => run.source,
+                    _ => None,
+                })
+                .filter(|source| {
+                    source.node == item_source.node
+                        && source.char_start >= item_source.char_start
+                        && source.char_end < item_source.char_end
+                })
+                .map(|source| source.char_end)
+                .max()?;
+            Some((index, prefix_end, prefix_end))
+        })
+        .max()
+}
+
+fn conditional_hyphen_visual_items(
+    line_items: &[LineItem],
+    logical_items: &[oxml_layout::InlineItem],
+    base_direction: oxml_layout::TextDirection,
+) -> Vec<usize> {
+    line_items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let LineItem::Text(hyphen) = item else {
+                return None;
+            };
+            if hyphen.text != "-"
+                || hyphen.source.is_some()
+                || hyphen.field_kind.is_some()
+                || hyphen.note.is_some()
+            {
+                return None;
+            }
+            logical_items
+                .iter()
+                .filter_map(|item| match item {
+                    oxml_layout::InlineItem::HyphenatedText { segment, .. } => Some(segment),
+                    _ => None,
+                })
+                .any(|segment| {
+                    let direction = match segment.direction {
+                        oxml_layout::TextDirection::Auto => {
+                            inferred_text_direction(&segment.text).unwrap_or(base_direction)
+                        }
+                        direction => direction,
+                    };
+                    let prefix_index = match direction {
+                        oxml_layout::TextDirection::RightToLeft => index.checked_add(1),
+                        oxml_layout::TextDirection::LeftToRight => index.checked_sub(1),
+                        oxml_layout::TextDirection::Auto => unreachable!("Auto was resolved"),
+                    };
+                    let Some(prefix_source) = prefix_index
+                        .and_then(|prefix_index| line_items.get(prefix_index))
+                        .and_then(line_item_source)
+                    else {
+                        return false;
+                    };
+                    segment.source.is_some_and(|source| {
+                        prefix_source.node == source.node
+                            && prefix_source.char_start >= source.char_start
+                            && prefix_source.char_end < source.char_end
+                    })
+                })
+                .then_some(index)
+        })
+        .collect()
+}
+
+fn inferred_text_direction(text: &str) -> Option<oxml_layout::TextDirection> {
+    for character in text.chars() {
+        if character == '\u{200e}' {
+            return Some(oxml_layout::TextDirection::LeftToRight);
+        }
+        if character == '\u{200f}' {
+            return Some(oxml_layout::TextDirection::RightToLeft);
+        }
+        if !character.is_alphabetic() {
+            continue;
+        }
+        return Some(
+            if matches!(
+                character as u32,
+                0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff
+            ) {
+                oxml_layout::TextDirection::RightToLeft
+            } else {
+                oxml_layout::TextDirection::LeftToRight
+            },
+        );
+    }
+    None
+}
+
+fn line_item_source(item: &LineItem) -> Option<oxml_layout::SourceSpan> {
+    match item {
+        LineItem::Text(segment) | LineItem::Marker(segment) => segment.source,
+        LineItem::MultilingualText(segment) => segment.base().source,
+        _ => None,
+    }
+}
+
+fn source_less_item_matches(
+    item: &oxml_layout::InlineItem,
+    kind: ReflowTextProvenanceKind,
+    field_kind: Option<oxml_layout::FieldKind>,
+    note: Option<oxml_layout::NoteRef>,
+    text: &str,
+) -> bool {
+    let segment = match (kind, item) {
+        (ReflowTextProvenanceKind::Marker, oxml_layout::InlineItem::Marker(segment))
+        | (ReflowTextProvenanceKind::Text, oxml_layout::InlineItem::Text(segment)) => segment,
+        _ => return false,
+    };
+    segment.source.is_none()
+        && segment.field_kind == field_kind
+        && segment.note == note
+        && segment.text == text
+}
+
+fn logical_tab_ranks(
+    tabs: &[ReflowTabProvenance],
+    known_visual_ranks: &[(usize, usize)],
+    logical_items: &[oxml_layout::InlineItem],
+    base_direction: oxml_layout::TextDirection,
+) -> Option<HashMap<usize, usize>> {
+    if tabs.is_empty() {
+        return Some(HashMap::new());
+    }
+    let logical_tabs = logical_items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| matches!(item, oxml_layout::InlineItem::Tab).then_some(index))
+        .collect::<Vec<_>>();
+    if logical_tabs.len() < tabs.len() {
+        return None;
+    }
+    let mut known = known_visual_ranks.to_vec();
+    known.sort_unstable_by_key(|(visual_item, _)| *visual_item);
+    let default_ascending = known
+        .windows(2)
+        .find_map(|pair| (pair[0].1 != pair[1].1).then_some(pair[0].1 < pair[1].1))
+        .unwrap_or(base_direction != oxml_layout::TextDirection::RightToLeft);
+    let mut result = HashMap::new();
+    let mut used = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < tabs.len() {
+        let start = cursor;
+        while cursor + 1 < tabs.len()
+            && tabs[cursor + 1].visual_item == tabs[cursor].visual_item + 1
+        {
+            cursor += 1;
+        }
+        let group = &tabs[start..=cursor];
+        let left = known
+            .iter()
+            .rev()
+            .find(|(visual_item, _)| *visual_item < group[0].visual_item)
+            .map(|(_, logical_index)| *logical_index);
+        let right = known
+            .iter()
+            .find(|(visual_item, _)| *visual_item > group[group.len() - 1].visual_item)
+            .map(|(_, logical_index)| *logical_index);
+        let ascending = match (left, right) {
+            (Some(left), Some(right)) if left != right => left < right,
+            _ => default_ascending,
+        };
+        let mut candidates = logical_tabs
+            .iter()
+            .copied()
+            .filter(|index| !used.contains(index))
+            .filter(|index| match (left, right, ascending) {
+                (Some(left), Some(right), true) => *index > left && *index < right,
+                (Some(left), Some(right), false) => *index < left && *index > right,
+                (Some(left), None, true) => *index > left,
+                (Some(left), None, false) => *index < left,
+                (None, Some(right), true) => *index < right,
+                (None, Some(right), false) => *index > right,
+                (None, None, _) => true,
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        let count = group.len();
+        if candidates.len() < count {
+            return None;
+        }
+        let mut selected = match (left, right, ascending) {
+            (None, Some(_), true) | (Some(_), None, false) => {
+                candidates.split_off(candidates.len() - count)
+            }
+            (None, Some(_), false) | (Some(_), None, true) | (None, None, _) => {
+                candidates.into_iter().take(count).collect()
+            }
+            (Some(_), Some(_), _) => candidates.into_iter().take(count).collect(),
+        };
+        if !ascending {
+            selected.reverse();
+        }
+        for (tab, logical_index) in group.iter().zip(selected) {
+            used.push(logical_index);
+            result.insert(tab.visual_item, logical_index);
+        }
+        cursor += 1;
+    }
+    Some(result)
+}
+
+fn inline_item_source(item: &oxml_layout::InlineItem) -> Option<oxml_layout::SourceSpan> {
+    match item {
+        oxml_layout::InlineItem::Text(segment)
+        | oxml_layout::InlineItem::HyphenatedText { segment, .. }
+        | oxml_layout::InlineItem::Marker(segment) => segment.source,
+        oxml_layout::InlineItem::MultilingualText(segment) => segment.base().source,
+        _ => None,
+    }
+}
+
+fn inline_item_field(item: &oxml_layout::InlineItem) -> Option<oxml_layout::FieldKind> {
+    match item {
+        oxml_layout::InlineItem::Text(segment)
+        | oxml_layout::InlineItem::HyphenatedText { segment, .. }
+        | oxml_layout::InlineItem::Marker(segment) => segment.field_kind,
+        oxml_layout::InlineItem::MultilingualText(segment) => segment.base().field_kind,
+        _ => None,
+    }
+}
+
+fn inline_item_note(item: &oxml_layout::InlineItem) -> Option<oxml_layout::NoteRef> {
+    match item {
+        oxml_layout::InlineItem::Text(segment)
+        | oxml_layout::InlineItem::HyphenatedText { segment, .. }
+        | oxml_layout::InlineItem::Marker(segment) => segment.note,
+        oxml_layout::InlineItem::MultilingualText(segment) => segment.base().note,
+        _ => None,
+    }
+}
+
+fn inline_item_text(item: &oxml_layout::InlineItem) -> Option<&str> {
+    match item {
+        oxml_layout::InlineItem::Text(segment)
+        | oxml_layout::InlineItem::HyphenatedText { segment, .. }
+        | oxml_layout::InlineItem::Marker(segment) => Some(segment.text.as_str()),
+        oxml_layout::InlineItem::MultilingualText(segment) => Some(segment.text()),
+        _ => None,
     }
 }
 
@@ -2688,6 +3187,7 @@ fn render_change_bar_at(
 /// Render header/footer blocks.
 fn render_hf_blocks(
     blocks: &[ParagraphBlock],
+    directions: Option<&[oxml_layout::TextDirection]>,
     geometry: &PageGeometry,
     start_y: f64,
     page_number: usize,
@@ -2695,12 +3195,17 @@ fn render_hf_blocks(
     media: &HashMap<MediaId, ImageData>,
 ) {
     let mut y = start_y - geometry.margin_top; // Convert to relative
-    for para in blocks {
+    for (index, para) in blocks.iter().enumerate() {
         render_paragraph_lines(
             &para.lines,
             ParagraphView {
                 block: para,
                 semantics: None,
+                reflow_direction: directions
+                    .and_then(|directions| directions.get(index))
+                    .copied()
+                    .unwrap_or(oxml_layout::TextDirection::Auto),
+                reflow_allowed: true,
             },
             geometry,
             y,
@@ -2808,6 +3313,11 @@ fn render_table_row(
                         ParagraphView {
                             block: paragraph,
                             semantics,
+                            reflow_direction: semantics
+                                .map_or(oxml_layout::TextDirection::Auto, |semantics| {
+                                    semantics.reflow_direction
+                                }),
+                            reflow_allowed: true,
                         },
                         &cell_geometry,
                         content_y,
@@ -3244,7 +3754,7 @@ fn distribute_justify_advances(text: &str, advances: &[f64], extra_per_gap: f64)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::ParagraphBlock;
+    use crate::block::{ParagraphBlock, ParagraphSemantics};
     use oxml_layout::LayoutLine;
 
     fn empty_media() -> MediaRegistry {
@@ -3294,6 +3804,798 @@ mod tests {
         }
     }
 
+    fn directional_test_segment(
+        text: &str,
+        direction: TextDirection,
+        source: Option<oxml_layout::SourceSpan>,
+        field_kind: Option<oxml_layout::FieldKind>,
+    ) -> oxml_layout::TextSegment {
+        oxml_layout::TextSegment {
+            text: text.to_owned(),
+            direction,
+            source,
+            font_id: oxml_layout::FontId(0),
+            font_size: 12.0,
+            glyph_ids: text.chars().map(|character| character as u16).collect(),
+            advances: vec![6.0; text.chars().count()],
+            width: text.chars().count() as f64 * 6.0,
+            ascent: 9.0,
+            descent: 3.0,
+            line_gap: 0.0,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            underline: None,
+            strike: false,
+            dstrike: false,
+            highlight: None,
+            baseline_offset: 0.0,
+            hyperlink_url: None,
+            field_kind,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn field_only_directional_reflow_uses_the_bidi_breaker() {
+        let fm = FontManager::new_deterministic().expect("bundled fonts load");
+        let hebrew = directional_test_segment(
+            "אבג",
+            TextDirection::RightToLeft,
+            None,
+            Some(oxml_layout::FieldKind::Page),
+        );
+        let english = directional_test_segment(
+            "ABC",
+            TextDirection::LeftToRight,
+            None,
+            Some(oxml_layout::FieldKind::NumPages),
+        );
+        let reflow_items = vec![
+            oxml_layout::InlineItem::Text(hebrew.clone()),
+            oxml_layout::InlineItem::Text(english.clone()),
+        ];
+        let params = oxml_layout::LineBreakParams {
+            available_width: 468.0,
+            ..Default::default()
+        };
+        let lines = break_multilingual_into_lines(
+            &[
+                oxml_layout::InlineItem::Text(hebrew),
+                oxml_layout::InlineItem::Text(english),
+            ],
+            &params,
+            &fm,
+            TextDirection::RightToLeft,
+        )
+        .expect("initial field-only bidi break");
+        let mut paragraph = make_para(1, 12.0);
+        paragraph.lines = lines;
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items: reflow_items,
+            params,
+        }));
+        let wrap = PlacedWrap {
+            rect: Rect {
+                x: 72.0,
+                y: 72.0,
+                width: 30.0,
+                height: 20.0,
+            },
+            wrap: WrapType::Square,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+        };
+
+        let reflowed = reflow_around_wraps(
+            &paragraph,
+            TextDirection::RightToLeft,
+            &[wrap],
+            0.0,
+            &PageGeometry::default(),
+            &fm,
+        )
+        .expect("wrap overlaps the field line");
+        let kinds = reflowed.lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::Text(segment) => segment.field_kind,
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                oxml_layout::FieldKind::NumPages,
+                oxml_layout::FieldKind::Page
+            ]
+        );
+    }
+
+    #[test]
+    fn source_less_stored_field_returns_to_logical_extraction_order() {
+        let source_node = oxml_layout::SourceNodeId::new(1).expect("source node");
+        let hebrew_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 0,
+            char_end: 3,
+        };
+        let english_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 5,
+            char_end: 8,
+        };
+        let hebrew =
+            directional_test_segment("אבג", TextDirection::RightToLeft, Some(hebrew_source), None);
+        let field = directional_test_segment(
+            "7",
+            TextDirection::RightToLeft,
+            None,
+            Some(oxml_layout::FieldKind::Page),
+        );
+        let english = directional_test_segment(
+            "ABC",
+            TextDirection::LeftToRight,
+            Some(english_source),
+            None,
+        );
+        let mut paragraph = make_para(1, 12.0);
+        paragraph.lines[0].items = vec![
+            LineItem::Text(field.clone()),
+            LineItem::Text(english.clone()),
+            LineItem::Text(hebrew.clone()),
+        ];
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items: vec![
+                oxml_layout::InlineItem::Text(hebrew),
+                oxml_layout::InlineItem::Text(field),
+                oxml_layout::InlineItem::Text(english),
+            ],
+            params: oxml_layout::LineBreakParams {
+                available_width: 468.0,
+                ..Default::default()
+            },
+        }));
+        let mut elements = Vec::new();
+        render_paragraph_lines(
+            &paragraph.lines,
+            ParagraphView {
+                block: &paragraph,
+                semantics: None,
+                reflow_direction: TextDirection::RightToLeft,
+                reflow_allowed: true,
+            },
+            &PageGeometry::default(),
+            0.0,
+            &mut elements,
+            &HashMap::new(),
+        );
+
+        let extracted = elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(extracted, "אבג7ABC");
+        let origins = elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some((run.text.as_str(), run.origin.x)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(origins[0].1 > origins[2].1, "visual origins stay unchanged");
+    }
+
+    #[test]
+    fn shaped_tab_leader_preserves_source_less_marker_and_field_logical_order() {
+        let source_node = oxml_layout::SourceNodeId::new(1).expect("source node");
+        let hebrew_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 0,
+            char_end: 3,
+        };
+        let english_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 5,
+            char_end: 8,
+        };
+        let marker = directional_test_segment("1.", TextDirection::LeftToRight, None, None);
+        let leader = directional_test_segment("...", TextDirection::Auto, None, None);
+        let hebrew =
+            directional_test_segment("אבג", TextDirection::RightToLeft, Some(hebrew_source), None);
+        let field = directional_test_segment(
+            "7",
+            TextDirection::RightToLeft,
+            None,
+            Some(oxml_layout::FieldKind::Page),
+        );
+        let english = directional_test_segment(
+            "ABC",
+            TextDirection::LeftToRight,
+            Some(english_source),
+            None,
+        );
+        let mut paragraph = make_para(1, 12.0);
+        paragraph.lines[0].items = vec![
+            LineItem::Text(english.clone()),
+            LineItem::Text(field.clone()),
+            LineItem::Text(hebrew.clone()),
+            LineItem::Tab {
+                width: leader.width,
+                leader: Some(leader),
+            },
+            LineItem::Marker(marker.clone()),
+        ];
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items: vec![
+                oxml_layout::InlineItem::Marker(marker),
+                oxml_layout::InlineItem::Tab,
+                oxml_layout::InlineItem::Text(hebrew),
+                oxml_layout::InlineItem::Text(field),
+                oxml_layout::InlineItem::Text(english),
+            ],
+            params: oxml_layout::LineBreakParams {
+                available_width: 468.0,
+                ..Default::default()
+            },
+        }));
+
+        let mut elements = Vec::new();
+        render_paragraph_lines(
+            &paragraph.lines,
+            ParagraphView {
+                block: &paragraph,
+                semantics: None,
+                reflow_direction: TextDirection::RightToLeft,
+                reflow_allowed: true,
+            },
+            &PageGeometry::default(),
+            0.0,
+            &mut elements,
+            &HashMap::new(),
+        );
+
+        let text = elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(text, "1....אבג7ABC");
+        let origins = elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some((run.text.as_str(), run.origin.x)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(origins[0].1 > origins[4].1, "visual origins stay unchanged");
+    }
+
+    #[test]
+    fn cached_body_and_table_bidi_sources_rebind_before_logical_extraction() {
+        let cache_node = oxml_layout::SourceNodeId::new(u32::MAX).expect("cache source node");
+        let hebrew_source = oxml_layout::SourceSpan {
+            node: cache_node,
+            char_start: 0,
+            char_end: 3,
+        };
+        let english_source = oxml_layout::SourceSpan {
+            node: cache_node,
+            char_start: 3,
+            char_end: 6,
+        };
+        let hebrew =
+            directional_test_segment("אבג", TextDirection::RightToLeft, Some(hebrew_source), None);
+        let transformed = directional_test_segment("ABC", TextDirection::LeftToRight, None, None);
+        let english = directional_test_segment(
+            "XYZ",
+            TextDirection::LeftToRight,
+            Some(english_source),
+            None,
+        );
+        let leader = directional_test_segment("...", TextDirection::Auto, None, None);
+
+        for (story, source_node) in [
+            (
+                "body",
+                oxml_layout::SourceNodeId::new(41).expect("body source node"),
+            ),
+            (
+                "table",
+                oxml_layout::SourceNodeId::new(42).expect("table source node"),
+            ),
+        ] {
+            let mut paragraph = make_para(1, 12.0);
+            paragraph.lines[0].items = vec![
+                LineItem::Text(english.clone()),
+                LineItem::Text(transformed.clone()),
+                LineItem::Tab {
+                    width: leader.width,
+                    leader: Some(leader.clone()),
+                },
+                LineItem::Text(hebrew.clone()),
+            ];
+            paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+                items: vec![
+                    oxml_layout::InlineItem::Text(hebrew.clone()),
+                    oxml_layout::InlineItem::Tab,
+                    oxml_layout::InlineItem::Text(transformed.clone()),
+                    oxml_layout::InlineItem::Text(english.clone()),
+                ],
+                params: oxml_layout::LineBreakParams {
+                    available_width: 468.0,
+                    ..Default::default()
+                },
+            }));
+            let semantics = ParagraphSemantics {
+                source_node: Some(source_node),
+                structure_id: None,
+                reflow_direction: TextDirection::RightToLeft,
+            };
+            let mut elements = Vec::new();
+            render_paragraph_lines(
+                &paragraph.lines,
+                ParagraphView {
+                    block: &paragraph,
+                    semantics: Some(&semantics),
+                    reflow_direction: TextDirection::RightToLeft,
+                    reflow_allowed: true,
+                },
+                &PageGeometry::default(),
+                0.0,
+                &mut elements,
+                &HashMap::new(),
+            );
+
+            let text = elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => Some(run.text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>();
+            assert_eq!(text, "אבג...ABCXYZ", "{story} PDF and SVG order");
+            let sourced = elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => run.source,
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(sourced.len(), 2, "{story} sourced runs");
+            assert!(
+                sourced.iter().all(|source| source.node == source_node),
+                "{story} sources must use the current story node: {sourced:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_header_hyphen_and_leader_rebind_before_logical_extraction() {
+        let cache_node = oxml_layout::SourceNodeId::new(u32::MAX).expect("cache source node");
+        let rebound = oxml_layout::SourceNodeId::new(73).expect("header source node");
+        let hebrew_source = oxml_layout::SourceSpan {
+            node: cache_node,
+            char_start: 0,
+            char_end: 3,
+        };
+        let word_source = oxml_layout::SourceSpan {
+            node: cache_node,
+            char_start: 3,
+            char_end: 17,
+        };
+        let prefix_source = oxml_layout::SourceSpan {
+            node: cache_node,
+            char_start: 3,
+            char_end: 8,
+        };
+        let hebrew =
+            directional_test_segment("אבג", TextDirection::RightToLeft, Some(hebrew_source), None);
+        let word = directional_test_segment(
+            "representation",
+            TextDirection::LeftToRight,
+            Some(word_source),
+            None,
+        );
+        let prefix = directional_test_segment(
+            "repre",
+            TextDirection::LeftToRight,
+            Some(prefix_source),
+            None,
+        );
+        let hyphen = directional_test_segment("-", TextDirection::LeftToRight, None, None);
+        let leader = directional_test_segment("...", TextDirection::Auto, None, None);
+        let mut paragraph = make_para(1, 12.0);
+        paragraph.lines[0].items = vec![
+            LineItem::Text(prefix),
+            LineItem::Text(hyphen),
+            LineItem::Tab {
+                width: leader.width,
+                leader: Some(leader),
+            },
+            LineItem::Text(hebrew.clone()),
+        ];
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items: vec![
+                oxml_layout::InlineItem::Text(hebrew),
+                oxml_layout::InlineItem::Tab,
+                oxml_layout::InlineItem::HyphenatedText {
+                    segment: word,
+                    language: "en-US".to_owned(),
+                },
+            ],
+            params: oxml_layout::LineBreakParams {
+                available_width: 468.0,
+                ..Default::default()
+            },
+        }));
+        let semantics = ParagraphSemantics {
+            source_node: Some(rebound),
+            structure_id: None,
+            reflow_direction: TextDirection::RightToLeft,
+        };
+        let mut elements = Vec::new();
+        render_paragraph_lines(
+            &paragraph.lines,
+            ParagraphView {
+                block: &paragraph,
+                semantics: Some(&semantics),
+                reflow_direction: TextDirection::RightToLeft,
+                reflow_allowed: true,
+            },
+            &PageGeometry::default(),
+            0.0,
+            &mut elements,
+            &HashMap::new(),
+        );
+
+        let text = elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(text, "אבג...repre-", "PDF and SVG consume logical order");
+        assert!(
+            elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => run.source,
+                    _ => None,
+                })
+                .all(|source| source.node == rebound),
+            "all cached header sources rebind to the current header node"
+        );
+    }
+
+    #[test]
+    fn selected_conditional_hyphen_keeps_hybrid_pdf_and_svg_text_logical_with_or_without_a_leader()
+    {
+        let source_node = oxml_layout::SourceNodeId::new(1).expect("source node");
+        let hebrew_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 0,
+            char_end: 3,
+        };
+        let word_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 3,
+            char_end: 17,
+        };
+        let prefix_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 3,
+            char_end: 8,
+        };
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut hebrew_base =
+            directional_test_segment("אבג", TextDirection::RightToLeft, Some(hebrew_source), None);
+        hebrew_base.font_id = fm
+            .resolve_font_for_text(None, false, false, "אבג")
+            .expect("Hebrew fallback font");
+        let hebrew = fm
+            .shape_multilingual_text(
+                hebrew_base,
+                Some("he-IL"),
+                TextDirection::RightToLeft,
+                false,
+            )
+            .expect("Hebrew uses rich shaping")
+            .remove(0);
+        let field = directional_test_segment(
+            "7",
+            TextDirection::RightToLeft,
+            None,
+            Some(oxml_layout::FieldKind::Page),
+        );
+        let word = directional_test_segment(
+            "representation",
+            TextDirection::LeftToRight,
+            Some(word_source),
+            None,
+        );
+        let prefix = directional_test_segment(
+            "repre",
+            TextDirection::LeftToRight,
+            Some(prefix_source),
+            None,
+        );
+        let hyphen = directional_test_segment("-", TextDirection::LeftToRight, None, None);
+        let leader = directional_test_segment("...", TextDirection::Auto, None, None);
+
+        for with_leader in [false, true] {
+            let mut visual_items = vec![
+                LineItem::Text(prefix.clone()),
+                LineItem::Text(hyphen.clone()),
+            ];
+            if with_leader {
+                visual_items.push(LineItem::Tab {
+                    width: leader.width,
+                    leader: Some(leader.clone()),
+                });
+            }
+            visual_items.push(LineItem::Text(field.clone()));
+            visual_items.push(LineItem::MultilingualText(hebrew.clone()));
+
+            let mut logical_items = vec![
+                oxml_layout::InlineItem::MultilingualText(hebrew.clone()),
+                oxml_layout::InlineItem::Text(field.clone()),
+            ];
+            if with_leader {
+                logical_items.push(oxml_layout::InlineItem::Tab);
+            }
+            logical_items.push(oxml_layout::InlineItem::HyphenatedText {
+                segment: word.clone(),
+                language: "en-US".to_owned(),
+            });
+
+            let mut paragraph = make_para(1, 12.0);
+            paragraph.lines[0].items = visual_items;
+            paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+                items: logical_items,
+                params: oxml_layout::LineBreakParams {
+                    available_width: 468.0,
+                    ..Default::default()
+                },
+            }));
+            let mut elements = Vec::new();
+            render_paragraph_lines(
+                &paragraph.lines,
+                ParagraphView {
+                    block: &paragraph,
+                    semantics: None,
+                    reflow_direction: TextDirection::RightToLeft,
+                    reflow_allowed: true,
+                },
+                &PageGeometry::default(),
+                0.0,
+                &mut elements,
+                &HashMap::new(),
+            );
+
+            let text = elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => Some(run.text.as_str()),
+                    PositionedElement::MultilingualText(run) => Some(run.logical_text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>();
+            let expected = if with_leader {
+                "אבג7...repre-"
+            } else {
+                "אבג7repre-"
+            };
+            assert_eq!(text, expected, "PDF and SVG consume this logical order");
+
+            let origins = elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => Some((run.text.as_str(), run.origin.x)),
+                    PositionedElement::MultilingualText(run) => {
+                        Some((run.logical_text.as_str(), run.origin.x))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let hebrew_x = origins
+                .iter()
+                .find_map(|(text, x)| (*text == "אבג").then_some(*x))
+                .expect("Hebrew origin");
+            let prefix_x = origins
+                .iter()
+                .find_map(|(text, x)| (*text == "repre").then_some(*x))
+                .expect("prefix origin");
+            assert!(prefix_x < hebrew_x, "visual origins stay unchanged");
+        }
+    }
+
+    #[test]
+    fn generated_hyphen_does_not_claim_an_identical_marker_or_untyped_field() {
+        let source_node = oxml_layout::SourceNodeId::new(1).expect("source node");
+        let hebrew_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 2,
+            char_end: 5,
+        };
+        let word_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 5,
+            char_end: 19,
+        };
+        let prefix_source = oxml_layout::SourceSpan {
+            node: source_node,
+            char_start: 5,
+            char_end: 10,
+        };
+        let mut marker = directional_test_segment("-", TextDirection::Auto, None, None);
+        marker.bold = true;
+        let mut untyped_field =
+            directional_test_segment("-", TextDirection::RightToLeft, None, None);
+        untyped_field.italic = true;
+        let hebrew =
+            directional_test_segment("אבג", TextDirection::RightToLeft, Some(hebrew_source), None);
+        let word = directional_test_segment(
+            "representation",
+            TextDirection::Auto,
+            Some(word_source),
+            None,
+        );
+        let prefix =
+            directional_test_segment("repre", TextDirection::Auto, Some(prefix_source), None);
+        let generated_hyphen = directional_test_segment("-", TextDirection::Auto, None, None);
+
+        let mut paragraph = make_para(1, 12.0);
+        paragraph.lines[0].items = vec![
+            LineItem::Text(prefix.clone()),
+            LineItem::Text(generated_hyphen),
+            LineItem::Text(hebrew.clone()),
+            LineItem::Text(untyped_field.clone()),
+            LineItem::Marker(marker.clone()),
+        ];
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items: vec![
+                oxml_layout::InlineItem::Marker(marker),
+                oxml_layout::InlineItem::Text(untyped_field),
+                oxml_layout::InlineItem::Text(hebrew),
+                oxml_layout::InlineItem::HyphenatedText {
+                    segment: word,
+                    language: "en-US".to_owned(),
+                },
+            ],
+            params: oxml_layout::LineBreakParams {
+                available_width: 468.0,
+                ..Default::default()
+            },
+        }));
+
+        let mut elements = Vec::new();
+        render_paragraph_lines(
+            &paragraph.lines,
+            ParagraphView {
+                block: &paragraph,
+                semantics: None,
+                reflow_direction: TextDirection::RightToLeft,
+                reflow_allowed: true,
+            },
+            &PageGeometry::default(),
+            0.0,
+            &mut elements,
+            &HashMap::new(),
+        );
+
+        let text_runs = elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text_runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>(),
+            "--אבגrepre-"
+        );
+        assert!(text_runs[0].bold, "numbering marker keeps logical rank");
+        assert!(text_runs[1].italic, "untyped field keeps logical rank");
+        assert!(
+            !text_runs[4].bold && !text_runs[4].italic,
+            "generated hyphen follows its source-bearing prefix"
+        );
+    }
+
+    #[test]
+    fn leader_provenance_skips_plain_tabs_and_survives_visual_tab_reversal() {
+        let source_node = oxml_layout::SourceNodeId::new(1).expect("source node");
+        let sourced = |text: &str, start| {
+            directional_test_segment(
+                text,
+                TextDirection::LeftToRight,
+                Some(oxml_layout::SourceSpan {
+                    node: source_node,
+                    char_start: start,
+                    char_end: start + 1,
+                }),
+                None,
+            )
+        };
+        let a = sourced("A", 0);
+        let b = sourced("B", 1);
+        let c = sourced("C", 2);
+        let d = sourced("D", 3);
+        let dots = directional_test_segment("...", TextDirection::Auto, None, None);
+        let dashes = directional_test_segment("---", TextDirection::Auto, None, None);
+        let mut paragraph = make_para(1, 12.0);
+        paragraph.lines[0].items = vec![
+            LineItem::Text(d.clone()),
+            LineItem::Tab {
+                width: dashes.width,
+                leader: Some(dashes),
+            },
+            LineItem::Text(c.clone()),
+            LineItem::Tab {
+                width: dots.width,
+                leader: Some(dots),
+            },
+            LineItem::Text(b.clone()),
+            LineItem::Tab {
+                width: 12.0,
+                leader: None,
+            },
+            LineItem::Text(a.clone()),
+        ];
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items: vec![
+                oxml_layout::InlineItem::Text(a),
+                oxml_layout::InlineItem::Tab,
+                oxml_layout::InlineItem::Text(b),
+                oxml_layout::InlineItem::Tab,
+                oxml_layout::InlineItem::Text(c),
+                oxml_layout::InlineItem::Tab,
+                oxml_layout::InlineItem::Text(d),
+            ],
+            params: oxml_layout::LineBreakParams {
+                available_width: 468.0,
+                ..Default::default()
+            },
+        }));
+
+        let mut elements = Vec::new();
+        render_paragraph_lines(
+            &paragraph.lines,
+            ParagraphView {
+                block: &paragraph,
+                semantics: None,
+                reflow_direction: TextDirection::RightToLeft,
+                reflow_allowed: true,
+            },
+            &PageGeometry::default(),
+            0.0,
+            &mut elements,
+            &HashMap::new(),
+        );
+
+        let text = elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(text, "AB...C---D");
+    }
+
     #[test]
     fn descriptionless_inline_drawings_are_paragraph_artifacts() {
         let mut paragraph = make_para(1, 14.0);
@@ -3332,6 +4634,8 @@ mod tests {
             ParagraphView {
                 block: &paragraph,
                 semantics: None,
+                reflow_direction: TextDirection::Auto,
+                reflow_allowed: true,
             },
             &PageGeometry::default(),
             0.0,
@@ -3432,6 +4736,7 @@ mod tests {
         use oxml_layout::TextSegment;
         let seg = TextSegment {
             text: "Hello".to_string(),
+            direction: TextDirection::Auto,
             source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
@@ -3559,6 +4864,7 @@ mod tests {
         let fm = FontManager::new();
         let seg = TextSegment {
             text: "Hi".to_string(),
+            direction: TextDirection::Auto,
             source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
@@ -3789,6 +5095,7 @@ mod tests {
         use oxml_layout::TextSegment;
         let seg = TextSegment {
             text: text.to_string(),
+            direction: TextDirection::Auto,
             source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
@@ -3829,6 +5136,7 @@ mod tests {
         let fm = FontManager::new();
         let seg = TextSegment {
             text: "Click me".to_string(),
+            direction: TextDirection::Auto,
             source: None,
             font_id: oxml_layout::FontId(0),
             font_size: 12.0,
@@ -4535,6 +5843,7 @@ mod tests {
         let pager = Pager::new(
             PageGeometry::default(),
             None,
+            None,
             false,
             &media,
             &notes,
@@ -4580,6 +5889,7 @@ mod tests {
             let pager = Pager::new(
                 PageGeometry::default(),
                 None,
+                None,
                 false,
                 &media,
                 &notes,
@@ -4616,6 +5926,7 @@ mod tests {
         let context = PassContext {
             geometry: PageGeometry::default(),
             header_footer: None,
+            header_footer_semantics: None,
             title_pg: false,
             fm: &fm,
             media: &media,

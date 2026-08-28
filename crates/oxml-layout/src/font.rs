@@ -68,6 +68,50 @@ pub enum TextDirection {
     RightToLeft,
 }
 
+pub(crate) fn directional_level(
+    direction: TextDirection,
+    paragraph_level: unicode_bidi::Level,
+) -> unicode_bidi::Level {
+    let paragraph_number = paragraph_level.number();
+    let number = match direction {
+        TextDirection::Auto => paragraph_number,
+        TextDirection::LeftToRight if paragraph_level.is_rtl() => paragraph_number + 1,
+        TextDirection::LeftToRight => paragraph_number,
+        TextDirection::RightToLeft if paragraph_level.is_rtl() => paragraph_number,
+        TextDirection::RightToLeft => paragraph_number + 1,
+    };
+    unicode_bidi::Level::new(number).expect("one directional embedding fits the bidi level limit")
+}
+
+pub(crate) fn explicit_direction_levels(
+    text: &str,
+    direction: TextDirection,
+    paragraph_level: unicode_bidi::Level,
+) -> Result<Vec<unicode_bidi::Level>> {
+    let local_base = match direction {
+        TextDirection::Auto => paragraph_level,
+        TextDirection::LeftToRight => unicode_bidi::Level::ltr(),
+        TextDirection::RightToLeft => unicode_bidi::Level::rtl(),
+    };
+    let target_base = directional_level(direction, paragraph_level);
+    let offset = target_base.number() - local_base.number();
+    unicode_bidi::BidiInfo::new(text, Some(local_base))
+        .levels
+        .into_iter()
+        .map(|level| {
+            level
+                .number()
+                .checked_add(offset)
+                .and_then(|number| unicode_bidi::Level::new(number).ok())
+                .ok_or_else(|| {
+                    LayoutError::Layout(
+                        "run direction exceeded the Unicode bidi level limit".to_owned(),
+                    )
+                })
+        })
+        .collect()
+}
+
 /// Script identity used to select shaping behavior and deterministic fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextScript {
@@ -1359,6 +1403,15 @@ impl FontManager {
             .iter()
             .map(|(segment, _)| segment.text.as_str())
             .collect::<String>();
+        let mut paragraph_offset = 0usize;
+        let segment_starts = segments
+            .iter()
+            .map(|(segment, _)| {
+                let start = paragraph_offset;
+                paragraph_offset += segment.text.len();
+                start
+            })
+            .collect::<Vec<_>>();
         if paragraph_text.is_empty() {
             return Ok(Vec::new());
         }
@@ -1368,23 +1421,34 @@ impl FontManager {
             TextDirection::RightToLeft => Some(unicode_bidi::Level::rtl()),
         };
         let bidi = unicode_bidi::BidiInfo::new(&paragraph_text, paragraph_level);
-        let mut byte_offset = 0usize;
+        let paragraph_level = bidi
+            .paragraphs
+            .first()
+            .map(|paragraph| paragraph.level)
+            .unwrap_or_else(unicode_bidi::Level::ltr);
         let mut logical_index = 0usize;
         let mut shaped = Vec::new();
-        for (segment, language) in segments {
+        for ((segment, language), byte_offset) in segments.into_iter().zip(segment_starts) {
             let byte_end = byte_offset + segment.text.len();
             if !segment.text.is_empty() {
+                let forced_levels = (segment.direction != TextDirection::Auto)
+                    .then(|| {
+                        explicit_direction_levels(&segment.text, segment.direction, paragraph_level)
+                    })
+                    .transpose()?;
+                let levels = forced_levels
+                    .as_deref()
+                    .unwrap_or(&bidi.levels[byte_offset..byte_end]);
                 let spans = self.shape_multilingual_with_levels(
                     segment,
                     language.as_deref(),
                     no_wrap,
-                    &bidi.levels[byte_offset..byte_end],
+                    levels,
                     logical_index,
                 )?;
                 logical_index += spans.len();
                 shaped.extend(spans);
             }
-            byte_offset = byte_end;
         }
         Ok(shaped)
     }
@@ -1949,6 +2013,7 @@ mod tests {
             .expect("test seed shapes");
         TextSegment {
             text: text.to_owned(),
+            direction: TextDirection::Auto,
             source,
             font_id,
             font_size: size_pt,
@@ -2514,6 +2579,7 @@ mod tests {
             .shape_multilingual_text(
                 TextSegment {
                     text: "A☀∙".to_owned(),
+                    direction: TextDirection::Auto,
                     source: None,
                     font_id,
                     font_size: 18.0,

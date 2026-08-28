@@ -477,6 +477,16 @@ spacing places rich text on the Word baseline at 0.8 of the largest run em for
 the line. Automatic spacing and the established Latin-only path retain their
 existing metrics and output bytes.
 
+Word `w:bidi` selects the paragraph base direction and `w:rtl` selects the
+direction of its exact logical run span. Start and end justification and
+indentation resolve from that base direction, while physical left and right
+values remain physical. Numbering markers participate in the same line-local
+visual order and therefore remain on the leading edge. Directional levels are
+intersected with language, script, font coverage, cluster, and source ranges.
+Line fitting stays logical. UAX 9 L1 resets line whitespace before L2 produces
+the painted item order. PDF `ActualText`, SVG text, diagnostics, selection, and
+round-trip XML retain logical order.
+
 `MultilingualGlyphRun` is the rich positioned output. It carries glyph ids,
 x and y advances, x and y offsets, logical clusters, direction, and extraction
 text. PDF paints those exact positions inside logical `ActualText`, raster

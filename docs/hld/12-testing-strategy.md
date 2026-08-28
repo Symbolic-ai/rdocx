@@ -751,15 +751,17 @@ succeed with nonzero output, and the expected TSV and JSON artifacts exist and
 are nonempty.** Page-count differences, dimension differences, and a missed
 trend are scored evidence rather than orchestration failures.
 
-The same harness source-builds four one-page Word fixtures for Arabic,
-Devanagari, Thai, and Simplified Chinese. Each uses an approved deterministic
-Noto family, complete `w:lang` attributes, 24 point text, and exact 24 point
-line spacing. Unlike the five-document trend, these four pages have a hard raw
-luminance SSIM gate of at least 0.95 on at least 80 percent of pages. The
-reviewed evidence passes four of four pages with scores 0.985079311,
-0.972241230, 0.997558968, and 0.997294132 respectively. The TSV records each
-page and the JSON records the fixture identities, coverage, threshold, and
-per-document page counts.
+The same harness source-builds five one-page Word fixtures for Arabic,
+Devanagari, Thai, Simplified Chinese, and mixed bidirectional text. Each uses an
+approved deterministic Noto family, complete `w:lang` attributes, 24 point
+text, and exact 24 point line spacing. The bidirectional page also carries an
+RTL paragraph base, explicit RTL and LTR runs, logical start and end indents,
+and start justification. Unlike the five-document trend, these five pages have
+a hard raw luminance SSIM gate of at least 0.95 on at least 80 percent of pages.
+The reviewed evidence passes five of five pages with scores 0.956809869,
+0.972241230, 0.997558968, 0.997294132, and 0.992810907 respectively. The TSV
+records each page and the JSON records fixture identities, coverage, threshold,
+and per-document page counts.
 
 The Writer oracle registers the three fixed Noto files and one checked-in
 oracle-only static Thin instance of the exact bundled Noto Sans SC subset. The
@@ -982,6 +984,11 @@ outcomes as mandatory manual evidence.
   word boundaries, CJK prohibited punctuation, conditional hyphens, and mixed
   bidi lines. Every fixture compares logical source intervals separately from
   line-local visual order and requires equal glyph-array lengths.
+- Word direction regressions type and round-trip `w:bidi` and `w:rtl` around
+  retained unknown siblings. Structural layout checks cover paragraph base and
+  exact run overrides, direction-relative start and end alignment and indents,
+  leading-edge numbering markers, line-local L1 then L2 ordering, unchanged
+  logical source spans, and PDF visual paint with logical `ActualText`.
 - The DrawingML direction round trip rejects a foreign same-local-name
   attribute and preserves unknown attributes, children, and schema order.
 - The rich PowerPoint fixture exercises the shared PDF, raster, and SVG paths

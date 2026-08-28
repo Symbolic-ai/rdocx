@@ -1955,7 +1955,7 @@ mod tests {
     use crate::text::{TextAutoNumberScheme, TextBulletChoice, TextBulletSizeValue};
 
     #[test]
-    fn drawingml_paragraph_direction_is_typed_without_losing_unknown_attributes() {
+    fn drawingml_rtl_attribute_becomes_typed_without_reordering_unknown_content() {
         let parsed = CT_TextParagraphProperties::from_xml(
             br#"<q:pPr xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:test" defTabSz="457200" rtl="1" x:keep="yes"/>"#,
         )
