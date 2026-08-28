@@ -130,12 +130,12 @@ release metadata only and must preserve F-198's accepted baseline delta.
 
 ## Implementation checklist
 
-- [ ] Verify every dependency and the published shared 0.7.0 family.
-- [ ] Move all stable carriers to 0.11.0.
-- [ ] Confirm all shared pins at 0.7.0.
-- [ ] Update stable carrier and registry regressions.
-- [ ] Prepare and validate selected-family notes and contribution inventory.
-- [ ] Verify metadata, bindings, packages, assets, and supply chain.
+- [x] Verify every dependency and the published shared 0.7.0 family.
+- [x] Move all stable carriers to 0.11.0.
+- [x] Confirm all shared pins at 0.7.0.
+- [x] Update stable carrier and registry regressions.
+- [x] Prepare and validate selected-family notes and contribution inventory.
+- [x] Verify metadata, bindings, packages, assets, and supply chain.
 - [ ] Run full verification, microscope, and clean sprint review at one SHA.
 - [ ] Stop at `/release v0.11.0` for separate final approval.
 - [ ] Verify all publications, owners, tag, body, and notifications.

@@ -726,12 +726,13 @@ crates are `publish = false`, because a cdylib has no business on crates.io.
 The Rust package trains remain separate. The exact 15-package shared OOXML and
 PowerPoint crates.io family is published at 0.7.0 from the annotated
 `rpptx-v0.7.0` tag at reviewed SHA
-`1b076c16fb494fe47b054d761e061181a1ea0b15`. The stable workspace and exact
-seven-package Word crates.io family remain published separately at 0.10.1
-from the annotated `v0.10.1` tag at reviewed SHA
-`ae0dcb162a7805e59e5890464b226765645ad547`. The immutable v0.10.0 attempt
-published only `rdocx-opc` and `rdocx-oxml`. Both Python project versions and
-`rdocx-wasm` track the stable workspace version, but
+`1b076c16fb494fe47b054d761e061181a1ea0b15`. The stable workspace is prepared
+at 0.11.0, while the exact seven-package Word crates.io family remains
+published at 0.10.1 from the annotated `v0.10.1` tag at reviewed SHA
+`ae0dcb162a7805e59e5890464b226765645ad547` until the separately approved
+stable release. The immutable v0.10.0 attempt published only `rdocx-opc` and
+`rdocx-oxml`. Both Python project versions and `rdocx-wasm` track the prepared
+stable workspace version, but
 every binding and WASM crate remains unpublished on crates.io. The incubating
 group places the unpublished `rpptx-wasm` crate at 0.7.0. Neither Rust release
 gives binding, WASM, npm, or Python package publication authority. Every later
