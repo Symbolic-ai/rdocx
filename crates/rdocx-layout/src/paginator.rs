@@ -10,9 +10,10 @@ use crate::block::{
 use std::collections::HashMap;
 
 use oxml_layout::{
-    Align, Color, FontManager, GlyphRun, GroupElement, LayoutLine, LineItem, MediaId, NoteRef,
-    NoteStream, OutlineEntry, PageFrame, Path, Point, PositionedElement, Rect, Transform,
-    Underline, break_into_lines,
+    Align, Color, FontManager, GlyphRun, GroupElement, LayoutLine, LineItem, MediaId,
+    MultilingualGlyphRun, NoteRef, NoteStream, OutlineEntry, PageFrame, Path, Point,
+    PositionedElement, Rect, TextDirection, Transform, Underline, break_into_lines,
+    break_multilingual_into_lines,
 };
 
 use rdocx_oxml::drawing::{
@@ -1246,6 +1247,154 @@ fn anchored_elements(
         .collect()
 }
 
+fn push_multilingual_text(
+    elements: &mut Vec<PositionedElement>,
+    segment: &oxml_layout::MultilingualTextSegment,
+    x: f64,
+    baseline: f64,
+    line_top: f64,
+    line_height: f64,
+    source_node: Option<Option<oxml_layout::SourceNodeId>>,
+    justify_extra: f64,
+) -> f64 {
+    let base = segment.base();
+    let segment_spaces = if justify_extra > 0.0 {
+        segment
+            .text()
+            .chars()
+            .filter(|character| *character == ' ')
+            .count()
+    } else {
+        0
+    };
+    let segment_extra = segment_spaces as f64 * justify_extra;
+    let effective_width = segment.width() + segment_extra;
+    let mut x_advances = segment.x_advances().to_vec();
+    if segment_extra > 0.0 {
+        let characters = segment.text().chars().collect::<Vec<_>>();
+        for cluster in segment.clusters() {
+            let spaces = characters[cluster.char_start as usize..cluster.char_end as usize]
+                .iter()
+                .filter(|character| **character == ' ')
+                .count();
+            if spaces > 0 {
+                let glyph = cluster.glyph_end as usize - 1;
+                x_advances[glyph] += spaces as f64 * justify_extra;
+            }
+        }
+    }
+    let adjusted_baseline = baseline - base.baseline_offset;
+    if let Some(color) = base.highlight {
+        elements.push(PositionedElement::FilledRect {
+            rect: Rect {
+                x,
+                y: line_top,
+                width: effective_width,
+                height: line_height,
+            },
+            color,
+        });
+    }
+    let source = match source_node {
+        Some(source_node) => base.source.and_then(|mut source| {
+            source.node = source_node?;
+            Some(source)
+        }),
+        None => base.source,
+    };
+    elements.push(PositionedElement::MultilingualText(MultilingualGlyphRun {
+        origin: Point {
+            x,
+            y: adjusted_baseline,
+        },
+        font_id: segment.font_id(),
+        font_size: base.font_size,
+        glyph_ids: segment.glyph_ids().to_vec(),
+        x_advances,
+        y_advances: segment.y_advances().to_vec(),
+        x_offsets: segment.x_offsets().to_vec(),
+        y_offsets: segment.y_offsets().to_vec(),
+        clusters: segment.clusters().to_vec(),
+        logical_text: segment.text().to_owned(),
+        logical_index: segment.logical_index(),
+        source,
+        script: segment.script(),
+        language: segment.language().map(str::to_owned),
+        direction: segment.direction(),
+        bidi_level: segment.bidi_level(),
+        color: base.color,
+        bold: base.bold,
+        italic: base.italic,
+        field_kind: base.field_kind,
+        note: base.note,
+    }));
+    if let Some(underline) = base.underline {
+        let underline_y = adjusted_baseline + base.descent * 0.3;
+        let thickness = match underline {
+            Underline::Thick => base.font_size / 12.0,
+            Underline::Double => base.font_size / 24.0,
+            _ => base.font_size / 18.0,
+        };
+        elements.push(PositionedElement::Line {
+            start: Point { x, y: underline_y },
+            end: Point {
+                x: x + effective_width,
+                y: underline_y,
+            },
+            width: thickness,
+            color: base.color,
+            dash_pattern: None,
+        });
+        if underline == Underline::Double {
+            let second_y = underline_y + thickness * 2.5;
+            elements.push(PositionedElement::Line {
+                start: Point { x, y: second_y },
+                end: Point {
+                    x: x + effective_width,
+                    y: second_y,
+                },
+                width: thickness,
+                color: base.color,
+                dash_pattern: None,
+            });
+        }
+    }
+    if base.strike || base.dstrike {
+        let strike_y = adjusted_baseline - base.ascent * 0.3;
+        let thickness = base.font_size / 24.0;
+        let positions = if base.dstrike {
+            let gap = thickness * 2.0;
+            vec![strike_y - gap / 2.0, strike_y + gap / 2.0]
+        } else {
+            vec![strike_y]
+        };
+        for y in positions {
+            elements.push(PositionedElement::Line {
+                start: Point { x, y },
+                end: Point {
+                    x: x + effective_width,
+                    y,
+                },
+                width: thickness,
+                color: base.color,
+                dash_pattern: None,
+            });
+        }
+    }
+    if let Some(url) = &base.hyperlink_url {
+        elements.push(PositionedElement::LinkAnnotation {
+            rect: Rect {
+                x,
+                y: line_top,
+                width: effective_width,
+                height: line_height,
+            },
+            url: url.clone(),
+        });
+    }
+    effective_width
+}
+
 /// Draw one note, or one slice of one, with its top edge at `top`.
 ///
 /// Returns the height consumed. Shared by the page foot and the document end
@@ -1288,6 +1437,19 @@ fn draw_note(
         let line_baseline = cursor_y + line.ascent;
         let mut x = geometry.margin_left + NOTE_INDENT;
         for item in &line.items {
+            if let LineItem::MultilingualText(segment) = item {
+                x += push_multilingual_text(
+                    elements,
+                    segment,
+                    x,
+                    line_baseline,
+                    cursor_y,
+                    line.height,
+                    None,
+                    0.0,
+                );
+                continue;
+            }
             let (segment, advance) = match item {
                 LineItem::Text(seg) | LineItem::Marker(seg) => (Some(seg), seg.width),
                 LineItem::Tab { width, .. }
@@ -1434,8 +1596,12 @@ pub fn append_endnote_pages(
     let mut ordered: Vec<NoteRef> = Vec::new();
     for page in pages.iter() {
         oxml_layout::walk(&page.elements, &mut |element, _| {
-            if let PositionedElement::Text(run) = element
-                && let Some(note) = run.note
+            let note = match element {
+                PositionedElement::Text(run) => run.note,
+                PositionedElement::MultilingualText(run) => run.note,
+                _ => None,
+            };
+            if let Some(note) = note
                 && note.stream == NoteStream::Endnote
                 && notes.get(note, geometry.content_width()).is_some()
                 && !ordered.contains(&note)
@@ -1552,6 +1718,7 @@ fn append_ordered_endnote_pages(
 fn notes_in_line(line: &LayoutLine) -> impl Iterator<Item = NoteRef> + '_ {
     line.items.iter().filter_map(|item| match item {
         LineItem::Text(seg) | LineItem::Marker(seg) => seg.note,
+        LineItem::MultilingualText(seg) => seg.base().note,
         _ => None,
     })
 }
@@ -1572,6 +1739,10 @@ fn page_foot_notes_in_line(line: &LayoutLine) -> impl Iterator<Item = NoteRef> +
 fn translate_element(element: &mut PositionedElement, dx: f64, dy: f64) {
     match element {
         PositionedElement::Text(run) => {
+            run.origin.x += dx;
+            run.origin.y += dy;
+        }
+        PositionedElement::MultilingualText(run) => {
             run.origin.x += dx;
             run.origin.y += dy;
         }
@@ -1793,7 +1964,16 @@ fn reflow_around_wraps(
         params.line_prefix_widths = prefix;
         params.line_suffix_widths = suffix;
 
-        let Ok(reflowed) = break_into_lines(&reflow.items, &params, fm) else {
+        let reflowed = if reflow
+            .items
+            .iter()
+            .any(|item| matches!(item, oxml_layout::InlineItem::MultilingualText(_)))
+        {
+            break_multilingual_into_lines(&reflow.items, &params, fm, TextDirection::Auto)
+        } else {
+            break_into_lines(&reflow.items, &params, fm)
+        };
+        let Ok(reflowed) = reflowed else {
             return None;
         };
         lines = reflowed;
@@ -2309,6 +2489,18 @@ fn render_paragraph_lines(
                     _accumulated_extra += segment_extra;
                     x += effective_width;
                 }
+                LineItem::MultilingualText(segment) => {
+                    x += push_multilingual_text(
+                        elements,
+                        segment,
+                        x,
+                        baseline_y,
+                        geometry.margin_top + y,
+                        line.height,
+                        para.source_node(),
+                        justify_extra,
+                    );
+                }
                 LineItem::Tab { width, leader } => {
                     if let Some(leader_seg) = leader {
                         // Render the pre-shaped leader text
@@ -2423,6 +2615,10 @@ fn render_paragraph_lines(
                     children: vec![element],
                 }
             }
+            PositionedElement::MultilingualText(_) => PositionedElement::MarkedContent {
+                structure: Some(structure_id),
+                children: vec![element],
+            },
             PositionedElement::Image { .. } | PositionedElement::Group(_) => {
                 PositionedElement::MarkedContent {
                     structure: None,
@@ -3006,6 +3202,9 @@ fn count_word_gaps(items: &[LineItem]) -> usize {
         match item {
             LineItem::Text(seg) | LineItem::Marker(seg) => {
                 count += seg.text.chars().filter(|c| *c == ' ').count();
+            }
+            LineItem::MultilingualText(seg) => {
+                count += seg.text().chars().filter(|c| *c == ' ').count();
             }
             LineItem::Tab { .. } => {
                 count += 1;

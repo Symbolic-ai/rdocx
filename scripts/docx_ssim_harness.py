@@ -5,16 +5,26 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager, nullcontext
+import ctypes
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the harness targets POSIX CI and macOS Writer
+    fcntl = None
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
+import time
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from fetch_docx_corpus import EXPECTED_COUNT, load_manifest, verify_directory
 from golden_png_harness import decode_png
@@ -74,6 +84,271 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 '''
+
+MULTI_SCRIPT_FIXTURES = (
+    (
+        "arabic.docx",
+        "arabic",
+        "ar-SA",
+        "Noto Sans Arabic",
+        "العربية مرحبا بالعالم",
+    ),
+    (
+        "devanagari.docx",
+        "devanagari",
+        "hi-IN",
+        "Noto Sans Devanagari",
+        "देवनागरी नमस्ते दुनिया",
+    ),
+    (
+        "thai.docx",
+        "thai",
+        "th-TH",
+        "Noto Sans Thai",
+        "ภาษาไทยยินดีต้อนรับ",
+    ),
+    (
+        "simplified-chinese.docx",
+        "simplified-chinese",
+        "zh-CN",
+        "Noto Sans SC",
+        "〈中〉、你好世界",
+    ),
+)
+MULTI_SCRIPT_FONT_FILES = (
+    "NotoSansArabic.ttf",
+    "NotoSansDevanagari.ttf",
+    "NotoSansThai.ttf",
+)
+ORACLE_FONT_DIRECTORY = REPO_ROOT / "scripts" / "oracle-fonts"
+ORACLE_CJK_FONT = "NotoSansSC-FX058-oracle-thin.ttf"
+ORACLE_CJK_SOURCE_SHA256 = (
+    "b06144fa7b2d5212fe21344261449c9350f603e3e2ae625e76306022d024fbe5"
+)
+ORACLE_CJK_OUTPUT_SHA256 = (
+    "390ba9f55d4dd69915736d2b225d602b40012cd2c50db4c1e6d2bbdfd61e63a6"
+)
+ORACLE_CJK_GENERATOR = "hb-subset (HarfBuzz) 13.2.1"
+ORACLE_CJK_GENERATION_COMMAND = (
+    "hb-subset crates/oxml-layout/fonts/NotoSansSC-FX058-subset.ttf "
+    "--output-file=scripts/oracle-fonts/NotoSansSC-FX058-oracle-thin.ttf "
+    "--unicodes='*' --variations='wght=100' --name-IDs='*' --name-languages='*'"
+)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def assert_oracle_font_inventory() -> None:
+    product_fonts = REPO_ROOT / "crates" / "oxml-layout" / "fonts"
+    source = product_fonts / "NotoSansSC-FX058-subset.ttf"
+    output = ORACLE_FONT_DIRECTORY / ORACLE_CJK_FONT
+    expected = {
+        "LICENSE-Noto",
+        "NotoSansSC-FX058-oracle-thin.ttf",
+        "PROVENANCE.md",
+    }
+    actual = {path.name for path in ORACLE_FONT_DIRECTORY.iterdir() if path.is_file()}
+    if actual != expected:
+        raise ValueError(
+            f"oracle font inventory expected {sorted(expected)!r}, got {sorted(actual)!r}"
+        )
+    if sha256(source) != ORACLE_CJK_SOURCE_SHA256:
+        raise ValueError("oracle CJK source font SHA-256 does not match provenance")
+    if sha256(output) != ORACLE_CJK_OUTPUT_SHA256:
+        raise ValueError("oracle CJK output font SHA-256 does not match provenance")
+    if (ORACLE_FONT_DIRECTORY / "LICENSE-Noto").read_bytes() != (
+        product_fonts / "LICENSE-Noto"
+    ).read_bytes():
+        raise ValueError("oracle CJK licence differs from the approved Noto licence")
+    provenance = (ORACLE_FONT_DIRECTORY / "PROVENANCE.md").read_text(encoding="utf-8")
+    for required in (
+        ORACLE_CJK_SOURCE_SHA256,
+        ORACLE_CJK_OUTPUT_SHA256,
+        ORACLE_CJK_GENERATOR,
+        ORACLE_CJK_GENERATION_COMMAND,
+    ):
+        if required not in provenance:
+            raise ValueError(f"oracle CJK provenance is missing {required!r}")
+
+
+def xml_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def write_deterministic_zip_member(
+    archive: zipfile.ZipFile, name: str, data: str
+) -> None:
+    member = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+    member.compress_type = zipfile.ZIP_DEFLATED
+    member.external_attr = 0o100644 << 16
+    archive.writestr(member, data.encode("utf-8"))
+
+
+def build_multi_script_fixtures(output: Path) -> list[dict[str, object]]:
+    output.mkdir(parents=True, exist_ok=True)
+    content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'''
+    relationships = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'''
+    fixtures = []
+    for filename, script, language, family, text in MULTI_SCRIPT_FIXTURES:
+        language_attributes = f'w:val="{language}"'
+        if script == "arabic":
+            language_attributes += f' w:bidi="{language}"'
+        if script == "simplified-chinese":
+            language_attributes += f' w:eastAsia="{language}"'
+        paragraphs = "".join(
+            f'''<w:p><w:pPr><w:spacing w:after="0" w:line="480" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="{family}" w:hAnsi="{family}" w:eastAsia="{family}" w:cs="{family}"/><w:sz w:val="48"/><w:szCs w:val="48"/><w:lang {language_attributes}/></w:rPr><w:t>{xml_text(text)}</w:t></w:r></w:p>'''
+            for _ in range(6)
+        )
+        document_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{paragraphs}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>'''
+        path = output / filename
+        with zipfile.ZipFile(path, "w") as archive:
+            write_deterministic_zip_member(archive, "[Content_Types].xml", content_types)
+            write_deterministic_zip_member(archive, "_rels/.rels", relationships)
+            write_deterministic_zip_member(archive, "word/document.xml", document_xml)
+        fixtures.append(
+            {
+                "document": filename,
+                "category": script,
+                "language": language,
+                "font": family,
+                "text": text,
+                "path": path,
+            }
+        )
+    return fixtures
+
+
+def install_oracle_fonts(profile: Path) -> None:
+    assert_oracle_font_inventory()
+    fonts = profile / "user" / "fonts"
+    fonts.mkdir(parents=True, exist_ok=True)
+    source = REPO_ROOT / "crates" / "oxml-layout" / "fonts"
+    for filename in MULTI_SCRIPT_FONT_FILES:
+        shutil.copyfile(source / filename, fonts / filename)
+    shutil.copyfile(ORACLE_FONT_DIRECTORY / ORACLE_CJK_FONT, fonts / ORACLE_CJK_FONT)
+
+
+ORACLE_FONT_LOCK_PATH = Path(gettempdir()) / "rdocx-docx-ssim-coretext-fonts.lock"
+ORACLE_FONT_LOCK_TIMEOUT_SECONDS = 240.0
+ORACLE_FONT_LOCK_POLL_SECONDS = 0.05
+
+
+@contextmanager
+def oracle_font_process_lock(
+    path: Path = ORACLE_FONT_LOCK_PATH,
+    timeout_seconds: float = ORACLE_FONT_LOCK_TIMEOUT_SECONDS,
+):
+    """Serialize process-scoped CoreText registration across harness runs."""
+    if fcntl is None:
+        raise OSError("oracle font registration requires POSIX advisory locking")
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    deadline = time.monotonic() + timeout_seconds
+    acquired = False
+    try:
+        while not acquired:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"timed out waiting for oracle font registration lock {path}"
+                    )
+                time.sleep(ORACLE_FONT_LOCK_POLL_SECONDS)
+        yield
+    finally:
+        try:
+            if acquired:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+@contextmanager
+def oracle_font_registration(profile: Path):
+    """Expose the approved fonts to the isolated Writer process."""
+    install_oracle_fonts(profile)
+    if sys.platform != "darwin":
+        yield
+        return
+    with oracle_font_process_lock():
+        with coretext_oracle_font_registration():
+            yield
+
+
+@contextmanager
+def coretext_oracle_font_registration():
+    """Register approved fonts for exactly one serialized macOS session."""
+
+    core_foundation = ctypes.CDLL(
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+    )
+    core_text = ctypes.CDLL("/System/Library/Frameworks/CoreText.framework/CoreText")
+    core_foundation.CFURLCreateFromFileSystemRepresentation.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_long,
+        ctypes.c_bool,
+    )
+    core_foundation.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+    core_foundation.CFRelease.argtypes = (ctypes.c_void_p,)
+    core_text.CTFontManagerRegisterFontsForURL.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    core_text.CTFontManagerRegisterFontsForURL.restype = ctypes.c_bool
+    core_text.CTFontManagerUnregisterFontsForURL.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    core_text.CTFontManagerUnregisterFontsForURL.restype = ctypes.c_bool
+
+    font_source = REPO_ROOT / "crates" / "oxml-layout" / "fonts"
+    font_paths = [font_source / filename for filename in MULTI_SCRIPT_FONT_FILES]
+    font_paths.append(ORACLE_FONT_DIRECTORY / ORACLE_CJK_FONT)
+    registered = []
+    session_scope = 3
+    try:
+        for path in font_paths:
+            filename = path.name
+            encoded = os.fsencode(path)
+            url = core_foundation.CFURLCreateFromFileSystemRepresentation(
+                None, encoded, len(encoded), False
+            )
+            if not url:
+                raise ValueError(f"CoreText could not create a URL for {filename}")
+            error = ctypes.c_void_p()
+            if not core_text.CTFontManagerRegisterFontsForURL(
+                url, session_scope, ctypes.byref(error)
+            ):
+                core_foundation.CFRelease(url)
+                if error:
+                    core_foundation.CFRelease(error)
+                raise ValueError(f"CoreText could not register {filename}")
+            if error:
+                core_foundation.CFRelease(error)
+            registered.append((filename, url))
+        yield
+    finally:
+        for filename, url in reversed(registered):
+            error = ctypes.c_void_p()
+            if not core_text.CTFontManagerUnregisterFontsForURL(
+                url, session_scope, ctypes.byref(error)
+            ):
+                if error:
+                    core_foundation.CFRelease(error)
+                core_foundation.CFRelease(url)
+                raise ValueError(f"CoreText could not unregister {filename}")
+            if error:
+                core_foundation.CFRelease(error)
+            core_foundation.CFRelease(url)
 
 
 def tool_version(command: str, arguments: list[str]) -> str:
@@ -235,26 +510,27 @@ def render_oracle_document(
     accepted_document = prepare_accepted_document(
         document, pdf_dir.parent / "accepted" / document.name, helper
     )
-    subprocess.run(
-        [
-            SOFFICE,
-            "--headless",
-            "--norestore",
-            "--nodefault",
-            "--nolockcheck",
-            f"-env:UserInstallation={profile.as_uri()}",
-            "--convert-to",
-            SOFFICE_PDF_FILTER,
-            "--outdir",
-            str(pdf_dir),
-            str(accepted_document),
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
+    with oracle_font_registration(profile):
+        subprocess.run(
+            [
+                SOFFICE,
+                "--headless",
+                "--norestore",
+                "--nodefault",
+                "--nolockcheck",
+                f"-env:UserInstallation={profile.as_uri()}",
+                "--convert-to",
+                SOFFICE_PDF_FILTER,
+                "--outdir",
+                str(pdf_dir),
+                str(accepted_document),
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
     pdf = pdf_dir / f"{accepted_document.stem}.pdf"
     if not pdf.is_file():
         raise ValueError(f"LibreOffice did not create {pdf}")
@@ -378,6 +654,10 @@ def meets_coverage(scores: list[float]) -> bool:
     return passing / len(scores) >= COVERAGE_TARGET
 
 
+def multi_script_gate_met(scores: list[float]) -> bool:
+    return meets_coverage(scores)
+
+
 def evidence_payload(
     documents: int,
     scores: list[float],
@@ -454,10 +734,29 @@ def run_gate(corpus: Path, output: Path) -> tuple[dict[str, object], Path]:
         all_pages.extend(union_page_inputs(relative_path, rust_pages, oracle_pages))
         categories[relative_path] = category
         page_counts[relative_path] = (len(rust_pages), len(oracle_pages))
+    corpus_page_count = len(all_pages)
+    fixtures = build_multi_script_fixtures(output / "multi-script-corpus")
+    for fixture in fixtures:
+        relative_path = str(fixture["document"])
+        document = Path(fixture["path"])
+        document_root = output / "multi-script-documents" / relative_path
+        rust_pages = run_rust_renderer(document, document_root / "rust")
+        oracle_pages = render_oracle_document(
+            document,
+            document_root / "oracle-pdf",
+            document_root / "oracle-png",
+            document_root / "libreoffice-profile",
+            output / "rdocx-acceptor",
+        )
+        all_pages.extend(union_page_inputs(relative_path, rust_pages, oracle_pages))
+        categories[relative_path] = str(fixture["category"])
+        page_counts[relative_path] = (len(rust_pages), len(oracle_pages))
     workers = min(8, os.cpu_count() or 1)
     with ProcessPoolExecutor(max_workers=workers) as executor:
         scored_pages = list(executor.map(score_union_page, all_pages))
     scores = [score for score, *_ in scored_pages]
+    corpus_scores = scores[:corpus_page_count]
+    multi_script_scores = scores[corpus_page_count:]
     results = output / "ssim-results.tsv"
     rows = [RESULT_HEADER]
     rows.extend(
@@ -496,7 +795,51 @@ def run_gate(corpus: Path, output: Path) -> tuple[dict[str, object], Path]:
                 ),
             }
         )
-    payload = evidence_payload(len(entries), scores, results, per_document)
+    multi_script_per_document = []
+    for fixture in fixtures:
+        relative_path = str(fixture["document"])
+        rust_count, oracle_count = page_counts[relative_path]
+        document_scores = [
+            scored
+            for page, scored in zip(all_pages, scored_pages)
+            if page[0] == relative_path
+        ]
+        multi_script_per_document.append(
+            {
+                "document": relative_path,
+                "category": fixture["category"],
+                "language": fixture["language"],
+                "font": fixture["font"],
+                "rust_pages": rust_count,
+                "oracle_pages": oracle_count,
+                "union_pages": max(rust_count, oracle_count),
+                "dimension_mismatches": sum(
+                    scored[-1] == "shared-white-canvas" for scored in document_scores
+                ),
+                "rust_only_pages": sum(
+                    scored[-1] == "blank-oracle" for scored in document_scores
+                ),
+                "oracle_only_pages": sum(
+                    scored[-1] == "blank-rust" for scored in document_scores
+                ),
+            }
+        )
+    payload = evidence_payload(len(entries), corpus_scores, results, per_document)
+    multi_script_passing = sum(
+        score >= SSIM_TARGET for score in multi_script_scores
+    )
+    payload["multi_script"] = {
+        "fixtures": len(fixtures),
+        "pages": len(multi_script_scores),
+        "passing": multi_script_passing,
+        "coverage": multi_script_passing / len(multi_script_scores),
+        "target": SSIM_TARGET,
+        "coverage_target": COVERAGE_TARGET,
+        "gate_met": multi_script_gate_met(multi_script_scores),
+        "minimum": min(multi_script_scores),
+        "maximum": max(multi_script_scores),
+        "per_document": multi_script_per_document,
+    }
     payload["libreoffice"] = soffice_version
     payload["pdftoppm"] = pdftoppm_version
     evidence = output / "gate-evidence.json"
@@ -504,6 +847,10 @@ def run_gate(corpus: Path, output: Path) -> tuple[dict[str, object], Path]:
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     assert_expected_artifacts([results, evidence])
+    if not payload["multi_script"]["gate_met"]:
+        raise ValueError(
+            "multi-script corpus missed the hard 0.95 SSIM on 80 percent of pages gate"
+        )
     return payload, evidence
 
 
@@ -518,6 +865,54 @@ def run_suite(test_names: list[str] | None = None) -> bool:
 
 
 class DocxSsimHarnessTests(unittest.TestCase):
+    def test_oracle_font_inventory_is_exact_and_reproducible(self) -> None:
+        assert_oracle_font_inventory()
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX advisory locking")
+    def test_oracle_font_lock_serializes_processes_and_releases_after_error(self) -> None:
+        child = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from docx_ssim_harness import oracle_font_process_lock
+try:
+    with oracle_font_process_lock(Path(sys.argv[2]), float(sys.argv[3])):
+        pass
+except TimeoutError:
+    raise SystemExit(3)
+"""
+        with TemporaryDirectory() as temporary:
+            lock_path = Path(temporary) / "coretext.lock"
+
+            def child_attempt(timeout: float) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        child,
+                        str(REPO_ROOT / "scripts"),
+                        str(lock_path),
+                        str(timeout),
+                    ],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "registration failed"):
+                with oracle_font_process_lock(lock_path, 1.0):
+                    blocked = child_attempt(0.1)
+                    self.assertEqual(
+                        blocked.returncode,
+                        3,
+                        blocked.stdout + blocked.stderr,
+                    )
+                    raise RuntimeError("registration failed")
+
+            acquired = child_attempt(1.0)
+            self.assertEqual(acquired.returncode, 0, acquired.stdout + acquired.stderr)
+
     def test_identical_images_have_ssim_one(self) -> None:
         image = (2, 1, bytes((10, 20, 30, 255, 40, 50, 60, 128)))
         self.assertEqual(structural_similarity(image, image), 1.0)
@@ -551,6 +946,8 @@ class DocxSsimHarnessTests(unittest.TestCase):
             return_value=Path(temporary) / "accepted.docx",
         ) as prepare, patch(f"{__name__}.subprocess.run") as run, patch(
             f"{__name__}.numbered_pages", return_value=[Path("oracle-page-1.png")]
+        ), patch(
+            f"{__name__}.oracle_font_registration", return_value=nullcontext()
         ):
             root = Path(temporary)
             (root / "oracle-pdf" / "accepted.pdf").parent.mkdir(parents=True)
@@ -645,6 +1042,23 @@ class DocxSsimHarnessTests(unittest.TestCase):
         self.assertFalse(payload["trend_target_met"])
         self.assertEqual(payload["documents"], EXPECTED_COUNT)
 
+    def test_multi_script_corpus_pages_meet_the_reviewed_oracle_contract(self) -> None:
+        with TemporaryDirectory() as temporary:
+            fixtures = build_multi_script_fixtures(Path(temporary))
+            self.assertEqual(
+                [fixture["category"] for fixture in fixtures],
+                ["arabic", "devanagari", "thai", "simplified-chinese"],
+            )
+            for fixture in fixtures:
+                path = Path(fixture["path"])
+                self.assertTrue(path.is_file())
+                with zipfile.ZipFile(path) as archive:
+                    document_xml = archive.read("word/document.xml").decode("utf-8")
+                self.assertIn(str(fixture["text"]), document_xml)
+                self.assertIn(str(fixture["font"]), document_xml)
+        self.assertTrue(multi_script_gate_met([0.95] * 4 + [0.94]))
+        self.assertFalse(multi_script_gate_met([0.95] * 3 + [0.94] * 2))
+
     def test_missing_expected_artifact_is_a_hard_failure(self) -> None:
         with TemporaryDirectory() as temporary:
             missing = Path(temporary) / "missing.tsv"
@@ -691,6 +1105,10 @@ class DocxSsimHarnessTests(unittest.TestCase):
         self.assertEqual(payload["revision_view"], REVISION_VIEW)
         self.assertEqual(payload["libreoffice"], SOFFICE_VERSION)
         self.assertEqual(payload["pdftoppm"], PDFTOPPM_VERSION)
+        self.assertEqual(payload["multi_script"]["fixtures"], 4)
+        self.assertGreater(payload["multi_script"]["pages"], 0)
+        self.assertTrue(payload["multi_script"]["gate_met"])
+        self.assertGreaterEqual(payload["multi_script"]["coverage"], COVERAGE_TARGET)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -735,6 +1153,13 @@ def main(argv: list[str] | None = None) -> int:
             f"({payload['coverage']:.3%}), min {payload['minimum']:.6f}, "
             f"median {payload['median']:.6f}, max {payload['maximum']:.6f}, "
             f"target met {str(payload['trend_target_met']).lower()}"
+        )
+        multi_script = payload["multi_script"]
+        print(
+            "docx_ssim_harness: multi-script hard gate "
+            f"{multi_script['passing']}/{multi_script['pages']} pages at SSIM >= "
+            f"{SSIM_TARGET:.2f} ({multi_script['coverage']:.3%}), target met "
+            f"{str(multi_script['gate_met']).lower()}"
         )
         print(f"docx_ssim_harness: results {payload['results']}")
         return 0

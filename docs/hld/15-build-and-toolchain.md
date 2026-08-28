@@ -66,6 +66,17 @@ The Word SSIM harness reaches that deterministic path through the production
 trees exist. It cannot alter layout, pagination, font selection, or renderer
 dimensions.
 
+The pinned Writer process receives one oracle-only static Thin instance for
+the Noto Sans SC fixture. `hb-subset (HarfBuzz) 13.2.1` instantiates it at
+`wght=100` from the exact checked-in product font with source SHA-256
+`b06144fa7b2d5212fe21344261449c9350f603e3e2ae625e76306022d024fbe5`.
+The output SHA-256 is
+`390ba9f55d4dd69915736d2b225d602b40012cd2c50db4c1e6d2bbdfd61e63a6`.
+The binary, authentic OFL licence, exact command, and provenance record live in
+`scripts/oracle-fonts/`. Harness inventory assertions bind all three files and
+both hashes. Product code continues to consume the published variable font,
+and hosted verification does not need the generation tool.
+
 Tagged Word PDFs use the same deterministic layout and writer path. Structure
 node references, page-local MCIDs, parent-tree keys, conditional PDF/UA
 metadata, and XMP bytes are derived only from ordered layout input. A
@@ -191,6 +202,11 @@ under the ignored `corpus/` directory. Their tracked manifests pin immutable
 source URLs and SHA-256 values. The Word manifest also pins one of each required
 category plus the reviewed `Apache-2.0` or `MIT` licence identity and immutable
 licence URL.
+
+Oracle-only fonts under `scripts/oracle-fonts/` are test infrastructure. They
+are absent from every crate include list and generated archive. The static CJK
+fixture therefore changes neither the 24-font `oxml-layout` package inventory
+nor its archive size contract.
 
 A separate crate-local packaging rule applies to
 `crates/rpptx/assets/default.pptx`. **An asset must live under its own crate's
@@ -623,8 +639,10 @@ corpus, runs `scripts/docx_ssim_harness.py --check`, and retains the required
 JSON and TSV evidence. The harness rejects corpus or tool drift, renderer or
 oracle failure, zero output, and a missing or empty evidence artifact. It
 records page-count and dimension differences through union-index SSIM scoring
-and does not fail solely because the 0.95 on 80 percent trend is missed. The
-aggregate CI gate requires success when the path filter selects the job.
+and does not fail solely because the five-document 0.95 on 80 percent trend is
+missed. The four source-built complex-script pages separately require raw SSIM
+of at least 0.95 on at least 80 percent of pages. The aggregate CI gate requires
+success when the path filter selects the job.
 The harness prepares each Writer input through a locked, offline helper that
 calls the existing `rdocx::Document::accept_all` API. It reopens the resulting
 untracked copy and rejects remaining modeled revisions before the isolated

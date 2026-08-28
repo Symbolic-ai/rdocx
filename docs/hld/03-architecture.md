@@ -132,6 +132,14 @@ HarfRust shaping, and line-local UAX 9 visual ordering therefore remain shared
 by document formats. Logical order is the extraction contract. Visual order is
 applied only to completed lines for painting.
 
+Word and Presentation both project complex text into those shared rich values.
+`rdocx-layout` selects the effective direct, bidirectional, or East Asian
+`w:lang` value for each logical run, retains its exact Word source interval,
+and leaves script, coverage, cluster, and line segmentation to `oxml-layout`.
+Paragraphs containing Arabic, Devanagari, Thai, or CJK use the rich path across
+PDF, raster, and SVG. Paragraphs on the established Latin path retain their
+legacy shaped values and byte identity.
+
 Language-aware automatic hyphenation keeps that boundary intact. `rdocx-oxml`
 owns the Word `w:autoHyphenation`, `w:lang`, and paragraph suppression values.
 `rdocx-layout` resolves them and projects only a boolean plus a BCP 47 language

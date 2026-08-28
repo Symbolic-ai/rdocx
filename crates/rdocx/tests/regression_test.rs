@@ -7140,6 +7140,85 @@ fn fixed_break_runs_match_pdf_and_raster_backends() {
     assert!(!direct_png.is_empty());
 }
 
+#[test]
+fn complex_shaping_preserves_clusters_offsets_and_logical_source_spans_across_word_backends() {
+    let samples = [
+        ("Noto Sans Arabic", "ar-SA", "العربية مرحبا بالعالم"),
+        ("Noto Sans Devanagari", "hi-IN", "देवनागरी नमस्ते दुनिया"),
+        ("Noto Sans Thai", "th-TH", "ภาษาไทยยินดีต้อนรับ"),
+        ("Noto Sans SC", "zh-CN", "〈中〉、你好世界"),
+    ];
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("");
+    for (index, (family, language, text)) in samples.iter().enumerate() {
+        if index > 0 {
+            paragraph.add_run("  ");
+        }
+        paragraph.add_run(text).font(family).language(language);
+    }
+
+    let result = document
+        .layout_deterministic()
+        .expect("deterministic multilingual Word layout");
+    let mut rich_runs = Vec::new();
+    for page in &result.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let oxml_layout::PositionedElement::MultilingualText(run) = element else {
+                return;
+            };
+            assert!(run.is_valid(), "Word layout emits a complete rich run");
+            assert!(
+                run.source
+                    .is_some_and(|span| result.source_node(span.node).is_some()),
+                "rich run retains resolvable Word source provenance"
+            );
+            assert_eq!(run.glyph_ids.len(), run.x_advances.len());
+            assert_eq!(run.glyph_ids.len(), run.y_advances.len());
+            assert_eq!(run.glyph_ids.len(), run.x_offsets.len());
+            assert_eq!(run.glyph_ids.len(), run.y_offsets.len());
+            assert!(!run.clusters.is_empty());
+            rich_runs.push(run.clone());
+        });
+    }
+    assert!(rich_runs.len() >= samples.len(), "one rich span per script");
+    for (_, language, text) in samples {
+        let mut language_runs = rich_runs
+            .iter()
+            .filter(|run| run.language.as_deref() == Some(language))
+            .collect::<Vec<_>>();
+        language_runs.sort_by_key(|run| run.logical_index);
+        assert_eq!(
+            language_runs
+                .iter()
+                .map(|run| run.logical_text.as_str())
+                .collect::<String>(),
+            text,
+            "rich output retains {language} logical text"
+        );
+    }
+
+    let pdf = document
+        .to_pdf_deterministic()
+        .expect("multilingual PDF renders");
+    assert!(pdf.starts_with(b"%PDF-"));
+    let png = document
+        .render_page_to_png_deterministic(0, 96.0)
+        .expect("multilingual raster renders")
+        .expect("multilingual first page exists");
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let svg = document
+        .render_page_to_svg_deterministic(0)
+        .expect("multilingual SVG renders")
+        .expect("multilingual first SVG page exists");
+    for run in &rich_runs {
+        assert!(
+            svg.svg.contains(&run.logical_text),
+            "SVG preserves searchable logical text for {}",
+            run.logical_text
+        );
+    }
+}
+
 fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
     use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
     use rdocx_oxml::header_footer::CT_HdrFtr;

@@ -36,8 +36,22 @@ use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FontId, FontManager,
     GlyphRun, GroupElement, InlineItem, LayoutResult, LineItem, NoteRef, NoteStream, PageFrame,
     Point, PositionedElement, Rect, Result, SourceNodeId, SourceSpan, StructureId, StructureNode,
-    StructureRole, TextSegment, Transform, Underline, break_into_lines,
+    StructureRole, TextDirection, TextSegment, Transform, Underline, break_into_lines,
+    break_multilingual_into_lines,
 };
+
+#[derive(Clone)]
+struct WordMultilingualStyle {
+    language: Option<String>,
+    language_east_asia: Option<String>,
+    language_bidi: Option<String>,
+    spacing: f64,
+}
+
+// Word positions exact-spaced text from a stable em baseline instead of each
+// fallback font's hhea ascent. Keeping this Word-specific prevents script font
+// metrics from moving otherwise identical lines vertically.
+const WORD_EXACT_LINE_BASELINE_EM: f64 = 0.8;
 
 #[derive(Clone, Copy)]
 struct ProjectedRun<'a> {
@@ -1238,7 +1252,7 @@ impl Engine {
                                 semantics,
                             } => {
                                 let mut paragraph = shared.as_ref().clone();
-                                rebind_paragraph_source(&mut paragraph, semantics.source_node);
+                                rebind_paragraph_source(&mut paragraph, semantics.source_node)?;
                                 paragraph.heading_level = Some(level);
                                 paragraph.heading_text = Some(heading_text);
                                 Some(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(
@@ -1937,7 +1951,7 @@ impl Engine {
             });
         }
 
-        rebind_paragraph_source(&mut block, source_node);
+        rebind_paragraph_source(&mut block, source_node)?;
         Ok(SharedLayoutBlock::Owned(Box::new(LayoutBlock::Paragraph(
             block,
         ))))
@@ -2017,7 +2031,7 @@ impl Engine {
 
         let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
         if let Some(font_trace) = font_trace {
-            canonicalize_table_sources(&mut block);
+            canonicalize_table_sources(&mut block)?;
             let key = TableCacheKey {
                 table: table.clone(),
                 content_width_bits: content_width.to_bits(),
@@ -2504,19 +2518,20 @@ fn table_semantics(
     TableSemantics { rows }
 }
 
-fn canonicalize_table_sources(block: &mut table::TableBlock) {
+fn canonicalize_table_sources(block: &mut table::TableBlock) -> Result<()> {
     for row in &mut block.rows {
         for cell in &mut row.cells {
             for block in &mut cell.blocks {
                 match block {
                     table::CellBlock::Paragraph(paragraph) => {
-                        rebind_paragraph_source(paragraph, Some(CACHE_SOURCE_NODE));
+                        rebind_paragraph_source(paragraph, Some(CACHE_SOURCE_NODE))?;
                     }
-                    table::CellBlock::Table(table) => canonicalize_table_sources(table),
+                    table::CellBlock::Table(table) => canonicalize_table_sources(table)?,
                 }
             }
         }
     }
+    Ok(())
 }
 
 fn table_cache_entry_bytes(
@@ -2966,6 +2981,15 @@ fn canonicalize_layout_fonts(
                         order.push(run.font_id);
                     }
                 }
+                PositionedElement::MultilingualText(run) => {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        remap.entry(run.font_id)
+                    {
+                        let local = FontId(order.len() as u32);
+                        entry.insert(local);
+                        order.push(run.font_id);
+                    }
+                }
                 PositionedElement::Group(group) => collect(&group.children, remap, order),
                 PositionedElement::MarkedContent { children, .. } => {
                     collect(children, remap, order)
@@ -2979,6 +3003,9 @@ fn canonicalize_layout_fonts(
         for element in elements {
             match element {
                 PositionedElement::Text(run) => {
+                    run.font_id = remap[&run.font_id];
+                }
+                PositionedElement::MultilingualText(run) => {
                     run.font_id = remap[&run.font_id];
                 }
                 PositionedElement::Group(group) => rewrite(&mut group.children, remap),
@@ -3018,6 +3045,7 @@ fn restart_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
             && paragraph.lines.iter().all(|line| {
                 line.items.iter().all(|item| match item {
                     LineItem::Text(text) | LineItem::Marker(text) => text.field_kind.is_none(),
+                    LineItem::MultilingualText(text) => text.base().field_kind.is_none(),
                     LineItem::Tab {
                         leader: Some(text), ..
                     } => text.field_kind.is_none(),
@@ -3039,6 +3067,7 @@ fn restart_record_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
             && paragraph.lines.iter().all(|line| {
                 line.items.iter().all(|item| match item {
                     LineItem::Text(_) | LineItem::Marker(_) => true,
+                    LineItem::MultilingualText(_) => false,
                     LineItem::Tab {
                         leader: Some(_), ..
                     } => true,
@@ -3055,7 +3084,11 @@ fn restart_record_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
 fn page_has_substitution_state(page: &PageFrame) -> bool {
     let mut found = false;
     oxml_layout::walk(&page.elements, &mut |element, _| {
-        found |= matches!(element, PositionedElement::Text(run) if run.field_kind.is_some());
+        found |= match element {
+            PositionedElement::Text(run) => run.field_kind.is_some(),
+            PositionedElement::MultilingualText(run) => run.field_kind.is_some(),
+            _ => false,
+        };
     });
     found
 }
@@ -3172,9 +3205,37 @@ fn page_frame_retained_bytes(page: &PageFrame) -> usize {
             )
     }
 
+    fn multilingual_glyph_bytes(run: &oxml_layout::MultilingualGlyphRun) -> usize {
+        run.logical_text
+            .capacity()
+            .saturating_add(run.language.as_ref().map_or(0, String::capacity))
+            .saturating_add(
+                run.glyph_ids
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u16>()),
+            )
+            .saturating_add(
+                [
+                    run.x_advances.capacity(),
+                    run.y_advances.capacity(),
+                    run.x_offsets.capacity(),
+                    run.y_offsets.capacity(),
+                ]
+                .into_iter()
+                .sum::<usize>()
+                .saturating_mul(std::mem::size_of::<f64>()),
+            )
+            .saturating_add(
+                run.clusters
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<oxml_layout::GlyphCluster>()),
+            )
+    }
+
     fn element_bytes(element: &PositionedElement) -> usize {
         match element {
             PositionedElement::Text(run) => glyph_bytes(run),
+            PositionedElement::MultilingualText(run) => multilingual_glyph_bytes(run),
             PositionedElement::Image {
                 data, content_type, ..
             } => data.capacity().saturating_add(content_type.capacity()),
@@ -3228,13 +3289,40 @@ fn rebind_text_source(text: &mut TextSegment, source_node: Option<SourceNodeId>)
     }
 }
 
-fn rebind_paragraph_source(block: &mut ParagraphBlock, source_node: Option<SourceNodeId>) {
+fn rebind_multilingual_source(
+    text: &mut oxml_layout::MultilingualTextSegment,
+    source_node: Option<SourceNodeId>,
+) -> Result<()> {
+    let mut base = text.base().clone();
+    rebind_text_source(&mut base, source_node);
+    *text = oxml_layout::MultilingualTextSegment::new(
+        base,
+        text.logical_index(),
+        text.language().map(str::to_owned),
+        text.script(),
+        text.direction(),
+        text.bidi_level(),
+        text.x_advances().to_vec(),
+        text.y_advances().to_vec(),
+        text.x_offsets().to_vec(),
+        text.y_offsets().to_vec(),
+        text.clusters().to_vec(),
+        text.break_after(),
+    )?;
+    Ok(())
+}
+
+fn rebind_paragraph_source(
+    block: &mut ParagraphBlock,
+    source_node: Option<SourceNodeId>,
+) -> Result<()> {
     for line in &mut block.lines {
         for item in &mut line.items {
             match item {
                 LineItem::Text(text) | LineItem::Marker(text) => {
                     rebind_text_source(text, source_node)
                 }
+                LineItem::MultilingualText(text) => rebind_multilingual_source(text, source_node)?,
                 LineItem::Tab {
                     leader: Some(leader),
                     ..
@@ -3249,10 +3337,14 @@ fn rebind_paragraph_source(block: &mut ParagraphBlock, source_node: Option<Sourc
                 InlineItem::Text(text) | InlineItem::Marker(text) => {
                     rebind_text_source(text, source_node)
                 }
+                InlineItem::MultilingualText(text) => {
+                    rebind_multilingual_source(text, source_node)?
+                }
                 _ => {}
             }
         }
     }
+    Ok(())
 }
 
 fn rebind_header_footer_sources(
@@ -3261,7 +3353,7 @@ fn rebind_header_footer_sources(
     part: &rdocx_oxml::header_footer::CT_HdrFtr,
     blocks: &mut [ParagraphBlock],
     sources: Option<&SourceRegistry>,
-) {
+) -> Result<()> {
     let story = match story_kind {
         HeaderFooterStoryKind::Header => WordStory::Header {
             relationship_id: relationship_id.to_owned(),
@@ -3273,8 +3365,9 @@ fn rebind_header_footer_sources(
     for (paragraph_index, block) in blocks.iter_mut().enumerate() {
         debug_assert!(paragraph_index < part.paragraphs.len());
         let source = sources.and_then(|sources| sources.id(&story, &[paragraph_index]));
-        rebind_paragraph_source(block, source);
+        rebind_paragraph_source(block, source)?;
     }
+    Ok(())
 }
 
 fn header_footer_cache_entry_bytes(
@@ -3567,6 +3660,7 @@ fn paragraph_cache_entry_bytes(
     fn inline_bytes(item: &InlineItem) -> usize {
         match item {
             InlineItem::Text(text) | InlineItem::Marker(text) => text_bytes(text),
+            InlineItem::MultilingualText(_) => usize::MAX,
             InlineItem::Group { .. } => usize::MAX,
             _ => 0,
         }
@@ -3574,6 +3668,7 @@ fn paragraph_cache_entry_bytes(
     fn line_item_bytes(item: &LineItem) -> usize {
         match item {
             LineItem::Text(text) | LineItem::Marker(text) => text_bytes(text),
+            LineItem::MultilingualText(_) => usize::MAX,
             LineItem::Tab { leader, .. } => leader.as_ref().map_or(0, text_bytes),
             LineItem::Group { .. } => usize::MAX,
             _ => 0,
@@ -4376,6 +4471,7 @@ fn layout_paragraph_with_source_and_table(
 
     // Convert runs to inline items
     let mut inline_items = Vec::new();
+    let mut multilingual_styles = HashMap::<usize, WordMultilingualStyle>::new();
 
     // Handle numbering marker
     if let (Some(num_id), Some(numbering)) = (effective_ppr.num_id, input.numbering.as_ref()) {
@@ -4644,6 +4740,16 @@ fn layout_paragraph_with_source_and_table(
                         field_kind: None,
                         note: None,
                     };
+                    let item_index = inline_items.len();
+                    multilingual_styles.insert(
+                        item_index,
+                        WordMultilingualStyle {
+                            language: effective_rpr.language.clone(),
+                            language_east_asia: effective_rpr.language_east_asia.clone(),
+                            language_bidi: effective_rpr.language_bidi.clone(),
+                            spacing: effective_rpr.spacing.map_or(0.0, |value| value.to_pt()),
+                        },
+                    );
                     if automatic_hyphenation && let Some(language) = effective_rpr.language.as_ref()
                     {
                         inline_items.push(InlineItem::HyphenatedText {
@@ -4837,6 +4943,18 @@ fn layout_paragraph_with_source_and_table(
                                     }
                                     shaped.width += extra * shaped.advances.len() as f64;
                                 }
+                                let item_index = inline_items.len();
+                                multilingual_styles.insert(
+                                    item_index,
+                                    WordMultilingualStyle {
+                                        language: segment_rpr.language.clone(),
+                                        language_east_asia: segment_rpr.language_east_asia.clone(),
+                                        language_bidi: segment_rpr.language_bidi.clone(),
+                                        spacing: segment_rpr
+                                            .spacing
+                                            .map_or(0.0, |value| value.to_pt()),
+                                    },
+                                );
                                 inline_items.push(InlineItem::Text(TextSegment {
                                     text,
                                     source: None,
@@ -4981,7 +5099,27 @@ fn layout_paragraph_with_source_and_table(
         None
     };
 
-    let mut lines = break_into_lines(&inline_items, &line_params, fm)?;
+    let uses_multilingual_layout = inline_items.iter().any(|item| {
+        multilingual_candidate(item)
+            .is_some_and(|segment| needs_word_multilingual_layout(&segment.text))
+    });
+    let uses_exact_word_baseline = uses_multilingual_layout
+        && effective_ppr.line_rule.as_deref() == Some("exact")
+        && effective_ppr.line_spacing.is_some();
+    if uses_multilingual_layout {
+        inline_items = shape_word_multilingual_items(
+            fm,
+            inline_items,
+            &multilingual_styles,
+            !line_params.wrap,
+            uses_exact_word_baseline,
+        )?;
+    }
+    let mut lines = if uses_multilingual_layout {
+        break_multilingual_into_lines(&inline_items, &line_params, fm, TextDirection::Auto)?
+    } else {
+        break_into_lines(&inline_items, &line_params, fm)?
+    };
     convert::restore_word_line_heights(&mut lines, &effective_ppr);
     if let (Some(line), Some(legacy)) = (lines.first_mut(), legacy_empty_line) {
         line.ascent = legacy.ascent;
@@ -5862,7 +6000,7 @@ fn layout_header_footer_variant(
             part,
             &mut content.blocks,
             sources,
-        );
+        )?;
         diagnostics.extend(cached_diagnostics);
         engine.font_manager.replay_layout_font_trace(&font_trace);
         engine.header_footer_cache_hits += 1;
@@ -5907,7 +6045,7 @@ fn layout_header_footer_variant(
         part,
         &mut content.blocks,
         sources,
-    );
+    )?;
     Ok(content)
 }
 
@@ -6159,6 +6297,249 @@ fn resolve_run_color(
         .unwrap_or(Color::BLACK)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordLanguageSlot {
+    Direct,
+    EastAsia,
+    Bidi,
+}
+
+fn word_language_slot(character: char) -> Option<WordLanguageSlot> {
+    match character as u32 {
+        0x0590..=0x08ff | 0xfb1d..=0xfdff | 0xfe70..=0xfeff => Some(WordLanguageSlot::Bidi),
+        0x3000..=0x30ff | 0x3400..=0x9fff | 0xf900..=0xfaff => Some(WordLanguageSlot::EastAsia),
+        0x0041..=0x024f | 0x0900..=0x097f | 0x0e00..=0x0e7f | 0x1e00..=0x1eff => {
+            Some(WordLanguageSlot::Direct)
+        }
+        _ => None,
+    }
+}
+
+fn word_language_for_slot(style: &WordMultilingualStyle, slot: WordLanguageSlot) -> Option<String> {
+    match slot {
+        WordLanguageSlot::Direct => style.language.clone(),
+        WordLanguageSlot::EastAsia => style
+            .language_east_asia
+            .clone()
+            .or_else(|| style.language.clone()),
+        WordLanguageSlot::Bidi => style
+            .language_bidi
+            .clone()
+            .or_else(|| style.language.clone()),
+    }
+}
+
+fn word_language_ranges(text: &str) -> Vec<(usize, usize, WordLanguageSlot)> {
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    let mut slot = WordLanguageSlot::Direct;
+    for (offset, character) in text.char_indices() {
+        let Some(next_slot) = word_language_slot(character) else {
+            continue;
+        };
+        if next_slot != slot && offset > start {
+            ranges.push((start, offset, slot));
+            start = offset;
+        }
+        slot = next_slot;
+    }
+    if start < text.len() {
+        ranges.push((start, text.len(), slot));
+    }
+    ranges
+}
+
+fn word_multilingual_segment_slice(
+    segment: &TextSegment,
+    byte_start: usize,
+    byte_end: usize,
+) -> Result<TextSegment> {
+    let mut slice = segment.clone();
+    slice.text = segment.text[byte_start..byte_end].to_owned();
+    if let Some(source) = segment.source {
+        let char_start =
+            u32::try_from(segment.text[..byte_start].chars().count()).map_err(|_| {
+                oxml_layout::LayoutError::Layout(
+                    "Word multilingual source offset exceeds the supported range".to_owned(),
+                )
+            })?;
+        let char_len = u32::try_from(slice.text.chars().count()).map_err(|_| {
+            oxml_layout::LayoutError::Layout(
+                "Word multilingual source length exceeds the supported range".to_owned(),
+            )
+        })?;
+        slice.source = Some(SourceSpan {
+            node: source.node,
+            char_start: source.char_start.checked_add(char_start).ok_or_else(|| {
+                oxml_layout::LayoutError::Layout(
+                    "Word multilingual source offset overflowed".to_owned(),
+                )
+            })?,
+            char_end: source
+                .char_start
+                .checked_add(char_start)
+                .and_then(|start| start.checked_add(char_len))
+                .ok_or_else(|| {
+                    oxml_layout::LayoutError::Layout(
+                        "Word multilingual source range overflowed".to_owned(),
+                    )
+                })?,
+        });
+    }
+    slice.glyph_ids.clear();
+    slice.advances.clear();
+    slice.width = 0.0;
+    Ok(slice)
+}
+
+fn needs_word_multilingual_layout(text: &str) -> bool {
+    text.chars().any(|character| {
+        matches!(
+            character as u32,
+            0x0590..=0x08ff
+                | 0x0900..=0x097f
+                | 0x0e00..=0x0e7f
+                | 0x3000..=0x30ff
+                | 0x3400..=0x9fff
+                | 0xf900..=0xfaff
+                | 0xfb1d..=0xfdff
+                | 0xfe70..=0xfeff
+        )
+    })
+}
+
+fn multilingual_candidate(item: &InlineItem) -> Option<&TextSegment> {
+    match item {
+        InlineItem::Text(segment) | InlineItem::HyphenatedText { segment, .. }
+            if !segment.text.is_empty() && segment.field_kind.is_none() =>
+        {
+            Some(segment)
+        }
+        _ => None,
+    }
+}
+
+fn apply_word_multilingual_spacing(
+    segment: oxml_layout::MultilingualTextSegment,
+    spacing: f64,
+    exact_word_baseline: bool,
+) -> Result<oxml_layout::MultilingualTextSegment> {
+    if spacing == 0.0 && !exact_word_baseline {
+        return Ok(segment);
+    }
+    let mut base = segment.base().clone();
+    let x_advances = segment
+        .x_advances()
+        .iter()
+        .map(|advance| advance + spacing)
+        .collect::<Vec<_>>();
+    base.advances = x_advances.clone();
+    base.width = x_advances.iter().sum();
+    if exact_word_baseline {
+        base.ascent = base.font_size * WORD_EXACT_LINE_BASELINE_EM;
+    }
+    oxml_layout::MultilingualTextSegment::new(
+        base,
+        segment.logical_index(),
+        segment.language().map(str::to_owned),
+        segment.script(),
+        segment.direction(),
+        segment.bidi_level(),
+        x_advances,
+        segment.y_advances().to_vec(),
+        segment.x_offsets().to_vec(),
+        segment.y_offsets().to_vec(),
+        segment.clusters().to_vec(),
+        segment.break_after(),
+    )
+}
+
+fn shape_word_multilingual_items(
+    font_manager: &mut FontManager,
+    legacy_items: Vec<InlineItem>,
+    styles: &HashMap<usize, WordMultilingualStyle>,
+    no_wrap: bool,
+    exact_word_baseline: bool,
+) -> Result<Vec<InlineItem>> {
+    let mut styled = Vec::new();
+    for (index, item) in legacy_items.iter().enumerate() {
+        let Some(segment) = multilingual_candidate(item) else {
+            continue;
+        };
+        if let Some(style) = styles.get(&index) {
+            for (byte_start, byte_end, slot) in word_language_ranges(&segment.text) {
+                styled.push((
+                    word_multilingual_segment_slice(segment, byte_start, byte_end)?,
+                    word_language_for_slot(style, slot),
+                ));
+            }
+        } else {
+            let language = match item {
+                InlineItem::HyphenatedText { language, .. } => Some(language.clone()),
+                _ => None,
+            };
+            styled.push((segment.clone(), language));
+        }
+    }
+    let mut shaped = VecDeque::from(font_manager.shape_multilingual_paragraph(
+        styled,
+        TextDirection::Auto,
+        no_wrap,
+    )?);
+    let mut items = Vec::with_capacity(legacy_items.len());
+    for (index, mut item) in legacy_items.into_iter().enumerate() {
+        let Some(segment) = multilingual_candidate(&item) else {
+            if exact_word_baseline {
+                match &mut item {
+                    InlineItem::Text(segment)
+                    | InlineItem::Marker(segment)
+                    | InlineItem::HyphenatedText { segment, .. } => {
+                        segment.ascent = segment.font_size * WORD_EXACT_LINE_BASELINE_EM;
+                    }
+                    _ => {}
+                }
+            }
+            items.push(item);
+            continue;
+        };
+        let target_bytes = segment.text.len();
+        let mut consumed_bytes = 0usize;
+        while consumed_bytes < target_bytes {
+            let span = shaped.pop_front().ok_or_else(|| {
+                oxml_layout::LayoutError::Layout(
+                    "multilingual Word shaping lost a styled text run".to_owned(),
+                )
+            })?;
+            consumed_bytes = consumed_bytes
+                .checked_add(span.text().len())
+                .filter(|consumed| *consumed <= target_bytes)
+                .ok_or_else(|| {
+                    oxml_layout::LayoutError::Layout(
+                        "multilingual Word shaping crossed a styled text boundary".to_owned(),
+                    )
+                })?;
+            let spacing = styles.get(&index).map_or(0.0, |style| style.spacing);
+            let span = apply_word_multilingual_spacing(span, spacing, exact_word_baseline)?;
+            if let InlineItem::HyphenatedText { language, .. } = &item
+                && !needs_word_multilingual_layout(span.text())
+            {
+                items.push(InlineItem::HyphenatedText {
+                    segment: span.base().clone(),
+                    language: language.clone(),
+                });
+            } else {
+                items.push(InlineItem::MultilingualText(span));
+            }
+        }
+    }
+    if !shaped.is_empty() {
+        return Err(oxml_layout::LayoutError::Layout(
+            "multilingual Word shaping produced an unmatched text run".to_owned(),
+        ));
+    }
+    Ok(items)
+}
+
 /// Convert a highlight color enum to an RGBA Color.
 fn highlight_to_color(h: ST_HighlightColor) -> Option<Color> {
     match h {
@@ -6266,7 +6647,7 @@ fn highlight_to_color(h: ST_HighlightColor) -> Option<Color> {
 mod tests {
     use super::*;
     use crate::input::ImageData;
-    use oxml_layout::MediaId;
+    use oxml_layout::{MediaId, MultilingualGlyphRun, TextScript};
     use std::collections::HashMap;
 
     fn compatibility_elements(elements: &[PositionedElement]) -> Vec<&PositionedElement> {
@@ -6291,6 +6672,18 @@ mod tests {
 
     fn compatibility_page_elements(page: &PageFrame) -> Vec<&PositionedElement> {
         compatibility_elements(&page.elements)
+    }
+
+    fn multilingual_runs(layout: &LayoutResult) -> Vec<&MultilingualGlyphRun> {
+        layout
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .filter_map(|element| match element {
+                PositionedElement::MultilingualText(run) => Some(run),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -6956,6 +7349,50 @@ mod tests {
             let text = output_text(&deterministic_layout(&input)).concat();
             assert_eq!(text, "representation");
         }
+    }
+
+    #[test]
+    fn rtl_first_rich_paragraph_keeps_hyphenatable_english_in_visual_order() {
+        let mut input = make_input_with_text("");
+        input.automatic_hyphenation = true;
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        let mut arabic = CT_R::new("العربية");
+        arabic.properties = Some(rdocx_oxml::properties::CT_RPr {
+            language: Some("ar-SA".to_owned()),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        let mut english = CT_R::new(" representation");
+        english.properties = Some(rdocx_oxml::properties::CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..Default::default()
+        });
+        paragraph.runs = vec![arabic, english];
+
+        let output = deterministic_layout(&input);
+        let arabic_x = multilingual_runs(&output)
+            .into_iter()
+            .find(|run| run.logical_text == "العربية")
+            .expect("Arabic run uses rich shaping")
+            .origin
+            .x;
+        let english_x = output
+            .pages
+            .iter()
+            .flat_map(|page| compatibility_page_elements(page))
+            .find_map(|element| match element {
+                PositionedElement::Text(run) if run.text.contains("representation") => {
+                    Some(run.origin.x)
+                }
+                _ => None,
+            })
+            .expect("hyphenatable English run stays in the line");
+        assert!(
+            english_x < arabic_x,
+            "RTL paragraph paints English left of Arabic: English {english_x}, Arabic {arabic_x}"
+        );
     }
 
     #[test]
@@ -7651,58 +8088,301 @@ mod tests {
     }
 
     #[test]
+    fn mixed_script_fallback_uses_each_covering_font_without_boxes() {
+        let input = make_input_with_text("Latin العربية देवनागरी ภาษาไทย 你好世界");
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("deterministic multilingual layout");
+        let runs = multilingual_runs(&result.layout);
+
+        assert!(
+            !runs.is_empty(),
+            "Word layout still emits only legacy glyph runs"
+        );
+        for script in [
+            TextScript::Latin,
+            TextScript::Arabic,
+            TextScript::Devanagari,
+            TextScript::Thai,
+            TextScript::Han,
+        ] {
+            assert!(
+                runs.iter().any(|run| run.script == script),
+                "missing {script:?} span"
+            );
+        }
+        assert!(
+            runs.iter().all(|run| !run.glyph_ids.contains(&0)),
+            "deterministic fallback emitted a .notdef glyph: {:?}",
+            runs.iter()
+                .map(|run| (&run.logical_text, run.script, &run.glyph_ids))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn complex_shaping_preserves_clusters_offsets_and_logical_source_spans() {
+        let text = "سلام क्षि ภาษาไทย 你好世界";
+        let input = make_input_with_text(text);
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("deterministic multilingual layout");
+        let mut runs = multilingual_runs(&result.layout);
+
+        assert!(!runs.is_empty(), "Word did not consume rich shaped spans");
+        runs.sort_by_key(|run| run.logical_index);
+        assert_eq!(
+            runs.iter()
+                .map(|run| run.logical_text.as_str())
+                .collect::<String>(),
+            text
+        );
+        assert!(runs.iter().all(|run| run.is_valid()));
+        assert!(runs.iter().all(|run| run.source.is_some()));
+        assert!(runs.iter().any(|run| {
+            run.script == TextScript::Devanagari
+                && run
+                    .clusters
+                    .iter()
+                    .any(|cluster| cluster.char_end - cluster.char_start > 1)
+        }));
+    }
+
+    #[test]
+    fn rich_mixed_script_paragraph_retains_conditional_hyphenation() {
+        let mut input = hyphenation_input(true, Some("en-US"), false);
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        let mut arabic = CT_R::new(" العربية");
+        arabic.properties = Some(rdocx_oxml::properties::CT_RPr {
+            language: Some("en-US".to_owned()),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        paragraph.runs.push(arabic);
+
+        let output = deterministic_layout(&input);
+        let text = output_text(&output);
+        assert!(text.iter().any(|item| item == "-"), "{text:?}");
+        assert!(
+            multilingual_runs(&output)
+                .iter()
+                .any(|run| run.script == TextScript::Arabic),
+            "the Arabic run must still use rich shaping"
+        );
+    }
+
+    #[test]
+    fn one_mixed_text_node_uses_each_effective_word_language_slot() {
+        let text = "Latin العربية 你好";
+        let mut input = make_input_with_text(text);
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+            language: Some("en-US".to_owned()),
+            language_east_asia: Some("zh-CN".to_owned()),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("deterministic multilingual layout");
+        let runs = multilingual_runs(&result.layout);
+
+        for (script, language) in [
+            (TextScript::Latin, "en-US"),
+            (TextScript::Arabic, "ar-SA"),
+            (TextScript::Han, "zh-CN"),
+        ] {
+            let run = runs
+                .iter()
+                .find(|run| run.script == script && run.language.as_deref() == Some(language))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing {script:?} with {language}: {:?}",
+                        runs.iter()
+                            .map(|run| (
+                                run.script,
+                                run.language.as_deref(),
+                                run.logical_text.as_str()
+                            ))
+                            .collect::<Vec<_>>()
+                    )
+                });
+            let source = run.source.unwrap_or_else(|| {
+                panic!(
+                    "mixed-language {script:?} span {:?} retains source: {:?}",
+                    run.logical_text,
+                    runs.iter()
+                        .map(|run| (&run.logical_text, run.script, run.source))
+                        .collect::<Vec<_>>()
+                )
+            });
+            let source_text = text
+                .chars()
+                .skip(source.char_start as usize)
+                .take((source.char_end - source.char_start) as usize)
+                .collect::<String>();
+            assert_eq!(source_text, run.logical_text);
+        }
+    }
+
+    #[test]
+    fn rich_stored_field_retains_resolved_language_and_character_spacing() {
+        for (xml, expected) in [
+            (
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:fldSimple w:instr="DATE"><w:r><w:rPr><w:spacing w:val="40"/><w:lang w:val="en-US"/></w:rPr><w:t>stored</w:t></w:r></w:fldSimple><w:r><w:rPr><w:lang w:bidi="ar-SA"/></w:rPr><w:t> العربية</w:t></w:r></w:p></w:body></w:document>"#,
+                "stored",
+            ),
+            (
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:bookmarkStart w:id="1" w:name="target"/><w:r><w:t>resolved</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p><w:p><w:fldSimple w:instr="REF target"><w:r><w:rPr><w:spacing w:val="40"/><w:lang w:val="en-US"/></w:rPr><w:t>cached</w:t></w:r></w:fldSimple><w:r><w:rPr><w:lang w:bidi="ar-SA"/></w:rPr><w:t> العربية</w:t></w:r></w:p></w:body></w:document>"#,
+                "resolved",
+            ),
+        ] {
+            let mut input = make_input_with_text("");
+            input.document =
+                rdocx_oxml::CT_Document::from_xml(xml.as_bytes()).expect("stored field XML parses");
+            let output = deterministic_layout(&input);
+            let run = multilingual_runs(&output)
+                .into_iter()
+                .find(|run| {
+                    run.logical_text == expected && run.language.as_deref() == Some("en-US")
+                })
+                .expect("stored or resolved field is rich-shaped with its language");
+
+            let family = output
+                .fonts
+                .iter()
+                .find(|font| font.id == run.font_id)
+                .expect("field font is present")
+                .family
+                .clone();
+            let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+            let font_id = fonts
+                .resolve_font(Some(&family), run.bold, run.italic)
+                .expect("field font resolves");
+            let unspaced = fonts
+                .shape_text(font_id, &run.logical_text, run.font_size)
+                .expect("field text reshapes");
+            assert_eq!(run.x_advances.len(), unspaced.advances.len());
+            assert!(
+                run.x_advances
+                    .iter()
+                    .zip(unspaced.advances)
+                    .all(|(actual, unspaced)| (*actual - unspaced - 2.0).abs() < 0.001),
+                "stored or resolved field spacing was not retained"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_word_lines_place_every_complex_script_on_the_word_em_baseline() {
+        for (family, language_attributes, text) in [
+            (
+                "Noto Sans Arabic",
+                r#"w:val="ar-SA" w:bidi="ar-SA""#,
+                "العربية مرحبا بالعالم",
+            ),
+            (
+                "Noto Sans Devanagari",
+                r#"w:val="hi-IN""#,
+                "देवनागरी नमस्ते दुनिया",
+            ),
+            ("Noto Sans Thai", r#"w:val="th-TH""#, "ภาษาไทยยินดีต้อนรับ"),
+            (
+                "Noto Sans SC",
+                r#"w:val="zh-CN" w:eastAsia="zh-CN""#,
+                "〈中〉、你好世界",
+            ),
+        ] {
+            let xml = format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:spacing w:after="0" w:line="480" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="{family}" w:hAnsi="{family}" w:eastAsia="{family}" w:cs="{family}"/><w:sz w:val="48"/><w:szCs w:val="48"/><w:lang {language_attributes}/></w:rPr><w:t>{text}</w:t></w:r></w:p><w:sectPr><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>"#
+            );
+            let mut input = make_input_with_text("");
+            input.document = rdocx_oxml::CT_Document::from_xml(xml.as_bytes())
+                .expect("complex-script metric fixture parses");
+            let result = crate::layout_document_deterministic_with_provenance(&input)
+                .expect("complex-script metric fixture lays out");
+            let runs = multilingual_runs(&result.layout);
+            let first = runs
+                .iter()
+                .min_by_key(|run| run.logical_index)
+                .expect("fixture emits rich text");
+            assert!(
+                (first.origin.y - 91.2).abs() < 0.001,
+                "{family} baseline was {}, expected 91.2",
+                first.origin.y
+            );
+        }
+    }
+
+    #[test]
+    fn latin_shaping_and_hash_outputs_remain_byte_identical() {
+        let text = "financial العربية";
+        let input = make_input_with_text(text);
+        let result = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("deterministic Latin layout");
+        let mut runs = multilingual_runs(&result.layout);
+
+        assert!(
+            !runs.is_empty(),
+            "Word has not migrated to the shared rich path"
+        );
+        runs.sort_by_key(|run| run.logical_index);
+        assert_eq!(
+            runs.iter()
+                .map(|run| run.logical_text.as_str())
+                .collect::<String>(),
+            text
+        );
+        let latin = runs
+            .iter()
+            .find(|run| run.script == TextScript::Latin && run.logical_text == "financial")
+            .expect("mixed-script paragraph retains its Latin span");
+        let projection = latin.legacy_projection();
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let family = result
+            .layout
+            .fonts
+            .iter()
+            .find(|font| font.id == latin.font_id)
+            .expect("Latin font is in the result")
+            .family
+            .clone();
+        let font_id = fonts
+            .resolve_font(Some(&family), latin.bold, latin.italic)
+            .expect("bundled Latin font resolves");
+        let independently_shaped = fonts
+            .shape_text(font_id, &latin.logical_text, latin.font_size)
+            .expect("Latin span shapes independently");
+        assert_eq!(projection.glyph_ids, independently_shaped.glyph_ids);
+        assert_eq!(projection.advances, independently_shaped.advances);
+    }
+
+    #[test]
     fn break_opportunities_emit_every_scalar_and_glyph_once() {
         let text = "financial planning ttf-parser  double  spaces e\u{301}lan allocated \u{754c} "
             .repeat(12);
         let input = make_input_with_text(&text);
         let result = crate::layout_document_deterministic_with_provenance(&input)
             .expect("deterministic layout");
-        let runs = result
-            .layout
-            .pages
-            .iter()
-            .flat_map(|page| compatibility_page_elements(page))
-            .filter_map(|element| match element {
-                PositionedElement::Text(run) if run.source.is_some() => Some(run),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let runs = multilingual_runs(&result.layout);
 
         assert_eq!(
-            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+            runs.iter()
+                .map(|run| run.logical_text.as_str())
+                .collect::<String>(),
             text
         );
         let mut expected_start = 0;
-        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
         for run in runs {
             let source = run.source.expect("filtered sourced run");
             assert_eq!(source.char_start, expected_start);
             assert_eq!(
                 source.char_end - source.char_start,
-                run.text.chars().count() as u32
+                run.logical_text.chars().count() as u32
             );
             expected_start = source.char_end;
-
-            let family = result
-                .layout
-                .fonts
-                .iter()
-                .find(|font| font.id == run.font_id)
-                .expect("run font is in result")
-                .family
-                .clone();
-            let font_id = fonts
-                .resolve_font(Some(&family), run.bold, run.italic)
-                .expect("bundled run font resolves");
-            let independently_shaped = fonts
-                .shape_text(font_id, &run.text, run.font_size)
-                .expect("emitted chunk reshapes");
-            assert_eq!(
-                run.glyph_ids, independently_shaped.glyph_ids,
-                "{}",
-                run.text
-            );
-            assert_eq!(run.advances, independently_shaped.advances, "{}", run.text);
+            assert!(run.is_valid(), "{}", run.logical_text);
         }
         assert_eq!(expected_start, text.chars().count() as u32);
     }
@@ -8480,6 +9160,65 @@ mod tests {
         assert_eq!(warm.1, fresh.1);
         assert_eq!(heading_path(&warm.0, &warm.1), vec![2]);
         assert_eq!(engine.paragraph_cache_counts(), (2, 3));
+    }
+
+    #[test]
+    fn complex_heading_rebinds_rich_line_and_reflow_sources() {
+        let mut input = make_input_with_text("العنوان المخزن");
+        if let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] {
+            paragraph.properties = Some(CT_PPr {
+                style_id: Some("Heading1".to_owned()),
+                ..CT_PPr::default()
+            });
+        } else {
+            panic!("expected paragraph")
+        }
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            unreachable!("paragraph checked above")
+        };
+        let media = MediaRegistry::new(&input.images);
+        let mut fonts = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut numbering = NumberingState::new();
+        let mut diagnostics = Vec::new();
+        let mut block = layout_paragraph_with_source(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &media,
+            &mut fonts,
+            &mut numbering,
+            &mut diagnostics,
+            Some(CACHE_SOURCE_NODE),
+        )
+        .expect("complex heading lays out");
+
+        let rebound = SourceNodeId::new(2).expect("source ID");
+        rebind_paragraph_source(&mut block, Some(rebound)).expect("source rebinding succeeds");
+        let line_sources = block
+            .lines
+            .iter()
+            .flat_map(|line| &line.items)
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(segment) => Some(segment.base().source),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!line_sources.is_empty());
+        assert!(
+            line_sources
+                .iter()
+                .all(|source| source.is_some_and(|source| source.node == rebound))
+        );
+        assert!(block
+            .reflow
+            .as_ref()
+            .expect("heading retains reflow inputs")
+            .items
+            .iter()
+            .all(|item| {
+                !matches!(item, InlineItem::MultilingualText(segment) if !segment.base().source.is_some_and(|source| source.node == rebound))
+            }));
     }
 
     #[test]
@@ -10183,13 +10922,13 @@ mod tests {
 
         let mut header = CT_HdrFtr::new();
         let mut header_paragraph = CT_P::new();
-        header_paragraph.add_run("header text");
+        header_paragraph.add_run("رأس الصفحة");
         header.paragraphs.push(header_paragraph);
         input.headers.insert("rIdHeader".to_owned(), header);
 
         let mut footer = CT_HdrFtr::new();
         let mut footer_paragraph = CT_P::new();
-        footer_paragraph.add_run("footer text");
+        footer_paragraph.add_run("تذييل الصفحة");
         footer.paragraphs.push(footer_paragraph);
         input.footers.insert("rIdFooter".to_owned(), footer);
 
@@ -10252,7 +10991,7 @@ mod tests {
                     },
                     children: vec![0],
                 },
-                "header text".to_owned(),
+                "رأس الصفحة".to_owned(),
             ),
             (
                 WordSourcePath {
@@ -10261,7 +11000,7 @@ mod tests {
                     },
                     children: vec![0],
                 },
-                "footer text".to_owned(),
+                "تذييل الصفحة".to_owned(),
             ),
             (
                 WordSourcePath {
@@ -10282,15 +11021,18 @@ mod tests {
         let result = crate::layout_document_deterministic_with_provenance(&input)
             .expect("layout with provenance");
         let mut seen = std::collections::HashSet::new();
-        for run in result.layout.pages.iter().flat_map(|page| {
+        for (source, text) in result.layout.pages.iter().flat_map(|page| {
             compatibility_page_elements(page)
                 .into_iter()
                 .filter_map(|element| match element {
-                    PositionedElement::Text(run) => Some(run),
+                    PositionedElement::Text(run) => Some((run.source, run.text.as_str())),
+                    PositionedElement::MultilingualText(run) => {
+                        Some((run.source, run.logical_text.as_str()))
+                    }
                     _ => None,
                 })
         }) {
-            let Some(span) = run.source else {
+            let Some(span) = source else {
                 continue;
             };
             let path = result.source_node(span.node).expect("source node resolves");
@@ -10300,7 +11042,7 @@ mod tests {
                 .skip(span.char_start as usize)
                 .take((span.char_end - span.char_start) as usize)
                 .collect::<String>();
-            assert_eq!(selected, run.text, "mismatch at {path:?}");
+            assert_eq!(selected, text, "mismatch at {path:?}");
             seen.insert(path.clone());
         }
         assert_eq!(
@@ -10311,6 +11053,17 @@ mod tests {
         for path in expected.keys() {
             assert!(seen.contains(path), "missing source path {path:?}");
         }
+
+        let without_provenance = deterministic_layout(&input);
+        let rich_header_footer = multilingual_runs(&without_provenance)
+            .into_iter()
+            .filter(|run| run.logical_text.contains("الصفحة"))
+            .collect::<Vec<_>>();
+        assert_eq!(rich_header_footer.len(), 2);
+        assert!(
+            rich_header_footer.iter().all(|run| run.source.is_none()),
+            "cache-only source IDs must not escape without provenance"
+        );
     }
 
     #[test]
@@ -12345,6 +13098,40 @@ mod tests {
 
         let text = output_text(&deterministic_layout(&input));
         assert!(text.iter().any(|item| item == "-"), "{text:?}");
+    }
+
+    #[test]
+    fn drawing_reflow_retains_the_exact_word_rich_baseline() {
+        use rdocx_oxml::drawing::{AnchorAlignH, WrapType};
+
+        let mut input =
+            make_wrapping_document(WrapType::Square, Some(AnchorAlignH::Left), 100.0, 40.0, 5.0);
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("expected paragraph")
+        };
+        paragraph.properties = Some(CT_PPr {
+            line_spacing: Some(rdocx_oxml::units::Twips(480)),
+            line_rule: Some("exact".to_owned()),
+            ..Default::default()
+        });
+        paragraph.runs[0] = rdocx_oxml::text::CT_R::new(&"العربية مرحبا بالعالم ".repeat(12));
+        paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+            sz: Some(rdocx_oxml::units::HalfPoint(48)),
+            language: Some("ar-SA".to_owned()),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+
+        let output = deterministic_layout(&input);
+        let first = multilingual_runs(&output)
+            .into_iter()
+            .min_by(|left, right| left.origin.y.total_cmp(&right.origin.y))
+            .expect("wrapped paragraph emits rich text");
+        assert!(
+            (first.origin.y - 91.2).abs() < 0.001,
+            "wrapped rich baseline was {}, expected 91.2",
+            first.origin.y
+        );
     }
 
     #[test]

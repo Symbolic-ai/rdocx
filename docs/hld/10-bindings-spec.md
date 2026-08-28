@@ -650,6 +650,13 @@ WASM, and CLI surfaces gain no multilingual authoring method. Both WASM graphs
 retain their host-font-free target contract while consuming the same bundled
 fallback inventory transitively.
 
+Word layout emits the same existing `MultilingualTextSegment` and
+`MultilingualGlyphRun` values for paragraphs containing complex scripts. This
+activates the already additive pre-1.0 rich-layout surface for native Word
+consumers without adding a public type, field, entrypoint, binding method, or
+dependency. Consumers that inspect positioned elements handle the existing
+multilingual variant for both Word and Presentation results.
+
 The next stable Rust family includes the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. `ST_NumberFormat::Other(String)`

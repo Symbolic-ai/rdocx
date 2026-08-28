@@ -1,6 +1,6 @@
 # F-199, Complex script shaping
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: L
 **Depends on**: F-196, F-X059, F-X066
@@ -122,14 +122,14 @@ unexpected and must not be folded into F-198's isolated output change.
 
 ## Implementation checklist
 
-- [ ] Migrate Word onto F-X058's published rich shaping path.
-- [ ] Project complete effective Word language and exact logical source spans.
-- [ ] Prove Word and PowerPoint consume the same segmented result.
-- [ ] Retain Arabic, Indic, Thai, CJK, offset, and searchable-text regressions.
-- [ ] Verify the approved deterministic fonts, licences, notices, and subset provenance.
-- [ ] Add the approved pinned multi-script corpus inputs and oracle evidence.
-- [ ] Prove the existing Latin and hash outputs remain byte-identical.
-- [ ] Run all risk riders and update exactly the listed HLD files.
+- [x] Migrate Word onto F-X058's published rich shaping path.
+- [x] Project complete effective Word language and exact logical source spans.
+- [x] Prove Word and PowerPoint consume the same segmented result.
+- [x] Retain Arabic, Indic, Thai, CJK, offset, and searchable-text regressions.
+- [x] Verify the approved deterministic fonts, licences, notices, and subset provenance.
+- [x] Add the approved pinned multi-script corpus inputs and oracle evidence.
+- [x] Prove the existing Latin and hash outputs remain byte-identical.
+- [x] Run all risk riders and update exactly the listed HLD files.
 
 ## Open questions
 

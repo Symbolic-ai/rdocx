@@ -468,6 +468,15 @@ resolved-slide model. Its facade supplies that sidecar to the renderer, so an
 explicit DrawingML direction also controls numeric and Latin text on both
 sides of a forced line break.
 
+Word uses the same paragraph-wide rich shaping and line path when a paragraph
+contains Arabic, Devanagari, Thai, or CJK text. The Word projection selects the
+effective direct, bidirectional, or East Asian language value for each run and
+retains exact logical source intervals. Shared shaping still owns script and
+coverage segmentation, clusters, offsets, and line fitting. Exact Word line
+spacing places rich text on the Word baseline at 0.8 of the largest run em for
+the line. Automatic spacing and the established Latin-only path retain their
+existing metrics and output bytes.
+
 `MultilingualGlyphRun` is the rich positioned output. It carries glyph ids,
 x and y advances, x and y offsets, logical clusters, direction, and extraction
 text. PDF paints those exact positions inside logical `ActualText`, raster

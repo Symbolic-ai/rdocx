@@ -751,6 +751,22 @@ succeed with nonzero output, and the expected TSV and JSON artifacts exist and
 are nonempty.** Page-count differences, dimension differences, and a missed
 trend are scored evidence rather than orchestration failures.
 
+The same harness source-builds four one-page Word fixtures for Arabic,
+Devanagari, Thai, and Simplified Chinese. Each uses an approved deterministic
+Noto family, complete `w:lang` attributes, 24 point text, and exact 24 point
+line spacing. Unlike the five-document trend, these four pages have a hard raw
+luminance SSIM gate of at least 0.95 on at least 80 percent of pages. The
+reviewed evidence passes four of four pages with scores 0.985079311,
+0.972241230, 0.997558968, and 0.997294132 respectively. The TSV records each
+page and the JSON records the fixture identities, coverage, threshold, and
+per-document page counts.
+
+The Writer oracle registers the three fixed Noto files and one checked-in
+oracle-only static Thin instance of the exact bundled Noto Sans SC subset. The
+fixture inventory test binds the source and output SHA-256 values, requires the
+adjacent OFL licence and provenance record, and rejects extra files. The static
+instance changes neither product font bytes nor the deterministic Rust input.
+
 ## The M11 cross-viewer acceptance gate
 
 The M11 gate uses one deterministic ten-slide deck built from the checked-in
@@ -972,6 +988,11 @@ outcomes as mandatory manual evidence.
   with deterministic bundled fonts. PDF extraction and SVG text stay logical
   while painted bidi positions are visual. The stable source fixture and full
   49-entry hash harness protect the legacy Latin path.
+- The native Word rich-layout fixture covers the same four scripts, exact
+  language projection, valid clusters and offsets, resolvable Word source
+  intervals, deterministic PDF and raster output, and searchable logical SVG
+  text. An exact-line regression fixes every complex script to the Word 0.8em
+  baseline while the Latin path and all 49 hashes remain byte-identical.
 
 **`oxml-pdf`**
 - Three-deep groups balance `q` and `Q`, emit each `cm` before child content,

@@ -619,10 +619,12 @@ pub fn break_multilingual_into_lines(
     base_direction: TextDirection,
 ) -> Result<Vec<LayoutLine>> {
     let mut lines = break_into_lines(items, params, fm)?;
-    let paragraph_text = items
+    let paragraph_text = lines
         .iter()
+        .flat_map(|line| &line.items)
         .filter_map(|item| match item {
-            InlineItem::MultilingualText(segment) => Some(segment.text()),
+            LineItem::Text(segment) => Some(segment.text.as_str()),
+            LineItem::MultilingualText(segment) => Some(segment.text()),
             _ => None,
         })
         .collect::<String>();
@@ -647,19 +649,24 @@ pub fn break_multilingual_into_lines(
             .iter()
             .enumerate()
             .filter_map(|(index, item)| {
-                matches!(item, LineItem::MultilingualText(_)).then_some(index)
+                matches!(item, LineItem::Text(_) | LineItem::MultilingualText(_)).then_some(index)
             })
             .collect::<Vec<_>>();
         let line_start = paragraph_offset;
         let span_starts = positions
             .iter()
             .map(|index| match &line.items[*index] {
+                LineItem::Text(segment) => {
+                    let start = paragraph_offset;
+                    paragraph_offset += segment.text.len();
+                    start
+                }
                 LineItem::MultilingualText(segment) => {
                     let start = paragraph_offset;
                     paragraph_offset += segment.text().len();
                     start
                 }
-                _ => unreachable!("positions contain only multilingual text"),
+                _ => unreachable!("positions contain only text"),
             })
             .collect::<Vec<_>>();
         if positions.is_empty() {
@@ -681,10 +688,11 @@ pub fn break_multilingual_into_lines(
             .iter()
             .zip(&levels)
             .map(|(index, level)| match &line.items[*index] {
+                LineItem::Text(segment) => Ok(LineItem::Text(segment.clone())),
                 LineItem::MultilingualText(segment) => Ok(LineItem::MultilingualText(
                     multilingual_segment_with_level(segment, *level)?,
                 )),
-                _ => unreachable!("positions contain only multilingual text"),
+                _ => unreachable!("positions contain only text"),
             })
             .collect::<Result<Vec<_>>>()?;
         for (visual_slot, logical_index) in positions.into_iter().zip(visual_order) {
