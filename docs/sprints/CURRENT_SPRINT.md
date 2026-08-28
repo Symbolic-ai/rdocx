@@ -42,7 +42,7 @@ protection at the reviewed sprint SHA.
 | F-198 | Hyphenation | L | done | - |
 | F-199 | Complex script shaping | L | done | - |
 | F-202 | Incremental layout | L | done | - |
-| F-200 | Vertical and bidirectional text | M | in-progress | codex |
+| F-200 | Vertical and bidirectional text | M | done | - |
 | F-X060 | Tag v0.11.0 | S | pending | - |
 | F-X031 | Require the CI gate in branch protection | S | pending | - |
 

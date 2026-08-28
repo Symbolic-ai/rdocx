@@ -9933,3 +9933,54 @@ resolve bidirectional order across both legacy hyphenatable items and rich
 complex-script items as one paragraph. The static CJK oracle font is evidence
 for the approved variable source bytes, not a product font or a new public
 variation-axis contract.
+
+### F-200, Vertical and bidirectional text
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word paragraph `w:bidi` and run `w:rtl` are typed without
+losing unsupported attributes, duplicate occurrences, namespace identity, or
+schema order. Paragraph and run direction now reach the shared UAX 9 layout
+path across body text, tables, headers, footers, footnotes, endnotes, fields,
+numbering, tabs, conditional hyphens, and drawing reflow. Visual painting order
+and direction-sensitive alignment remain separate from logical PDF and SVG
+extraction order and exact source attribution.
+
+**Non-obvious choices.** Absent Word direction uses one inferred paragraph base
+instead of forcing left-to-right, while explicit run overrides preserve their
+internal digit and whitespace levels. Private reflow and cache sidecars carry
+direction and logical provenance without changing the public
+`ParagraphReflow` shape. Source-less fields, markers, generated hyphens, and tab
+leaders use distinct private provenance so visually reordered lines remain
+searchable in logical order. Existing whole-group quarter-turn vertical text
+remains the documented approximation.
+
+**Deviations from the design plan.** The approved bidi-only scope and five-file
+HLD impact were retained. Eleven microscope passes found parser occurrence,
+direction inference, hybrid line, field, object, note, table, header, cache,
+reflow, and source-less provenance interactions. Each defect received an
+existing-file red regression and a separate remediation turn. Microscope pass
+11 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** Typed direction round-trip, raw replay, paragraph and run override,
+line-local L1 and L2, logical extraction, drawing reflow, table and story cache,
+field, numbering, note, conditional-hyphen, tab-leader, and quarter-turn
+regressions passed. The pinned raw oracle passed all five pages at SSIM 0.95 or
+better: Arabic 0.956809869, Devanagari 0.972241230, Thai 0.997558968,
+Simplified Chinese 0.997294132, and bidirectional 0.992810907. Full workspace,
+no-default, WASM, documentation, 22-package dry-run, archive-size, and
+supply-chain gates passed at the integrated SHA.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve logical source order independently of
+visual positions, including for source-less generated content. Keep direction
+transport private where the existing public aggregate is exhaustive, and do
+not expand the quarter-turn approximation into upright vertical layout without
+an explicit scope and HLD revision.

@@ -341,6 +341,7 @@ defended.
 | F-X066 | S58 | S | 1 | 1 | 2026-08-28 | Classify strict namespace-aware legacy VML horizontal rules without rendering them |
 | F-198 | S58 | L | 4 | 1 | 2026-08-28 | Automatic English hyphenation with exact source spans and pinned Writer parity |
 | F-199 | S58 | L | 4 | 1 | 2026-08-28 | Shared rich shaping for Arabic, Devanagari, Thai, and Simplified Chinese Word text |
+| F-200 | S58 | M | 2 | 1 | 2026-08-28 | Bidirectional Word layout with logical extraction, visual ordering, and retained vertical approximations |
 
 ## Velocity
 
