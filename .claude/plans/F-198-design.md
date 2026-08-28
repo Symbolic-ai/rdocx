@@ -92,6 +92,7 @@ line breaks within the recorded tolerance, and the harness delta is declared.
 - `docs/hld/08-rendering-spec.md`, Liang opportunities, conditional hyphens, shaping, and source spans.
 - `docs/hld/10-bindings-spec.md`, low-level Rust source compatibility of layout input and the shared inline variant.
 - `docs/hld/12-testing-strategy.md`, deterministic golden and pinned Word-fidelity evidence.
+- `docs/hld/14-development-backlog.md`, canonical dependency on the preceding stable-reader work.
 - `docs/hld/15-build-and-toolchain.md`, pattern dependency, licensing, deterministic embedding, and package verification.
 
 ## Risk routing

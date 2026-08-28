@@ -1837,7 +1837,7 @@ Liang hyphenation with language-specific patterns, which changes line breaking
 and therefore every subsequent line. Word hyphenates and this renderer does not,
 so any hyphenated document currently differs from the first hyphenated line
 onward.
-**Depends on**: F-197, F-X059.
+**Depends on**: F-197, F-X059, F-X066.
 **Test gate**: golden. A hyphenated document matches the oracle's line breaks
 within the recorded tolerance, and the harness delta is declared.
 

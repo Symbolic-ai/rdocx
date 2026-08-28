@@ -9832,7 +9832,8 @@ story with its own output contract.
 **Size.** L, estimated 4 days, actual 1 day
 
 **What was built.** Word settings and run properties now project, preserve,
-and author automatic hyphenation plus all four language attributes. The layout
+and author automatic hyphenation plus all three modeled language attributes,
+while retaining foreign attributes separately. The layout
 path uses the effective run language to select the farthest fitting Liang
 opportunity and emits a generated hyphen without claiming a source character.
 The page-one showcase enables English hyphenation and renders
@@ -9855,7 +9856,7 @@ and zero nitpicks.
 
 **Spec sections touched.** `docs/hld/03-architecture.md`,
 `docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
-`docs/hld/12-testing-strategy.md`, and
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
 `docs/hld/15-build-and-toolchain.md`.
 
 **Tests.** Parser, round-trip, authoring, language inheritance, conditional
