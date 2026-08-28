@@ -9878,3 +9878,58 @@ example. All 49 baseline entries match after accepting that isolated delta.
 keep regional English tags mapped to the approved language data, and retain
 the exact 700-paragraph restart boundary and 8 MiB budget. The recovery stash
 and patch remain available until sprint close for auditability.
+
+### F-199, Complex script shaping
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Word layout now projects Arabic, Devanagari, Thai, and
+Simplified Chinese text through the shared multilingual shaping and line
+breaking path published in `oxml-layout` 0.7.0. Script-local language values,
+glyph clusters, offsets, logical source spans, conditional hyphens, field
+formatting, note references, and cached-story provenance survive pagination,
+drawing reflow, PDF, raster, and searchable SVG output. Latin-only content
+continues to use the byte-identical legacy path.
+
+**Non-obvious choices.** Exact-spaced rich Word lines use Word's 0.8em
+baseline instead of each fallback font's `hhea` ascent. The Simplified Chinese
+oracle uses a static Thin instance derived reproducibly from the approved Noto
+Sans SC variable subset because LibreOffice selects its Regular instance while
+the product consumes the file's Thin default. The fixture is oracle-only,
+licenced and hash-pinned, and excluded from published crates. A bounded POSIX
+lock serialises the complete macOS CoreText registration, Writer conversion,
+and unregistration lifetime.
+
+**Deviations from the design plan.** The approved oracle amendment added the
+static Thin fixture after exact-font calibration proved variation-axis
+selection was the only remaining CJK mismatch. Microscope passes 1 and 2 found
+interaction defects involving hyphenation, mixed language slots, field
+metadata, drawing reflow, cached source rebinding, hybrid bidirectional order,
+and concurrent oracle font registration. Each received a focused red
+regression and separate remediation. Microscope pass 3 reported zero defects,
+zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The shared Arabic joining, Indic cluster, Thai break, CJK
+punctuation, mixed fallback, positioned-cluster, searchable-output, source,
+hyphenation, field, drawing, cache, and paragraph-wide UAX 9 regressions
+passed. The pinned multi-script hard gate passed all 4 pages at raw SSIM 0.95
+or better: Arabic 0.985079311, Devanagari 0.972241230, Thai 0.997558968, and
+Simplified Chinese 0.997294132. The five-document corpus retained complete
+18-page evidence with its aggregate SSIM trend advisory. The full workspace,
+no-default, WASM, documentation, 22-package dry-run, archive-size, and
+supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep pure Latin on the legacy identity path and
+resolve bidirectional order across both legacy hyphenatable items and rich
+complex-script items as one paragraph. The static CJK oracle font is evidence
+for the approved variable source bytes, not a product font or a new public
+variation-axis contract.
