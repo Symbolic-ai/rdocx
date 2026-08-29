@@ -1156,7 +1156,7 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.11.1 preparation regression pins all eleven inherited version
+The stable 0.11.1 carrier regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
@@ -1165,7 +1165,7 @@ The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
 15-package publication preflight at 0.8.0. It separately proves the stable
-workspace remains at its prepared 0.11.1 boundary and `rpptx-wasm` remains
+workspace remains at its published 0.11.1 boundary and `rpptx-wasm` remains
 ineligible for publication.
 The stable shared-family gate packages and verifies `rdocx-layout@0.11.1`, requires its
 normalized archive dependency on `oxml-layout@0.8.0` to contain no local path,
@@ -1210,8 +1210,11 @@ after `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` because packaged
 `rdocx-layout@0.11.0` could not compile against registry
 `oxml-layout@0.7.0`. The other five stable packages, GitHub release, and six
 notifications are absent. The shared recovery gate proves all 15 shared 0.8.0
-entries. The stable recovery gate must prove all seven stable 0.11.1 entries
-and six leave-open notifications.
+entries. The stable 0.11.1 recovery gate verified all seven selected registry
+entries under sole owner `mantissaman (Atul Sharma)`, the annotated tag at
+reviewed SHA `5a850ce9ae6c31f8365594ed2970193266f8b2a6`, byte-identical GitHub release
+notes, the published `oxml-layout@0.8.0` dependency, and all six leave-open
+notifications.
 A separate cleanup gate may yank only the two incomplete 0.11.0 entries after
 0.11.1 verifies and another final approval is granted.
 

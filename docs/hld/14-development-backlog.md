@@ -3317,8 +3317,8 @@ immutable annotated `rpptx-v0.8.0` tag at reviewed SHA
 `TextSegment.direction` contract required by stable source after the immutable
 0.7.0 shared release. All 15 registry entries resolve under sole owner
 `mantissaman (Atul Sharma)`, the release body matches the reviewed notes, and
-`rpptx-wasm@0.8.0` remains absent from crates.io. The stable family is prepared
-at 0.11.1 and pins this published shared boundary for the coherent recovery.
+`rpptx-wasm@0.8.0` remains absent from crates.io. The stable family is published
+at 0.11.1 and pins this shared boundary.
 
 **Depends on**: F-200, F-X064, F-X065, F-X066, F-X067.
 **Test gate**: release, passed. All 15 incubating registry entries resolve at 0.8.0
@@ -3328,22 +3328,22 @@ the annotated tag and GitHub release body match the reviewed evidence,
 
 ### F-X069, Tag v0.11.1 (S)
 
-The complete stable recovery is prepared at 0.11.1 against the published
-shared 0.8.0 family. Every stable carrier, internal pin, lockfile record,
+The complete stable recovery is published at 0.11.1 against the published
+shared 0.8.0 family from the immutable annotated `v0.11.1` tag at reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6`. Every stable carrier, internal pin, lockfile record,
 Python metadata value, WASM contract literal, CI identity, README requirement,
 release regression, and reviewed changelog section is at 0.11.1. Every shared
 dependency remains pinned to 0.8.0. The release publishes exactly `rdocx-opc`,
 `rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and
 `rdocx-cli` in dependency order.
 
-The reviewed notes describe the partial v0.11.0 attempt accurately. The
+The published notes describe the partial v0.11.0 attempt accurately. The
 selected contribution inventory credits authenticated `@emptinessform` for
 Issues 53 and 54 and authenticated `@pedroassumpcao` for PRs 55 through 58.
-After publication verifies, post exactly one release-bound thank-you to each
-record and leave all six records open.
+Each record has exactly one release-bound thank-you and remains open.
 
 **Depends on**: F-198, F-199, F-200, F-202, F-X062, F-X063, F-X064, F-X065, F-X066, F-X067, F-X068.
-**Test gate**: release. All seven stable registry entries resolve at 0.11.1
+**Test gate**: release, passed. All seven stable registry entries resolve at 0.11.1
 against incubating 0.8.0 dependencies, their owners match the authenticated
 registry inventory, the annotated tag targets the reviewed SHA, the GitHub
 release body is byte-identical to the reviewed notes, and all six leave-open

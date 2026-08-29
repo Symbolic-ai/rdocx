@@ -1,6 +1,6 @@
 # F-X069, Tag v0.11.1
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-198, F-199, F-200, F-202, F-X062, F-X063, F-X064, F-X065, F-X066, F-X067, F-X068
@@ -120,8 +120,8 @@ only and preserves the accepted S58 output baseline.
 - [x] Prepare and validate the complete recovery notes and six-record inventory.
 - [x] Update exactly the five listed HLD files.
 - [x] Run `/verify --full`, packaging, assets, bindings, WASM, registry, supply-chain, notes, and hash gates.
-- [ ] Stop at `/release v0.11.1` for separate final approval.
-- [ ] Verify all publications, owners, tag, body, and six leave-open comments.
+- [x] Stop at `/release v0.11.1` for separate final approval.
+- [x] Verify all publications, owners, tag, body, and six leave-open comments.
 
 ## Open questions
 

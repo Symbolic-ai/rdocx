@@ -10034,3 +10034,65 @@ passed.
 **Notes for future sessions.** Preserve the immutable `rpptx-v0.8.0` tag.
 F-X069 may now prepare and publish the coherent stable 0.11.1 recovery against
 the complete published shared 0.8.0 family.
+
+### F-X069, Tag v0.11.1
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete seven-package stable Word family was
+published at 0.11.1 from reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6`. The release publishes
+`rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`,
+and `rdocx-cli` against the complete shared 0.8.0 registry family. Python,
+WASM, npm, PyPI, shared, and PowerPoint publication authority remains
+unchanged.
+
+**Release evidence.** GitHub Actions run
+[33266482507](https://github.com/tensorbee/rdocx/actions/runs/33266482507)
+passed output stability, release metadata, reviewed notes, archive
+verification, the exact seven-crate publication, and GitHub Release jobs.
+Every selected 0.11.1 registry entry resolved unyanked under sole owner
+`mantissaman (Atul Sharma)`. The annotated
+[`v0.11.1`](https://github.com/tensorbee/rdocx/releases/tag/v0.11.1) tag
+dereferenced to the reviewed SHA. Its 6,102-byte body was byte-identical to the
+committed changelog render with SHA-256
+`a5111e521f1adcb5ca856b54bfb2c69c6cccdd855a608e75737fce74a8f5de47`.
+
+**Contribution inventory.** Issues
+[53](https://github.com/tensorbee/rdocx/issues/53) and
+[54](https://github.com/tensorbee/rdocx/issues/54) credit authenticated
+`@emptinessform`. Pull requests
+[55](https://github.com/tensorbee/rdocx/pull/55),
+[56](https://github.com/tensorbee/rdocx/pull/56),
+[57](https://github.com/tensorbee/rdocx/pull/57), and
+[58](https://github.com/tensorbee/rdocx/pull/58) credit authenticated
+`@pedroassumpcao`. Each outcome landed through a reviewed hardened equivalent.
+
+**Notifications.** The six release-bound comments are
+[Issue 53](https://github.com/tensorbee/rdocx/issues/53#issuecomment-5463995347),
+[Issue 54](https://github.com/tensorbee/rdocx/issues/54#issuecomment-5463995659),
+[PR 55](https://github.com/tensorbee/rdocx/pull/55#issuecomment-5463995914),
+[PR 56](https://github.com/tensorbee/rdocx/pull/56#issuecomment-5463996200),
+[PR 57](https://github.com/tensorbee/rdocx/pull/57#issuecomment-5463996504), and
+[PR 58](https://github.com/tensorbee/rdocx/pull/58#issuecomment-5463996746).
+All six records remain open.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed SHA with all workspace,
+no-default, WASM, documentation, README, exact 22-package dry-run, archive,
+and cargo-deny gates. The hash harness remained unchanged at 49 of 49. The
+publication workflow and independent registry, owner, tag, release-body,
+shared dependency, and notification checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `v0.11.1` tag and all
+seven live packages. F-X070 may separately prepare the cleanup of exactly
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`, but the yanks still require a new
+final approval at its reviewed SHA.
