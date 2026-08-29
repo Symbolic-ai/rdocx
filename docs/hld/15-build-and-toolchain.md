@@ -299,7 +299,7 @@ incomplete 0.11.0 entries. The tag is never moved or deleted.
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.11.0, nine internal
+stable regression requires prepared workspace version 0.11.1, nine internal
 pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
 set. The incubating regression requires the exact 0.8.0 versions, pins,
@@ -383,7 +383,7 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group, its two Python project
-versions, and the rdocx WASM contract literals are prepared at 0.11.0. The
+versions, and the rdocx WASM contract literals are prepared at 0.11.1. The
 exact seven-package stable family remains published at 0.10.1 from the
 annotated `v0.10.1` tag at reviewed SHA
 `ae0dcb162a7805e59e5890464b226765645ad547`.

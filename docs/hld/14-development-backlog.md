@@ -3317,9 +3317,8 @@ immutable annotated `rpptx-v0.8.0` tag at reviewed SHA
 `TextSegment.direction` contract required by stable source after the immutable
 0.7.0 shared release. All 15 registry entries resolve under sole owner
 `mantissaman (Atul Sharma)`, the release body matches the reviewed notes, and
-`rpptx-wasm@0.8.0` remains absent from crates.io. The stable family remains
-prepared at 0.11.0 and pins this published shared boundary before the coherent
-0.11.1 recovery.
+`rpptx-wasm@0.8.0` remains absent from crates.io. The stable family is prepared
+at 0.11.1 and pins this published shared boundary for the coherent recovery.
 
 **Depends on**: F-200, F-X064, F-X065, F-X066, F-X067.
 **Test gate**: release, passed. All 15 incubating registry entries resolve at 0.8.0
@@ -3329,11 +3328,11 @@ the annotated tag and GitHub release body match the reviewed evidence,
 
 ### F-X069, Tag v0.11.1 (S)
 
-Recover the complete stable release at 0.11.1 after F-X068 publishes the
-required shared 0.8.0 family. Move every stable carrier, internal pin, lockfile
-record, Python metadata value, WASM contract literal, CI identity, README
-requirement, release regression, and reviewed changelog section from 0.11.0 to
-0.11.1. Pin every shared dependency to 0.8.0. Publish exactly `rdocx-opc`,
+The complete stable recovery is prepared at 0.11.1 against the published
+shared 0.8.0 family. Every stable carrier, internal pin, lockfile record,
+Python metadata value, WASM contract literal, CI identity, README requirement,
+release regression, and reviewed changelog section is at 0.11.1. Every shared
+dependency remains pinned to 0.8.0. The release publishes exactly `rdocx-opc`,
 `rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and
 `rdocx-cli` in dependency order.
 

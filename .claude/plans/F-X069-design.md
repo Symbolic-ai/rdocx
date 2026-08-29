@@ -114,12 +114,12 @@ only and preserves the accepted S58 output baseline.
 
 ## Implementation checklist
 
-- [ ] Verify F-X068 publication and the immutable v0.11.0 partial evidence.
-- [ ] Move all stable carriers to 0.11.1 and all shared pins to 0.8.0.
-- [ ] Update stable carrier, recovery, registry, and notification regressions.
-- [ ] Prepare and validate the complete recovery notes and six-record inventory.
-- [ ] Update exactly the five listed HLD files.
-- [ ] Run `/verify --full`, packaging, assets, bindings, WASM, registry, supply-chain, notes, and hash gates.
+- [x] Verify F-X068 publication and the immutable v0.11.0 partial evidence.
+- [x] Move all stable carriers to 0.11.1 and all shared pins to 0.8.0.
+- [x] Update stable carrier, recovery, registry, and notification regressions.
+- [x] Prepare and validate the complete recovery notes and six-record inventory.
+- [x] Update exactly the five listed HLD files.
+- [x] Run `/verify --full`, packaging, assets, bindings, WASM, registry, supply-chain, notes, and hash gates.
 - [ ] Stop at `/release v0.11.1` for separate final approval.
 - [ ] Verify all publications, owners, tag, body, and six leave-open comments.
 

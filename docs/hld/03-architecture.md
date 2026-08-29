@@ -549,7 +549,7 @@ preparation member is also at 0.8.0 without gaining a crates.io publication
 path. The family includes
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates use the
-separate workspace version. The stable workspace is prepared at 0.11.0 across
+separate workspace version. The stable workspace is prepared at 0.11.1 across
 nine internal pins, eleven inherited lockfile packages, two Python project
 versions, and the unpublished `rdocx-wasm` package. Its exact seven-package
 crates.io family remains published at 0.10.1 from the annotated `v0.10.1` tag

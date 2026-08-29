@@ -2,7 +2,122 @@
 
 ## Unreleased
 
-No changes have been recorded since the rpptx-v0.8.0 preparation.
+No changes have been recorded since the v0.11.1 preparation.
+
+## v0.11.1
+
+### Highlights
+
+The stable Word family completes the S58 release at 0.11.1 after the immutable
+partial v0.11.0 attempt published only `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0`. It adds language-aware conditional hyphenation,
+multi-script shaping, bidirectional paragraph and run layout, logical text
+extraction over visually ordered output, and bounded restart pagination for
+ordinary note, header, and footer workloads. The complete stable family now
+uses the published shared 0.8.0 family.
+
+### Added
+
+- Apply Word automatic-hyphenation settings and run languages for English,
+  French, German, and Spanish without assigning source ranges to generated
+  hyphens.
+- Shape Arabic, Devanagari, Thai, and Simplified Chinese with deterministic
+  font selection, cluster-safe breaking, complete glyph offsets, and stable
+  source mapping.
+- Carry Word paragraph and run direction into paragraph-wide UAX 9 resolution,
+  line-local visual ordering, and logical PDF and SVG extraction.
+- Reuse bounded restart pagination for unchanged notes, headers, and footers.
+  This hardened equivalent addresses the 700-paragraph note and header or
+  footer workloads reported in
+  [Issue 53](https://github.com/tensorbee/rdocx/issues/53).
+- Avoid the redundant retained-context font byte comparison after the font
+  manager has already accepted the exact ordered font set. This hardened
+  equivalent addresses the 22 MiB caller-font workload reported in
+  [Issue 54](https://github.com/tensorbee/rdocx/issues/54).
+- Accept exact whole-valued decimal table measurements while rejecting
+  fractional, exponent, overflow, unit-bearing, and malformed forms. This
+  hardened equivalent includes the outcome proposed in
+  [PR 55](https://github.com/tensorbee/rdocx/pull/55).
+- Preserve tracked table-grid history as inert revision metadata while keeping
+  the active grid as the only layout input. This hardened equivalent includes
+  the outcome proposed in
+  [PR 56](https://github.com/tensorbee/rdocx/pull/56).
+- Classify the narrow enabled legacy VML horizontal-rule form for native
+  inspection while retaining its exact raw XML. This hardened equivalent
+  includes the outcome proposed in
+  [PR 57](https://github.com/tensorbee/rdocx/pull/57).
+- Prime locked Cargo dependencies before the intentionally offline Word
+  fidelity harness. This hardened equivalent includes the locked Word fidelity
+  dependency preparation proposed in
+  [PR 58](https://github.com/tensorbee/rdocx/pull/58).
+
+### Fixed
+
+- Preserve exact warm and fresh layout equality when related stories, note
+  references, language, hyphenation, direction, source-less generated content,
+  or caller fonts participate in cache identity.
+- Preserve logical searchable text while visually positioning mixed-direction
+  rich runs, inline objects, numbering markers, stored fields, tab leaders,
+  and generated conditional hyphens.
+- Preserve namespace-aware unsupported table and run XML, including ancestor
+  bindings, without changing schema child order or treating historical grids
+  as active layout data.
+- Recover the complete stable registry family without moving or deleting the
+  immutable v0.11.0 tag. The five stable packages absent from that partial
+  attempt are published only as part of the complete 0.11.1 family.
+
+### Compatibility
+
+The exact seven-package stable crates.io family moves together from 0.10.1 to
+0.11.1 and requires the separately published shared 0.8.0 family. The stable
+set remains `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
+`rdocx-pdf`, `rdocx`, and `rdocx-cli`. Python, WASM, npm, and PyPI publication
+authority is unchanged.
+
+Low-level Rust callers that use full `CT_RPr`, `LayoutInput`, `CT_PPr`,
+`CT_TblGrid`, `TextSegment`, and positioned-layout struct literals must
+initialize the new language, automatic-hyphenation, direction, preservation,
+and source-mapping fields or use existing defaults and constructors. In
+particular, callers constructing full `TextSegment` literals must initialize
+the `direction` field. These are intentional pre-1.0 source changes. The native
+facade additions are additive, and existing binding method names remain
+unchanged. The legacy VML horizontal rule is classified for inspection and
+preservation, not rendered.
+
+The immutable partial v0.11.0 attempt contains exactly `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0`. It has no GitHub release and receives no contribution
+notification. Recovery cleanup may yank those two incomplete entries only
+after all seven 0.11.1 packages and the release body verify independently.
+
+### Contributors
+
+Atul Sharma maintained the release. Thanks to authenticated reporter
+`@emptinessform` for the note and header or footer restart evidence in
+[Issue 53](https://github.com/tensorbee/rdocx/issues/53), including the
+corrected attribution and independent page-count ceiling, and for the isolated
+caller-font byte-comparison evidence and unsound shallow-comparison caveat in
+[Issue 54](https://github.com/tensorbee/rdocx/issues/54). Both final fixes are
+hardened equivalents. Both issues remain open after their release-bound
+thank-yous.
+
+Thanks to authenticated contributor `@pedroassumpcao` for the whole-valued
+decimal table-measurement case in
+[PR 55](https://github.com/tensorbee/rdocx/pull/55) at
+`056d48fdf23f35e3538ef3d6ff78cf9e3863e3a5`, tracked table-grid history in
+[PR 56](https://github.com/tensorbee/rdocx/pull/56) at
+`8b79c4cd0452defafe0a58e86b332c98e7fe52d7`, the legacy VML reader
+classification in [PR 57](https://github.com/tensorbee/rdocx/pull/57) at
+`44498f042a2290ef40c7a6c26025f38e38e9ce2a`, and locked Word fidelity
+dependency preparation in
+[PR 58](https://github.com/tensorbee/rdocx/pull/58) at
+`c8fed1d1268fd765d602bac2da6524900c1c1cfd`. All four outcomes are hardened
+equivalents. All four pull requests remain open after their release-bound
+thank-yous.
+
+No named external patch landed directly. Each named report or proposal landed
+through the hardened equivalent described above so that namespace, exact
+lexical parsing, raw preservation, bounded cache identity, and offline oracle
+contracts remain intact.
 
 ## rpptx-v0.8.0
 

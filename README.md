@@ -45,7 +45,7 @@ The core focus is **DOCX**: a high-level, python-docx-inspired API for building 
 
 ```toml
 [dependencies]
-rdocx = "0.11.0"
+rdocx = "0.11.1"
 ```
 
 Bundled metric-compatible fonts are always available through the deterministic
@@ -54,7 +54,7 @@ when an application should use only deterministic bundled fonts:
 
 ```toml
 [dependencies]
-rdocx = { version = "0.11.0", default-features = false }
+rdocx = { version = "0.11.1", default-features = false }
 ```
 
 ## Quick Start

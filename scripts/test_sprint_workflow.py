@@ -1962,7 +1962,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.11.0" "rdocx_wasm"',
+            '"0.11.1" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.8.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -4476,8 +4476,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(" ".join(contributor_paragraphs).count("landed directly"), 1)
         return notes
 
-    def assert_v0_11_0_release_notes_truth_contract(self, changelog: str) -> str:
-        notes = workflow.render_release_notes(changelog, "v0.11.0")
+    def assert_v0_11_1_release_notes_truth_contract(self, changelog: str) -> str:
+        notes = workflow.render_release_notes(changelog, "v0.11.1")
         normalized_notes = " ".join(notes.split())
         records = (
             "https://github.com/tensorbee/rdocx/issues/53",
@@ -4506,19 +4506,30 @@ class SprintWorkflowTests(unittest.TestCase):
             "legacy VML reader classification",
             "locked Word fidelity dependency preparation",
             "No named external patch landed directly",
-            "remain open",
+            "Both issues remain open after their release-bound thank-yous",
+            "All four pull requests remain open after their release-bound thank-yous",
         ):
             self.assertIn(claim, normalized_notes, claim)
+        self.assertEqual(notes.count("`rdocx-opc@0.11.0`"), 2)
+        self.assertEqual(notes.count("`rdocx-oxml@0.11.0`"), 2)
+        for absent in (
+            "rdocx-layout@0.11.0",
+            "rdocx-html@0.11.0",
+            "rdocx-pdf@0.11.0",
+            "rdocx@0.11.0",
+            "rdocx-cli@0.11.0",
+        ):
+            self.assertNotIn(absent, notes)
         self.assertNotIn("renders legacy VML horizontal rules", notes)
         self.assertIn(
-            "`CT_RPr`, `LayoutInput`, `CT_PPr`, `CT_TblGrid`, and low-level "
-            "positioned-layout struct literals",
+            "callers constructing full `TextSegment` literals must initialize "
+            "the `direction` field",
             normalized_notes,
         )
         return notes
 
-    def test_stable_release_family_is_prepared_at_0_11_0(self) -> None:
-        expected_version = "0.11.0"
+    def test_stable_release_family_is_prepared_at_0_11_1(self) -> None:
+        expected_version = "0.11.1"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -4642,13 +4653,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.11.0"', 'version = "0.11.0"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.11.0'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.11.0"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.11.0"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.11.0"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.11.0"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.11.0"',),
+            "README.md": ('rdocx = "0.11.1"', 'version = "0.11.1"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.11.1'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.11.1"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.11.1"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.11.1"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.11.1"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.11.1"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -4682,20 +4693,20 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             publish.count(
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_11_0"
+                "test_stable_release_family_is_prepared_at_0_11_1"
             ),
             1,
         )
 
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        notes = self.assert_v0_11_0_release_notes_truth_contract(changelog)
-        self.assertIn("published shared 0.7.0 family", notes)
+        notes = self.assert_v0_11_1_release_notes_truth_contract(changelog)
+        self.assertIn("published shared 0.8.0 family", notes)
 
     @unittest.skipUnless(
         os.environ.get("RDOCX_VERIFY_PUBLISHED_SHARED") == "1",
         "requires the separately published shared 0.8.0 family",
     )
-    def test_prepared_rdocx_layout_0_11_0_requires_published_oxml_layout_0_8_0(
+    def test_prepared_rdocx_layout_0_11_1_requires_published_oxml_layout_0_8_0(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="rdocx-layout-package-") as temp:
@@ -4706,7 +4717,6 @@ class SprintWorkflowTests(unittest.TestCase):
                     "package",
                     "--locked",
                     "--allow-dirty",
-                    "--no-verify",
                     "--config",
                     'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"',
                     "--package",
@@ -4724,11 +4734,11 @@ class SprintWorkflowTests(unittest.TestCase):
                 0,
                 packaged.stdout + packaged.stderr,
             )
-            archive = target / "package" / "rdocx-layout-0.11.0.crate"
+            archive = target / "package" / "rdocx-layout-0.11.1.crate"
             self.assertTrue(archive.is_file(), archive)
             with tarfile.open(archive, mode="r:gz") as package:
                 normalized = package.extractfile(
-                    "rdocx-layout-0.11.0/Cargo.toml"
+                    "rdocx-layout-0.11.1/Cargo.toml"
                 )
                 self.assertIsNotNone(normalized)
                 manifest = tomllib.loads(normalized.read().decode("utf-8"))
@@ -4736,42 +4746,28 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(dependency["version"], "0.8.0")
             self.assertNotIn("path", dependency)
 
-            consumer = Path(temp) / "published-shared"
-            (consumer / "src").mkdir(parents=True)
-            (consumer / "Cargo.toml").write_text(
-                """[package]
-name = "published-oxml-layout-graph"
-version = "0.0.0"
-edition = "2024"
-
-[dependencies]
-oxml-layout = "=0.8.0"
-""",
-                encoding="utf-8",
-            )
-            (consumer / "src/lib.rs").write_text("", encoding="utf-8")
-            env = os.environ.copy()
-            env["CARGO_HOME"] = str(Path(temp) / "cargo-home")
+            verified_manifest = target / "package" / "rdocx-layout-0.11.1" / "Cargo.toml"
+            self.assertTrue(verified_manifest.is_file(), verified_manifest)
             resolved = subprocess.run(
                 (
                     "cargo",
                     "tree",
                     "--manifest-path",
-                    str(consumer / "Cargo.toml"),
+                    str(verified_manifest),
+                    "--config",
+                    f'patch.crates-io.rdocx-oxml.path="{workflow.REPO / "crates/rdocx-oxml"}"',
                     "--edges",
                     "normal",
                     "--prefix",
                     "none",
-                    "--package",
-                    "oxml-layout@0.8.0",
                 ),
-                cwd=consumer,
-                env=env,
+                cwd=verified_manifest.parent,
                 check=False,
                 capture_output=True,
                 text=True,
             )
         self.assertEqual(resolved.returncode, 0, resolved.stdout + resolved.stderr)
+        self.assertIn("rdocx-layout v0.11.1", resolved.stdout + resolved.stderr)
         self.assertIn("oxml-layout v0.8.0", resolved.stdout + resolved.stderr)
 
     def test_immutable_rdocx_layout_0_10_1_registry_graph_remains_at_oxml_layout_0_6_0(
@@ -4845,19 +4841,45 @@ rdocx-layout = "=0.10.1"
         ):
             self.assertIn(addition, normalized_notes, addition)
 
-    def test_release_notes_v0_11_0_reconcile_release_inventory(self) -> None:
+    def test_release_notes_v0_11_1_reconcile_release_inventory(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        notes = self.assert_v0_11_0_release_notes_truth_contract(changelog)
+        notes = self.assert_v0_11_1_release_notes_truth_contract(changelog)
         normalized = " ".join(notes.split())
         for claim in (
             "conditional hyphenation",
             "Arabic, Devanagari, Thai, and Simplified Chinese",
             "paragraph and run direction",
             "bounded restart pagination",
-            "published shared 0.7.0 family",
+            "published shared 0.8.0 family",
             "Python, WASM, npm, and PyPI publication authority is unchanged",
         ):
             self.assertIn(claim, normalized, claim)
+
+    def test_release_notes_v0_11_1_reject_partial_or_notification_drift(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = self.assert_v0_11_1_release_notes_truth_contract(changelog)
+        mutations = (
+            notes.replace(
+                "`rdocx-oxml@0.11.0`.",
+                "`rdocx-oxml@0.11.0` and `rdocx-layout@0.11.0`.",
+                1,
+            ),
+            notes.replace(
+                "Both issues remain open",
+                "Both issues are closed",
+                1,
+            ),
+            notes.replace(
+                "All four pull requests remain open",
+                "All four pull requests are closed",
+                1,
+            ),
+        )
+        for mutated_notes in mutations:
+            self.assertNotEqual(mutated_notes, notes)
+            mutated = changelog.replace(notes, mutated_notes, 1)
+            with self.assertRaises(AssertionError):
+                self.assert_v0_11_1_release_notes_truth_contract(mutated)
 
     def test_release_notes_v0_10_1_reject_reversed_landing_truth(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -5029,7 +5051,7 @@ rdocx-layout = "=0.10.1"
         preparation_packages = (*incubating_packages, "rpptx-wasm")
         expected_version = "0.8.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.11.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.11.1")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -6230,7 +6252,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_11_0",
+                "test_stable_release_family_is_prepared_at_0_11_1",
                 1,
             ),
             "job-condition": ci.replace(
@@ -6466,7 +6488,7 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_11_0"
+            "test_stable_release_family_is_prepared_at_0_11_1"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
@@ -6474,7 +6496,7 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         packaged_registry_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_prepared_rdocx_layout_0_11_0_requires_published_oxml_layout_0_8_0"
+            "test_prepared_rdocx_layout_0_11_1_requires_published_oxml_layout_0_8_0"
         )
         historical_registry_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
@@ -7034,7 +7056,7 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace(
-                    "prepared at\n  0.11.0",
+                    "prepared at\n  0.11.1",
                     "prepared at\n  0.2.0",
                     1,
                 ),

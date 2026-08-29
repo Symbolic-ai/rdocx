@@ -727,7 +727,7 @@ The Rust package trains remain separate. The exact 15-package shared OOXML and
 PowerPoint workspace family is published at 0.8.0 from the immutable annotated
 `rpptx-v0.8.0` tag at reviewed SHA
 `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The stable workspace is prepared
-at 0.11.0 and pins
+at 0.11.1 and pins
 shared dependencies to 0.8.0, while the last complete seven-package Word
 crates.io family remains
 published at 0.10.1 from the annotated `v0.10.1` tag at reviewed SHA
