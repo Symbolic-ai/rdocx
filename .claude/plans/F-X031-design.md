@@ -1,6 +1,6 @@
 # F-X031, Require the CI gate in branch protection
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X029, F-X070
@@ -96,14 +96,15 @@ tracked delivery evidence, not rendered output.
 
 ## Implementation checklist
 
-- [ ] Bind the inspected `ci-gate` job id and `CI gate` check name to the final reviewed S58 SHA.
-- [ ] Re-query rulesets and classic protection immediately before mutation.
-- [ ] Add one active default-branch ruleset that requires exact check `CI gate`, grants only the repository-administrator role an always bypass, and removes no existing protection.
-- [ ] Run the docs-only pull request and record successful required-check evidence with expensive filtered jobs skipped.
-- [ ] Run the selected-failure pull request and record failed-gate and merge-block evidence.
-- [ ] Close the disposable pull requests and remove only their disposable remote branches.
-- [ ] Update only the listed HLD sections and sprint delivery records.
-- [ ] Confirm the deterministic hash harness remains unchanged.
+- [x] Bind the inspected `ci-gate` job id and `CI gate` check name to the final reviewed S58 SHA.
+- [x] Re-query rulesets and classic protection immediately before mutation.
+- [x] Add one active default-branch ruleset that requires exact check `CI gate`, grants only the repository-administrator role an always bypass, and removes no existing protection.
+- [x] Run the docs-only pull request and record successful required-check evidence with expensive filtered jobs skipped.
+- [x] Run the selected-failure pull request and record failed-gate and merge-block evidence.
+- [x] Close the disposable pull requests and remove only their disposable remote branches.
+- [x] Update only the listed HLD sections.
+- [x] Defer sprint delivery records to the integrator-owned completion step.
+- [x] Confirm the deterministic hash harness remains unchanged.
 
 ## Open questions
 

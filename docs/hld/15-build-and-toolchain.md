@@ -501,6 +501,25 @@ the filtered product jobs skip, yet the same stable aggregate gate reports.
 The scheduled path skips change detection and requires supply-chain success.
 Unfiltered jobs retain their ordinary triggers.
 
+Repository ruleset `21823007` is active for repository `tensorbee/rdocx`,
+targets branches, and includes `~DEFAULT_BRANCH`. Its only rule requires exact
+status context `CI gate` with
+`strict_required_status_checks_policy=false` and
+`do_not_enforce_on_create=false`. Its sole bypass actor is `RepositoryRole`
+ID 5, role `admin`, in `always` mode. Effective rules on `main` expose only
+this required status check. This narrow bypass preserves the direct reviewed
+sprint-close push without exempting ordinary pull requests.
+
+The hosted protection proof uses reviewed and verified S58 SHA
+`31c51f04f1a9e7c6a198ef16eebba0d782a5827a`. Docs-only PR 59 passed run
+`33275852961` and required CI gate job `99162339881` while all eight
+path-filtered product jobs skipped. Selected-failure PR 60 failed run
+`33276064981` and CI gate job `99162924862`, and GitHub reported its merge state
+as blocked while the administrator viewer retained bypass authority. Both
+disposable pull requests are closed and unmerged. Their verified remote head
+refs were deleted and are absent. Their disposable worktrees and local branches
+were removed cleanly.
+
 **A dedicated `oxml-layout` package job.** It checks the exact bundled font and
 legal-file inventory, builds and verifies the generated archive, and enforces
 the crates.io 10 MiB limit.

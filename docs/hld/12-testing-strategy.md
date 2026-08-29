@@ -1269,8 +1269,30 @@ job. It accepts only `success` for a selected job and only `skipped` for an
 unselected job. Failure, cancellation, an unexpected skip, or a failed change
 detector makes the aggregate gate fail. On the scheduled route, it requires
 the detector to be skipped and the supply-chain job to succeed. The stable
-aggregate check exists in the tracked workflow. Repository branch-protection
-configuration is separate external state.
+aggregate check exists in the tracked workflow. Active repository ruleset
+`21823007` protects the default branch with exact required status `CI gate`.
+The check does not require a current-base SHA and applies when the ref is
+created. The effective `main` rules contain only that required check. The
+ruleset has exactly one bypass actor, repository role `admin` with numeric
+actor ID 5 in `always` mode. This permits the reviewed direct sprint-close
+push while ordinary pull requests remain subject to the aggregate gate.
+
+The protection proof is bound to reviewed and verified S58 SHA
+`31c51f04f1a9e7c6a198ef16eebba0d782a5827a`. Docs-only PR
+[59](https://github.com/tensorbee/rdocx/pull/59) at
+`aee0808a37a3afcc46c6ca236df096198c9601e4` reached clean mergeable state.
+Hosted run `33275852961` reported successful Detect changes job `99162308288`,
+Prose job `99162325899`, and CI gate job `99162339881`. Test, MSRV, WASM,
+Python bindings, Presentation fidelity, Word fidelity, Output stability, and
+Supply chain were skipped as unselected. Deliberately failing PR
+[60](https://github.com/tensorbee/rdocx/pull/60) at
+`ee1c0ae09d676498a594a77601e36240d0199a2b` produced failed hosted run
+`33276064981`. Detect changes job `99162895790` succeeded, selected Prose job
+`99162911436` failed, and CI gate job `99162924862` failed. The pull request
+reported `mergeStateStatus=BLOCKED` and `viewerCanMergeAsAdmin=true`. Both
+proof pull requests are closed and unmerged. Their remote refs were verified
+at the named heads before deletion and are now absent. Their disposable
+worktrees and local branches were removed cleanly.
 
 The Word fidelity job has one explicit Cargo network boundary. Its exact
 `cargo fetch --locked` step follows the pinned Rust cache and precedes corpus
