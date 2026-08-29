@@ -175,6 +175,14 @@ namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
 
+Raw Word run children receive semantic classification only at the OXML parse
+boundary. A WordprocessingML `pict` is classified as a legacy horizontal rule
+only when its in-scope expanded names identify exactly one VML `rect` with an
+enabled Office `hr` attribute and whitespace otherwise. The classification is
+stored in the existing raw-child position sidecar, while the subtree bytes and
+ancestor namespace ownership remain unchanged. Foreign, malformed, numeric,
+false, visible, or structurally ambiguous content stays unmodelled raw XML.
+
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes
 the typed comments model back to that target with its content-type override.
@@ -376,6 +384,24 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+Word table widths, cell widths, table indents, and default cell margins share
+one exact signed-integer projection. The parser accepts integer lexical forms
+and decimals only when the nonempty fractional portion contains zeroes. It
+checked-parses the integer portion into `i32` without floating point. Fractional
+values, exponent forms, empty fractions, overflow, percentages, universal
+measures, and malformed input fail explicitly instead of becoming zero. Missing
+widths retain their existing default. Attributes are selected by the bound
+WordprocessingML namespace, and serialization writes the canonical integer with
+fixed `w` attributes in schema order while unmodelled table content retains its
+stored bytes.
+
+Word table grids recognize `tblGrid`, active `gridCol` children, their width
+attributes, and `tblGridChange` by the bound WordprocessingML namespace.
+Foreign same-local children remain unmodelled and retain their exact bytes.
+One historical grid-change subtree is preserved, while a second modeled change
+fails parsing rather than discarding history. Serialization writes active
+columns first and the historical change after them in schema order.
 
 Word table styles parse modeled children and attributes by expanded name.
 Base table properties and conditional regions retain self-contained source XML

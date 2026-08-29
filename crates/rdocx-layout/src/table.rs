@@ -4,7 +4,10 @@ use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Tbl, CT_TblBorders, CT_TblGrid, ST_VerticalJc, VMerge};
 
 use crate::WordStory;
-use crate::block::ParagraphBlock;
+use crate::block::{
+    CellBlockSemantics, CellSemantics, ParagraphBlock, ParagraphSemantics, RowSemantics,
+    TableSemantics,
+};
 use crate::engine::SourceRegistry;
 use crate::input::{LayoutInput, MediaRegistry};
 use crate::style_resolver::NumberingState;
@@ -142,6 +145,7 @@ pub fn layout_table(
         &WordStory::Document,
         &[],
     )
+    .map(|(block, _)| block)
 }
 
 pub(crate) fn layout_table_with_provenance(
@@ -156,7 +160,7 @@ pub(crate) fn layout_table_with_provenance(
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     path: &[usize],
-) -> Result<TableBlock> {
+) -> Result<(TableBlock, TableSemantics)> {
     layout_table_inner(
         tbl,
         available_width,
@@ -184,7 +188,7 @@ fn layout_table_inner(
     sources: Option<&SourceRegistry>,
     story: &WordStory,
     path: &[usize],
-) -> Result<TableBlock> {
+) -> Result<(TableBlock, TableSemantics)> {
     // 1. Compute column widths
     let col_widths = compute_column_widths(tbl.grid.as_ref(), available_width, tbl);
     let table_width: f64 = col_widths.iter().sum();
@@ -245,6 +249,7 @@ fn layout_table_inner(
     let num_rows = tbl.rows.len();
     let mut header_row_indices = Vec::new();
     let mut rows = Vec::new();
+    let mut row_semantics = Vec::new();
     let mut exact_rows = Vec::new();
 
     for (row_idx, row) in tbl.rows.iter().enumerate() {
@@ -258,6 +263,7 @@ fn layout_table_inner(
         }
 
         let mut cells = Vec::new();
+        let mut cell_semantics = Vec::new();
         let mut col_index = 0usize;
 
         for (cell_index, cell) in row.cells.iter().enumerate() {
@@ -313,8 +319,8 @@ fn layout_table_inner(
             let content_width = (cell_width - cell_margin_left - cell_margin_right).max(0.0);
 
             // Layout cell content (paragraphs and nested tables)
-            let blocks = if is_vmerge_continue {
-                Vec::new()
+            let (blocks, block_semantics) = if is_vmerge_continue {
+                (Vec::new(), Vec::new())
             } else {
                 layout_cell_content(
                     &cell.content,
@@ -362,6 +368,9 @@ fn layout_table_inner(
                 is_last_row: row_idx == num_rows - 1,
                 v_align,
             });
+            cell_semantics.push(CellSemantics {
+                blocks: block_semantics,
+            });
 
             col_index += grid_span as usize;
         }
@@ -398,6 +407,9 @@ fn layout_table_inner(
             cells,
             height: row_height,
             is_header,
+        });
+        row_semantics.push(RowSemantics {
+            cells: cell_semantics,
         });
     }
 
@@ -466,15 +478,20 @@ fn layout_table_inner(
         restart.clip_content = required > restart.merged_height;
     }
 
-    Ok(TableBlock {
-        structure_id: None,
-        col_widths,
-        rows,
-        header_row_indices,
-        table_width,
-        table_indent,
-        borders: table_borders,
-    })
+    Ok((
+        TableBlock {
+            structure_id: None,
+            col_widths,
+            rows,
+            header_row_indices,
+            table_width,
+            table_indent,
+            borders: table_borders,
+        },
+        TableSemantics {
+            rows: row_semantics,
+        },
+    ))
 }
 
 /// Compute column widths from CT_TblGrid, shrinking to the available width if
@@ -542,18 +559,19 @@ fn layout_cell_content(
     row_index: usize,
     cell_index: usize,
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
-) -> Result<Vec<CellBlock>> {
+) -> Result<(Vec<CellBlock>, Vec<CellBlockSemantics>)> {
     use crate::engine;
     use rdocx_oxml::table::CellContent;
 
     let mut blocks = Vec::new();
+    let mut semantics = Vec::new();
     for (content_index, item) in content.iter().enumerate() {
         let mut source_path = table_path.to_vec();
         source_path.extend([row_index, cell_index, content_index]);
         match item {
             CellContent::Paragraph(para) => {
                 let source = sources.and_then(|sources| sources.id(story, &source_path));
-                let block = engine::layout_paragraph_with_source_in_table(
+                let (block, reflow_direction) = engine::layout_paragraph_with_source_in_table(
                     para,
                     available_width,
                     styles,
@@ -566,10 +584,15 @@ fn layout_cell_content(
                     table_style_ppr,
                 )?;
                 blocks.push(CellBlock::Paragraph(block));
+                semantics.push(CellBlockSemantics::Paragraph(ParagraphSemantics {
+                    source_node: source,
+                    structure_id: None,
+                    reflow_direction,
+                }));
             }
             CellContent::Table(tbl) => {
                 // Recursively lay out the nested table
-                let nested = layout_table_inner(
+                let (nested, nested_semantics) = layout_table_inner(
                     tbl,
                     available_width,
                     styles,
@@ -583,11 +606,12 @@ fn layout_cell_content(
                     &source_path,
                 )?;
                 blocks.push(CellBlock::Table(nested));
+                semantics.push(CellBlockSemantics::Table(nested_semantics));
             }
             CellContent::ContentControl(_) => {}
         }
     }
-    Ok(blocks)
+    Ok((blocks, semantics))
 }
 
 #[derive(Default)]
@@ -832,6 +856,7 @@ mod tests {
     fn layout_with_styles(table: &CT_Tbl, width: f64, styles: &CT_Styles) -> TableBlock {
         let input = LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
@@ -879,6 +904,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(2880) }, // 2 inches = 144pt
                 CT_TblGridCol { width: Twips(2880) },
             ],
+            ..Default::default()
         };
 
         // 288pt total in a 468pt text column: the author asked for a narrow
@@ -891,6 +917,27 @@ mod tests {
     }
 
     #[test]
+    fn historical_table_grid_never_changes_active_column_widths() {
+        let table = CT_Tbl::new();
+        let grid = CT_TblGrid {
+            columns: vec![
+                CT_TblGridCol { width: Twips(1440) },
+                CT_TblGridCol { width: Twips(2880) },
+            ],
+            grid_change_xml: Some(
+                br#"<w:tblGridChange w:id="4"><w:tblGrid><w:gridCol w:w="9000"/><w:gridCol w:w="9000"/></w:tblGrid></w:tblGridChange>"#
+                    .to_vec(),
+            ),
+            ..CT_TblGrid::default()
+        };
+
+        assert_eq!(
+            compute_column_widths(Some(&grid), 468.0, &table),
+            vec![72.0, 144.0]
+        );
+    }
+
+    #[test]
     fn overflowing_grid_is_scaled_down_to_fit() {
         let tbl = CT_Tbl::new();
         let grid = CT_TblGrid {
@@ -898,6 +945,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(7200) }, // 5 inches = 360pt
                 CT_TblGridCol { width: Twips(7200) },
             ],
+            ..Default::default()
         };
 
         // 720pt total will not fit a 468pt column, so scale it down.
@@ -926,6 +974,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(0) },
                 CT_TblGridCol { width: Twips(0) },
             ],
+            ..Default::default()
         };
         let widths = compute_column_widths(Some(&grid), 468.0, &tbl);
         assert_eq!(widths.len(), 3);
@@ -958,6 +1007,7 @@ mod tests {
         let mut outer = CT_Tbl::new();
         outer.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(4680) }], // 3.25"
+            ..Default::default()
         });
 
         let mut outer_row = CT_Row::new();
@@ -971,6 +1021,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(2000) },
                 CT_TblGridCol { width: Twips(2000) },
             ],
+            ..Default::default()
         });
         let mut nr = CT_Row::new();
         let mut nc1 = CT_Tc::new();
@@ -989,6 +1040,7 @@ mod tests {
         let styles = rdocx_oxml::styles::CT_Styles::default();
         let input = crate::input::LayoutInput {
             revision_view: crate::input::RevisionView::Accepted,
+            automatic_hyphenation: false,
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),
@@ -1053,6 +1105,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(600) },
                 CT_TblGridCol { width: Twips(600) },
             ],
+            ..Default::default()
         });
 
         let mut exact_row = CT_Row::new();
@@ -1106,6 +1159,7 @@ mod tests {
         let mut minimum_merge = CT_Tbl::new();
         minimum_merge.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(600) }],
+            ..Default::default()
         });
         let mut restart_row = CT_Row::new();
         let mut restart = CT_Tc::new();
@@ -1162,6 +1216,7 @@ mod tests {
         });
         table.grid = Some(CT_TblGrid {
             columns: vec![CT_TblGridCol { width: Twips(1200) }],
+            ..Default::default()
         });
         for (index, text) in ["header", "body"].into_iter().enumerate() {
             let mut row = CT_Row::new();

@@ -35,11 +35,11 @@ regenerated, never hand-edited.
 | M17, Security and compliance                   | 7  | 7 | 0 | 0  |
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
-| M20, Fidelity at scale                         | 7  | 3 | 0 | 4  |
+| M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 60 | 55 | 1 | 2  |
-| **Total** | **307** | **247** | **4** | **54** |
+| X, Cross-cutting (opportunistic)            | 73 | 65 | 3 | 2  |
+| **Total** | **320** | **261** | **6** | **50** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -397,11 +397,11 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-196 | Word corpus                                  | S57  | M | done |
 | F-197 | Word SSIM harness                            | S57  | L | done |
-| F-198 | Hyphenation                                  | S58  | L | pending |
-| F-199 | Complex script shaping                       | S58  | L | pending |
-| F-200 | Vertical and bidirectional text              | S58  | M | pending |
+| F-198 | Hyphenation                                  | S58  | L | done |
+| F-199 | Complex script shaping                       | S58  | L | done |
+| F-200 | Vertical and bidirectional text              | S58  | M | done |
 | F-201 | Large document performance                   | S57  | L | done |
-| F-202 | Incremental layout                           | S58  | L | pending |
+| F-202 | Incremental layout                           | S58  | L | done |
 <!-- AUTOGEN:backlog-M20 END -->
 
 ### M21, Presentation depth
@@ -483,7 +483,7 @@ regenerated, never hand-edited.
 | F-X028 | Repair the agent-facing documentation drift | S44 | M | done |
 | F-X029 | Path-filtered CI jobs                       | S44 | M | done |
 | F-X030 | Decouple the npm package versions           | -   | S | archived |
-| F-X031 | Require the CI gate in branch protection    | S58 | S | pending |
+| F-X031 | Require the CI gate in branch protection    | S58 | S | done |
 | F-X032 | Expose complete Word layout results         | S51 | S | done |
 | F-X033 | Integrate PR 36 ordered body items          | S51 | S | done |
 | F-X034 | Reviewed release notes for every release    | S51 | S | done |
@@ -510,4 +510,17 @@ regenerated, never hand-edited.
 | F-X055 | Tag v0.10.0                               | S56 | S | archived |
 | F-X056 | Tag rpptx-v0.6.0                          | S56 | S | done |
 | F-X057 | Tag v0.10.1                               | S56 | S | done |
+| F-X058 | Shared multilingual text substrate        | S58 | L | done |
+| F-X059 | Tag rpptx-v0.7.0                          | S58 | S | done |
+| F-X060 | Tag v0.11.0                               | S58 | S | archived |
+| F-X061 | Support staged dependency checkpoints in run-sprint | S58 | S | done |
+| F-X062 | Reuse restart pagination with notes and headers | S58 | M | done |
+| F-X063 | Avoid duplicate caller-font byte comparisons | S58 | S | done |
+| F-X064 | Accept whole-valued decimal table measurements | S58 | S | done |
+| F-X065 | Expose tracked table grid changes             | S58 | S | done |
+| F-X066 | Classify legacy VML horizontal rules          | S58 | S | done |
+| F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | done |
+| F-X068 | Tag rpptx-v0.8.0                          | S58 | S | done |
+| F-X069 | Tag v0.11.1                               | S58 | S | done |
+| F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

@@ -1060,16 +1060,47 @@ the advanced spreadsheet programme begins.
 | F-199 | Complex script shaping | L |
 | F-200 | Vertical and bidirectional text | M |
 | F-202 | Incremental layout | L |
+| F-X061 | Support staged dependency checkpoints in run-sprint | S |
+| F-X062 | Reuse restart pagination with notes and headers | M |
+| F-X063 | Avoid duplicate caller-font byte comparisons | S |
+| F-X058 | Shared multilingual text substrate | L |
+| F-X059 | Tag rpptx-v0.7.0 | S |
+| F-X064 | Accept whole-valued decimal table measurements | S |
+| F-X067 | Prime Word fidelity Cargo dependencies | S |
+| F-X065 | Expose tracked table grid changes | S |
+| F-X066 | Classify legacy VML horizontal rules | S |
+| F-X060 | Tag v0.11.0 | S |
+| F-X068 | Tag rpptx-v0.8.0 | S |
+| F-X069 | Tag v0.11.1 | S |
+| F-X070 | Yank incomplete v0.11.0 packages | S |
 | F-X031 | Require the CI gate in branch protection | S |
 
 F-198 changes line breaking and therefore every line after the first hyphenated
 one, so it lands after the corpus exists to measure it. Expect a declared hash
 harness delta, and expect it to be large.
 
-F-X031 remains at the non-spreadsheet boundary. F-X029 creates the stable
+F-X061 makes ordinary and release dependency checkpoints resumable inside one
+sprint. F-X062 and F-X063 close the two independently reproduced editor
+performance cliffs from Issues 53 and 54. F-X058 then establishes the complete
+shared text contract needed by F-198,
+F-199, and F-200. F-X059 publishes that contract as the incubating 0.7.0 family
+before the stable Word consumers verify against crates.io. F-X064 lands the
+first external reader fix, and F-X067 primes the locked Word fidelity graph
+before F-X065 and F-X066 land the remaining reader fixes. Together these are
+the hardened or directly adopted outcomes of PRs 55 through 58 before the
+paused Word text stories resume. F-X060 records the immutable partial v0.11.0
+attempt, which published two packages before registry verification exposed the
+missing shared source boundary. F-X068 publishes that shared boundary at
+0.8.0, and F-X069 publishes the complete stable recovery at 0.11.1. F-X070
+then yanks the two incomplete 0.11.0 registry entries after separate approval
+without moving the tag. Each release retains the separate final approval
+required by `/release`.
+
+F-X031 remains at the non-spreadsheet boundary after the recovery and cleanup.
+F-X029 creates the stable
 repository-side `ci-gate` in S44. This operational story makes it a required
-GitHub check after the Word fidelity gates have settled and before the larger
-spreadsheet programme starts.
+GitHub check after the Word fidelity and release gates have settled and before
+the larger spreadsheet programme starts.
 
 ### M21, Presentation depth
 

@@ -3,7 +3,7 @@
 use crate::table::TableBlock;
 use oxml_layout::{
     Align, Color, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId, SourceNodeId,
-    StructureId,
+    StructureId, TextDirection,
 };
 use rdocx_oxml::borders::CT_PBdr;
 use rdocx_oxml::drawing::{
@@ -109,6 +109,7 @@ pub enum LayoutBlock {
 pub(crate) struct ParagraphSemantics {
     pub source_node: Option<SourceNodeId>,
     pub structure_id: Option<StructureId>,
+    pub reflow_direction: TextDirection,
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +135,10 @@ pub(crate) struct TableSemantics {
 
 #[derive(Debug, Clone)]
 pub(crate) enum SharedLayoutBlock {
-    Owned(Box<LayoutBlock>),
+    Owned {
+        block: Box<LayoutBlock>,
+        reflow_direction: TextDirection,
+    },
     Paragraph {
         block: Arc<ParagraphBlock>,
         semantics: ParagraphSemantics,
@@ -149,6 +153,8 @@ pub(crate) enum SharedLayoutBlock {
 pub(crate) struct ParagraphView<'a> {
     pub block: &'a ParagraphBlock,
     pub semantics: Option<&'a ParagraphSemantics>,
+    pub reflow_direction: TextDirection,
+    pub reflow_allowed: bool,
 }
 
 impl Deref for ParagraphView<'_> {
@@ -217,6 +223,8 @@ impl LayoutBlockLike for LayoutBlock {
             Self::Paragraph(block) => Some(ParagraphView {
                 block,
                 semantics: None,
+                reflow_direction: TextDirection::Auto,
+                reflow_allowed: true,
             }),
             Self::Table(_) => None,
         }
@@ -236,10 +244,18 @@ impl LayoutBlockLike for LayoutBlock {
 impl LayoutBlockLike for SharedLayoutBlock {
     fn paragraph(&self) -> Option<ParagraphView<'_>> {
         match self {
-            Self::Owned(block) => block.paragraph(),
+            Self::Owned {
+                block,
+                reflow_direction,
+            } => block.paragraph().map(|mut paragraph| {
+                paragraph.reflow_direction = *reflow_direction;
+                paragraph
+            }),
             Self::Paragraph { block, semantics } => Some(ParagraphView {
                 block,
                 semantics: Some(semantics),
+                reflow_direction: semantics.reflow_direction,
+                reflow_allowed: true,
             }),
             Self::Table { .. } => None,
         }
@@ -247,7 +263,7 @@ impl LayoutBlockLike for SharedLayoutBlock {
 
     fn table(&self) -> Option<TableView<'_>> {
         match self {
-            Self::Owned(block) => block.table(),
+            Self::Owned { block, .. } => block.table(),
             Self::Paragraph { .. } => None,
             Self::Table { block, semantics } => Some(TableView {
                 block,

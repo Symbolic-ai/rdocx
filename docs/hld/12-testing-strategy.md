@@ -59,11 +59,39 @@ subtree, including namespace shadowing and owner insertion, removal, and
 reordering. Unsafe namespace replay must fail closed without changing the
 opened package.
 
+The legacy horizontal-rule reader regression classifies canonical, aliased,
+default, locally shadowed, and ancestor-bound Word, VML, and Office names by
+expanded namespace URI. Its negative matrix keeps false, numeric, missing,
+foreign, multiple-shape, visible-child, comment, and malformed forms as
+unsupported XML. Adjacent regressions preserve the exact raw subtree and item
+boundary through save and reopen, retain the earlier public `CT_R` literal
+shape, include classification in equality, and prove ordinary modeled runs
+retain no namespace-classification allocation. The pinned Word corpus, public
+package dry run, archive ceiling, and unchanged 49-entry hash set complete the
+gate.
+
 Adjacent parser regressions require producer-defined numbering formats to
 round-trip without an invented marker and require malformed encoded `w:t` or
 `w:delText` values to fail before a partial document is published. Binding
 coverage confirms that malformed document XML keeps the existing `XmlError`,
 while HTML and ODT import failures keep the generic `RdocxError`.
+
+The table-measurement parser gate covers integer and whole-valued decimal forms
+at table width, cell width, table indent, and default cell-margin sites. Aliased
+Word attributes are accepted, foreign same-local attributes are ignored, and
+fractional, exponent, empty-fraction, overflow, percentage, universal-unit,
+malformed, and empty forms return errors rather than zero. Round-trip evidence
+requires canonical integer output in schema order and byte-identical unmodelled
+table content. The pinned Word corpus and the 49-entry hash harness remain the
+integration and output-stability gates.
+
+The tracked table-grid gate parses canonical and aliased Word grid elements,
+rejects foreign same-local names from the modeled projection while preserving
+their bytes, and fails closed on duplicate modeled grid changes. Save and reopen
+evidence requires active columns before one byte-identical historical subtree.
+Facade and deterministic layout regressions prove presence inspection without
+allowing historical widths to alter the active grid. The public package dry run,
+pinned Word corpus, and unchanged 49-entry hash set complete the gate.
 
 The release-notes regression gate validates both release tag families through
 the same deterministic parser used by publication. It requires one exact
@@ -84,6 +112,26 @@ specific credit, and cross-family records must remain excluded. Workflow
 mutation tests pin the inventory, approval-report, and post-publication
 notification requirements. After the release body verifies byte for byte, the
 release records the comment URL posted to each included issue and pull request.
+
+The sprint-workflow regression also covers ordinary and release dependencies
+inside one sprint. An A to B to C regression requires each reviewed dependency
+prefix to complete before its consumer starts, then returns the same state to
+implementation. Each checkpoint commits its clean review file, records review
+at that resulting HEAD, and repeats full verification because the evidence
+commit changed HEAD. It does not create a confirmation review solely for that
+review-file commit. Release cases extend the ordinary checkpoint with prepared
+release and post-publication evidence HEADs plus separate immediate approval.
+The ordinary final gate remains bound to the latest integrated HEAD. Review
+pass numbers remain global, but each scheduled evidence boundary has its own
+bounded remediation loop. Passing the global counter limit solely because
+earlier boundaries finished clean uses the recorded extension path and does not
+weaken the current boundary's limit.
+
+The resume regression changes an existing F-ID's canonical title and size and
+adds another story after run state exists. Reinitialisation with `--resume`
+must refresh those two metadata fields and discover the new F-ID while
+preserving phase, feature state, owner, wave, worker evidence, review records,
+and verification records.
 
 The Word field regression matrix records Microsoft Word 16.104 build
 16.104.25121423 with an en-US locale, Gregorian calendar, period decimal
@@ -309,6 +357,16 @@ cases prove publication and recovery remain safe. Both WASM targets, the
 package dry run and archive ceiling, and the unchanged 49-entry hash harness
 are required riders.
 
+The caller-font comparison regression generates five valid font files totalling
+exactly 22 MiB and supplies 40 aliases through the deterministic
+bundled-fallback facade. Test-only structural accounting surrounds only the
+retained-context exact font equality. An unchanged warm layout must report zero
+bytes through that second comparison, retain bounded page identities, and equal
+a fresh layout across pages, fonts, diagnostics, outlines, provenance, and PDF
+bytes. Equal-length changed font bytes must still invalidate normal reuse, and
+checked engine transfer must still compare the ordered family names and bytes
+exactly.
+
 The `document_facing_aliases_share_one_caller_font` gate uses caller bytes that
 differ from bundled same-family bytes. Multiple document-facing names must
 select that one caller face with exact bytes, diagnostics, provenance, and
@@ -344,7 +402,7 @@ the independently pinned 4,096-entry and 50 MiB paragraph limits. Cacheable
 active paragraph and table blocks share immutable cache payloads through a
 private representation. Warm and fresh results must retain exact pages,
 structure, provenance, and nested table paths while public block APIs remain
-unchanged. Compile-time checks also pin the 4,224-entry and 64 MiB combined
+unchanged. Compile-time checks also pin the 5,216-entry and 64 MiB combined
 envelope.
 
 The restart-pagination regression gate compares warm edits at the start,
@@ -353,9 +411,22 @@ It requires complete equality of pages, fonts, diagnostics, provenance,
 numbering, notes, fields, outlines, and rendered inputs. A middle edit must
 share the unchanged page prefix and tail while reporting only its bounded
 rebuilt range. Insertions and deletions have the same complete-equality check.
-Multi-section content, tables, split paragraphs, floating drawings, note
-continuations, keep constraints, headers, footers, backgrounds, and mismatched
-boundary state must use the full paginator.
+Source-built 700-paragraph cases prove unchanged footnotes, endnotes, default
+headers, and page-number footers keep bounded restart work through both the
+engine and bundled-fallback facade. They also prove endnotes append once,
+changed related stories and note-reference sequences invalidate reuse, and a
+footnote continuation cannot publish a dirty checkpoint. Multi-section
+content, note-bearing tables, split paragraphs, floating drawings, keep
+constraints, backgrounds, and mismatched boundary state must use the full
+paginator.
+
+The incremental-layout scale gate builds 1,000 one-page paragraphs through the
+public deterministic bundled-fallback facade, edits paragraph 500, and compares
+the warm result with a fresh layout. It requires exactly 1,000 pages, at most
+two warm page-layout invocations, at least 998 retained page-frame `Arc`
+identities, 999 paragraph-cache hits, one paragraph build, and complete result
+equality. The paired engine gate requires a 1,024-page restart record to remain
+within 8 MiB and a 1,025-page record to fall back safely.
 
 The substituted-page regression gate proves that unchanged PAGE, NUMPAGES, and
 PAGEREF pages reuse their prior substituted frame only through pristine `Arc`
@@ -401,9 +472,9 @@ shrunk per-paragraph font traces, and both pending and published block queues.
 Structural byte tests use retained capacities for
 owned keys, rows, cells, blocks, glyph data, diagnostics, font traces, restart
 pages, and reflow parameters including tab stops. The combined retained state
-must stay within 4,224 entries and 64 MiB, with paragraph state capped at 4,096
+must stay within 5,216 entries and 64 MiB, with paragraph state capped at 4,096
 entries and 50 MiB, table state capped at 32 entries and 2 MiB, header and
-footer state capped at 64 entries and 4 MiB, and restart state capped at 32
+footer state capped at 64 entries and 4 MiB, and restart state capped at 1,024
 entries and 8 MiB. Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
@@ -504,6 +575,14 @@ The pull-request `test` job runs the golden-PNG check after the full workspace
 suite. That job installs the pinned Poppler 26.01.0 oracle first, so the decoded
 pixel comparison is unconditional, failure-propagating, and bound to the
 reviewed rasteriser identity.
+
+The `feature_showcase` page-one golden is also the automatic-hyphenation
+acceptance case. It enables the Word setting, assigns `en-US` to
+`representation`, and constrains the line so deterministic output is `repre-`
+followed by `sentation`. The reviewed LibreOffice Writer 26.2.5.2 oracle makes
+the same break. The hash and pixel manifests may move only for that declared
+sample after the source-built layout, XML round trip, deterministic raster, and
+pinned Writer evidence agree.
 
 ## The SVG page golden gate
 
@@ -671,6 +750,24 @@ automatic gate: the exact corpus and tool identities match, both renderers
 succeed with nonzero output, and the expected TSV and JSON artifacts exist and
 are nonempty.** Page-count differences, dimension differences, and a missed
 trend are scored evidence rather than orchestration failures.
+
+The same harness source-builds five one-page Word fixtures for Arabic,
+Devanagari, Thai, Simplified Chinese, and mixed bidirectional text. Each uses an
+approved deterministic Noto family, complete `w:lang` attributes, 24 point
+text, and exact 24 point line spacing. The bidirectional page also carries an
+RTL paragraph base, explicit RTL and LTR runs, logical start and end indents,
+and start justification. Unlike the five-document trend, these five pages have
+a hard raw luminance SSIM gate of at least 0.95 on at least 80 percent of pages.
+The reviewed evidence passes five of five pages with scores 0.956809869,
+0.972241230, 0.997558968, 0.997294132, and 0.992810907 respectively. The TSV
+records each page and the JSON records fixture identities, coverage, threshold,
+and per-document page counts.
+
+The Writer oracle registers the three fixed Noto files and one checked-in
+oracle-only static Thin instance of the exact bundled Noto Sans SC subset. The
+fixture inventory test binds the source and output SHA-256 values, requires the
+adjacent OFL licence and provenance record, and rejects extra files. The static
+instance changes neither product font bytes nor the deterministic Rust input.
 
 ## The M11 cross-viewer acceptance gate
 
@@ -883,6 +980,26 @@ outcomes as mandatory manual evidence.
 - `FontManager` with no fonts returns an error rather than panicking, and
   `--no-default-features` is in the CI matrix so the system-font-discovery-off
   path is exercised while bundled deterministic fonts remain available.
+- Multilingual fixtures cover Arabic joining, Indic cluster integrity, Thai
+  word boundaries, CJK prohibited punctuation, conditional hyphens, and mixed
+  bidi lines. Every fixture compares logical source intervals separately from
+  line-local visual order and requires equal glyph-array lengths.
+- Word direction regressions type and round-trip `w:bidi` and `w:rtl` around
+  retained unknown siblings. Structural layout checks cover paragraph base and
+  exact run overrides, direction-relative start and end alignment and indents,
+  leading-edge numbering markers, line-local L1 then L2 ordering, unchanged
+  logical source spans, and PDF visual paint with logical `ActualText`.
+- The DrawingML direction round trip rejects a foreign same-local-name
+  attribute and preserves unknown attributes, children, and schema order.
+- The rich PowerPoint fixture exercises the shared PDF, raster, and SVG paths
+  with deterministic bundled fonts. PDF extraction and SVG text stay logical
+  while painted bidi positions are visual. The stable source fixture and full
+  49-entry hash harness protect the legacy Latin path.
+- The native Word rich-layout fixture covers the same four scripts, exact
+  language projection, valid clusters and offsets, resolvable Word source
+  intervals, deterministic PDF and raster output, and searchable logical SVG
+  text. An exact-line regression fixes every complex script to the Word 0.8em
+  baseline while the Latin path and all 49 hashes remain byte-identical.
 
 **`oxml-pdf`**
 - Three-deep groups balance `q` and `Q`, emit each `cm` before child content,
@@ -1039,21 +1156,29 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.10.1 regression pins all eleven inherited version
+The stable 0.11.1 carrier regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
-README requirement. It also proves the incubating family is published at 0.6.0
-and `rpptx-wasm` remains unpublished.
+README requirement. It also proves the current incubating workspace carriers
+are 0.8.0 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.6.0. It separately proves the stable
-workspace remains at its published 0.10.1 boundary and `rpptx-wasm` remains
-unpublished.
-The stable dependency recovery gate packages and verifies `rdocx-layout`
-against registry `oxml-layout@0.6.0`. During preparation it patched only the
-then-unpublished stable `rdocx-oxml@0.10.1` dependency to local source, so it
-exercised the exact unpatched shared edge that stopped v0.10.0.
+15-package publication preflight at 0.8.0. It separately proves the stable
+workspace remains at its published 0.11.1 boundary and `rpptx-wasm` remains
+ineligible for publication.
+The stable shared-family gate packages and verifies `rdocx-layout@0.11.1`, requires its
+normalized archive dependency on `oxml-layout@0.8.0` to contain no local path,
+and compiles the packaged crate against the exact shared registry version
+without an `oxml-layout` patch.
+That registry consumer is excluded from the incubating tag preflight because
+0.8.0 does not exist before its own publication. The stable tag preflight runs
+it with explicit published-shared authority, and the F-X068 post-publication
+gate runs it independently before stable recovery starts.
+A separate recovery gate constructs an isolated registry consumer of exact
+`rdocx-layout@0.10.1` and inspects its unpatched normal dependency tree. It
+requires registry `oxml-layout@0.6.0` and rejects 0.7.0, so the immutable
+published proof remains independent of current workspace pins.
 The 0.6.0 release gate verified every selected registry entry and owner, the
 annotated tag target, byte-identical GitHub release notes, and selected record
 notifications at reviewed SHA
@@ -1065,6 +1190,39 @@ owner `mantissaman (Atul Sharma)`, the annotated tag at reviewed SHA
 `ae0dcb162a7805e59e5890464b226765645ad547`, byte-identical GitHub release
 notes, nine contribution notifications, and six authorized unmerged
 pull-request closures.
+The 0.7.0 release gate verified all 15 incubating registry entries under sole
+owner `mantissaman (Atul Sharma)`, the annotated `rpptx-v0.7.0` tag at
+reviewed SHA `1b076c16fb494fe47b054d761e061181a1ea0b15`, the stable-family
+exclusion, byte-identical GitHub release notes, and the absence of
+`rpptx-wasm@0.7.0` from crates.io. Its selected contribution inventory is
+empty, so it requires no external notification.
+The 0.8.0 release gate verified all 15 incubating registry entries under sole
+owner `mantissaman (Atul Sharma)`, the annotated `rpptx-v0.8.0` tag at
+reviewed SHA `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`, stable-family exclusion,
+byte-identical GitHub release notes, the published stable shared-family graph,
+and the absence of `rpptx-wasm@0.8.0` from crates.io. Its selected contribution
+inventory is empty, so it requires no external notification.
+The failed stable 0.11.0 release gate is not a passing family gate. Its
+annotated tag targets reviewed SHA
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full
+verification, notes, and archive preflights passed. Publication then stopped
+after `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` because packaged
+`rdocx-layout@0.11.0` could not compile against registry
+`oxml-layout@0.7.0`. The other five stable packages, GitHub release, and six
+notifications are absent. The shared recovery gate proves all 15 shared 0.8.0
+entries. The stable 0.11.1 recovery gate verified all seven selected registry
+entries under sole owner `mantissaman (Atul Sharma)`, the annotated tag at
+reviewed SHA `5a850ce9ae6c31f8365594ed2970193266f8b2a6`, byte-identical GitHub release
+notes, the published `oxml-layout@0.8.0` dependency, and all six leave-open
+notifications.
+A separate cleanup gate proved all seven 0.11.1 entries live and unyanked under
+the authenticated owner, exactly `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0` present, the other five 0.11.0 entries absent, the
+immutable v0.11.0 tag target unchanged, and no v0.11.0 GitHub release. After
+another final approval, it yanked only those two incomplete entries and read
+back their yanked flags. A regression pins that exact allowlist and forbids
+tag, release, notification, closure, and other-version mutations. Complete
+coherent releases remain live.
 
 The large-document regression source-builds 1,000 one-page paragraphs and
 measures deterministic pagination separately from direct PDF rendering. Its
@@ -1087,7 +1245,7 @@ parallel, or failure-swallowing invocation.
 | release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
 | presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
-| word-fidelity | Fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler |
+| word-fidelity | Restore the pinned Rust cache, run `cargo fetch --locked`, fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler with its locked offline helper |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
@@ -1111,8 +1269,41 @@ job. It accepts only `success` for a selected job and only `skipped` for an
 unselected job. Failure, cancellation, an unexpected skip, or a failed change
 detector makes the aggregate gate fail. On the scheduled route, it requires
 the detector to be skipped and the supply-chain job to succeed. The stable
-aggregate check exists in the tracked workflow. Repository branch-protection
-configuration is separate external state.
+aggregate check exists in the tracked workflow. Active repository ruleset
+`21823007` protects the default branch with exact required status `CI gate`.
+The check does not require a current-base SHA and applies when the ref is
+created. The effective `main` rules contain only that required check. The
+ruleset has exactly one bypass actor, repository role `admin` with numeric
+actor ID 5 in `always` mode. This permits the reviewed direct sprint-close
+push while ordinary pull requests remain subject to the aggregate gate.
+
+The protection proof is bound to reviewed and verified S58 SHA
+`31c51f04f1a9e7c6a198ef16eebba0d782a5827a`. Docs-only PR
+[59](https://github.com/tensorbee/rdocx/pull/59) at
+`aee0808a37a3afcc46c6ca236df096198c9601e4` reached clean mergeable state.
+Hosted run `33275852961` reported successful Detect changes job `99162308288`,
+Prose job `99162325899`, and CI gate job `99162339881`. Test, MSRV, WASM,
+Python bindings, Presentation fidelity, Word fidelity, Output stability, and
+Supply chain were skipped as unselected. Deliberately failing PR
+[60](https://github.com/tensorbee/rdocx/pull/60) at
+`ee1c0ae09d676498a594a77601e36240d0199a2b` produced failed hosted run
+`33276064981`. Detect changes job `99162895790` succeeded, selected Prose job
+`99162911436` failed, and CI gate job `99162924862` failed. The pull request
+reported `mergeStateStatus=BLOCKED` and `viewerCanMergeAsAdmin=true`. Both
+proof pull requests are closed and unmerged. Their remote refs were verified
+at the named heads before deletion and are now absent. Their disposable
+worktrees and local branches were removed cleanly.
+
+The Word fidelity job has one explicit Cargo network boundary. Its exact
+`cargo fetch --locked` step follows the pinned Rust cache and precedes corpus
+and harness work. The later acceptor build remains `--locked --offline`.
+Workflow regressions require that order and cardinality and reject a missing,
+unlocked, duplicated, post-harness, or wrong-job fetch. The accepted
+contribution evidence is PR 58 at source SHA
+`c8fed1d1268fd765d602bac2da6524900c1c1cfd`, hosted run `33025657609`, Word
+job `98366252284`. That job uploaded both required evidence files in one
+nonempty 1,420-byte artifact. The integrated hosted Word job remains a separate
+sprint-completion rider.
 
 The `--exclude` pair on every all-feature command is required, not cosmetic:
 `pyo3/extension-module` tells the linker that Python symbols come from the host

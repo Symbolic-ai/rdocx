@@ -808,12 +808,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     if exists and args.resume:
         # The point of --resume is that an interrupted /run-sprint picks up
         # where it stopped rather than redoing landed work. Adopt the limits
-        # from this invocation, keep every feature and review record.
+        # and canonical feature metadata from this invocation, while keeping
+        # every state, worker fact, and evidence record.
         data = load(sprint)
         data["max_review_passes"] = args.max_review_passes
         data["max_workers"] = args.max_workers
         for f in features:
-            data["features"].setdefault(
+            feature = data["features"].setdefault(
                 f["fid"],
                 {
                     "state": "pending",
@@ -822,6 +823,8 @@ def cmd_init(args: argparse.Namespace) -> int:
                     "owner": f["owner"] if f["owner"] != "-" else None,
                 },
             )
+            feature["size"] = f["size"]
+            feature["title"] = f["title"]
         save(sprint, data)
         print(
             f"resumed {sprint}, phase={data['phase']}, "

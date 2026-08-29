@@ -66,6 +66,17 @@ The Word SSIM harness reaches that deterministic path through the production
 trees exist. It cannot alter layout, pagination, font selection, or renderer
 dimensions.
 
+The pinned Writer process receives one oracle-only static Thin instance for
+the Noto Sans SC fixture. `hb-subset (HarfBuzz) 13.2.1` instantiates it at
+`wght=100` from the exact checked-in product font with source SHA-256
+`b06144fa7b2d5212fe21344261449c9350f603e3e2ae625e76306022d024fbe5`.
+The output SHA-256 is
+`390ba9f55d4dd69915736d2b225d602b40012cd2c50db4c1e6d2bbdfd61e63a6`.
+The binary, authentic OFL licence, exact command, and provenance record live in
+`scripts/oracle-fonts/`. Harness inventory assertions bind all three files and
+both hashes. Product code continues to consume the published variable font,
+and hosted verification does not need the generation tool.
+
 Tagged Word PDFs use the same deterministic layout and writer path. Structure
 node references, page-local MCIDs, parent-tree keys, conditional PDF/UA
 metadata, and XMP bytes are derived only from ordered layout input. A
@@ -81,10 +92,29 @@ path.
 
 Reusable managers bound shaping to 2,048 entries and 16 MiB, file bytes to 256
 entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
-entry ceilings. The reusable Word engine bounds both pending and published
-paragraph entries at 256 entries and 16 MiB with retained-capacity accounting.
-These caches add no feature flag or dependency and remain available in the
-default-off graphs without enabling host discovery.
+entry ceilings. The reusable Word engine bounds paragraph state at 4,096
+entries and 50 MiB, table state at 32 entries and 2 MiB, header and footer state
+at 64 entries and 4 MiB, and aligned restart page and checkpoint state at 1,024
+entries and 8 MiB. Its aggregate retained state stays within 5,216 entries and
+64 MiB. Both pending and published queues use retained-capacity accounting.
+The thousand-page incremental gate exercises the deterministic bundled-fallback
+facade and requires a middle edit to paginate at most two pages while matching
+a fresh layout exactly. The related-story gate source-builds 700 paragraphs
+with a footnote, endnote, default header, and page-number footer. An unchanged
+context retains all but at most two page frames and equals a fresh deterministic
+layout. Changed stories and note-reference sequences fall back fully, and
+continued notes publish only clean boundaries. These caches add no feature flag
+or dependency and remain available in the default-off graphs without enabling
+host discovery.
+
+The caller-font relayout gate passes five generated fonts totalling 22 MiB and
+40 aliases through the deterministic bundled-fallback engine. Structural test
+accounting requires zero repeated retained-context font bytes on an unchanged
+warm call while exact font-manager invalidation and checked transfer remain
+byte-exact. The unchanged 49-entry hash harness, both WASM target checks, the
+no-default-features suite, and the existing release-mode 1,000-page performance
+test cover this private comparison split. No binding metadata, feature, public
+type, dependency, or package inventory changes.
 
 `rpptx-render::layout_presentation_deterministic` applies the same rule to a
 whole presentation. It shares page lowering with
@@ -95,6 +125,14 @@ development target and does not change any crate publication setting.
 The `oxml-layout` `--no-default-features` path disables host system font
 discovery while retaining bundled fonts for deterministic construction. This is
 also the same font-isolation path the WASM build needs.
+
+`oxml-layout` pins `hypher` exactly at 0.1.7 with default features disabled and
+only `alloc`, `english`, `french`, `german`, and `spanish` enabled. Its Liang
+pattern data is embedded in the published crate graph, adds no runtime file or
+network lookup, and is covered by the repository licence policy. Package dry
+runs and the archive-size gate cover the added pattern payload. The dependency
+lives only in `oxml-layout`, so it does not add a format-family edge or feature
+flag.
 
 Builds otherwise stay native. There is no development container. The Linux-only
 work, manylinux wheels, `wasm32` checks and the LibreOffice render oracle, runs
@@ -148,21 +186,27 @@ include = [
     "fonts/*.ttf",
     "fonts/LICENSE-*",
     "fonts/NOTICE-*",
+    "fonts/SUBSET-*.md",
 ]
 ```
 
 The dedicated package CI job compares `cargo package -p oxml-layout --list`
-against all 20 TTFs, the three family licence files, and the Caladea notice. It
-then runs verified packaging without `--no-verify` and rejects a missing
-archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
-published 0.1.2 package, while the release workflow remains the authority for
-every later publication.
+against all 24 TTFs, the four family licence files, the Caladea and Noto
+notices, and the Simplified Chinese subset record. It then runs verified
+packaging without `--no-verify` and rejects a missing archive or one larger
+than the crates.io 10 MiB limit. `oxml-layout` is a published 0.1.2 package,
+while the release workflow remains the authority for every later publication.
 
 The external PowerPoint and Word corpora remain outside every published crate
 under the ignored `corpus/` directory. Their tracked manifests pin immutable
 source URLs and SHA-256 values. The Word manifest also pins one of each required
 category plus the reviewed `Apache-2.0` or `MIT` licence identity and immutable
 licence URL.
+
+Oracle-only fonts under `scripts/oracle-fonts/` are test infrastructure. They
+are absent from every crate include list and generated archive. The static CJK
+fixture therefore changes neither the 24-font `oxml-layout` package inventory
+nor its archive size contract.
 
 A separate crate-local packaging rule applies to
 `crates/rpptx/assets/default.pptx`. **An asset must live under its own crate's
@@ -232,23 +276,37 @@ unconfigured and unauthorized.
 The exact incubating crates.io allowlist now contains 15 implemented shared
 and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
-`oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
-`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15 are published
-at 0.6.0 from the annotated `rpptx-v0.6.0` tag at reviewed SHA
-`55fb2f54caf91d7dedc8936b4c7b116354590628`. The earlier 0.5.0 and 0.4.0
+`oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
+`rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15
+are published at 0.8.0 from the immutable annotated `rpptx-v0.8.0` tag at
+reviewed SHA `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The earlier 0.7.0, 0.6.0,
+0.5.0, and 0.4.0
 registry releases remain available, and no existing version or tag was moved. Manifest
 eligibility and allowlist membership do not authorize a later publication
 without a separately approved `/release` invocation at the exact reviewed
-SHA. The unpublished `rpptx-wasm` preparation member is also at 0.6.0 but has
+SHA. The unpublished `rpptx-wasm` preparation member is also at 0.8.0 but has
 no crates.io publication path.
+
+The complete stable 0.11.1 family is published against the shared 0.8.0 family
+from the immutable annotated `v0.11.1` tag at reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6`. It recovers the immutable partial
+v0.11.0 attempt, whose tag targets reviewed SHA
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`. That attempt published only
+`rdocx-opc` and `rdocx-oxml` before package verification exposed the missing
+shared `TextSegment.direction` registry contract. It created no GitHub release
+and posted no contribution notifications. All seven 0.11.1 packages and six
+leave-open notifications are verified. After separate approval, exactly
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
+releases remain live and unyanked. The tag is never moved or deleted, no
+v0.11.0 GitHub release exists, and no other external state changes.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires published workspace version 0.10.1, nine internal
+stable regression requires prepared workspace version 0.11.1, nine internal
 pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.6.0 versions, pins,
+set. The incubating regression requires the exact 0.8.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -290,9 +348,15 @@ and authentication, network, compilation and duplicate-version failures fail
 the job.
 
 The generated archives remain subject to the crates.io 10 MiB ceiling.
-`oxml-layout` contains all 20 bundled fonts and their required legal files, and
+`oxml-layout` contains all 24 bundled fonts and their required legal files, and
 `rpptx` contains `assets/default.pptx`. No binding or WASM package is in either
 crates.io allowlist.
+
+The deterministic inventory includes official Noto Sans Arabic, Devanagari,
+and Thai fonts plus a FontTools-reproducible Noto Sans Simplified Chinese
+subset for the approved fixture repertoire. The source and output hashes,
+subset command, licence, and notice ship with `oxml-layout`. Package checks
+verify that inventory and keep the archive below the same 10 MiB ceiling.
 
 Two tag namespaces:
 
@@ -322,27 +386,35 @@ possible and never rewrite README prose by pattern.
 that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
-`v{{version}}` tag template. That shared-version group and its two Python
-project versions and rdocx WASM contract literals are at 0.10.1. The exact
-seven-package stable family is published from the annotated `v0.10.1` tag at
-reviewed SHA `ae0dcb162a7805e59e5890464b226765645ad547`.
-The immutable v0.10.0 attempt published only `rdocx-opc` and `rdocx-oxml`
-before package verification failed. The remaining five packages and GitHub
-release were not published at that version. The last complete stable family is
-0.10.1. Earlier immutable
+`v{{version}}` tag template. That shared-version group, its two Python project
+versions, and the rdocx WASM contract literals are at 0.11.1. The exact
+seven-package stable family is published from the immutable annotated
+`v0.11.1` tag at reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6`.
+The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
+before package verification failed against the published shared 0.7.0 API.
+The remaining five packages and GitHub release were not published at that
+version. Shared 0.8.0 and stable 0.11.1 form the published recovery sequence.
+After separate immediate approval, the post-recovery cleanup yanked exactly
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Complete coherent stable releases
+remain live and unyanked. The last published complete stable family is 0.11.1.
+Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.6.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-exact 15-package crates.io family listed above is published from the annotated
-`rpptx-v0.6.0` tag at reviewed SHA
-`55fb2f54caf91d7dedc8936b4c7b116354590628`. The preparation group also
-contains unpublished `rpptx-wasm`, while the crates.io allowlist remains
-exactly 15 packages. Earlier immutable registry releases remain available.
+0.8.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+preparation group contains unpublished `rpptx-wasm`, while the crates.io
+allowlist remains exactly 15 packages. The last published complete family is
+the immutable `rpptx-v0.8.0` release at reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`, and earlier registry releases
+remain available. The stable 0.10.1 registry consumer proof remains pinned to
+the immutable `oxml-layout@0.6.0` dependency rather than the current workspace
+family.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
-Preparation therefore changes only the selected manifests and `Cargo.lock`.
+Preparation changes release carriers, assertions, and selected-family notes
+without changing runtime behavior.
 External release actions remain owned by `/release`.
 
 `/release {vX.Y.Z | rpptx-vX.Y.Z}` is the only command allowed to create or push
@@ -379,6 +451,23 @@ approval immediately before the first mutation. `/release` pushes only the
 requested tag. `/close-sprint` remains the only command allowed to merge
 `main` or create an `sNN` tag.
 
+When a later sprint wave depends on an integrated and reviewed F-ID that is not
+completed, `/run-sprint` uses a resumable dependency-prefix checkpoint before
+that consumer. It verifies and completes the prefix, commits the clean review
+file, records review at the resulting HEAD, reruns full verification, and
+returns the same state to implementation. It does not add a confirmation review
+solely because the review file was committed. A release dependency extends the
+ordinary route with preparation, exact-HEAD review, publication through
+`/release`, separate approval, and verified publication evidence. Full
+verification repeats after every tracked evidence commit and again over the
+final integrated sprint. Earlier checkpoint evidence never satisfies a later
+HEAD.
+
+`sprint_workflow.py init --resume` treats `CURRENT_SPRINT.md` as the canonical
+source for each F-ID's title and size. It refreshes those fields and adds newly
+listed F-IDs while preserving the existing phase, feature state, owner, wave,
+worker handoff, review, and verification records.
+
 The requested tag starts `publish.yml`. Its Linux runner reproduces the
 deterministic hash baseline, release metadata check, and full workspace dry run
 before crates.io publication begins. Success requires every package in the
@@ -411,6 +500,25 @@ change-detector failure paths. A documentation-only change runs prose while
 the filtered product jobs skip, yet the same stable aggregate gate reports.
 The scheduled path skips change detection and requires supply-chain success.
 Unfiltered jobs retain their ordinary triggers.
+
+Repository ruleset `21823007` is active for repository `tensorbee/rdocx`,
+targets branches, and includes `~DEFAULT_BRANCH`. Its only rule requires exact
+status context `CI gate` with
+`strict_required_status_checks_policy=false` and
+`do_not_enforce_on_create=false`. Its sole bypass actor is `RepositoryRole`
+ID 5, role `admin`, in `always` mode. Effective rules on `main` expose only
+this required status check. This narrow bypass preserves the direct reviewed
+sprint-close push without exempting ordinary pull requests.
+
+The hosted protection proof uses reviewed and verified S58 SHA
+`31c51f04f1a9e7c6a198ef16eebba0d782a5827a`. Docs-only PR 59 passed run
+`33275852961` and required CI gate job `99162339881` while all eight
+path-filtered product jobs skipped. Selected-failure PR 60 failed run
+`33276064981` and CI gate job `99162924862`, and GitHub reported its merge state
+as blocked while the administrator viewer retained bypass authority. Both
+disposable pull requests are closed and unmerged. Their verified remote head
+refs were deleted and are absent. Their disposable worktrees and local branches
+were removed cleanly.
 
 **A dedicated `oxml-layout` package job.** It checks the exact bundled font and
 legal-file inventory, builds and verifies the generated archive, and enforces
@@ -562,19 +670,25 @@ retains the gate JSON, render manifest, and per-slide score TSV as its evidence
 artifact.
 
 **A dedicated Word fidelity job** runs on Ubuntu 24.04 with exact Rust 1.97.1,
-LibreOffice Writer 26.2.5.2, and Poppler 26.01.0. It fetches and verifies the
-five-document corpus, runs `scripts/docx_ssim_harness.py --check`, and retains
-the required JSON and TSV evidence. The harness rejects corpus or tool drift,
-renderer or oracle failure, zero output, and a missing or empty evidence
-artifact. It records page-count and dimension differences through union-index
-SSIM scoring and does not fail solely because the 0.95 on 80 percent trend is
-missed. The aggregate CI gate requires success when the path filter selects the
-job.
+LibreOffice Writer 26.2.5.2, and Poppler 26.01.0. Immediately after the pinned
+Rust cache, one `cargo fetch --locked` step materializes the reviewed Cargo
+graph before corpus and harness work. It fetches and verifies the five-document
+corpus, runs `scripts/docx_ssim_harness.py --check`, and retains the required
+JSON and TSV evidence. The harness rejects corpus or tool drift, renderer or
+oracle failure, zero output, and a missing or empty evidence artifact. It
+records page-count and dimension differences through union-index SSIM scoring
+and does not fail solely because the five-document 0.95 on 80 percent trend is
+missed. The four source-built complex-script pages separately require raw SSIM
+of at least 0.95 on at least 80 percent of pages. The aggregate CI gate requires
+success when the path filter selects the job.
 The harness prepares each Writer input through a locked, offline helper that
 calls the existing `rdocx::Document::accept_all` API. It reopens the resulting
 untracked copy and rejects remaining modeled revisions before the isolated
 Writer profile exports it. This helper shares the workspace Cargo lock and
 target directory and adds no published dependency or production entry point.
+Workflow regressions keep the fetch singular and immediately after the cache,
+reject weakened or misplaced commands, and keep all dependency network access
+ahead of the offline helper.
 
 ## Dependency policy
 
@@ -605,6 +719,12 @@ New dependencies are added only with a named consumer. The workspace already
 minimises feature sets deliberately, and the comments in the root manifest
 explaining why `zip` and `fontdb` are trimmed should be preserved rather than
 regenerated.
+
+`oxml-layout` is the direct consumer of exact `hypher` 0.1.7 for conditional
+hyphens, `icu_segmenter` 2.3 with compiled data for complex-script boundaries,
+and `unicode-bidi` 0.3.18 for paragraph levels and line-local visual order.
+These edges remain format-neutral and compile in the no-default-features and
+wasm32 graphs.
 
 The private native Word SVG renderer is the direct runtime consumer of
 `base64`, which embeds exact layout font bytes and page image bytes into

@@ -4,6 +4,7 @@
 //! and HarfRust for text shaping.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ops::Range;
 #[cfg(feature = "system-fonts")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "system-fonts")]
@@ -14,7 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{LayoutError, Result};
-use crate::output::FontId;
+use crate::line::TextSegment;
+use crate::output::{FontId, SourceSpan};
 
 /// Font data provided by the user or extracted from an OOXML file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,291 @@ pub struct ShapedText {
     pub advances: Vec<f64>,
     /// Total width in points.
     pub width: f64,
+}
+
+/// Requested or resolved direction for one logical text span.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextDirection {
+    #[default]
+    Auto,
+    LeftToRight,
+    RightToLeft,
+}
+
+pub(crate) fn directional_level(
+    direction: TextDirection,
+    paragraph_level: unicode_bidi::Level,
+) -> unicode_bidi::Level {
+    let paragraph_number = paragraph_level.number();
+    let number = match direction {
+        TextDirection::Auto => paragraph_number,
+        TextDirection::LeftToRight if paragraph_level.is_rtl() => paragraph_number + 1,
+        TextDirection::LeftToRight => paragraph_number,
+        TextDirection::RightToLeft if paragraph_level.is_rtl() => paragraph_number,
+        TextDirection::RightToLeft => paragraph_number + 1,
+    };
+    unicode_bidi::Level::new(number).expect("one directional embedding fits the bidi level limit")
+}
+
+pub(crate) fn explicit_direction_levels(
+    text: &str,
+    direction: TextDirection,
+    paragraph_level: unicode_bidi::Level,
+) -> Result<Vec<unicode_bidi::Level>> {
+    let local_base = match direction {
+        TextDirection::Auto => paragraph_level,
+        TextDirection::LeftToRight => unicode_bidi::Level::ltr(),
+        TextDirection::RightToLeft => unicode_bidi::Level::rtl(),
+    };
+    let target_base = directional_level(direction, paragraph_level);
+    let offset = target_base.number() - local_base.number();
+    unicode_bidi::BidiInfo::new(text, Some(local_base))
+        .levels
+        .into_iter()
+        .map(|level| {
+            level
+                .number()
+                .checked_add(offset)
+                .and_then(|number| unicode_bidi::Level::new(number).ok())
+                .ok_or_else(|| {
+                    LayoutError::Layout(
+                        "run direction exceeded the Unicode bidi level limit".to_owned(),
+                    )
+                })
+        })
+        .collect()
+}
+
+/// Script identity used to select shaping behavior and deterministic fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextScript {
+    Latin,
+    Arabic,
+    Hebrew,
+    Devanagari,
+    Thai,
+    Han,
+    Common,
+}
+
+/// One glyph interval mapped to an exclusive logical Unicode-scalar interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlyphCluster {
+    pub glyph_start: u32,
+    pub glyph_end: u32,
+    pub char_start: u32,
+    pub char_end: u32,
+}
+
+impl GlyphCluster {
+    pub fn is_valid(&self) -> bool {
+        self.glyph_start < self.glyph_end && self.char_start < self.char_end
+    }
+
+    pub fn char_range(&self) -> Range<u32> {
+        self.char_start..self.char_end
+    }
+}
+
+/// One script, font, and bidi-level span shaped with complete positioning data.
+#[derive(Debug, Clone)]
+pub struct MultilingualTextSegment {
+    base: TextSegment,
+    logical_index: usize,
+    language: Option<String>,
+    script: TextScript,
+    direction: TextDirection,
+    bidi_level: u8,
+    x_advances: Vec<f64>,
+    y_advances: Vec<f64>,
+    x_offsets: Vec<f64>,
+    y_offsets: Vec<f64>,
+    clusters: Vec<GlyphCluster>,
+    break_after: bool,
+}
+
+impl MultilingualTextSegment {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        base: TextSegment,
+        logical_index: usize,
+        language: Option<String>,
+        script: TextScript,
+        direction: TextDirection,
+        bidi_level: u8,
+        x_advances: Vec<f64>,
+        y_advances: Vec<f64>,
+        x_offsets: Vec<f64>,
+        y_offsets: Vec<f64>,
+        clusters: Vec<GlyphCluster>,
+        break_after: bool,
+    ) -> Result<Self> {
+        let glyph_count = base.glyph_ids.len();
+        let char_count = base.text.chars().count();
+        let valid_level = unicode_bidi::Level::new(bidi_level).is_ok();
+        if x_advances.len() != glyph_count
+            || y_advances.len() != glyph_count
+            || x_offsets.len() != glyph_count
+            || y_offsets.len() != glyph_count
+            || base.advances.len() != glyph_count
+            || !valid_level
+            || !position_values_are_finite(
+                &x_advances,
+                &y_advances,
+                &x_offsets,
+                &y_offsets,
+                base.width,
+            )
+            || !cluster_ranges_are_valid(&clusters, glyph_count, char_count, bidi_level % 2 == 1)
+        {
+            return Err(LayoutError::Layout(
+                "invalid multilingual glyph positioning or cluster range".to_owned(),
+            ));
+        }
+        Ok(Self {
+            base,
+            logical_index,
+            language,
+            script,
+            direction,
+            bidi_level,
+            x_advances,
+            y_advances,
+            x_offsets,
+            y_offsets,
+            clusters,
+            break_after,
+        })
+    }
+
+    pub fn text(&self) -> &str {
+        &self.base.text
+    }
+
+    pub fn base(&self) -> &TextSegment {
+        &self.base
+    }
+
+    pub fn font_id(&self) -> FontId {
+        self.base.font_id
+    }
+
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    pub fn script(&self) -> TextScript {
+        self.script
+    }
+
+    pub fn direction(&self) -> TextDirection {
+        self.direction
+    }
+
+    pub fn bidi_level(&self) -> u8 {
+        self.bidi_level
+    }
+
+    pub fn logical_index(&self) -> usize {
+        self.logical_index
+    }
+
+    pub fn glyph_ids(&self) -> &[u16] {
+        &self.base.glyph_ids
+    }
+
+    pub fn x_advances(&self) -> &[f64] {
+        &self.x_advances
+    }
+
+    pub fn y_advances(&self) -> &[f64] {
+        &self.y_advances
+    }
+
+    pub fn x_offsets(&self) -> &[f64] {
+        &self.x_offsets
+    }
+
+    pub fn y_offsets(&self) -> &[f64] {
+        &self.y_offsets
+    }
+
+    pub fn clusters(&self) -> &[GlyphCluster] {
+        &self.clusters
+    }
+
+    pub fn width(&self) -> f64 {
+        self.base.width
+    }
+
+    pub fn break_after(&self) -> bool {
+        self.break_after
+    }
+}
+
+pub(crate) fn position_values_are_finite(
+    x_advances: &[f64],
+    y_advances: &[f64],
+    x_offsets: &[f64],
+    y_offsets: &[f64],
+    width: f64,
+) -> bool {
+    width.is_finite()
+        && x_advances
+            .iter()
+            .chain(y_advances)
+            .chain(x_offsets)
+            .chain(y_offsets)
+            .all(|value| value.is_finite())
+}
+
+pub(crate) fn cluster_ranges_are_valid(
+    clusters: &[GlyphCluster],
+    glyph_count: usize,
+    char_count: usize,
+    right_to_left: bool,
+) -> bool {
+    if glyph_count == 0 || char_count == 0 {
+        return glyph_count == 0 && char_count == 0 && clusters.is_empty();
+    }
+    let mut previous_glyph_end = 0u32;
+    let mut previous_char_range = None::<Range<u32>>;
+    let mut covered_chars = 0usize;
+    for cluster in clusters {
+        if !cluster.is_valid()
+            || cluster.glyph_start != previous_glyph_end
+            || cluster.glyph_end as usize > glyph_count
+            || cluster.char_end as usize > char_count
+        {
+            return false;
+        }
+        if let Some(previous) = previous_char_range {
+            let contiguous = if right_to_left {
+                cluster.char_end == previous.start
+            } else {
+                cluster.char_start == previous.end
+            };
+            if !contiguous {
+                return false;
+            }
+        }
+        previous_glyph_end = cluster.glyph_end;
+        previous_char_range = Some(cluster.char_range());
+        covered_chars += (cluster.char_end - cluster.char_start) as usize;
+    }
+    previous_glyph_end as usize == glyph_count
+        && covered_chars == char_count
+        && previous_char_range.is_some_and(|last| {
+            if right_to_left {
+                clusters
+                    .first()
+                    .is_some_and(|first| first.char_end as usize == char_count)
+                    && last.start == 0
+            } else {
+                clusters.first().is_some_and(|first| first.char_start == 0)
+                    && last.end as usize == char_count
+            }
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +528,11 @@ pub struct FontManager {
 /// Ordered roughly by how likely each is to be installed. This is only a fast
 /// path: if none of them is present the full font database is still searched.
 const BROAD_COVERAGE_FAMILIES: &[&str] = &[
+    // Deterministic complex-script fallbacks bundled by this crate
+    "Noto Sans Arabic",
+    "Noto Sans Devanagari",
+    "Noto Sans Thai",
+    "Noto Sans SC",
     // Bundled with or shipped alongside many Linux distributions
     "Noto Sans CJK SC",
     "Noto Sans CJK JP",
@@ -1075,6 +1367,302 @@ impl FontManager {
         Ok(shaped)
     }
 
+    /// Shape one logical text segment into script, font, and bidi-level spans.
+    ///
+    /// The returned spans are in logical order. The rich line breaker applies
+    /// UAX 9 visual order only after it knows the final line boundaries.
+    pub fn shape_multilingual_text(
+        &mut self,
+        segment: TextSegment,
+        language: Option<&str>,
+        base_direction: TextDirection,
+        no_wrap: bool,
+    ) -> Result<Vec<MultilingualTextSegment>> {
+        if segment.text.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let paragraph_level = match base_direction {
+            TextDirection::Auto => None,
+            TextDirection::LeftToRight => Some(unicode_bidi::Level::ltr()),
+            TextDirection::RightToLeft => Some(unicode_bidi::Level::rtl()),
+        };
+        let bidi = unicode_bidi::BidiInfo::new(&segment.text, paragraph_level);
+        let levels = bidi.levels.clone();
+        self.shape_multilingual_with_levels(segment, language, no_wrap, &levels, 0)
+    }
+
+    /// Shape styled spans with one paragraph-wide bidi resolution.
+    pub fn shape_multilingual_paragraph(
+        &mut self,
+        segments: Vec<(TextSegment, Option<String>)>,
+        base_direction: TextDirection,
+        no_wrap: bool,
+    ) -> Result<Vec<MultilingualTextSegment>> {
+        let paragraph_text = segments
+            .iter()
+            .map(|(segment, _)| segment.text.as_str())
+            .collect::<String>();
+        let mut paragraph_offset = 0usize;
+        let segment_starts = segments
+            .iter()
+            .map(|(segment, _)| {
+                let start = paragraph_offset;
+                paragraph_offset += segment.text.len();
+                start
+            })
+            .collect::<Vec<_>>();
+        if paragraph_text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let paragraph_level = match base_direction {
+            TextDirection::Auto => None,
+            TextDirection::LeftToRight => Some(unicode_bidi::Level::ltr()),
+            TextDirection::RightToLeft => Some(unicode_bidi::Level::rtl()),
+        };
+        let bidi = unicode_bidi::BidiInfo::new(&paragraph_text, paragraph_level);
+        let paragraph_level = bidi
+            .paragraphs
+            .first()
+            .map(|paragraph| paragraph.level)
+            .unwrap_or_else(unicode_bidi::Level::ltr);
+        let mut logical_index = 0usize;
+        let mut shaped = Vec::new();
+        for ((segment, language), byte_offset) in segments.into_iter().zip(segment_starts) {
+            let byte_end = byte_offset + segment.text.len();
+            if !segment.text.is_empty() {
+                let forced_levels = (segment.direction != TextDirection::Auto)
+                    .then(|| {
+                        explicit_direction_levels(&segment.text, segment.direction, paragraph_level)
+                    })
+                    .transpose()?;
+                let levels = forced_levels
+                    .as_deref()
+                    .unwrap_or(&bidi.levels[byte_offset..byte_end]);
+                let spans = self.shape_multilingual_with_levels(
+                    segment,
+                    language.as_deref(),
+                    no_wrap,
+                    levels,
+                    logical_index,
+                )?;
+                logical_index += spans.len();
+                shaped.extend(spans);
+            }
+        }
+        Ok(shaped)
+    }
+
+    fn shape_multilingual_with_levels(
+        &mut self,
+        segment: TextSegment,
+        language: Option<&str>,
+        no_wrap: bool,
+        levels: &[unicode_bidi::Level],
+        logical_index_base: usize,
+    ) -> Result<Vec<MultilingualTextSegment>> {
+        let grapheme_boundaries = icu_segmenter::GraphemeClusterSegmenter::new()
+            .segment_str(&segment.text)
+            .collect::<Vec<_>>();
+        let break_offsets = if no_wrap {
+            HashSet::new()
+        } else {
+            multilingual_break_opportunities(&segment.text)
+        };
+
+        let mut logical_ranges = Vec::<(usize, usize, TextScript, unicode_bidi::Level)>::new();
+        let mut start = 0usize;
+        let mut current_script = TextScript::Common;
+        let mut current_level = levels[0];
+        for window in grapheme_boundaries.windows(2) {
+            let grapheme_start = window[0];
+            let grapheme_end = window[1];
+            let script = script_for_grapheme(&segment.text[grapheme_start..grapheme_end]);
+            let script = if script == TextScript::Common {
+                current_script
+            } else {
+                script
+            };
+            let level = levels[grapheme_start];
+            if grapheme_start > start && (script != current_script || level != current_level) {
+                logical_ranges.push((start, grapheme_start, current_script, current_level));
+                start = grapheme_start;
+            }
+            current_script = script;
+            current_level = level;
+            if break_offsets.contains(&grapheme_end) && grapheme_end < segment.text.len() {
+                logical_ranges.push((start, grapheme_end, current_script, current_level));
+                start = grapheme_end;
+            }
+        }
+        if start < segment.text.len() {
+            logical_ranges.push((start, segment.text.len(), current_script, current_level));
+        }
+
+        let mut font_ranges = Vec::new();
+        for (start, end, script, level) in logical_ranges {
+            let boundaries = icu_segmenter::GraphemeClusterSegmenter::new()
+                .segment_str(&segment.text[start..end])
+                .map(|offset| start + offset)
+                .collect::<Vec<_>>();
+            let mut range_start = start;
+            let mut range_font = None;
+            for window in boundaries.windows(2) {
+                let grapheme_start = window[0];
+                let grapheme_end = window[1];
+                let font_id = self.font_for_multilingual_span(
+                    segment.font_id,
+                    &segment.text[grapheme_start..grapheme_end],
+                    segment.bold,
+                    segment.italic,
+                );
+                if let Some(current_font) = range_font
+                    && current_font != font_id
+                {
+                    font_ranges.push((range_start, grapheme_start, script, level, current_font));
+                    range_start = grapheme_start;
+                }
+                range_font = Some(font_id);
+            }
+            if let Some(font_id) = range_font {
+                font_ranges.push((range_start, end, script, level, font_id));
+            }
+        }
+
+        let mut logical = Vec::with_capacity(font_ranges.len());
+        for (logical_index, (start, end, script, level, font_id)) in
+            font_ranges.into_iter().enumerate()
+        {
+            let text = &segment.text[start..end];
+            let metrics = self.metrics(font_id, segment.font_size)?;
+            let direction = if level.is_rtl() {
+                TextDirection::RightToLeft
+            } else {
+                TextDirection::LeftToRight
+            };
+            let positioned = self.shape_explicit(
+                font_id,
+                text,
+                segment.font_size,
+                script,
+                language,
+                direction,
+            )?;
+            let char_start = segment.text[..start].chars().count() as u32;
+            let char_end = segment.text[..end].chars().count() as u32;
+            let source = segment.source.map(|source| SourceSpan {
+                node: source.node,
+                char_start: source.char_start + char_start,
+                char_end: source.char_start + char_end,
+            });
+            let mut base = segment.clone();
+            base.text = text.to_owned();
+            base.source = source;
+            base.font_id = font_id;
+            base.glyph_ids = positioned.glyph_ids;
+            base.advances = positioned.x_advances.clone();
+            base.width = positioned.x_advances.iter().sum();
+            base.ascent = metrics.ascent;
+            base.descent = metrics.descent;
+            base.line_gap = metrics.line_gap;
+            logical.push(MultilingualTextSegment::new(
+                base,
+                logical_index_base + logical_index,
+                language.map(str::to_owned),
+                script,
+                direction,
+                level.number(),
+                positioned.x_advances,
+                positioned.y_advances,
+                positioned.x_offsets,
+                positioned.y_offsets,
+                positioned.clusters,
+                break_offsets.contains(&end),
+            )?);
+        }
+
+        Ok(logical)
+    }
+
+    fn font_for_multilingual_span(
+        &mut self,
+        preferred: FontId,
+        text: &str,
+        bold: bool,
+        italic: bool,
+    ) -> FontId {
+        let Some(index) = self.index_of(preferred) else {
+            return preferred;
+        };
+        if self.uncovered(index, text).is_empty() {
+            return preferred;
+        }
+        let required = text
+            .chars()
+            .filter(|character| !character.is_whitespace() && !character.is_control())
+            .collect::<Vec<_>>();
+        self.font_covering(&required, bold, italic)
+            .unwrap_or(preferred)
+    }
+
+    fn shape_explicit(
+        &self,
+        font_id: FontId,
+        text: &str,
+        size_pt: f64,
+        script: TextScript,
+        language: Option<&str>,
+        direction: TextDirection,
+    ) -> Result<PositionedShape> {
+        let font = self.get_font(font_id)?;
+        let face = harfrust::FontRef::from_index(&font.data, font.face_index)
+            .map_err(|error| LayoutError::Shaping(format!("failed to read font face: {error}")))?;
+        let shaper = font.shaper_data.shaper(&face).build();
+        let mut buffer = harfrust::UnicodeBuffer::new();
+        buffer.push_str(text);
+        buffer.set_script(harfrust_script(script));
+        buffer.set_direction(match direction {
+            TextDirection::RightToLeft => harfrust::Direction::RightToLeft,
+            TextDirection::Auto | TextDirection::LeftToRight => harfrust::Direction::LeftToRight,
+        });
+        if let Some(language) = language.and_then(harfrust::Language::new) {
+            buffer.set_language(language);
+        }
+        let output = shaper.shape(buffer, harfrust::ShapeOptions::default());
+        let infos = output.glyph_infos();
+        let positions = output.glyph_positions();
+        let scale = size_pt / f64::from(font.units_per_em);
+        let glyph_ids = infos
+            .iter()
+            .map(|info| info.glyph_id as u16)
+            .collect::<Vec<_>>();
+        let x_advances = positions
+            .iter()
+            .map(|pos| f64::from(pos.x_advance) * scale)
+            .collect();
+        let y_advances = positions
+            .iter()
+            .map(|pos| f64::from(pos.y_advance) * scale)
+            .collect();
+        let x_offsets = positions
+            .iter()
+            .map(|pos| f64::from(pos.x_offset) * scale)
+            .collect();
+        let y_offsets = positions
+            .iter()
+            .map(|pos| f64::from(pos.y_offset) * scale)
+            .collect();
+        let clusters = glyph_clusters(infos, text);
+        Ok(PositionedShape {
+            glyph_ids,
+            x_advances,
+            y_advances,
+            x_offsets,
+            y_offsets,
+            clusters,
+        })
+    }
+
     /// Get font data for PDF embedding.
     pub fn font_data(&self, font_id: FontId) -> Result<crate::output::FontData> {
         let font = self.get_font(font_id)?;
@@ -1153,6 +1741,100 @@ impl FontManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         (memo.hits, memo.misses, memo.entries.len(), memo.bytes)
     }
+}
+
+struct PositionedShape {
+    glyph_ids: Vec<u16>,
+    x_advances: Vec<f64>,
+    y_advances: Vec<f64>,
+    x_offsets: Vec<f64>,
+    y_offsets: Vec<f64>,
+    clusters: Vec<GlyphCluster>,
+}
+
+fn script_for_grapheme(grapheme: &str) -> TextScript {
+    grapheme
+        .chars()
+        .map(script_for_char)
+        .find(|script| *script != TextScript::Common)
+        .unwrap_or(TextScript::Common)
+}
+
+fn script_for_char(character: char) -> TextScript {
+    match character as u32 {
+        0x0041..=0x024f | 0x1e00..=0x1eff => TextScript::Latin,
+        0x0590..=0x05ff => TextScript::Hebrew,
+        0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x08ff => TextScript::Arabic,
+        0x0900..=0x097f | 0xa8e0..=0xa8ff => TextScript::Devanagari,
+        0x0e00..=0x0e7f => TextScript::Thai,
+        0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff => TextScript::Han,
+        _ => TextScript::Common,
+    }
+}
+
+fn harfrust_script(script: TextScript) -> harfrust::Script {
+    match script {
+        TextScript::Latin => harfrust::script::LATIN,
+        TextScript::Arabic => harfrust::script::ARABIC,
+        TextScript::Hebrew => harfrust::script::HEBREW,
+        TextScript::Devanagari => harfrust::script::DEVANAGARI,
+        TextScript::Thai => harfrust::script::THAI,
+        TextScript::Han => harfrust::script::HAN,
+        TextScript::Common => harfrust::script::COMMON,
+    }
+}
+
+fn multilingual_break_opportunities(text: &str) -> HashSet<usize> {
+    let mut opportunities = icu_segmenter::WordSegmenter::new_auto(Default::default())
+        .segment_str(text)
+        .filter(|offset| *offset > 0 && *offset <= text.len())
+        .collect::<HashSet<_>>();
+    for (offset, _) in unicode_linebreak::linebreaks(text) {
+        if offset > 0 {
+            opportunities.insert(offset);
+        }
+    }
+    opportunities.retain(|offset| {
+        let before = text[..*offset].chars().next_back();
+        let after = text[*offset..].chars().next();
+        before
+            .zip(after)
+            .is_none_or(|(before, after)| crate::line::multilingual_break_allowed(before, after))
+    });
+    opportunities
+}
+
+fn glyph_clusters(infos: &[harfrust::GlyphInfo], text: &str) -> Vec<GlyphCluster> {
+    let mut byte_starts = infos
+        .iter()
+        .map(|info| info.cluster as usize)
+        .collect::<Vec<_>>();
+    byte_starts.push(text.len());
+    byte_starts.sort_unstable();
+    byte_starts.dedup();
+
+    let mut clusters = Vec::new();
+    let mut glyph_start = 0usize;
+    while glyph_start < infos.len() {
+        let cluster_byte = infos[glyph_start].cluster as usize;
+        let mut glyph_end = glyph_start + 1;
+        while glyph_end < infos.len() && infos[glyph_end].cluster as usize == cluster_byte {
+            glyph_end += 1;
+        }
+        let byte_end = byte_starts
+            .iter()
+            .copied()
+            .find(|candidate| *candidate > cluster_byte)
+            .unwrap_or(text.len());
+        clusters.push(GlyphCluster {
+            glyph_start: glyph_start as u32,
+            glyph_end: glyph_end as u32,
+            char_start: text[..cluster_byte].chars().count() as u32,
+            char_end: text[..byte_end].chars().count() as u32,
+        });
+        glyph_start = glyph_end;
+    }
+    clusters
 }
 
 fn best_caller_face(
@@ -1311,7 +1993,49 @@ fn map_font_name(name: &str) -> &[&str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Color;
     use crate::bundled_fonts::bundled_font_data;
+
+    fn multilingual_test_segment(
+        manager: &mut FontManager,
+        text: &str,
+        size_pt: f64,
+        source: Option<SourceSpan>,
+    ) -> TextSegment {
+        let font_id = manager
+            .resolve_font_for_text(None, false, false, text)
+            .expect("test font resolves");
+        let metrics = manager
+            .metrics(font_id, size_pt)
+            .expect("test font metrics");
+        let shaped = manager
+            .shape_text(font_id, text, size_pt)
+            .expect("test seed shapes");
+        TextSegment {
+            text: text.to_owned(),
+            direction: TextDirection::Auto,
+            source,
+            font_id,
+            font_size: size_pt,
+            glyph_ids: shaped.glyph_ids,
+            advances: shaped.advances,
+            width: shaped.width,
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+            line_gap: metrics.line_gap,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            underline: None,
+            strike: false,
+            dstrike: false,
+            highlight: None,
+            baseline_offset: 0.0,
+            hyperlink_url: None,
+            field_kind: None,
+            note: None,
+        }
+    }
 
     #[test]
     fn caller_font_labels_resolve_after_exact_embedded_families() {
@@ -1803,6 +2527,172 @@ mod tests {
     }
 
     #[test]
+    fn arabic_joining_survives_script_and_line_break_boundaries() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let segment = multilingual_test_segment(&mut fm, "العربية", 18.0, None);
+        let shaped = fm
+            .shape_multilingual_text(segment, Some("ar"), TextDirection::RightToLeft, false)
+            .unwrap();
+        assert_eq!(shaped.len(), 1);
+        assert_eq!(
+            shaped[0].glyph_ids(),
+            &[288, 85, 319, 18, 317, 19, 31, 48, 72, 8]
+        );
+        assert_eq!(
+            shaped[0]
+                .clusters()
+                .iter()
+                .map(|cluster| (cluster.glyph_start..cluster.glyph_end, cluster.char_range()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0..2, 6..7),
+                (2..4, 5..6),
+                (4..6, 4..5),
+                (6..7, 3..4),
+                (7..8, 2..3),
+                (8..9, 1..2),
+                (9..10, 0..1),
+            ]
+        );
+    }
+
+    #[test]
+    fn indic_clusters_are_never_split_or_mapped_as_independent_scalars() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let segment = multilingual_test_segment(&mut fm, "कि", 18.0, None);
+        let shaped = fm
+            .shape_multilingual_text(segment, Some("hi"), TextDirection::LeftToRight, false)
+            .unwrap();
+
+        assert_eq!(shaped[0].clusters()[0].char_range(), 0..2);
+        assert_eq!(shaped[0].x_offsets().len(), shaped[0].glyph_ids().len());
+        assert_eq!(shaped[0].y_offsets().len(), shaped[0].glyph_ids().len());
+    }
+
+    #[test]
+    fn same_script_coverage_changes_split_only_between_graphemes() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let font_id = fm.resolve_font(Some("Carlito"), false, false).unwrap();
+        let metrics = fm.metrics(font_id, 18.0).unwrap();
+        let seed = fm.shape_text(font_id, "A☀∙", 18.0).unwrap();
+        let shaped = fm
+            .shape_multilingual_text(
+                TextSegment {
+                    text: "A☀∙".to_owned(),
+                    direction: TextDirection::Auto,
+                    source: None,
+                    font_id,
+                    font_size: 18.0,
+                    glyph_ids: seed.glyph_ids,
+                    advances: seed.advances,
+                    width: seed.width,
+                    ascent: metrics.ascent,
+                    descent: metrics.descent,
+                    line_gap: metrics.line_gap,
+                    color: Color::BLACK,
+                    bold: false,
+                    italic: false,
+                    underline: None,
+                    strike: false,
+                    dstrike: false,
+                    highlight: None,
+                    baseline_offset: 0.0,
+                    hyperlink_url: None,
+                    field_kind: None,
+                    note: None,
+                },
+                None,
+                TextDirection::LeftToRight,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(
+            shaped.iter().map(|span| span.text()).collect::<Vec<_>>(),
+            ["A", "☀", "∙"]
+        );
+        assert!(shaped.iter().all(|span| span.script() == TextScript::Latin));
+        assert_ne!(shaped[1].font_id(), shaped[2].font_id());
+        assert!(shaped.iter().all(|span| {
+            let index = fm.index_of(span.font_id()).unwrap();
+            fm.uncovered(index, span.text()).is_empty()
+        }));
+    }
+
+    #[test]
+    fn multilingual_constructor_rejects_invalid_levels_and_cluster_maps() {
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let segment = multilingual_test_segment(&mut fm, "ab", 18.0, None);
+        let valid = fm
+            .shape_multilingual_text(segment, None, TextDirection::LeftToRight, true)
+            .unwrap()
+            .remove(0);
+        let rebuild = |bidi_level, clusters| {
+            MultilingualTextSegment::new(
+                valid.base().clone(),
+                valid.logical_index(),
+                valid.language().map(str::to_owned),
+                valid.script(),
+                valid.direction(),
+                bidi_level,
+                valid.x_advances().to_vec(),
+                valid.y_advances().to_vec(),
+                valid.x_offsets().to_vec(),
+                valid.y_offsets().to_vec(),
+                clusters,
+                valid.break_after(),
+            )
+        };
+
+        assert!(rebuild(255, valid.clusters().to_vec()).is_err());
+        let mut out_of_bounds = valid.clusters().to_vec();
+        out_of_bounds.last_mut().unwrap().char_end = 3;
+        assert!(rebuild(valid.bidi_level(), out_of_bounds).is_err());
+        let mut glyph_gap = valid.clusters().to_vec();
+        glyph_gap[0].glyph_start = 1;
+        assert!(rebuild(valid.bidi_level(), glyph_gap).is_err());
+    }
+
+    #[test]
+    fn thai_words_offer_approved_breaks_without_losing_source_text() {
+        let text = "ภาษาไทยยินดีต้อนรับ";
+        let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
+        let source = SourceSpan {
+            node: crate::SourceNodeId::new(3).unwrap(),
+            char_start: 10,
+            char_end: 29,
+        };
+        let segment = multilingual_test_segment(&mut fm, text, 18.0, Some(source));
+        let shaped = fm
+            .shape_multilingual_text(segment, Some("th"), TextDirection::LeftToRight, false)
+            .unwrap();
+        assert_eq!(
+            shaped
+                .iter()
+                .map(|span| {
+                    let source = span.base().source.unwrap();
+                    (
+                        span.text(),
+                        span.break_after(),
+                        source.char_start..source.char_end,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("ภาษา", true, 10..14),
+                ("ไทยยิน", true, 14..20),
+                ("ดี", true, 20..22),
+                ("ต้อน", true, 22..26),
+                ("รับ", true, 26..29),
+            ]
+        );
+        assert_eq!(
+            shaped.iter().map(|span| span.text()).collect::<String>(),
+            text
+        );
+    }
+
+    #[test]
     fn shaping_memo_hits_preserve_fifo_order() {
         let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
         let font = fm.resolve_font(Some("Carlito"), false, false).unwrap();
@@ -2092,15 +2982,15 @@ mod tests {
 
     /// Text nothing can draw must keep the requested font rather than failing.
     ///
-    /// The bundled fonts have no CJK coverage, so in deterministic mode the
-    /// search is guaranteed to come up empty. The text still needs a font so
-    /// it occupies the right space.
+    /// The approved deterministic fallbacks intentionally do not cover emoji,
+    /// so the search is guaranteed to come up empty. The text still needs a
+    /// font so it occupies the right space.
     #[test]
     fn text_no_font_can_draw_keeps_the_requested_font() {
         let mut fm = FontManager::new_deterministic().expect("bundled fonts should load");
         let primary = fm.resolve_font(Some("Carlito"), false, false).unwrap();
         let resolved = fm
-            .resolve_font_for_text(Some("Carlito"), false, false, "这是中文")
+            .resolve_font_for_text(Some("Carlito"), false, false, "🀄")
             .unwrap();
         assert_eq!(
             primary, resolved,

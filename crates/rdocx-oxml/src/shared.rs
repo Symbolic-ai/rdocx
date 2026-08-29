@@ -17,8 +17,10 @@ pub enum ST_Jc {
 impl ST_Jc {
     pub fn from_str(s: &str) -> Result<Self> {
         match s {
-            "start" | "left" => Ok(ST_Jc::Left),
-            "end" | "right" => Ok(ST_Jc::Right),
+            "start" => Ok(ST_Jc::Start),
+            "end" => Ok(ST_Jc::End),
+            "left" => Ok(ST_Jc::Left),
+            "right" => Ok(ST_Jc::Right),
             "center" => Ok(ST_Jc::Center),
             // Kashida justification stretches Arabic text by elongating the
             // connecting stroke rather than by widening spaces. Shaping that
@@ -33,8 +35,10 @@ impl ST_Jc {
 
     pub fn to_str(self) -> &'static str {
         match self {
-            ST_Jc::Start | ST_Jc::Left => "left",
-            ST_Jc::End | ST_Jc::Right => "right",
+            ST_Jc::Start => "start",
+            ST_Jc::End => "end",
+            ST_Jc::Left => "left",
+            ST_Jc::Right => "right",
             ST_Jc::Center => "center",
             ST_Jc::Both => "both",
             ST_Jc::Distribute => "distribute",

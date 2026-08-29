@@ -36,7 +36,14 @@ glyph-cluster positions. Word assigns spans before shaping. Its initial text
 projection assigns one shaped segment to each formatting and provenance span.
 The shared line breaker alone discovers UAX 14 opportunities, reshapes each
 exact byte slice, and subdivides the scalar source range, so every wrapped
-fragment retains an exact contiguous source range. Generated text uses `None`.
+fragment retains an exact contiguous source range. A language-aware inline
+item additionally exposes embedded Liang opportunities for the `en`, `fr`,
+`de`, and `es` BCP 47 primary subtags. On overflow it tries candidates from
+right to left and selects the farthest opportunity whose prefix plus a shaped
+hyphen fits. Unsupported languages, omitted document enablement, paragraph
+suppression, and ordinary text retain UAX 14 behavior. The chosen prefix and
+suffix keep exact source spans. The separately shaped conditional hyphen has
+the preceding run's formatting and `source: None`, as all generated text does.
 
 An empty Word paragraph contributes one `TextSegment` with empty text, zero
 width, no glyph ids, and the resolved paragraph-mark font metrics. Its source
@@ -448,6 +455,43 @@ ascent and descent and the tallest complete run advance. Omitted line spacing
 uses that natural advance, while percentage line spacing multiplies the largest
 effective run point size. Exact point spacing remains exact, including when it
 is smaller than the glyph box.
+
+Complex text enters shared layout as one paragraph-wide logical sequence.
+Coverage and script boundaries select deterministic fonts before HarfRust
+receives explicit script, language, and direction. ICU supplies Thai and
+complex-script opportunities, shared punctuation rules protect CJK line edges,
+and language-specific Liang dictionaries supply conditional hyphens. Fitting
+never divides a shaping cluster. After fitting, UAX 9 reorders each completed
+line for painting without rewriting its logical text or source spans.
+PowerPoint transports resolved paragraph direction beside the established
+resolved-slide model. Its facade supplies that sidecar to the renderer, so an
+explicit DrawingML direction also controls numeric and Latin text on both
+sides of a forced line break.
+
+Word uses the same paragraph-wide rich shaping and line path when a paragraph
+contains Arabic, Devanagari, Thai, or CJK text. The Word projection selects the
+effective direct, bidirectional, or East Asian language value for each run and
+retains exact logical source intervals. Shared shaping still owns script and
+coverage segmentation, clusters, offsets, and line fitting. Exact Word line
+spacing places rich text on the Word baseline at 0.8 of the largest run em for
+the line. Automatic spacing and the established Latin-only path retain their
+existing metrics and output bytes.
+
+Word `w:bidi` selects the paragraph base direction and `w:rtl` selects the
+direction of its exact logical run span. Start and end justification and
+indentation resolve from that base direction, while physical left and right
+values remain physical. Numbering markers participate in the same line-local
+visual order and therefore remain on the leading edge. Directional levels are
+intersected with language, script, font coverage, cluster, and source ranges.
+Line fitting stays logical. UAX 9 L1 resets line whitespace before L2 produces
+the painted item order. PDF `ActualText`, SVG text, diagnostics, selection, and
+round-trip XML retain logical order.
+
+`MultilingualGlyphRun` is the rich positioned output. It carries glyph ids,
+x and y advances, x and y offsets, logical clusters, direction, and extraction
+text. PDF paints those exact positions inside logical `ActualText`, raster
+applies the same per-glyph coordinates, and SVG emits searchable logical text.
+Legacy Latin remains on `GlyphRun` so existing output bytes do not move.
 Non-negative leading is divided equally above and below the glyph box. A
 below-natural exact line keeps its stated height and places no negative leading
 before the baseline. Stored normal-autofit line-spacing reduction applies only
@@ -515,10 +559,12 @@ an annotation, but their visible text remains in the line.
 ## Tables
 
 Table lowering derives cumulative row and column offsets from the resolved
-grid. Right-to-left tables reverse visual column placement without changing
-logical cell ownership. Cell payloads retain paragraphs and nested tables in
-source order. A nested table resolves its own grid, fills, borders, text,
-provenance, anchors, and logical structure inside the owning cell content box.
+active grid columns. A preserved historical table-grid change is inspection and
+round-trip metadata and never participates in width calculation. Right-to-left
+tables reverse visual column placement without changing logical cell ownership.
+Cell payloads retain paragraphs and nested tables in source order. A nested
+table resolves its own active grid, fills, borders, text, provenance, anchors,
+and logical structure inside the owning cell content box.
 
 Vertical merge groups match the exact starting grid column and grid span. A
 continuation emits no content or paint. The restart paints across the resolved
@@ -689,10 +735,10 @@ VML watermarks remain reusable because the part, complete section geometry,
 resolved media bytes, and reusable context are all authoritative identity
 inputs.
 
-Retained block and restart state share a 4,224-entry and 64 MiB ceiling.
+Retained block and restart state share a 5,216-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 50 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
-aligned restart page and checkpoint slots receive 32 entries and 8 MiB. The
+aligned restart page and checkpoint slots receive 1,024 entries and 8 MiB. The
 published and transaction-pending queues enforce the same partitions using
 retained-capacity accounting for owned keys, resolved part bytes, rows, cells,
 recursive cell blocks, watermark media, diagnostics, font traces, and reflow
@@ -710,19 +756,25 @@ font ids, font bytes, diagnostics, revision view, and resolved source provenance
 equal.
 
 The engine also records restart checkpoints for one safe section containing
-one-line or two-line context-independent paragraphs and cache-safe tables. A
-checkpoint exists only before a complete block at an empty page boundary. The
-paginator never records one inside a table. It records the next block, page
-count, and displayed header page number. Headers, footers, backgrounds, notes,
-fields, headings, drawings, multi-section content, split paragraphs, keep
-constraints, and any unrepresented state use the full paginator. A warm edit
-restarts at the last checkpoint before its first changed block. It stops at the
-first safe page boundary inside an unchanged suffix only when the complete
-retained context, font-resolution trace, page count, displayed header page
-number, and exact typed body suffix all match. Retained prefix and tail page
-frames keep their `Arc` ownership through pagination. Newly paginated pages are
-allocated once. If any equality or capacity check fails, pagination continues
-through the normal full path.
+one-line or two-line context-independent paragraphs, safe paragraph note
+references, and cache-safe tables. A checkpoint exists only before a complete
+block at an empty page boundary after the current and pending note queues have
+drained. The paginator never records one inside a table. It records the next
+block, page count, and displayed header page number. Unchanged footnote,
+endnote, header, and footer stories participate through exact retained-context
+equality. A changed related story or body note-reference sequence uses the full
+paginator. Note-bearing tables, backgrounds, fields, headings, drawings,
+multi-section content, split paragraphs, keep constraints, and any
+unrepresented state also use the full paginator. A warm edit restarts at the
+last checkpoint before its first changed block. It stops at the first safe page
+boundary inside an unchanged suffix only when the complete retained context,
+font-resolution trace, page count, displayed header page number, and exact
+typed body suffix all match. Retained prefix and tail page frames keep their
+`Arc` ownership through pagination. Newly paginated pages are allocated once.
+When restarted body pagination reaches the end, endnote pages are appended
+once. An attached exact cached tail already carries those pages. If any
+equality or capacity check fails, pagination continues through the normal full
+path.
 
 The same restart record retains aligned pristine and field-substituted page
 pairs. PAGE, NUMPAGES, and PAGEREF pages bypass reshaping only when exact page
@@ -731,9 +783,24 @@ page number, total-page count, sorted bookmark targets, font trace, revision
 view, and every substitution input compare equal. Field-free output shares its
 pristine `Arc` directly. Field-bearing blocks still receive no pagination
 checkpoint, so this optimization cannot widen the restart-safe region. Page
-pairs and checkpoints occupy aligned slots inside the 32-entry partition, and
+pairs and checkpoints occupy aligned slots inside the 1,024-entry partition, and
 all pair payloads and exact inputs count toward its 8 MiB ceiling. A mismatch
 reshapes the page. A bound failure drops the whole restart record.
+
+A thousand-page document with one safe page-boundary paragraph per page keeps
+the complete restart record under these limits. Editing paragraph 500 through
+the deterministic bundled-fallback facade paginates at most two pages, retains
+at least 998 prior page-frame `Arc` identities, and produces a warm result that
+equals a fresh layout exactly. The edit yields 999 paragraph-cache hits and one
+paragraph build. A 1,025-page record exceeds the slot ceiling and uses the safe
+full-pagination path.
+
+Before every normal reusable layout, `FontManager::load_additional_fonts`
+compares the ordered caller-font family names and bytes exactly. When that
+authoritative comparison reports no change, the retained-work context compares
+every other input without repeating the same font-byte pass. A changed set,
+including equal-length changed bytes, rebuilds font-dependent state and cannot
+reuse retained work. The retained context still owns the exact font bytes.
 
 `Document::transfer_reusable_layout_from` builds the receiver input before it
 takes anything. It moves the source's normal engine only when that complete
@@ -794,6 +861,10 @@ ambiguous, malformed, or unrelated VML remains preserved but does not enter
 layout. Named VML colours and six-digit RGB values lower to shared colour.
 Unsupported colours and unresolved image relationships suppress that watermark
 and add a stable diagnostic.
+
+Legacy horizontal rules retained as run-level `w:pict` children are a native
+inspection classification only. They remain absent from Word layout and every
+render backend, so classification does not create pixels or alter pagination.
 
 Text watermarks shape with the deterministic font manager and image watermarks
 reuse the scoped relationship entry in the layout's collision-safe

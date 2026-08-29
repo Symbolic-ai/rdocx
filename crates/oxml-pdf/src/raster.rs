@@ -354,6 +354,22 @@ fn render_elements(
                     render_glyph_run(pixmap, glyph_run, font_data, transform, mask);
                 }
             }
+            PositionedElement::MultilingualText(glyph_run) => {
+                if glyph_run.is_valid()
+                    && let Some(font_data) = fonts.iter().find(|font| font.id == glyph_run.font_id)
+                {
+                    render_positioned_glyph_run(
+                        pixmap,
+                        &glyph_run.legacy_projection(),
+                        font_data,
+                        transform,
+                        mask,
+                        &glyph_run.x_offsets,
+                        &glyph_run.y_offsets,
+                        &glyph_run.y_advances,
+                    );
+                }
+            }
             PositionedElement::Image {
                 rect,
                 data,
@@ -922,6 +938,20 @@ fn render_glyph_run(
     transform: Transform,
     mask: Option<&Mask>,
 ) {
+    render_positioned_glyph_run(pixmap, glyph_run, font_data, transform, mask, &[], &[], &[]);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_positioned_glyph_run(
+    pixmap: &mut Pixmap,
+    glyph_run: &oxml_layout::GlyphRun,
+    font_data: &oxml_layout::FontData,
+    transform: Transform,
+    mask: Option<&Mask>,
+    x_offsets: &[f64],
+    y_offsets: &[f64],
+    y_advances: &[f64],
+) {
     let Ok(face) = ttf_parser::Face::parse(&font_data.data, font_data.face_index) else {
         return;
     };
@@ -939,7 +969,7 @@ fn render_glyph_run(
     paint.anti_alias = true;
 
     let mut x = glyph_run.origin.x;
-    let y = glyph_run.origin.y;
+    let mut y = glyph_run.origin.y;
 
     for (i, &glyph_id) in glyph_run.glyph_ids.iter().enumerate() {
         let gid = ttf_parser::GlyphId(glyph_id);
@@ -952,7 +982,10 @@ fn render_glyph_run(
             // Transform: translate to glyph position, scale from font units to points,
             // and flip Y (font coordinates are Y-up, pixmap is Y-down)
             let glyph_transform = transform
-                .pre_translate(x as f32, y as f32)
+                .pre_translate(
+                    (x + x_offsets.get(i).copied().unwrap_or(0.0)) as f32,
+                    (y - y_offsets.get(i).copied().unwrap_or(0.0)) as f32,
+                )
                 .pre_scale(scale as f32, -(scale as f32));
 
             pixmap.fill_path(&path, &paint, FillRule::Winding, glyph_transform, mask);
@@ -961,6 +994,7 @@ fn render_glyph_run(
         if i < glyph_run.advances.len() {
             x += glyph_run.advances[i];
         }
+        y -= y_advances.get(i).copied().unwrap_or(0.0);
     }
 }
 

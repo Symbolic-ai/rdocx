@@ -1837,7 +1837,7 @@ Liang hyphenation with language-specific patterns, which changes line breaking
 and therefore every subsequent line. Word hyphenates and this renderer does not,
 so any hyphenated document currently differs from the first hyphenated line
 onward.
-**Depends on**: F-197.
+**Depends on**: F-197, F-X059, F-X066.
 **Test gate**: golden. A hyphenated document matches the oracle's line breaks
 within the recorded tolerance, and the harness delta is declared.
 
@@ -1845,14 +1845,14 @@ within the recorded tolerance, and the harness delta is declared.
 Arabic joining and shaping, Indic reordering and clusters, Thai breaking, and
 CJK line-breaking rules. The shaper handles these and the line breaker does not
 know their rules.
-**Depends on**: F-196.
+**Depends on**: F-196, F-X059.
 **Test gate**: golden. Multi-script corpus pages match the oracle within the
 recorded threshold.
 
 ### F-200, Vertical and bidirectional text (M)
 Right-to-left paragraph direction, mixed-direction runs, and the vertical text
 directions the deck renderer currently approximates.
-**Depends on**: F-199.
+**Depends on**: F-199, F-X059.
 **Test gate**: golden. A bidirectional document renders with the correct visual
 order.
 
@@ -2615,7 +2615,7 @@ existing protections without an explicit reviewed decision. Bind the evidence
 to the repository, branch pattern, ruleset or protection identifier, and the
 reviewed sprint SHA.
 
-**Depends on**: F-X029.
+**Depends on**: F-X029, F-X070.
 **Test gate**: integration. A docs-only pull request reports a successful
 required `ci-gate` while the filtered expensive jobs stay skipped, and a
 selected failing job makes the required gate fail.
@@ -3246,6 +3246,250 @@ registry inventory, the annotated tag targets the reviewed SHA, the GitHub
 release body is byte-identical, all nine stable contribution notifications are
 verified, and PRs 47 through 52 close with their reviewed hardened-equivalent
 status.
+
+### F-X058, Shared multilingual text substrate (L)
+
+The shared layout family must own one complete text contract before stable Word
+consumers can use language-aware hyphenation, complex-script shaping, or
+bidirectional layout. Add conditional-hyphen opportunities, script and font
+segmentation, cluster and offset preservation, complex-script line boundaries,
+paragraph and run direction, and line-local visual ordering in the existing
+incubating layout, drawing, PDF, and Presentation paths. Add the approved
+deterministic multilingual fonts and legal files without changing legacy Latin
+output. Stable Word property parsing, facade authoring, and final Word oracle
+acceptance remain in F-198, F-199, and F-200.
+
+**Depends on**: F-196, F-197, F-X061.
+**Test gate**: regression. Shared deterministic tests prove conditional
+hyphens, exact logical source spans, cluster-safe Arabic and Indic shaping,
+Thai and CJK breaking, bidi visual order, searchable logical text, and
+unchanged legacy Latin hashes.
+
+### F-X059, Tag rpptx-v0.7.0 (S)
+
+The complete 15-package incubating family is published at 0.7.0 after F-X058
+from the annotated `rpptx-v0.7.0` tag at reviewed SHA
+`1b076c16fb494fe47b054d761e061181a1ea0b15`.
+Every incubating manifest, workspace pin, lock record, README requirement, CI
+literal, release regression, and the unpublished `rpptx-wasm` preparation
+carrier moves together. The stable family stays at 0.10.1, and the immutable
+`rdocx-layout@0.10.1` registry graph continues to resolve
+`oxml-layout@0.6.0`. The published 0.7.0 family is the registry boundary that
+F-198, F-199, and F-200 must compile and run against.
+
+**Depends on**: F-X058.
+**Test gate**: release. All 15 incubating registry entries resolve at 0.7.0
+from the reviewed SHA, their owners match the authenticated registry inventory,
+the tag and GitHub release body match the reviewed evidence, every selected
+external record receives its reviewed notification, and no stable package is
+published.
+
+### F-X060, Tag v0.11.0 (S)
+
+The immutable v0.11.0 attempt prepared the stable workspace and exact
+seven-package family at reviewed SHA
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`. The annotated `v0.11.0` tag
+targets that SHA. The release workflow published `rdocx-opc` and
+`rdocx-oxml`, then stopped while verifying `rdocx-layout` because current
+stable source uses `TextSegment.direction`, which is newer than the published
+`oxml-layout@0.7.0` registry contract. The other five stable packages and the
+GitHub release were not published.
+
+No contribution notification is attributed to the partial attempt. Issues 53
+and 54 and PRs 55 through 58 remain open. F-X068 publishes the required shared
+family at 0.8.0, F-X069 owns the coherent seven-package stable recovery at
+0.11.1 and its six leave-open notifications, and F-X070 owns the separately
+approved post-recovery yank of the two incomplete 0.11.0 registry entries. The
+v0.11.0 tag is never moved or deleted. Python, WASM, npm, and PyPI packages
+remain outside publication authority.
+
+**Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063, F-X064, F-X065, F-X066, F-X067.
+**Test gate**: release. Preparation and every local gate passed at the reviewed
+SHA. Publication did not complete because the shared registry graph could not
+verify `rdocx-layout`. The immutable partial result is the input to F-X068,
+F-X069, and F-X070, not a completed stable-family release.
+
+### F-X068, Tag rpptx-v0.8.0 (S)
+
+The complete 15-package incubating family is published at 0.8.0 from the
+immutable annotated `rpptx-v0.8.0` tag at reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. It supplies the additive
+`TextSegment.direction` contract required by stable source after the immutable
+0.7.0 shared release. All 15 registry entries resolve under sole owner
+`mantissaman (Atul Sharma)`, the release body matches the reviewed notes, and
+`rpptx-wasm@0.8.0` remains absent from crates.io. The stable family is published
+at 0.11.1 and pins this shared boundary.
+
+**Depends on**: F-200, F-X064, F-X065, F-X066, F-X067.
+**Test gate**: release, passed. All 15 incubating registry entries resolve at 0.8.0
+from the reviewed SHA, their owners match the authenticated registry inventory,
+the annotated tag and GitHub release body match the reviewed evidence,
+`rpptx-wasm@0.8.0` is absent, and no stable package publishes from this tag.
+
+### F-X069, Tag v0.11.1 (S)
+
+The complete stable recovery is published at 0.11.1 against the published
+shared 0.8.0 family from the immutable annotated `v0.11.1` tag at reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6`. Every stable carrier, internal pin, lockfile record,
+Python metadata value, WASM contract literal, CI identity, README requirement,
+release regression, and reviewed changelog section is at 0.11.1. Every shared
+dependency remains pinned to 0.8.0. The release publishes exactly `rdocx-opc`,
+`rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and
+`rdocx-cli` in dependency order.
+
+The published notes describe the partial v0.11.0 attempt accurately. The
+selected contribution inventory credits authenticated `@emptinessform` for
+Issues 53 and 54 and authenticated `@pedroassumpcao` for PRs 55 through 58.
+Each record has exactly one release-bound thank-you and remains open.
+
+**Depends on**: F-198, F-199, F-200, F-202, F-X062, F-X063, F-X064, F-X065, F-X066, F-X067, F-X068.
+**Test gate**: release, passed. All seven stable registry entries resolve at 0.11.1
+against incubating 0.8.0 dependencies, their owners match the authenticated
+registry inventory, the annotated tag targets the reviewed SHA, the GitHub
+release body is byte-identical to the reviewed notes, and all six leave-open
+notification URLs verify.
+
+### F-X070, Yank incomplete v0.11.0 packages (S)
+
+After the complete v0.11.1 family verifies, remove the two incomplete v0.11.0
+registry entries from ordinary dependency selection without rewriting release
+history. After separate final approval, yank exactly `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0`. The cleanup is complete. The annotated `v0.11.0` tag
+remains immutable, no v0.11.0 GitHub release exists, and the other five 0.11.0
+packages never existed. Complete coherent stable releases remain live and
+unyanked. The cleanup changes no other registry version, tag, release,
+notification, issue, pull request, or external contribution-record state.
+Normal local sprint ledgers, progress notes, review artifacts, and handoff
+records still advance through the feature workflow.
+
+**Depends on**: F-X069.
+**Test gate**: integration. crates.io readback reports the two incomplete
+0.11.0 entries yanked, the other five absent, and all seven 0.11.1 entries
+live and owned by the authenticated publisher. The immutable v0.11.0 tag still
+targets the reviewed partial-attempt SHA and no v0.11.0 GitHub release exists.
+
+### F-X061, Support staged dependency checkpoints in run-sprint (S)
+
+`/run-sprint` detects when a later wave depends on an integrated and reviewed
+F-ID that is not completed, then uses a resumable checkpoint before that
+consumer. The route verifies and completes the dependency prefix, commits its
+clean review evidence, records review at that resulting HEAD, reruns full
+verification, and returns the same sprint state to implementation. A release
+dependency extends that route with preparation, publication, and its separate
+approval. Review evidence remains bound to the prefix, prepared release,
+post-publication evidence, and final closure HEADs without a self-confirming
+review loop. Resuming an existing run refreshes canonical title and size
+metadata and discovers new F-IDs without discarding state, ownership, worker,
+review, or verification facts.
+
+**Depends on**: none.
+**Test gate**: regression. The workflow contracts, A to B to C state regression,
+and phase regression prove ordinary and release dependency checkpoints can
+return to implementation before the final close-preflight without weakening
+release approval or HEAD-bound evidence.
+
+### F-X062, Reuse restart pagination with notes and headers (M)
+
+The restart paginator admits documents with footnotes, endnotes, headers, and
+footers when their retained context and body note-reference sequence are
+exactly equal. It restarts only at note-clean page boundaries. Changed related
+stories, changed note references, note-bearing tables, and other
+traversal-sensitive content retain conservative full fallback. Endnote pages
+append exactly once after a complete restarted body or arrive through an exact
+cached tail. F-202 separately owns the 1,024-page capacity.
+
+**Depends on**: F-202.
+**Test gate**: regression. Source-built 700-paragraph note and header/footer
+workloads retain bounded page work and exact warm-versus-fresh output, while
+changed related stories and dirty note continuations invalidate reuse.
+
+### F-X063, Avoid duplicate caller-font byte comparisons (S)
+
+Issue 54 isolates a WASM relayout regression to a second exact comparison of
+caller font bytes. `FontManager::load_additional_fonts` already performs the
+authoritative ordered family-and-byte comparison. Normal warm relayout uses a
+private font-elided retained-context comparison only after the font manager
+reports that exact set unchanged. The retained context keeps exact bytes, and
+checked engine transfer retains the complete ordered family-and-byte check.
+Equal-length changed bytes invalidate both normal reuse and checked transfer.
+
+**Depends on**: F-X052.
+**Test gate**: regression. Five generated caller fonts totalling about 22 MiB
+and 40 aliases perform zero repeated retained-context font-byte work on warm
+layout, same-length changed bytes still invalidate reuse, checked transfer stays
+exact, and warm output equals fresh output across positioned pages, font data,
+diagnostics, outlines, provenance, and PDF bytes.
+
+### F-X064, Accept whole-valued decimal table measurements (S)
+
+PR 55 supplies the Word-produced `9345.0` compatibility case. The existing
+signed integer projection uses one exact string parser for table widths, cell
+widths, table indents, and default cell margins. It accepts integers and
+decimals whose nonempty fractional portion contains only zeroes, then
+checked-parses the integer portion into `i32` without floating point. Missing
+values retain their existing default. Fractional decimals, exponent forms,
+empty fractions, overflow, malformed input, percentages, and universal
+measures fail explicitly rather than becoming zero. The latter two remain
+unsupported union arms until a lossless public model is designed.
+
+**Depends on**: F-X059.
+**Test gate**: regression. Namespace-aware parser and canonical round-trip
+tests cover every table-width site, negative lexical forms, unsupported union
+arms, and the current Word corpus with 49 of 49 output hashes unchanged.
+
+### F-X065, Expose tracked table grid changes (S)
+
+PR 56 exposes the historical grid carried by `w:tblGridChange`. Recognize the
+grid, active columns, and historical change by WordprocessingML namespace URI,
+preserve exactly one change subtree after active columns in schema order, and
+fail closed on a duplicate modeled change. Foreign same-local children remain
+unmodelled with their exact bytes preserved. The active columns remain the only
+layout grid. Native callers can query `TableRef::has_grid_change()`, while the
+historical bytes remain inspection and round-trip data. The public low-level
+grid fields are an intentional pre-1.0 exhaustive-literal source impact.
+
+**Depends on**: F-X064.
+**Test gate**: regression. Aliased and foreign namespace cases, duplicate
+rejection, package save-reopen, and layout prove the historical grid is
+preserved without changing active column widths or the 49 output hashes.
+
+### F-X066, Classify legacy VML horizontal rules (S)
+
+PR 57 adds a native reader classification for an unambiguous legacy horizontal
+rule. Recognize a WordprocessingML `pict` containing exactly one VML `rect`
+whose Office `hr` attribute is enabled by expanded namespace URI, not lexical
+prefix. Accept the VML true forms `t` and `true`, and preserve and expose the
+exact raw bytes. Numeric `1`, false, missing, malformed, foreign,
+multiple-shape, visible-child, and ambiguous input remains `UnsupportedXml`.
+Classification occurs once at the OXML parse boundary and records a compact
+semantic flag in the existing raw-child position sidecar. Ordinary modeled
+runs retain no namespace scope, and run equality includes the classification.
+This story does not add layout or rendering support.
+
+**Depends on**: F-X065.
+**Test gate**: regression. Canonical and aliased positive cases, adversarial
+foreign and ambiguous cases, public-literal and equality compatibility,
+item-order preservation, package save-reopen, and
+the current Word corpus pass with 49 of 49 output hashes unchanged.
+
+### F-X067, Prime Word fidelity Cargo dependencies (S)
+
+PR 58 at source SHA `c8fed1d1268fd765d602bac2da6524900c1c1cfd`
+identifies that a cold hosted runner can reach the intentional locked offline
+`rdocx` build before the complete Cargo graph is present. The Word fidelity job
+runs exact `cargo fetch --locked` after its pinned Rust cache and before the
+corpus harness. The harness remains locked and offline, so network preparation
+stays explicit and render evidence cannot depend on an incidental warm cache.
+Exact workflow order, cardinality, and mutation regressions harden the direct
+submitted outcome. PR 58 remains open and unchanged. Contribution-hosted run
+`33025657609`, Word job `98366252284`, proves the cold path and uploads both
+required evidence files as one nonempty artifact.
+
+**Depends on**: F-X064.
+**Test gate**: regression. Workflow tests reject missing, unlocked, duplicated,
+misplaced, or wrong-job dependency priming. The current pinned Word corpus and
+PR 58 hosted run emit nonempty evidence, and all 49 output hashes remain
+unchanged. The integrated hosted Word job remains a sprint-completion rider.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

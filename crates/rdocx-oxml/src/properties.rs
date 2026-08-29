@@ -109,6 +109,10 @@ pub struct CT_PPr {
     pub ind_left: Option<Twips>,
     /// Right indentation in twips (ind/@w:right)
     pub ind_right: Option<Twips>,
+    /// Logical leading-edge indentation in twips (ind/@w:start).
+    pub ind_start: Option<Twips>,
+    /// Logical trailing-edge indentation in twips (ind/@w:end).
+    pub ind_end: Option<Twips>,
     /// First line indent in twips (ind/@w:firstLine)
     pub ind_first_line: Option<Twips>,
     /// Hanging indent in twips (ind/@w:hanging)
@@ -123,6 +127,8 @@ pub struct CT_PPr {
     pub widow_control: Option<bool>,
     /// Suppress auto-hyphens (suppressAutoHyphens)
     pub suppress_auto_hyphens: Option<bool>,
+    /// Paragraph base direction (bidi).
+    pub bidi: Option<bool>,
     /// Outline level 0-8 (outlineLvl)
     pub outline_lvl: Option<u32>,
     /// Paragraph borders (pBdr)
@@ -147,6 +153,110 @@ pub struct CT_PPr {
     pub change: Option<CT_Revision>,
     /// Malformed tracked-change elements retained without a typed projection.
     pub revision_xml: Vec<Vec<u8>>,
+    /// Schema slots and occurrences for retained raw children.
+    #[doc(hidden)]
+    pub revision_xml_positions: Vec<(u8, usize)>,
+}
+
+const PPR_STYLE_SLOT: u8 = 0;
+const PPR_KEEP_NEXT_SLOT: u8 = 1;
+const PPR_KEEP_LINES_SLOT: u8 = 2;
+const PPR_PAGE_BREAK_SLOT: u8 = 3;
+const PPR_WIDOW_SLOT: u8 = 5;
+const PPR_NUM_SLOT: u8 = 6;
+const PPR_BORDER_SLOT: u8 = 8;
+const PPR_SHADING_SLOT: u8 = 9;
+const PPR_TABS_SLOT: u8 = 10;
+const PPR_SUPPRESS_HYPHENS_SLOT: u8 = 11;
+const PPR_BIDI_SLOT: u8 = 18;
+const PPR_SPACING_SLOT: u8 = 21;
+const PPR_INDENT_SLOT: u8 = 22;
+const PPR_JUSTIFICATION_SLOT: u8 = 26;
+const PPR_OUTLINE_SLOT: u8 = 30;
+const PPR_RUN_PROPERTIES_SLOT: u8 = 33;
+const PPR_SECTION_SLOT: u8 = 34;
+const PPR_CHANGE_SLOT: u8 = 35;
+const PPR_END_SLOT: u8 = 36;
+const RAW_MODELED_ATTRIBUTES_FLAG: usize = 1 << (usize::BITS - 1);
+const RAW_MODELED_DUPLICATE_FLAG: usize = 1 << (usize::BITS - 2);
+const RAW_MODELED_FLAGS: usize = RAW_MODELED_ATTRIBUTES_FLAG | RAW_MODELED_DUPLICATE_FLAG;
+
+fn raw_occurrence(position: (u8, usize)) -> usize {
+    position.1 & !RAW_MODELED_FLAGS
+}
+
+fn raw_is_modeled_attribute_carrier(position: (u8, usize)) -> bool {
+    position.1 & RAW_MODELED_ATTRIBUTES_FLAG != 0
+}
+
+fn modeled_attribute_carrier_occurrence(occurrence: usize) -> usize {
+    occurrence | RAW_MODELED_ATTRIBUTES_FLAG
+}
+
+fn raw_is_modeled_duplicate(position: (u8, usize)) -> bool {
+    position.1 & RAW_MODELED_DUPLICATE_FLAG != 0
+}
+
+fn modeled_duplicate_occurrence(occurrence: usize) -> usize {
+    occurrence | RAW_MODELED_DUPLICATE_FLAG
+}
+
+fn replay_modeled_toggle_raw(position: (u8, usize), modeled_value_is_present: bool) -> bool {
+    !raw_is_modeled_attribute_carrier(position)
+        && (!raw_is_modeled_duplicate(position) || modeled_value_is_present)
+}
+
+fn record_modeled_toggle_candidate(
+    raw_xml: &mut Vec<Vec<u8>>,
+    positions: &mut Vec<(u8, usize)>,
+    raw: Vec<u8>,
+    slot: u8,
+    occurrence: usize,
+) {
+    let replacing_carrier = positions
+        .iter()
+        .any(|position| position.0 == slot && raw_is_modeled_attribute_carrier(*position));
+    if replacing_carrier {
+        for position in positions
+            .iter_mut()
+            .filter(|position| position.0 == slot && raw_is_modeled_attribute_carrier(**position))
+        {
+            position.1 = modeled_duplicate_occurrence(raw_occurrence(*position));
+        }
+    }
+    raw_xml.push(raw);
+    positions.push((slot, modeled_attribute_carrier_occurrence(occurrence)));
+}
+
+fn remove_redundant_modeled_toggle_candidate(
+    raw_xml: &mut Vec<Vec<u8>>,
+    positions: &mut Vec<(u8, usize)>,
+    slot: u8,
+    carrier_required: bool,
+) {
+    if carrier_required {
+        return;
+    }
+    if let Some(index) = positions
+        .iter()
+        .rposition(|position| position.0 == slot && raw_is_modeled_attribute_carrier(*position))
+    {
+        let carrier_occurrence = raw_occurrence(positions[index]);
+        for (candidate_index, position) in positions.iter_mut().enumerate() {
+            if candidate_index == index || position.0 != slot {
+                continue;
+            }
+            let flags = position.1 & RAW_MODELED_FLAGS;
+            let occurrence = raw_occurrence(*position);
+            position.1 = flags
+                | usize::from(
+                    occurrence > carrier_occurrence
+                        || (occurrence == carrier_occurrence && candidate_index > index),
+                );
+        }
+        raw_xml.remove(index);
+        positions.remove(index);
+    }
 }
 
 const RPR_STYLE_SLOT: u8 = 0;
@@ -170,6 +280,8 @@ const RPR_HIGHLIGHT_SLOT: u8 = 25;
 const RPR_UNDERLINE_SLOT: u8 = 26;
 const RPR_SHADING_SLOT: u8 = 29;
 const RPR_VERT_ALIGN_SLOT: u8 = 31;
+const RPR_RTL_SLOT: u8 = 32;
+const RPR_LANG_SLOT: u8 = 35;
 const RPR_MARKER_SLOT: u8 = 39;
 const RPR_CHANGE_SLOT: u8 = 40;
 const RPR_END_SLOT: u8 = 41;
@@ -201,6 +313,32 @@ fn flush_rpr_raw(rpr: &mut CT_RPr, pending_raw: &mut Vec<Vec<u8>>, slot: u8, occ
     }
 }
 
+fn record_ppr_modeled(
+    ppr: &mut CT_PPr,
+    pending_raw: &mut Vec<Vec<u8>>,
+    occurrences: &mut [usize],
+    slot: u8,
+) {
+    let occurrence = occurrences[slot as usize];
+    for raw in pending_raw.drain(..) {
+        ppr.revision_xml.push(raw);
+        ppr.revision_xml_positions.push((slot, occurrence));
+    }
+    occurrences[slot as usize] += 1;
+}
+
+fn record_ppr_raw_at(ppr: &mut CT_PPr, raw: Vec<u8>, slot: u8, occurrence: usize) {
+    ppr.revision_xml.push(raw);
+    ppr.revision_xml_positions.push((slot, occurrence));
+}
+
+fn flush_ppr_raw(ppr: &mut CT_PPr, pending_raw: &mut Vec<Vec<u8>>, slot: u8) {
+    for raw in pending_raw.drain(..) {
+        ppr.revision_xml.push(raw);
+        ppr.revision_xml_positions.push((slot, 0));
+    }
+}
+
 #[allow(non_snake_case)]
 impl CT_PPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
@@ -222,6 +360,9 @@ impl CT_PPr {
         let mut ppr = CT_PPr::default();
         let mut change_raw_index = 0usize;
         let mut numbering_change_raw_index = 0usize;
+        let mut pending_raw = Vec::new();
+        let mut occurrences = [0usize; PPR_END_SLOT as usize + 1];
+        let mut bidi_carrier_required = false;
         let mut buf = Vec::new();
 
         loop {
@@ -229,6 +370,9 @@ impl CT_PPr {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if let Some(slot) = ppr_modeled_slot(name.as_ref(), &prefixes) {
+                        record_ppr_modeled(&mut ppr, &mut pending_raw, &mut occurrences, slot);
+                    }
                     if is_word_element(name.as_ref(), b"rPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         ppr.rpr = Some(parse_scoped_rpr_with_owner_bindings(
@@ -269,24 +413,56 @@ impl CT_PPr {
                             if let Some(previous) = ppr.change.replace(revision) {
                                 ppr.revision_xml
                                     .insert(change_raw_index, previous.into_raw_xml());
+                                ppr.revision_xml_positions
+                                    .insert(change_raw_index, (PPR_CHANGE_SLOT, 0));
                             }
                             change_raw_index = ppr.revision_xml.len();
                         } else {
-                            ppr.revision_xml.push(raw);
+                            record_ppr_raw_at(&mut ppr, raw, PPR_CHANGE_SLOT, 0);
                         }
                     } else if matches_local_name(name.as_ref(), b"pPrChange") {
-                        ppr.revision_xml
-                            .push(crate::text::raw_with_external_bindings(
-                                &capture_element(reader, e)?,
-                                owner_bindings,
-                            )?);
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        pending_raw.push(raw);
+                    } else if is_word_element(name.as_ref(), b"bidi", &prefixes) {
+                        let captured = capture_element(reader, e)?;
+                        let raw =
+                            crate::text::raw_with_external_bindings(&captured, owner_bindings)?;
+                        if toggle_element_is_explicitly_empty(&captured)? {
+                            ppr.bidi = Some(parse_word_toggle(e, &prefixes)?);
+                            bidi_carrier_required =
+                                toggle_has_unsupported_attributes(e, &prefixes)?;
+                            record_modeled_toggle_candidate(
+                                &mut ppr.revision_xml,
+                                &mut ppr.revision_xml_positions,
+                                raw,
+                                PPR_BIDI_SLOT,
+                                occurrences[PPR_BIDI_SLOT as usize] - 1,
+                            );
+                        } else {
+                            let occurrence = occurrences[PPR_BIDI_SLOT as usize] - 1;
+                            record_ppr_raw_at(&mut ppr, raw, PPR_BIDI_SLOT, occurrence);
+                        }
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        if let Some(slot) = ppr_schema_slot(name.as_ref(), &prefixes) {
+                            record_ppr_raw_at(&mut ppr, raw, slot, 0);
+                        } else {
+                            pending_raw.push(raw);
+                        }
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if let Some(slot) = ppr_modeled_slot(name.as_ref(), &prefixes) {
+                        record_ppr_modeled(&mut ppr, &mut pending_raw, &mut occurrences, slot);
+                    }
                     if is_word_element(name.as_ref(), b"pStyle", &prefixes) {
                         ppr.style_id = get_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"jc", &prefixes) {
@@ -317,14 +493,14 @@ impl CT_PPr {
                             let attr = attr?;
                             let key = attr.key.as_ref();
                             let val_str = std::str::from_utf8(&attr.value)?;
-                            if is_word_attribute(key, b"left", &prefixes)
-                                || is_word_attribute(key, b"start", &prefixes)
-                            {
+                            if is_word_attribute(key, b"left", &prefixes) {
                                 ppr.ind_left = Some(Twips(val_str.parse()?));
-                            } else if is_word_attribute(key, b"right", &prefixes)
-                                || is_word_attribute(key, b"end", &prefixes)
-                            {
+                            } else if is_word_attribute(key, b"right", &prefixes) {
                                 ppr.ind_right = Some(Twips(val_str.parse()?));
+                            } else if is_word_attribute(key, b"start", &prefixes) {
+                                ppr.ind_start = Some(Twips(val_str.parse()?));
+                            } else if is_word_attribute(key, b"end", &prefixes) {
+                                ppr.ind_end = Some(Twips(val_str.parse()?));
                             } else if is_word_attribute(key, b"firstLine", &prefixes) {
                                 ppr.ind_first_line = Some(Twips(val_str.parse()?));
                             } else if is_word_attribute(key, b"hanging", &prefixes) {
@@ -341,6 +517,20 @@ impl CT_PPr {
                         ppr.widow_control = Some(parse_word_toggle(e, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"suppressAutoHyphens", &prefixes) {
                         ppr.suppress_auto_hyphens = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"bidi", &prefixes) {
+                        ppr.bidi = Some(parse_word_toggle(e, &prefixes)?);
+                        bidi_carrier_required = toggle_has_unsupported_attributes(e, &prefixes)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
+                        record_modeled_toggle_candidate(
+                            &mut ppr.revision_xml,
+                            &mut ppr.revision_xml_positions,
+                            raw,
+                            PPR_BIDI_SLOT,
+                            occurrences[PPR_BIDI_SLOT as usize] - 1,
+                        );
                     } else if is_word_element(name.as_ref(), b"outlineLvl", &prefixes) {
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
                             ppr.outline_lvl = Some(val.parse()?);
@@ -356,17 +546,28 @@ impl CT_PPr {
                             if let Some(previous) = ppr.change.replace(revision) {
                                 ppr.revision_xml
                                     .insert(change_raw_index, previous.into_raw_xml());
+                                ppr.revision_xml_positions
+                                    .insert(change_raw_index, (PPR_CHANGE_SLOT, 0));
                             }
                             change_raw_index = ppr.revision_xml.len();
                         } else {
-                            ppr.revision_xml.push(raw);
+                            record_ppr_raw_at(&mut ppr, raw, PPR_CHANGE_SLOT, 0);
                         }
                     } else if matches_local_name(name.as_ref(), b"pPrChange") {
-                        ppr.revision_xml
-                            .push(crate::text::raw_with_external_bindings(
-                                &capture_empty_element(e)?,
-                                owner_bindings,
-                            )?);
+                        pending_raw.push(crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?);
+                    } else {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
+                        if let Some(slot) = ppr_schema_slot(name.as_ref(), &prefixes) {
+                            record_ppr_raw_at(&mut ppr, raw, slot, 0);
+                        } else {
+                            pending_raw.push(raw);
+                        }
                     }
                 }
                 Ok(Event::End(ref e))
@@ -380,6 +581,14 @@ impl CT_PPr {
             }
             buf.clear();
         }
+
+        flush_ppr_raw(&mut ppr, &mut pending_raw, PPR_END_SLOT);
+        remove_redundant_modeled_toggle_candidate(
+            &mut ppr.revision_xml,
+            &mut ppr.revision_xml_positions,
+            PPR_BIDI_SLOT,
+            bidi_carrier_required,
+        );
 
         Ok(ppr)
     }
@@ -472,6 +681,17 @@ impl CT_PPr {
             return Ok(());
         }
 
+        if !self.revision_xml.is_empty()
+            && self.revision_xml_positions.len() == self.revision_xml.len()
+        {
+            let mut modeled = self.clone();
+            modeled.revision_xml.clear();
+            modeled.revision_xml_positions.clear();
+            let mut generated = Writer::new(Vec::new());
+            modeled.to_xml(&mut generated)?;
+            return write_ppr_with_positioned_raw(writer, &generated.into_inner(), self);
+        }
+
         let mut buf = itoa::Buffer::new();
         writer.write_event(Event::Start(BytesStart::new("w:pPr")))?;
 
@@ -541,6 +761,10 @@ impl CT_PPr {
             write_toggle(writer, "w:suppressAutoHyphens", suppress)?;
         }
 
+        if let Some(bidi) = self.bidi {
+            write_toggle(writer, "w:bidi", bidi)?;
+        }
+
         // spacing
         if self.space_before.is_some()
             || self.space_after.is_some()
@@ -573,6 +797,8 @@ impl CT_PPr {
         // ind
         if self.ind_left.is_some()
             || self.ind_right.is_some()
+            || self.ind_start.is_some()
+            || self.ind_end.is_some()
             || self.ind_first_line.is_some()
             || self.ind_hanging.is_some()
         {
@@ -582,6 +808,12 @@ impl CT_PPr {
             }
             if let Some(right) = self.ind_right {
                 e.push_attribute(("w:right", buf.format(right.0)));
+            }
+            if let Some(start) = self.ind_start {
+                e.push_attribute(("w:start", buf.format(start.0)));
+            }
+            if let Some(end) = self.ind_end {
+                e.push_attribute(("w:end", buf.format(end.0)));
             }
             if let Some(fl) = self.ind_first_line {
                 e.push_attribute(("w:firstLine", buf.format(fl.0)));
@@ -633,6 +865,8 @@ impl CT_PPr {
             && self.after_autospacing.is_none()
             && self.ind_left.is_none()
             && self.ind_right.is_none()
+            && self.ind_start.is_none()
+            && self.ind_end.is_none()
             && self.ind_first_line.is_none()
             && self.ind_hanging.is_none()
             && self.keep_next.is_none()
@@ -640,6 +874,7 @@ impl CT_PPr {
             && self.page_break_before.is_none()
             && self.widow_control.is_none()
             && self.suppress_auto_hyphens.is_none()
+            && self.bidi.is_none()
             && self.outline_lvl.is_none()
             && self.borders.is_none()
             && self.tabs.is_none()
@@ -687,6 +922,12 @@ impl CT_PPr {
         if other.ind_right.is_some() {
             self.ind_right = other.ind_right;
         }
+        if other.ind_start.is_some() {
+            self.ind_start = other.ind_start;
+        }
+        if other.ind_end.is_some() {
+            self.ind_end = other.ind_end;
+        }
         if other.ind_first_line.is_some() {
             self.ind_first_line = other.ind_first_line;
         }
@@ -707,6 +948,9 @@ impl CT_PPr {
         }
         if other.suppress_auto_hyphens.is_some() {
             self.suppress_auto_hyphens = other.suppress_auto_hyphens;
+        }
+        if other.bidi.is_some() {
+            self.bidi = other.bidi;
         }
         if other.outline_lvl.is_some() {
             self.outline_lvl = other.outline_lvl;
@@ -787,6 +1031,17 @@ pub struct CT_RPr {
     pub shading: Option<CT_Shd>,
     /// Vanish/hidden text (vanish)
     pub vanish: Option<bool>,
+    /// Character-level right-to-left direction (rtl).
+    pub rtl: Option<bool>,
+    /// Language for Latin and high-ANSI text (`lang/@w:val`).
+    pub language: Option<String>,
+    /// Language for East Asian text (`lang/@w:eastAsia`).
+    pub language_east_asia: Option<String>,
+    /// Language for complex-script text (`lang/@w:bidi`).
+    pub language_bidi: Option<String>,
+    /// Namespace declarations and foreign attributes retained from `w:lang`.
+    #[doc(hidden)]
+    pub language_extra_attributes: Vec<(String, String)>,
     /// Contextual insertion and deletion markers retained in schema order.
     pub revision_markers: Vec<CT_Revision>,
     /// Prior run properties from the schema-final `w:rPrChange`.
@@ -820,6 +1075,7 @@ impl CT_RPr {
         let mut change_raw_index = 0usize;
         let mut pending_raw = Vec::new();
         let mut occurrences = [0usize; RPR_END_SLOT as usize + 1];
+        let mut rtl_carrier_required = false;
         let mut buf = Vec::new();
 
         loop {
@@ -1037,6 +1293,34 @@ impl CT_RPr {
                             RPR_VANISH_SLOT,
                         );
                         rpr.vanish = Some(parse_word_toggle(e, &prefixes)?);
+                    } else if is_word_element(name.as_ref(), b"rtl", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_RTL_SLOT,
+                        );
+                        rpr.rtl = Some(parse_word_toggle(e, &prefixes)?);
+                        rtl_carrier_required = toggle_has_unsupported_attributes(e, &prefixes)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
+                        record_modeled_toggle_candidate(
+                            &mut rpr.revision_xml,
+                            &mut rpr.revision_xml_positions,
+                            raw,
+                            RPR_RTL_SLOT,
+                            occurrences[RPR_RTL_SLOT as usize] - 1,
+                        );
+                    } else if is_word_element(name.as_ref(), b"lang", &prefixes) {
+                        record_rpr_modeled(
+                            &mut rpr,
+                            &mut pending_raw,
+                            &mut occurrences,
+                            RPR_LANG_SLOT,
+                        );
+                        parse_language_attributes(&mut rpr, e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
                         || is_word_element(name.as_ref(), b"del", &prefixes)
                     {
@@ -1093,7 +1377,52 @@ impl CT_RPr {
                 }
                 Ok(Event::Start(ref e)) => {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(e.name().as_ref(), b"ins", &prefixes)
+                    if is_word_element(e.name().as_ref(), b"rtl", &prefixes) {
+                        let captured = capture_element(reader, e)?;
+                        let raw =
+                            crate::text::raw_with_external_bindings(&captured, owner_bindings)?;
+                        if toggle_element_is_explicitly_empty(&captured)? {
+                            record_rpr_modeled(
+                                &mut rpr,
+                                &mut pending_raw,
+                                &mut occurrences,
+                                RPR_RTL_SLOT,
+                            );
+                            rpr.rtl = Some(parse_word_toggle(e, &prefixes)?);
+                            rtl_carrier_required = toggle_has_unsupported_attributes(e, &prefixes)?;
+                            record_modeled_toggle_candidate(
+                                &mut rpr.revision_xml,
+                                &mut rpr.revision_xml_positions,
+                                raw,
+                                RPR_RTL_SLOT,
+                                occurrences[RPR_RTL_SLOT as usize] - 1,
+                            );
+                        } else {
+                            let occurrence = occurrences[RPR_RTL_SLOT as usize];
+                            occurrences[RPR_RTL_SLOT as usize] += 1;
+                            record_rpr_raw_at(&mut rpr, raw, RPR_RTL_SLOT, occurrence);
+                        }
+                    } else if is_word_element(e.name().as_ref(), b"lang", &prefixes) {
+                        let captured = capture_element(reader, e)?;
+                        let raw =
+                            crate::text::raw_with_external_bindings(&captured, owner_bindings)?;
+                        if language_element_is_explicitly_empty(&captured)? {
+                            record_rpr_modeled(
+                                &mut rpr,
+                                &mut pending_raw,
+                                &mut occurrences,
+                                RPR_LANG_SLOT,
+                            );
+                            parse_language_attributes(&mut rpr, e, &prefixes)?;
+                        } else {
+                            record_rpr_raw_at(
+                                &mut rpr,
+                                raw,
+                                RPR_LANG_SLOT,
+                                occurrences[RPR_LANG_SLOT as usize],
+                            );
+                        }
+                    } else if is_word_element(e.name().as_ref(), b"ins", &prefixes)
                         || is_word_element(e.name().as_ref(), b"del", &prefixes)
                     {
                         let raw = crate::text::raw_with_external_bindings(
@@ -1163,6 +1492,12 @@ impl CT_RPr {
             RPR_END_SLOT
         };
         flush_rpr_raw(&mut rpr, &mut pending_raw, final_slot, 0);
+        remove_redundant_modeled_toggle_candidate(
+            &mut rpr.revision_xml,
+            &mut rpr.revision_xml_positions,
+            RPR_RTL_SLOT,
+            rtl_carrier_required,
+        );
 
         Ok(rpr)
     }
@@ -1326,6 +1661,31 @@ impl CT_RPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(rtl) = self.rtl {
+            write_toggle(writer, "w:rtl", rtl)?;
+        }
+
+        if self.language.is_some()
+            || self.language_east_asia.is_some()
+            || self.language_bidi.is_some()
+            || !self.language_extra_attributes.is_empty()
+        {
+            let mut e = BytesStart::new("w:lang");
+            if let Some(language) = &self.language {
+                e.push_attribute(("w:val", language.as_str()));
+            }
+            if let Some(language) = &self.language_east_asia {
+                e.push_attribute(("w:eastAsia", language.as_str()));
+            }
+            if let Some(language) = &self.language_bidi {
+                e.push_attribute(("w:bidi", language.as_str()));
+            }
+            for (name, value) in &self.language_extra_attributes {
+                e.push_attribute((name.as_str(), value.as_str()));
+            }
+            writer.write_event(Event::Empty(e))?;
+        }
+
         for revision in &self.revision_markers {
             revision.write_xml_with_word_override(writer, foreign_word_namespace)?;
         }
@@ -1368,6 +1728,11 @@ impl CT_RPr {
             && self.position.is_none()
             && self.shading.is_none()
             && self.vanish.is_none()
+            && self.rtl.is_none()
+            && self.language.is_none()
+            && self.language_east_asia.is_none()
+            && self.language_bidi.is_none()
+            && self.language_extra_attributes.is_empty()
             && self.revision_markers.is_empty()
             && self.change.is_none()
             && self.revision_xml.is_empty()
@@ -1457,7 +1822,314 @@ impl CT_RPr {
         if other.vanish.is_some() {
             self.vanish = other.vanish;
         }
+        if other.rtl.is_some() {
+            self.rtl = other.rtl;
+        }
+        if other.language.is_some() {
+            self.language = other.language.clone();
+        }
+        if other.language_east_asia.is_some() {
+            self.language_east_asia = other.language_east_asia.clone();
+        }
+        if other.language_bidi.is_some() {
+            self.language_bidi = other.language_bidi.clone();
+        }
+        if !other.language_extra_attributes.is_empty() {
+            self.language_extra_attributes = other.language_extra_attributes.clone();
+        }
     }
+}
+
+fn parse_language_attributes(
+    rpr: &mut CT_RPr,
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<()> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = attribute.key.as_ref();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .into_owned();
+        if is_word_attribute(key, b"val", prefixes) {
+            rpr.language = Some(value);
+        } else if is_word_attribute(key, b"eastAsia", prefixes) {
+            rpr.language_east_asia = Some(value);
+        } else if is_word_attribute(key, b"bidi", prefixes) {
+            rpr.language_bidi = Some(value);
+        } else {
+            rpr.language_extra_attributes
+                .push((std::str::from_utf8(key)?.to_owned(), value));
+        }
+    }
+    Ok(())
+}
+
+fn language_element_is_explicitly_empty(xml: &[u8]) -> Result<bool> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    if !matches!(reader.read_event_into(&mut buffer)?, Event::Start(_)) {
+        return Ok(false);
+    }
+    buffer.clear();
+    Ok(matches!(
+        reader.read_event_into(&mut buffer)?,
+        Event::End(_)
+    ))
+}
+
+fn toggle_element_is_explicitly_empty(xml: &[u8]) -> Result<bool> {
+    language_element_is_explicitly_empty(xml)
+}
+
+fn toggle_has_unsupported_attributes(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+) -> Result<bool> {
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if !is_word_attribute(attribute.key.as_ref(), b"val", word_prefixes) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn append_modeled_toggle_attributes(
+    element: &mut BytesStart<'_>,
+    raw_xml: &[Vec<u8>],
+    positions: &[(u8, usize)],
+    slot: u8,
+    _occurrence: usize,
+) -> Result<()> {
+    for (raw, position) in raw_xml.iter().zip(positions) {
+        if position.0 != slot || !raw_is_modeled_attribute_carrier(*position) {
+            continue;
+        }
+        let mut reader = Reader::from_reader(raw.as_slice());
+        let mut buffer = Vec::new();
+        let source = match reader.read_event_into(&mut buffer)? {
+            Event::Start(source) | Event::Empty(source) => source.into_owned(),
+            _ => continue,
+        };
+        let prefixes = word_prefixes_at(&source, &["w".to_owned()])?;
+        let mut preserved = Vec::new();
+        for attribute in source.attributes() {
+            let attribute = attribute?;
+            if is_word_attribute(attribute.key.as_ref(), b"val", &prefixes) {
+                continue;
+            }
+            let name = std::str::from_utf8(attribute.key.as_ref())?.to_owned();
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, source.decoder())?
+                .into_owned();
+            preserved.push((name, value));
+        }
+        for (name, value) in &preserved {
+            element.push_attribute((name.as_str(), value.as_str()));
+        }
+    }
+    Ok(())
+}
+
+fn write_ppr_with_positioned_raw<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    generated: &[u8],
+    ppr: &CT_PPr,
+) -> Result<()> {
+    let mut raw_order = (0..ppr.revision_xml.len())
+        .filter(|index| {
+            replay_modeled_toggle_raw(
+                ppr.revision_xml_positions[*index],
+                ppr.revision_xml_positions[*index].0 != PPR_BIDI_SLOT || ppr.bidi.is_some(),
+            )
+        })
+        .collect::<Vec<_>>();
+    raw_order.sort_by_key(|index| {
+        let (slot, occurrence) = effective_ppr_raw_position(ppr, *index);
+        (slot, occurrence, *index)
+    });
+    let mut raw_index = 0usize;
+    let mut occurrences = [0usize; PPR_END_SLOT as usize + 1];
+    let mut reader = Reader::from_reader(generated);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut inside = false;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if !inside => {
+                inside = true;
+                writer.write_event(Event::Start(element.into_owned()))?;
+            }
+            Event::Start(element) => {
+                let slot = ppr_slot_for_name(element.local_name().as_ref());
+                write_ppr_raw_before(
+                    writer,
+                    ppr,
+                    &raw_order,
+                    &mut raw_index,
+                    slot,
+                    occurrences[slot as usize],
+                )?;
+                let raw = capture_element(&mut reader, &element)?;
+                writer.get_mut().write_all(&raw)?;
+                occurrences[slot as usize] += 1;
+            }
+            Event::Empty(mut element) => {
+                let slot = ppr_slot_for_name(element.local_name().as_ref());
+                write_ppr_raw_before(
+                    writer,
+                    ppr,
+                    &raw_order,
+                    &mut raw_index,
+                    slot,
+                    occurrences[slot as usize],
+                )?;
+                append_modeled_toggle_attributes(
+                    &mut element,
+                    &ppr.revision_xml,
+                    &ppr.revision_xml_positions,
+                    slot,
+                    occurrences[slot as usize],
+                )?;
+                writer.write_event(Event::Empty(element.into_owned()))?;
+                occurrences[slot as usize] += 1;
+            }
+            Event::End(element) if inside => {
+                write_ppr_raw_before(writer, ppr, &raw_order, &mut raw_index, PPR_END_SLOT, 0)?;
+                while let Some(index) = raw_order.get(raw_index).copied() {
+                    writer.get_mut().write_all(&ppr.revision_xml[index])?;
+                    raw_index += 1;
+                }
+                writer.write_event(Event::End(element.into_owned()))?;
+                return Ok(());
+            }
+            Event::Eof => return Ok(()),
+            event => writer.write_event(event.into_owned())?,
+        }
+        buffer.clear();
+    }
+}
+
+fn write_ppr_raw_before<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    ppr: &CT_PPr,
+    raw_order: &[usize],
+    raw_index: &mut usize,
+    slot: u8,
+    occurrence: usize,
+) -> Result<()> {
+    while let Some(index) = raw_order.get(*raw_index).copied() {
+        let position = effective_ppr_raw_position(ppr, index);
+        if position.0 > slot || (position.0 == slot && position.1 > occurrence) {
+            break;
+        }
+        writer.get_mut().write_all(&ppr.revision_xml[index])?;
+        *raw_index += 1;
+    }
+    Ok(())
+}
+
+fn effective_ppr_raw_position(ppr: &CT_PPr, index: usize) -> (u8, usize) {
+    let mut position = ppr.revision_xml_positions[index];
+    position.1 = raw_occurrence(position);
+    if position.0 == PPR_BIDI_SLOT
+        && let Some((carrier_index, carrier_occurrence)) = ppr
+            .revision_xml_positions
+            .iter()
+            .enumerate()
+            .find(|candidate| {
+                candidate.1.0 == PPR_BIDI_SLOT && raw_is_modeled_attribute_carrier(*candidate.1)
+            })
+            .map(|(carrier_index, candidate)| (carrier_index, raw_occurrence(*candidate)))
+    {
+        position.1 = usize::from(
+            position.1 > carrier_occurrence
+                || (position.1 == carrier_occurrence && index > carrier_index),
+        );
+    }
+    if ppr.change.is_some() && position.0 >= PPR_CHANGE_SLOT {
+        (PPR_CHANGE_SLOT, 0)
+    } else {
+        position
+    }
+}
+
+fn ppr_slot_for_name(local: &[u8]) -> u8 {
+    match local {
+        b"pStyle" => PPR_STYLE_SLOT,
+        b"keepNext" => PPR_KEEP_NEXT_SLOT,
+        b"keepLines" => PPR_KEEP_LINES_SLOT,
+        b"pageBreakBefore" => PPR_PAGE_BREAK_SLOT,
+        b"framePr" => 4,
+        b"widowControl" => PPR_WIDOW_SLOT,
+        b"numPr" => PPR_NUM_SLOT,
+        b"suppressLineNumbers" => 7,
+        b"pBdr" => PPR_BORDER_SLOT,
+        b"shd" => PPR_SHADING_SLOT,
+        b"tabs" => PPR_TABS_SLOT,
+        b"suppressAutoHyphens" => PPR_SUPPRESS_HYPHENS_SLOT,
+        b"kinsoku" => 12,
+        b"wordWrap" => 13,
+        b"overflowPunct" => 14,
+        b"topLinePunct" => 15,
+        b"autoSpaceDE" => 16,
+        b"autoSpaceDN" => 17,
+        b"bidi" => PPR_BIDI_SLOT,
+        b"adjustRightInd" => 19,
+        b"snapToGrid" => 20,
+        b"spacing" => PPR_SPACING_SLOT,
+        b"ind" => PPR_INDENT_SLOT,
+        b"contextualSpacing" => 23,
+        b"mirrorIndents" => 24,
+        b"suppressOverlap" => 25,
+        b"jc" => PPR_JUSTIFICATION_SLOT,
+        b"textDirection" => 27,
+        b"textAlignment" => 28,
+        b"textboxTightWrap" => 29,
+        b"outlineLvl" => PPR_OUTLINE_SLOT,
+        b"divId" => 31,
+        b"cnfStyle" => 32,
+        b"rPr" => PPR_RUN_PROPERTIES_SLOT,
+        b"sectPr" => PPR_SECTION_SLOT,
+        b"pPrChange" => PPR_CHANGE_SLOT,
+        _ => PPR_END_SLOT,
+    }
+}
+
+fn ppr_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
+    let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+    let slot = ppr_slot_for_name(local);
+    (slot != PPR_END_SLOT && is_word_element(name, local, word_prefixes)).then_some(slot)
+}
+
+fn ppr_modeled_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
+    let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
+    if !is_word_element(name, local, word_prefixes) {
+        return None;
+    }
+    matches!(
+        local,
+        b"pStyle"
+            | b"keepNext"
+            | b"keepLines"
+            | b"pageBreakBefore"
+            | b"widowControl"
+            | b"numPr"
+            | b"pBdr"
+            | b"shd"
+            | b"tabs"
+            | b"suppressAutoHyphens"
+            | b"bidi"
+            | b"spacing"
+            | b"ind"
+            | b"jc"
+            | b"outlineLvl"
+            | b"rPr"
+            | b"sectPr"
+            | b"pPrChange"
+    )
+    .then(|| ppr_slot_for_name(local))
 }
 
 fn write_rpr_with_positioned_raw<W: std::io::Write>(
@@ -1466,7 +2138,14 @@ fn write_rpr_with_positioned_raw<W: std::io::Write>(
     rpr: &CT_RPr,
     foreign_word_namespace: Option<&str>,
 ) -> Result<()> {
-    let mut raw_order = (0..rpr.revision_xml.len()).collect::<Vec<_>>();
+    let mut raw_order = (0..rpr.revision_xml.len())
+        .filter(|index| {
+            replay_modeled_toggle_raw(
+                rpr.revision_xml_positions[*index],
+                rpr.revision_xml_positions[*index].0 != RPR_RTL_SLOT || rpr.rtl.is_some(),
+            )
+        })
+        .collect::<Vec<_>>();
     raw_order.sort_by_key(|index| {
         let (slot, occurrence) = effective_rpr_raw_position(rpr, *index);
         (slot, occurrence, *index)
@@ -1498,7 +2177,7 @@ fn write_rpr_with_positioned_raw<W: std::io::Write>(
                 writer.get_mut().write_all(&raw)?;
                 occurrences[slot as usize] += 1;
             }
-            Event::Empty(element) => {
+            Event::Empty(mut element) => {
                 let slot = rpr_slot_for_name(element.local_name().as_ref());
                 write_rpr_raw_before(
                     writer,
@@ -1508,6 +2187,13 @@ fn write_rpr_with_positioned_raw<W: std::io::Write>(
                     slot,
                     occurrences[slot as usize],
                     foreign_word_namespace,
+                )?;
+                append_modeled_toggle_attributes(
+                    &mut element,
+                    &rpr.revision_xml,
+                    &rpr.revision_xml_positions,
+                    slot,
+                    occurrences[slot as usize],
                 )?;
                 writer.write_event(Event::Empty(element.into_owned()))?;
                 occurrences[slot as usize] += 1;
@@ -1565,7 +2251,23 @@ fn write_rpr_raw_before<W: std::io::Write>(
 }
 
 fn effective_rpr_raw_position(rpr: &CT_RPr, index: usize) -> (u8, usize) {
-    let position = rpr.revision_xml_positions[index];
+    let mut position = rpr.revision_xml_positions[index];
+    position.1 = raw_occurrence(position);
+    if position.0 == RPR_RTL_SLOT
+        && let Some((carrier_index, carrier_occurrence)) = rpr
+            .revision_xml_positions
+            .iter()
+            .enumerate()
+            .find(|candidate| {
+                candidate.1.0 == RPR_RTL_SLOT && raw_is_modeled_attribute_carrier(*candidate.1)
+            })
+            .map(|(carrier_index, candidate)| (carrier_index, raw_occurrence(*candidate)))
+    {
+        position.1 = usize::from(
+            position.1 > carrier_occurrence
+                || (position.1 == carrier_occurrence && index > carrier_index),
+        );
+    }
     if rpr.change.is_some() && position.0 >= RPR_CHANGE_SLOT {
         (RPR_CHANGE_SLOT, 0)
     } else {
@@ -1610,7 +2312,7 @@ fn rpr_slot_for_name(local: &[u8]) -> u8 {
         b"rtl" => 32,
         b"cs" => 33,
         b"em" => 34,
-        b"lang" => 35,
+        b"lang" => RPR_LANG_SLOT,
         b"eastAsianLayout" => 36,
         b"specVanish" => 37,
         b"oMath" => 38,
@@ -1904,5 +2606,424 @@ mod tests {
         assert_eq!(base.bold, Some(true)); // kept
         assert_eq!(base.sz, Some(HalfPoint(28))); // overridden
         assert_eq!(base.italic, Some(true)); // added
+    }
+
+    #[test]
+    fn run_language_parses_aliases_and_rejects_foreign_same_local_attributes() {
+        let rpr = parse_rpr(&format!(
+            r#"<q:lang xmlns:q="{}" xmlns:x="urn:foreign" q:val="en-US" q:eastAsia="zh-CN" q:bidi="ar-SA" x:val="ignored" x:kept="raw"/>"#,
+            W_NS
+        ));
+        assert_eq!(rpr.language.as_deref(), Some("en-US"));
+        assert_eq!(rpr.language_east_asia.as_deref(), Some("zh-CN"));
+        assert_eq!(rpr.language_bidi.as_deref(), Some("ar-SA"));
+
+        let mut output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"<w:lang w:val="en-US" w:eastAsia="zh-CN" w:bidi="ar-SA""#));
+        assert!(output.contains(r#"x:kept="raw""#));
+        assert!(!output.contains(r#"w:val="ignored""#));
+
+        let explicit = parse_rpr(&format!(
+            r#"<q:lang xmlns:q="{}" q:val="en-GB"></q:lang>"#,
+            W_NS
+        ));
+        assert_eq!(explicit.language.as_deref(), Some("en-GB"));
+    }
+
+    #[test]
+    fn run_language_round_trips_at_its_schema_slot_and_cascades() {
+        let mut base = CT_RPr {
+            language: Some("fr-FR".to_owned()),
+            language_east_asia: Some("ja-JP".to_owned()),
+            ..Default::default()
+        };
+        base.merge_from(&CT_RPr {
+            language: Some("de-DE".to_owned()),
+            language_bidi: Some("ar-SA".to_owned()),
+            ..Default::default()
+        });
+        assert_eq!(base.language.as_deref(), Some("de-DE"));
+        assert_eq!(base.language_east_asia.as_deref(), Some("ja-JP"));
+        assert_eq!(base.language_bidi.as_deref(), Some("ar-SA"));
+
+        let mut output = Vec::new();
+        base.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.find("w:vertAlign").is_none());
+        assert!(output.find("w:lang").unwrap() < output.rfind("</w:rPr>").unwrap());
+    }
+
+    #[test]
+    fn malformed_language_after_the_modeled_occurrence_keeps_its_relative_position() {
+        let rpr = parse_rpr(r#"<w:lang w:val="en-US"/><w:lang><w:producerExtension/></w:lang>"#);
+
+        let mut output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output_text = std::str::from_utf8(&output).unwrap();
+        assert!(
+            output_text.find(r#"w:val="en-US""#).unwrap()
+                < output_text.find("w:producerExtension").unwrap()
+        );
+
+        let mut reader = Reader::from_reader(output.as_slice());
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer).unwrap() {
+                Event::Start(element) if element.local_name().as_ref() == b"rPr" => break,
+                Event::Eof => panic!("serialized run properties have no root"),
+                _ => {}
+            }
+            buffer.clear();
+        }
+        let reparsed = CT_RPr::from_xml(&mut reader).unwrap();
+        let mut repeated = Vec::new();
+        reparsed.to_xml(&mut Writer::new(&mut repeated)).unwrap();
+        assert_eq!(repeated, output);
+    }
+
+    #[test]
+    fn word_bidi_and_run_rtl_parse_write_parse_without_raw_loss() {
+        let ppr = parse_ppr(
+            r#"<x:before xmlns:x="urn:producer"/><w:bidi/><x:after xmlns:x="urn:producer"/>"#,
+        );
+        assert_eq!(ppr.bidi, Some(true));
+
+        let mut paragraph_output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut paragraph_output)).unwrap();
+        let paragraph_output = String::from_utf8(paragraph_output).unwrap();
+        assert!(
+            paragraph_output.find("x:before").unwrap() < paragraph_output.find("w:bidi").unwrap()
+        );
+        assert!(
+            paragraph_output.find("w:bidi").unwrap() < paragraph_output.find("x:after").unwrap()
+        );
+
+        let rpr = parse_rpr(
+            r#"<x:before xmlns:x="urn:producer"/><w:rtl/><x:rtl xmlns:x="urn:foreign"/><x:after xmlns:x="urn:producer"/>"#,
+        );
+        assert_eq!(rpr.rtl, Some(true));
+        let mut run_output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut run_output)).unwrap();
+        let run_output = String::from_utf8(run_output).unwrap();
+        assert!(run_output.contains("<w:rtl/>"));
+        assert!(run_output.contains("<x:rtl xmlns:x=\"urn:foreign\"/>"));
+
+        let reparsed_ppr = parse_ppr(
+            paragraph_output
+                .strip_prefix("<w:pPr>")
+                .unwrap()
+                .strip_suffix("</w:pPr>")
+                .unwrap(),
+        );
+        let reparsed_rpr = parse_rpr(
+            run_output
+                .strip_prefix("<w:rPr>")
+                .unwrap()
+                .strip_suffix("</w:rPr>")
+                .unwrap(),
+        );
+        assert_eq!(reparsed_ppr.bidi, Some(true));
+        assert_eq!(reparsed_rpr.rtl, Some(true));
+    }
+
+    #[test]
+    fn word_direction_toggles_preserve_unsupported_attributes() {
+        let ppr = parse_ppr(r#"<w:bidi xmlns:x="urn:producer" w:val="0" x:flag="paragraph"/>"#);
+        let rpr = parse_rpr(r#"<w:rtl xmlns:x="urn:producer" w:val="1" x:flag="run"></w:rtl>"#);
+        assert_eq!(ppr.bidi, Some(false));
+        assert_eq!(rpr.rtl, Some(true));
+
+        let mut paragraph_output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut paragraph_output)).unwrap();
+        let paragraph_output = String::from_utf8(paragraph_output).unwrap();
+        assert!(paragraph_output.contains(r#"xmlns:x="urn:producer""#));
+        assert!(paragraph_output.contains(r#"x:flag="paragraph""#));
+
+        let mut run_output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut run_output)).unwrap();
+        let run_output = String::from_utf8(run_output).unwrap();
+        assert!(run_output.contains(r#"xmlns:x="urn:producer""#));
+        assert!(run_output.contains(r#"x:flag="run""#));
+    }
+
+    #[test]
+    fn malformed_direction_duplicates_keep_their_relative_occurrence() {
+        let ppr =
+            parse_ppr(r#"<w:bidi/><w:bidi><w:producerExtension w:val="paragraph"/></w:bidi>"#);
+        let rpr = parse_rpr(r#"<w:rtl/><w:rtl><w:producerExtension w:val="run"/></w:rtl>"#);
+
+        let mut paragraph_output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut paragraph_output)).unwrap();
+        let paragraph_output = String::from_utf8(paragraph_output).unwrap();
+        assert!(
+            paragraph_output.find("<w:bidi/>").unwrap()
+                < paragraph_output.find("producerExtension").unwrap()
+        );
+
+        let mut run_output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut run_output)).unwrap();
+        let run_output = String::from_utf8(run_output).unwrap();
+        assert!(
+            run_output.find("<w:rtl/>").unwrap() < run_output.find("producerExtension").unwrap()
+        );
+
+        let reparsed_ppr = parse_ppr(
+            paragraph_output
+                .strip_prefix("<w:pPr>")
+                .unwrap()
+                .strip_suffix("</w:pPr>")
+                .unwrap(),
+        );
+        let reparsed_rpr = parse_rpr(
+            run_output
+                .strip_prefix("<w:rPr>")
+                .unwrap()
+                .strip_suffix("</w:rPr>")
+                .unwrap(),
+        );
+        let mut repeated_ppr = Vec::new();
+        reparsed_ppr
+            .to_xml(&mut Writer::new(&mut repeated_ppr))
+            .unwrap();
+        let mut repeated_rpr = Vec::new();
+        reparsed_rpr
+            .to_xml(&mut Writer::new(&mut repeated_rpr))
+            .unwrap();
+        assert_eq!(repeated_ppr, paragraph_output.as_bytes());
+        assert_eq!(repeated_rpr, run_output.as_bytes());
+    }
+
+    #[test]
+    fn interleaved_direction_duplicates_keep_their_relative_occurrence() {
+        let ppr = parse_ppr(
+            r#"<w:bidi xmlns:x="urn:first" x:first="paragraph"/><w:bidi><w:producerExtension w:val="paragraph"/></w:bidi><w:bidi xmlns:y="urn:last" y:last="paragraph"/>"#,
+        );
+        let rpr = parse_rpr(
+            r#"<w:rtl xmlns:x="urn:first" x:first="run"/><w:rtl><w:producerExtension w:val="run"/></w:rtl><w:rtl xmlns:y="urn:last" y:last="run"/>"#,
+        );
+
+        let mut paragraph_output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut paragraph_output)).unwrap();
+        let paragraph_output = String::from_utf8(paragraph_output).unwrap();
+        assert!(
+            paragraph_output.find("x:first").unwrap()
+                < paragraph_output.find("producerExtension").unwrap(),
+            "{paragraph_output}"
+        );
+        assert!(
+            paragraph_output.find("producerExtension").unwrap()
+                < paragraph_output.find("y:last").unwrap(),
+            "{paragraph_output}"
+        );
+
+        let mut run_output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut run_output)).unwrap();
+        let run_output = String::from_utf8(run_output).unwrap();
+        assert!(
+            run_output.find("x:first").unwrap() < run_output.find("producerExtension").unwrap(),
+            "{run_output}"
+        );
+        assert!(
+            run_output.find("producerExtension").unwrap() < run_output.find("y:last").unwrap(),
+            "{run_output}"
+        );
+
+        let reparsed_ppr = parse_ppr(
+            paragraph_output
+                .strip_prefix("<w:pPr>")
+                .unwrap()
+                .strip_suffix("</w:pPr>")
+                .unwrap(),
+        );
+        let reparsed_rpr = parse_rpr(
+            run_output
+                .strip_prefix("<w:rPr>")
+                .unwrap()
+                .strip_suffix("</w:rPr>")
+                .unwrap(),
+        );
+        let mut repeated_ppr = Vec::new();
+        reparsed_ppr
+            .to_xml(&mut Writer::new(&mut repeated_ppr))
+            .unwrap();
+        let mut repeated_rpr = Vec::new();
+        reparsed_rpr
+            .to_xml(&mut Writer::new(&mut repeated_rpr))
+            .unwrap();
+        assert_eq!(repeated_ppr, paragraph_output.as_bytes());
+        assert_eq!(repeated_rpr, run_output.as_bytes());
+    }
+
+    #[test]
+    fn canonical_final_direction_toggle_stays_after_an_interleaved_malformed_occurrence() {
+        let ppr = parse_ppr(
+            r#"<w:bidi xmlns:x="urn:first" x:first="paragraph"/><w:bidi><w:producerExtension w:val="paragraph"/></w:bidi><w:bidi/>"#,
+        );
+        let rpr = parse_rpr(
+            r#"<w:rtl xmlns:x="urn:first" x:first="run"/><w:rtl><w:producerExtension w:val="run"/></w:rtl><w:rtl/>"#,
+        );
+
+        let mut paragraph_output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut paragraph_output)).unwrap();
+        let paragraph_output = String::from_utf8(paragraph_output).unwrap();
+        assert_eq!(paragraph_output.matches("<w:bidi").count(), 3);
+        assert!(
+            paragraph_output.find("x:first").unwrap()
+                < paragraph_output.find("producerExtension").unwrap(),
+            "{paragraph_output}"
+        );
+        assert!(
+            paragraph_output.find("producerExtension").unwrap()
+                < paragraph_output.rfind("<w:bidi").unwrap(),
+            "{paragraph_output}"
+        );
+
+        let mut run_output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut run_output)).unwrap();
+        let run_output = String::from_utf8(run_output).unwrap();
+        assert_eq!(run_output.matches("<w:rtl").count(), 3);
+        assert!(
+            run_output.find("x:first").unwrap() < run_output.find("producerExtension").unwrap(),
+            "{run_output}"
+        );
+        assert!(
+            run_output.find("producerExtension").unwrap() < run_output.rfind("<w:rtl").unwrap(),
+            "{run_output}"
+        );
+
+        let reparsed_ppr = parse_ppr(
+            paragraph_output
+                .strip_prefix("<w:pPr>")
+                .unwrap()
+                .strip_suffix("</w:pPr>")
+                .unwrap(),
+        );
+        let reparsed_rpr = parse_rpr(
+            run_output
+                .strip_prefix("<w:rPr>")
+                .unwrap()
+                .strip_suffix("</w:rPr>")
+                .unwrap(),
+        );
+        let mut repeated_ppr = Vec::new();
+        reparsed_ppr
+            .to_xml(&mut Writer::new(&mut repeated_ppr))
+            .unwrap();
+        let mut repeated_rpr = Vec::new();
+        reparsed_rpr
+            .to_xml(&mut Writer::new(&mut repeated_rpr))
+            .unwrap();
+        assert_eq!(repeated_ppr, paragraph_output.as_bytes());
+        assert_eq!(repeated_rpr, run_output.as_bytes());
+    }
+
+    #[test]
+    fn duplicate_valid_direction_toggles_keep_each_occurrences_attributes_and_order() {
+        let ppr = parse_ppr(
+            r#"<w:bidi xmlns:x="urn:first" w:val="0" x:first="paragraph"/><w:bidi xmlns:y="urn:second" w:val="1" y:second="paragraph"/>"#,
+        );
+        let rpr = parse_rpr(
+            r#"<w:rtl xmlns:x="urn:first" w:val="0" x:first="run"/><w:rtl xmlns:y="urn:second" w:val="1" y:second="run"/>"#,
+        );
+
+        let mut paragraph_output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut paragraph_output)).unwrap();
+        let paragraph_output = String::from_utf8(paragraph_output).unwrap();
+        assert_eq!(paragraph_output.matches("<w:bidi").count(), 2);
+        assert!(
+            paragraph_output.find("x:first").unwrap() < paragraph_output.find("y:second").unwrap(),
+            "{paragraph_output}"
+        );
+        assert!(paragraph_output.contains(r#"x:first="paragraph""#));
+        assert!(paragraph_output.contains(r#"y:second="paragraph""#));
+
+        let mut run_output = Vec::new();
+        rpr.to_xml(&mut Writer::new(&mut run_output)).unwrap();
+        let run_output = String::from_utf8(run_output).unwrap();
+        assert_eq!(run_output.matches("<w:rtl").count(), 2);
+        assert!(
+            run_output.find("x:first").unwrap() < run_output.find("y:second").unwrap(),
+            "{run_output}"
+        );
+        assert!(run_output.contains(r#"x:first="run""#));
+        assert!(run_output.contains(r#"y:second="run""#));
+
+        let reparsed_ppr = parse_ppr(
+            paragraph_output
+                .strip_prefix("<w:pPr>")
+                .unwrap()
+                .strip_suffix("</w:pPr>")
+                .unwrap(),
+        );
+        let reparsed_rpr = parse_rpr(
+            run_output
+                .strip_prefix("<w:rPr>")
+                .unwrap()
+                .strip_suffix("</w:rPr>")
+                .unwrap(),
+        );
+        assert_eq!(reparsed_ppr.bidi, Some(true));
+        assert_eq!(reparsed_rpr.rtl, Some(true));
+
+        let mut repeated_ppr = Vec::new();
+        reparsed_ppr
+            .to_xml(&mut Writer::new(&mut repeated_ppr))
+            .unwrap();
+        let mut repeated_rpr = Vec::new();
+        reparsed_rpr
+            .to_xml(&mut Writer::new(&mut repeated_rpr))
+            .unwrap();
+        assert_eq!(repeated_ppr, paragraph_output.as_bytes());
+        assert_eq!(repeated_rpr, run_output.as_bytes());
+
+        let mut cleared_ppr = reparsed_ppr;
+        cleared_ppr.bidi = None;
+        cleared_ppr.jc = Some(ST_Jc::Left);
+        let mut cleared_ppr_output = Vec::new();
+        cleared_ppr
+            .to_xml(&mut Writer::new(&mut cleared_ppr_output))
+            .unwrap();
+        let cleared_ppr_output = String::from_utf8(cleared_ppr_output).unwrap();
+        assert!(
+            !cleared_ppr_output.contains("<w:bidi"),
+            "{cleared_ppr_output}"
+        );
+        assert_eq!(
+            parse_ppr(
+                cleared_ppr_output
+                    .strip_prefix("<w:pPr>")
+                    .unwrap()
+                    .strip_suffix("</w:pPr>")
+                    .unwrap(),
+            )
+            .bidi,
+            None
+        );
+
+        let mut cleared_rpr = reparsed_rpr;
+        cleared_rpr.rtl = None;
+        cleared_rpr.bold = Some(true);
+        let mut cleared_rpr_output = Vec::new();
+        cleared_rpr
+            .to_xml(&mut Writer::new(&mut cleared_rpr_output))
+            .unwrap();
+        let cleared_rpr_output = String::from_utf8(cleared_rpr_output).unwrap();
+        assert!(
+            !cleared_rpr_output.contains("<w:rtl"),
+            "{cleared_rpr_output}"
+        );
+        assert_eq!(
+            parse_rpr(
+                cleared_rpr_output
+                    .strip_prefix("<w:rPr>")
+                    .unwrap()
+                    .strip_suffix("</w:rPr>")
+                    .unwrap(),
+            )
+            .rtl,
+            None
+        );
     }
 }

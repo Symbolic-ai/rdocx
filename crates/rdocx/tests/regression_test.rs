@@ -17,6 +17,7 @@ use rdocx::{
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
+use rdocx_oxml::text::CT_R;
 
 struct MeasuredAllocator;
 
@@ -208,6 +209,171 @@ fn a_thousand_page_document_paginates_and_renders_within_the_declared_limits() {
     assert!(
         pdf_rate >= MIN_PDF_PAGES_PER_SECOND,
         "PDF rate {pdf_rate:.1} pages/s is below {MIN_PDF_PAGES_PER_SECOND:.1} pages/s",
+    );
+}
+
+#[test]
+fn editing_one_paragraph_of_a_thousand_page_document_rebuilds_at_most_two_pages() {
+    fn thousand_page_document() -> Document {
+        let mut document = Document::new();
+        for page in 0..1_000 {
+            document
+                .add_paragraph(&format!("Incremental page {}", page + 1))
+                .page_break_before(page > 0);
+        }
+        document
+    }
+
+    let mut warm_document = thousand_page_document();
+    let initial = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("initial deterministic thousand-page layout");
+    assert_eq!(initial.layout.pages.len(), 1_000);
+
+    warm_document
+        .paragraph_mut(499)
+        .expect("paragraph 500")
+        .run_mut(0)
+        .expect("paragraph text run")
+        .set_text("Incremental page 500 changed");
+    let warm = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("warm deterministic thousand-page layout");
+
+    let mut fresh_document = thousand_page_document();
+    fresh_document
+        .paragraph_mut(499)
+        .expect("paragraph 500")
+        .run_mut(0)
+        .expect("paragraph text run")
+        .set_text("Incremental page 500 changed");
+    let fresh = fresh_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("fresh deterministic thousand-page layout");
+
+    assert_eq!(warm.layout.pages.len(), 1_000);
+    assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+    let retained_pages = warm
+        .layout
+        .pages
+        .iter()
+        .zip(&initial.layout.pages)
+        .filter(|(current, retained)| Arc::ptr_eq(current, retained))
+        .count();
+    assert!(
+        retained_pages >= 998,
+        "expected at least 998 retained page frames, got {retained_pages}"
+    );
+}
+
+#[test]
+fn issue_53_related_stories_keep_the_700_paragraph_facade_workload_bounded() {
+    fn issue_53_document() -> Document {
+        let mut seed = Document::new();
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+            seed.to_bytes().expect("serialize seed document"),
+        ))
+        .expect("open seed package");
+        let (header_id, footer_id) = {
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            let header_id =
+                relationships.add(oxml_opc::relationship::rel_types::HEADER, "header1.xml");
+            let footer_id =
+                relationships.add(oxml_opc::relationship::rel_types::FOOTER, "footer1.xml");
+            relationships.add(
+                oxml_opc::relationship::rel_types::FOOTNOTES,
+                "footnotes.xml",
+            );
+            (header_id, footer_id)
+        };
+        package.set_part(
+            "/word/header1.xml",
+            br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Issue 53 header</w:t></w:r></w:p></w:hdr>"#.to_vec(),
+        );
+        package.set_part(
+            "/word/footer1.xml",
+            br#"<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p></w:ftr>"#.to_vec(),
+        );
+        package.set_part(
+            "/word/footnotes.xml",
+            br#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="1"><w:p><w:r><w:t>Issue 53 footnote</w:t></w:r></w:p></w:footnote></w:footnotes>"#.to_vec(),
+        );
+        package.content_types.add_override(
+            "/word/header1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        package.content_types.add_override(
+            "/word/footer1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+        );
+        package.content_types.add_override(
+            "/word/footnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+        );
+
+        let mut body = String::new();
+        for index in 0..700 {
+            let note = if index == 20 {
+                r#"<w:footnoteReference w:id="1"/>"#
+            } else {
+                ""
+            };
+            body.push_str(&format!(
+                "<w:p><w:r><w:t>Issue 53 paragraph {index:03}</w:t>{note}</w:r></w:p>"
+            ));
+        }
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="{header_id}"/><w:footerReference w:type="default" r:id="{footer_id}"/></w:sectPr></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package
+            .write_to(&mut bytes)
+            .expect("serialize Issue 53 package");
+        Document::from_bytes(bytes.get_ref()).expect("open Issue 53 document")
+    }
+
+    let mut warm_document = issue_53_document();
+    let initial = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("initial Issue 53 layout");
+    assert!(initial.layout.pages.len() > 2);
+    warm_document
+        .paragraph_mut(349)
+        .expect("paragraph 350")
+        .run_mut(0)
+        .expect("paragraph text run")
+        .set_text("Issue 53 paragraph 350 changed");
+    let warm = warm_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("warm Issue 53 layout");
+
+    let mut fresh_document = issue_53_document();
+    fresh_document
+        .paragraph_mut(349)
+        .expect("fresh paragraph 350")
+        .run_mut(0)
+        .expect("fresh paragraph text run")
+        .set_text("Issue 53 paragraph 350 changed");
+    let fresh = fresh_document
+        .layout_with_fonts_and_bundled_fallback(&[])
+        .expect("fresh Issue 53 layout");
+
+    assert_eq!(format!("{warm:?}"), format!("{fresh:?}"));
+    let retained_pages = warm
+        .layout
+        .pages
+        .iter()
+        .zip(&initial.layout.pages)
+        .filter(|(current, retained)| Arc::ptr_eq(current, retained))
+        .count();
+    assert!(
+        retained_pages >= warm.layout.pages.len().saturating_sub(2),
+        "expected bounded Issue 53 page work, retained {retained_pages} of {} pages",
+        warm.layout.pages.len()
     );
 }
 
@@ -1726,6 +1892,86 @@ fn caller_font_layout_options_select_the_tracked_revision_projection() {
 
 fn document_with_content_controls(document_xml: &str) -> Document {
     document_with_bound_content_controls(document_xml, None)
+}
+
+#[test]
+fn legacy_horizontal_rule_package_reopens_with_exact_raw_xml() {
+    let raw = br#"<w:pict><v:rect o:hr="true"/></w:pict>"#;
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p xmlns:v="urn:schemas-microsoft-com:vml"><w:r xmlns:o="urn:schemas-microsoft-com:office:office"><w:t>before</w:t>{}<w:t>after</w:t></w:r></w:p></w:body></w:document>"#,
+        std::str::from_utf8(raw).unwrap()
+    );
+    let mut document = document_with_content_controls(&xml);
+
+    let snapshot = |document: &Document| {
+        document
+            .paragraph(0)
+            .unwrap()
+            .run(0)
+            .unwrap()
+            .items()
+            .map(|item| match item {
+                RunItemRef::Text(text) => format!("text:{text}"),
+                RunItemRef::LegacyHorizontalRule(rule) => {
+                    format!("rule:{}", std::str::from_utf8(rule.raw_xml()).unwrap())
+                }
+                RunItemRef::UnsupportedXml(bytes) => {
+                    format!("unsupported:{}", std::str::from_utf8(bytes).unwrap())
+                }
+                _ => panic!("unexpected run item"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = [
+        "text:before".to_owned(),
+        format!("rule:{}", std::str::from_utf8(raw).unwrap()),
+        "text:after".to_owned(),
+    ];
+    assert_eq!(snapshot(&document), expected);
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(snapshot(&reopened), expected);
+}
+
+#[test]
+fn legacy_horizontal_rule_classification_participates_in_run_equality() {
+    let raw = r#"<w:pict><v:rect o:hr="true"/></w:pict>"#;
+    let parsed_run = |vml_namespace: &str| {
+        let body = body_from_xml(&format!(
+            r#"<w:p xmlns:v="{vml_namespace}" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r>{raw}</w:r></w:p>"#
+        ));
+        let BodyContent::Paragraph(paragraph) = &body.content[0] else {
+            panic!("expected paragraph");
+        };
+        paragraph.runs[0].clone()
+    };
+
+    let legacy = parsed_run("urn:schemas-microsoft-com:vml");
+    let foreign = parsed_run("urn:foreign");
+    assert!(CT_R::raw_child_is_legacy_horizontal_rule(
+        legacy.extra_xml_positions[0]
+    ));
+    assert!(!CT_R::raw_child_is_legacy_horizontal_rule(
+        foreign.extra_xml_positions[0]
+    ));
+    assert_ne!(legacy, foreign);
+}
+
+#[test]
+fn namespace_classification_metadata_exists_only_for_raw_children() {
+    let body = body_from_xml(
+        r#"<w:p xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r><w:t>ordinary</w:t></w:r><w:r><w:pict><v:rect o:hr="true"/></w:pict></w:r></w:p>"#,
+    );
+    let BodyContent::Paragraph(paragraph) = &body.content[0] else {
+        panic!("expected paragraph");
+    };
+
+    assert!(paragraph.runs[0].extra_xml.is_empty());
+    assert!(paragraph.runs[0].extra_xml_positions.is_empty());
+    assert_eq!(paragraph.runs[1].extra_xml_positions.len(), 1);
+    assert!(CT_R::raw_child_is_legacy_horizontal_rule(
+        paragraph.runs[1].extra_xml_positions[0]
+    ));
 }
 
 fn ordered_reader_fixture() -> &'static str {
@@ -6894,6 +7140,85 @@ fn fixed_break_runs_match_pdf_and_raster_backends() {
     assert!(!direct_png.is_empty());
 }
 
+#[test]
+fn complex_shaping_preserves_clusters_offsets_and_logical_source_spans_across_word_backends() {
+    let samples = [
+        ("Noto Sans Arabic", "ar-SA", "العربية مرحبا بالعالم"),
+        ("Noto Sans Devanagari", "hi-IN", "देवनागरी नमस्ते दुनिया"),
+        ("Noto Sans Thai", "th-TH", "ภาษาไทยยินดีต้อนรับ"),
+        ("Noto Sans SC", "zh-CN", "〈中〉、你好世界"),
+    ];
+    let mut document = Document::new();
+    let mut paragraph = document.add_paragraph("");
+    for (index, (family, language, text)) in samples.iter().enumerate() {
+        if index > 0 {
+            paragraph.add_run("  ");
+        }
+        paragraph.add_run(text).font(family).language(language);
+    }
+
+    let result = document
+        .layout_deterministic()
+        .expect("deterministic multilingual Word layout");
+    let mut rich_runs = Vec::new();
+    for page in &result.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let oxml_layout::PositionedElement::MultilingualText(run) = element else {
+                return;
+            };
+            assert!(run.is_valid(), "Word layout emits a complete rich run");
+            assert!(
+                run.source
+                    .is_some_and(|span| result.source_node(span.node).is_some()),
+                "rich run retains resolvable Word source provenance"
+            );
+            assert_eq!(run.glyph_ids.len(), run.x_advances.len());
+            assert_eq!(run.glyph_ids.len(), run.y_advances.len());
+            assert_eq!(run.glyph_ids.len(), run.x_offsets.len());
+            assert_eq!(run.glyph_ids.len(), run.y_offsets.len());
+            assert!(!run.clusters.is_empty());
+            rich_runs.push(run.clone());
+        });
+    }
+    assert!(rich_runs.len() >= samples.len(), "one rich span per script");
+    for (_, language, text) in samples {
+        let mut language_runs = rich_runs
+            .iter()
+            .filter(|run| run.language.as_deref() == Some(language))
+            .collect::<Vec<_>>();
+        language_runs.sort_by_key(|run| run.logical_index);
+        assert_eq!(
+            language_runs
+                .iter()
+                .map(|run| run.logical_text.as_str())
+                .collect::<String>(),
+            text,
+            "rich output retains {language} logical text"
+        );
+    }
+
+    let pdf = document
+        .to_pdf_deterministic()
+        .expect("multilingual PDF renders");
+    assert!(pdf.starts_with(b"%PDF-"));
+    let png = document
+        .render_page_to_png_deterministic(0, 96.0)
+        .expect("multilingual raster renders")
+        .expect("multilingual first page exists");
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let svg = document
+        .render_page_to_svg_deterministic(0)
+        .expect("multilingual SVG renders")
+        .expect("multilingual first SVG page exists");
+    for run in &rich_runs {
+        assert!(
+            svg.svg.contains(&run.logical_text),
+            "SVG preserves searchable logical text for {}",
+            run.logical_text
+        );
+    }
+}
+
 fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
     use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
     use rdocx_oxml::header_footer::CT_HdrFtr;
@@ -6913,6 +7238,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
     };
 
     rdocx_layout::LayoutInput {
+        automatic_hyphenation: false,
         document,
         styles: rdocx_oxml::styles::CT_Styles::new_default(),
         numbering: None,
@@ -7517,6 +7843,144 @@ fn document_facing_aliases_share_one_caller_font() {
     assert!(result.layout.diagnostics.is_empty());
 }
 
+#[test]
+fn five_large_caller_fonts_and_forty_aliases_keep_warm_and_fresh_layouts_equal() {
+    const TOTAL_FONT_BYTES: usize = 22 * 1024 * 1024;
+    let bundled = oxml_layout::bundled_fonts::bundled_font_data();
+    let generated_fonts = [0, 4, 8, 12, 16]
+        .into_iter()
+        .enumerate()
+        .map(|(index, bundled_index)| {
+            let (family, source) = bundled[bundled_index];
+            let mut data = source.to_vec();
+            let target = TOTAL_FONT_BYTES / 5 + usize::from(index < TOTAL_FONT_BYTES % 5);
+            data.resize(
+                target,
+                u8::try_from(index).expect("five font indices fit in u8"),
+            );
+            (family.to_owned(), data)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        generated_fonts
+            .iter()
+            .map(|(_, data)| data.len())
+            .sum::<usize>(),
+        TOTAL_FONT_BYTES
+    );
+    let font_files = generated_fonts
+        .iter()
+        .map(|(family, data)| (family.as_str(), data.as_slice()))
+        .collect::<Vec<_>>();
+    let owned_aliases = (0..40)
+        .map(|index| {
+            (
+                format!("Editor Family {index}"),
+                generated_fonts[index % generated_fonts.len()].0.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let aliases = owned_aliases
+        .iter()
+        .map(|(requested, target)| (requested.as_str(), target.as_str()))
+        .collect::<Vec<_>>();
+
+    let make_document = |changed: bool| {
+        let mut document = Document::new();
+        for index in 0..40 {
+            let text = if changed && index == 20 {
+                format!("paragraph {index:03} stable line changed")
+            } else {
+                format!("paragraph {index:03} stable line")
+            };
+            document.add_paragraph("").page_break_before(index > 0);
+            document
+                .paragraph_mut(index)
+                .expect("generated paragraph")
+                .add_run(&text)
+                .font(&owned_aliases[index % owned_aliases.len()].0);
+        }
+        document
+    };
+
+    let mut warm_document = make_document(false);
+    let initial = warm_document
+        .layout_with_fonts_aliases_and_bundled_fallback(&font_files, &aliases)
+        .expect("prime large caller-font layout");
+    warm_document
+        .paragraph_mut(20)
+        .expect("middle paragraph")
+        .run_mut(0)
+        .expect("middle paragraph text run")
+        .set_text("paragraph 020 stable line changed");
+    let fresh_document = make_document(true);
+    let warm = warm_document
+        .layout_with_fonts_aliases_and_bundled_fallback(&font_files, &aliases)
+        .expect("warm large caller-font layout");
+    let fresh = fresh_document
+        .layout_with_fonts_aliases_and_bundled_fallback(&font_files, &aliases)
+        .expect("fresh large caller-font layout");
+
+    let retained_pages = warm
+        .layout
+        .pages
+        .iter()
+        .zip(&initial.layout.pages)
+        .filter(|(current, previous)| Arc::ptr_eq(current, previous))
+        .count();
+    assert!(
+        retained_pages >= warm.layout.pages.len().saturating_sub(2),
+        "the bounded edit retained {retained_pages} of {} pages",
+        warm.layout.pages.len()
+    );
+    assert_eq!(warm.revision_view, fresh.revision_view);
+    assert_eq!(warm.layout.pages.len(), fresh.layout.pages.len());
+    for (warm_page, fresh_page) in warm.layout.pages.iter().zip(&fresh.layout.pages) {
+        assert_eq!(warm_page.page_number, fresh_page.page_number);
+        assert_eq!(warm_page.width, fresh_page.width);
+        assert_eq!(warm_page.height, fresh_page.height);
+        assert_eq!(warm_page.elements, fresh_page.elements);
+        assert_eq!(warm_page.background, fresh_page.background);
+    }
+    assert_eq!(warm.layout.fonts.len(), fresh.layout.fonts.len());
+    for (warm_font, fresh_font) in warm.layout.fonts.iter().zip(&fresh.layout.fonts) {
+        assert_eq!(warm_font.id, fresh_font.id);
+        assert_eq!(warm_font.family, fresh_font.family);
+        assert_eq!(warm_font.data, fresh_font.data);
+        assert_eq!(warm_font.face_index, fresh_font.face_index);
+        assert_eq!(warm_font.bold, fresh_font.bold);
+        assert_eq!(warm_font.italic, fresh_font.italic);
+    }
+    assert_eq!(warm.layout.diagnostics, fresh.layout.diagnostics);
+    assert_eq!(
+        format!("{:?}", warm.layout.outlines),
+        format!("{:?}", fresh.layout.outlines)
+    );
+    for (warm_page, fresh_page) in warm.layout.pages.iter().zip(&fresh.layout.pages) {
+        let mut warm_sources = Vec::new();
+        oxml_layout::walk(&warm_page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && let Some(source) = run.source
+            {
+                warm_sources.push(warm.source_node(source.node).cloned());
+            }
+        });
+        let mut fresh_sources = Vec::new();
+        oxml_layout::walk(&fresh_page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && let Some(source) = run.source
+            {
+                fresh_sources.push(fresh.source_node(source.node).cloned());
+            }
+        });
+        assert_eq!(warm_sources, fresh_sources);
+    }
+    assert_eq!(
+        oxml_pdf::render_to_pdf(&warm.layout),
+        oxml_pdf::render_to_pdf(&fresh.layout)
+    );
+}
+
 fn redaction_fixture() -> Document {
     let mut seed = Document::new();
     seed.set_title("secret core title");
@@ -7994,5 +8458,26 @@ fn svg_facade_options_share_the_existing_layout_paths_and_bounds_contract() {
             .render_page_to_svg_deterministic(usize::MAX)
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn automatic_hyphenation_authoring_round_trips_with_run_language() {
+    let mut document = Document::new();
+    document.set_auto_hyphenation(true).unwrap();
+    document
+        .add_paragraph("")
+        .add_run("representation")
+        .language("en-US");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let settings = std::str::from_utf8(package.get_part("/word/settings.xml").unwrap()).unwrap();
+    assert!(settings.contains("<w:autoHyphenation/>"));
+
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened.paragraphs()[0].run(0).unwrap().language(),
+        Some("en-US")
     );
 }

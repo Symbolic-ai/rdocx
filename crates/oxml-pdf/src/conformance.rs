@@ -114,6 +114,7 @@ fn validate_elements(elements: &[PositionedElement]) -> Result<(), PdfError> {
     for element in elements {
         match element {
             PositionedElement::Text(run) => validate_color(run.color)?,
+            PositionedElement::MultilingualText(run) => validate_color(run.color)?,
             PositionedElement::Line { color, .. } | PositionedElement::FilledRect { color, .. } => {
                 validate_color(*color)?
             }

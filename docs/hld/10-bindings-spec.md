@@ -90,6 +90,20 @@ cannot back a Python property setter. The facade exposes 61 non-consuming
 borrowed nested handle can mutate without a rebind:
 `doc.paragraph_mut(3).unwrap().add_run("text").set_bold(true)`.
 
+The Rust facade also exposes the minimum automatic-hyphenation authoring
+surface. `Document::set_auto_hyphenation` writes the Word document setting,
+while `Run::language` and `Run::set_language` assign the direct `w:lang` value.
+`Run::set_language_value` assigns or clears it. Omission remains off. These
+additions do not create a parallel binding model or make language inference
+part of the API contract.
+
+At the public low-level Rust boundary, `CT_RPr` includes the complete language
+attribute set and its retained foreign attributes, while `LayoutInput` includes
+the document automatic-hyphenation boolean. Full struct literals must provide
+these fields. These are intentional pre-1.0 source breaks for the next stable
+family. Established `TextSegment` construction and layout entrypoints retain
+their existing shapes.
+
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
 deterministic layouts live in separate
 `Mutex<Option<Arc<WordLayoutResult>>>` caches. One private normal-font engine
@@ -351,6 +365,14 @@ stable APIs. Existing binding surfaces do not gain new methods implicitly, but
 their owned `rdocx::Document` remains package-preserving when native code uses
 the new operations.
 
+Native Word table inspection includes additive
+`TableRef::has_grid_change()`. It reports whether the low-level grid preserves
+one historical `w:tblGridChange` and does not expose that historical snapshot
+as active layout input. `CT_TblGrid` carries public historical and unmodelled
+raw preservation fields. Full literals written against the earlier pre-1.0
+shape must initialize those fields or use `Default`. This intentional low-level
+Rust source impact does not add Python, WASM, or CLI methods.
+
 Native Word callers can inspect comments through `Document::comments` and
 author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. `RunPosition` and `RunRange` define top-level paragraph run
@@ -456,6 +478,12 @@ typed child and each unsupported raw subtree at its original boundary.
 URI, and whether child content exists. Raw bytes are available only for an
 actual preserved raw subtree. Existing flattened accessors remain unchanged,
 and Python, WASM, and CLI gain no corresponding methods.
+
+`RunItemRef::LegacyHorizontalRule` identifies the narrow run-level
+WordprocessingML `pict` form containing one enabled VML horizontal rule. Its
+borrowed accessor returns the exact preserved subtree bytes. Classification is
+additive on the existing non-exhaustive Rust enum. Python, WASM, CLI, layout,
+and rendering surfaces remain unchanged and continue to preserve the raw XML.
 
 Native Word callers inspect tracked changes through `Document::revisions`.
 Each immutable `RevisionRef` exposes the revision id, author, optional
@@ -611,6 +639,30 @@ break for the next stable family. They expose renderer input, not a second
 authoring surface. Opened header XML remains the serialization authority, and
 callers should use the native `Document` methods for mutation.
 
+The pre-1.0 shared layout surface provides multilingual text types for native
+renderer producers. Direction, script, clusters, logical source ranges, and
+two-dimensional glyph positions are available through the existing rich
+values. `TextSegment` includes a required `direction` field so exhaustive
+external literals must provide `TextDirection::Auto` when no override exists.
+This is an intentional pre-1.0 Rust source break. PowerPoint exposes
+resolved paragraph directions through `ResolvedSlideTextDirections` and
+sibling resolver and renderer entrypoints. The sidecar leaves the exhaustive
+`ResolvedParagraph` shape and all established entrypoints unchanged. Python,
+WASM, and CLI surfaces gain no multilingual authoring method. Both WASM graphs
+retain their host-font-free target contract while consuming the same bundled
+fallback inventory transitively.
+
+Word layout emits the same existing `MultilingualTextSegment` and
+`MultilingualGlyphRun` values for paragraphs containing complex scripts. This
+activates the existing rich-layout surface for native Word consumers without a
+new entrypoint, binding method, or dependency. Low-level Word callers gain
+`CT_PPr::bidi`, `ind_start`, and `ind_end`, plus `CT_RPr::rtl` and the paragraph
+raw-position sidecar required for exact unknown-child replay. Exhaustive public
+Word property literals must add the new fields or use `Default`. These are
+intentional pre-1.0 Rust source breaks. Consumers that inspect positioned
+elements handle the existing multilingual variant for both Word and
+Presentation results.
+
 The next stable Rust family includes the numbering preservation model.
 `CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
 producer extensions survive typed mutations. `ST_NumberFormat::Other(String)`
@@ -672,20 +724,26 @@ honest. Do not auto-generate them from PyO3.
 crates are `publish = false`, because a cdylib has no business on crates.io.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint crates.io family is published at 0.6.0 from the annotated
-`rpptx-v0.6.0` tag at reviewed SHA
-`55fb2f54caf91d7dedc8936b4c7b116354590628`. The stable workspace and exact
-seven-package Word crates.io family are published at 0.10.1 from the annotated
-`v0.10.1` tag at reviewed SHA
-`ae0dcb162a7805e59e5890464b226765645ad547`. The immutable v0.10.0 attempt
-published only `rdocx-opc` and `rdocx-oxml`. Both Python project versions and
-`rdocx-wasm` track the stable workspace version, but
+PowerPoint workspace family is published at 0.8.0 from the immutable annotated
+`rpptx-v0.8.0` tag at reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The stable workspace is published
+at 0.11.1 from the immutable annotated `v0.11.1` tag at reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6` and pins shared dependencies to
+0.8.0. The immutable v0.11.0 attempt at
+reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published only
+`rdocx-opc` and `rdocx-oxml`. It created no GitHub release and posted no
+contribution notifications. The complete seven-package recovery is published
+at 0.11.1, and all six reviewed leave-open notifications are posted. Both
+Python project versions and `rdocx-wasm` track the stable workspace version, but
 every binding and WASM crate remains unpublished on crates.io. The incubating
-preparation group
-places the unpublished `rpptx-wasm` crate at 0.6.0. Neither Rust release gives
-binding, WASM, npm, or Python package publication authority. Every later
+group places the unpublished `rpptx-wasm` crate at 0.8.0. Neither Rust release
+gives binding, WASM, npm, or Python package publication authority. Every later
 release still requires its selected-family gate and a separate final approval
-at the reviewed SHA.
+at the reviewed SHA. Complete coherent stable releases remain live and
+unyanked. After separate immediate approval, the incomplete
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries are yanked. Their package
+bytes, every other version, the immutable v0.11.0 tag, and GitHub release state
+remain unchanged.
 
 ## CI
 

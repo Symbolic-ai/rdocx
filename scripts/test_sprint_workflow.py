@@ -620,6 +620,19 @@ class SprintWorkflowTests(unittest.TestCase):
             ("dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",),
         )
         self.assertIn("toolchain: 1.97.1", self.operative_lines(steps[1]))
+        self.assertEqual(
+            self.yaml_step_actions(steps[2]),
+            ("Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",),
+        )
+        prime = self.yaml_step(job, "Prime locked Cargo dependencies")
+        self.assertEqual(
+            self.yaml_direct_lines(prime, 8),
+            ("run: cargo fetch --locked",),
+        )
+        self.assertEqual(steps[3], prime)
+        self.assertEqual(
+            self.operative_lines(job).count("run: cargo fetch --locked"), 1
+        )
         fetch = self.yaml_step(job, "Fetch pinned Word corpus")
         gate = self.yaml_step(
             job, "Run all-page Word SSIM trend and completeness gate"
@@ -645,8 +658,15 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("${{ runner.temp }}/word-fidelity/ssim-results.tsv", upload)
         self.assertIn("if-no-files-found: error", self.operative_lines(upload))
         self.assertNotIn("continue-on-error", job)
+        self.assertLess(job.index(prime), job.index(fetch))
         self.assertLess(job.index(fetch), job.index(gate))
         self.assertLess(job.index(gate), job.index(upload))
+
+    def test_word_fidelity_primes_locked_dependencies_before_offline_build(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_word_fidelity_ci_contract(ci)
 
     def test_word_fidelity_ci_gate_rejects_weakened_invocations(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
@@ -658,7 +678,24 @@ class SprintWorkflowTests(unittest.TestCase):
             job, "Run all-page Word SSIM trend and completeness gate"
         )
         upload = self.yaml_step(job, "Retain Word fidelity evidence")
+        prime = self.yaml_step(job, "Prime locked Cargo dependencies")
+        test_job = self.yaml_block(ci, "  test:")
+        test_checkout = self.yaml_steps(test_job)[0]
+        wrong_job_test = test_job.replace(
+            test_checkout, test_checkout + prime, 1
+        )
         mutations = {
+            "missing-fetch": ci.replace(prime, "", 1),
+            "unlocked-fetch": ci.replace(
+                prime, prime.replace("cargo fetch --locked", "cargo fetch", 1), 1
+            ),
+            "duplicate-fetch": ci.replace(prime, prime + prime, 1),
+            "misplaced-fetch": ci.replace(prime, "", 1).replace(
+                gate, gate + prime, 1
+            ),
+            "wrong-job-fetch": ci.replace(prime, "", 1).replace(
+                test_job, wrong_job_test, 1
+            ),
             "missing-gate": ci.replace(gate, "", 1),
             "self-test-only": ci.replace(
                 gate, gate.replace("--check", "--self-test", 1), 1
@@ -1925,9 +1962,9 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.10.1" "rdocx_wasm"',
+            '"0.11.1" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
-            '"0.6.0" "rpptx_wasm"',
+            '"0.8.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
             "--ignore-scripts --no-audit --no-fund --package-lock=false "
             '"$tarball_root/$tarball"',
@@ -4170,6 +4207,94 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(saved["features"], {})
             self.assertEqual(saved["phase"], "design")
 
+    def test_init_resume_refreshes_feature_metadata_without_losing_progress(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current = root / "CURRENT_SPRINT.md"
+            scratch = root / "scratch"
+            current.write_text(
+                "# Current Sprint, S11\n\n"
+                "| F-ID | Title | Size | Status | Owner |\n"
+                "|---|---|---|---|---|\n"
+                "| F-001 | Refreshed title | M | in-progress | claude |\n"
+                "| F-002 | Newly added | S | pending | - |\n",
+                encoding="utf-8",
+            )
+            existing = {
+                "schema_version": workflow.SCHEMA_VERSION,
+                "sprint": "S11",
+                "phase": "implementation",
+                "max_review_passes": 3,
+                "max_workers": 2,
+                "features": {
+                    "F-001": {
+                        "state": "reviewed",
+                        "size": "S",
+                        "title": "Original title",
+                        "owner": "codex",
+                        "wave": 2,
+                        "branch": "work/f-001-codex",
+                        "worktree": "/private/tmp/f-001",
+                        "head": "abc123",
+                        "handoff": "consumed",
+                        "integration_commit": "def456",
+                    }
+                },
+                "reviews": [{"pass": 1, "blocking": 0, "head": "def456"}],
+                "verifications": [
+                    {"scope": "full", "passed": True, "head": "def456"}
+                ],
+            }
+            scratch.mkdir()
+            (scratch / "S11-run.json").write_text(
+                json.dumps(existing), encoding="utf-8"
+            )
+            args = argparse.Namespace(
+                sprint="S11",
+                resume=True,
+                force=False,
+                max_review_passes=4,
+                max_workers=3,
+            )
+
+            with (
+                patch.object(workflow, "CURRENT_SPRINT", current),
+                patch.object(workflow, "SCRATCH", scratch),
+            ):
+                workflow.cmd_init(args)
+
+            saved = json.loads((scratch / "S11-run.json").read_text(encoding="utf-8"))
+            refreshed = saved["features"]["F-001"]
+            self.assertEqual(refreshed["title"], "Refreshed title")
+            self.assertEqual(refreshed["size"], "M")
+            for field in (
+                "state",
+                "owner",
+                "wave",
+                "branch",
+                "worktree",
+                "head",
+                "handoff",
+                "integration_commit",
+            ):
+                self.assertEqual(refreshed[field], existing["features"]["F-001"][field])
+            self.assertEqual(saved["reviews"], existing["reviews"])
+            self.assertEqual(saved["verifications"], existing["verifications"])
+            self.assertEqual(saved["phase"], "implementation")
+            self.assertEqual(saved["max_review_passes"], 4)
+            self.assertEqual(saved["max_workers"], 3)
+            self.assertEqual(
+                saved["features"]["F-002"],
+                {
+                    "state": "pending",
+                    "size": "S",
+                    "title": "Newly added",
+                    "owner": None,
+                },
+            )
+
     def test_empty_sprint_without_validation_marker_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             current = Path(directory) / "CURRENT_SPRINT.md"
@@ -4351,8 +4476,60 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(" ".join(contributor_paragraphs).count("landed directly"), 1)
         return notes
 
-    def test_stable_release_family_is_prepared_at_0_10_1(self) -> None:
-        expected_version = "0.10.1"
+    def assert_v0_11_1_release_notes_truth_contract(self, changelog: str) -> str:
+        notes = workflow.render_release_notes(changelog, "v0.11.1")
+        normalized_notes = " ".join(notes.split())
+        records = (
+            "https://github.com/tensorbee/rdocx/issues/53",
+            "https://github.com/tensorbee/rdocx/issues/54",
+            "https://github.com/tensorbee/rdocx/pull/55",
+            "https://github.com/tensorbee/rdocx/pull/56",
+            "https://github.com/tensorbee/rdocx/pull/57",
+            "https://github.com/tensorbee/rdocx/pull/58",
+        )
+        for record in records:
+            self.assertEqual(notes.count(record), 2, record)
+        for contributor in ("@emptinessform", "@pedroassumpcao"):
+            self.assertGreaterEqual(notes.count(contributor), 1, contributor)
+        for source_sha in (
+            "056d48fdf23f35e3538ef3d6ff78cf9e3863e3a5",
+            "8b79c4cd0452defafe0a58e86b332c98e7fe52d7",
+            "44498f042a2290ef40c7a6c26025f38e38e9ce2a",
+            "c8fed1d1268fd765d602bac2da6524900c1c1cfd",
+        ):
+            self.assertEqual(notes.count(source_sha), 1, source_sha)
+        for claim in (
+            "700-paragraph note and header or footer workloads",
+            "22 MiB caller-font workload",
+            "whole-valued decimal table measurements",
+            "tracked table-grid history",
+            "legacy VML reader classification",
+            "locked Word fidelity dependency preparation",
+            "No named external patch landed directly",
+            "Both issues remain open after their release-bound thank-yous",
+            "All four pull requests remain open after their release-bound thank-yous",
+        ):
+            self.assertIn(claim, normalized_notes, claim)
+        self.assertEqual(notes.count("`rdocx-opc@0.11.0`"), 2)
+        self.assertEqual(notes.count("`rdocx-oxml@0.11.0`"), 2)
+        for absent in (
+            "rdocx-layout@0.11.0",
+            "rdocx-html@0.11.0",
+            "rdocx-pdf@0.11.0",
+            "rdocx@0.11.0",
+            "rdocx-cli@0.11.0",
+        ):
+            self.assertNotIn(absent, notes)
+        self.assertNotIn("renders legacy VML horizontal rules", notes)
+        self.assertIn(
+            "callers constructing full `TextSegment` literals must initialize "
+            "the `direction` field",
+            normalized_notes,
+        )
+        return notes
+
+    def test_stable_release_family_is_prepared_at_0_11_1(self) -> None:
+        expected_version = "0.11.1"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -4476,13 +4653,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.10.1"', 'version = "0.10.1"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.10.1'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.10.1"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.10.1"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.10.1"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.10.1"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.10.1"',),
+            "README.md": ('rdocx = "0.11.1"', 'version = "0.11.1"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.11.1'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.11.1"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.11.1"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.11.1"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.11.1"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.11.1"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -4502,7 +4679,7 @@ class SprintWorkflowTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(manifest["package"]["version"], "0.6.0", name)
+            self.assertEqual(manifest["package"]["version"], "0.8.0", name)
             self.assertIs(
                 manifest["package"].get("publish", True),
                 name != "rpptx-wasm",
@@ -4516,38 +4693,117 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             publish.count(
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_10_1"
+                "test_stable_release_family_is_prepared_at_0_11_1"
             ),
             1,
         )
 
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        notes = self.assert_v0_10_1_release_notes_truth_contract(changelog)
-        self.assertIn("published at 0.6.0", notes)
+        notes = self.assert_v0_11_1_release_notes_truth_contract(changelog)
+        self.assertIn("published shared 0.8.0 family", notes)
 
-    def test_rdocx_layout_verifies_against_published_shared_family(self) -> None:
-        root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(
-            root["workspace"]["dependencies"]["oxml-layout"]["version"],
-            "0.6.0",
-        )
-        command = (
-            "cargo",
-            "publish",
-            "-p",
-            "rdocx-layout",
-            "--dry-run",
-            "--allow-dirty",
-            "--config",
-            'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"',
-        )
-        self.assertFalse(any("patch.crates-io.oxml-layout" in arg for arg in command))
+    @unittest.skipUnless(
+        os.environ.get("RDOCX_VERIFY_PUBLISHED_SHARED") == "1",
+        "requires the separately published shared 0.8.0 family",
+    )
+    def test_prepared_rdocx_layout_0_11_1_requires_published_oxml_layout_0_8_0(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="rdocx-layout-package-") as temp:
+            target = Path(temp) / "target"
+            packaged = subprocess.run(
+                (
+                    "cargo",
+                    "package",
+                    "--locked",
+                    "--allow-dirty",
+                    "--config",
+                    'patch.crates-io.rdocx-oxml.path="crates/rdocx-oxml"',
+                    "--package",
+                    "rdocx-layout",
+                    "--target-dir",
+                    str(target),
+                ),
+                cwd=workflow.REPO,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                packaged.returncode,
+                0,
+                packaged.stdout + packaged.stderr,
+            )
+            archive = target / "package" / "rdocx-layout-0.11.1.crate"
+            self.assertTrue(archive.is_file(), archive)
+            with tarfile.open(archive, mode="r:gz") as package:
+                normalized = package.extractfile(
+                    "rdocx-layout-0.11.1/Cargo.toml"
+                )
+                self.assertIsNotNone(normalized)
+                manifest = tomllib.loads(normalized.read().decode("utf-8"))
+            dependency = manifest["dependencies"]["oxml-layout"]
+            self.assertEqual(dependency["version"], "0.8.0")
+            self.assertNotIn("path", dependency)
+
+            verified_manifest = target / "package" / "rdocx-layout-0.11.1" / "Cargo.toml"
+            self.assertTrue(verified_manifest.is_file(), verified_manifest)
+            resolved = subprocess.run(
+                (
+                    "cargo",
+                    "tree",
+                    "--manifest-path",
+                    str(verified_manifest),
+                    "--config",
+                    f'patch.crates-io.rdocx-oxml.path="{workflow.REPO / "crates/rdocx-oxml"}"',
+                    "--edges",
+                    "normal",
+                    "--prefix",
+                    "none",
+                ),
+                cwd=verified_manifest.parent,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(resolved.returncode, 0, resolved.stdout + resolved.stderr)
+        self.assertIn("rdocx-layout v0.11.1", resolved.stdout + resolved.stderr)
+        self.assertIn("oxml-layout v0.8.0", resolved.stdout + resolved.stderr)
+
+    def test_immutable_rdocx_layout_0_10_1_registry_graph_remains_at_oxml_layout_0_6_0(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory(prefix="rdocx-layout-registry-") as temp:
+            consumer = Path(temp) / "published-graph"
+            (consumer / "src").mkdir(parents=True)
+            (consumer / "Cargo.toml").write_text(
+                """[package]
+name = "published-rdocx-layout-graph"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+rdocx-layout = "=0.10.1"
+""",
+                encoding="utf-8",
+            )
+            (consumer / "src/lib.rs").write_text("", encoding="utf-8")
             env = os.environ.copy()
             env["CARGO_HOME"] = str(Path(temp) / "cargo-home")
             completed = subprocess.run(
-                command,
-                cwd=workflow.REPO,
+                (
+                    "cargo",
+                    "tree",
+                    "--manifest-path",
+                    str(consumer / "Cargo.toml"),
+                    "--edges",
+                    "normal",
+                    "--prefix",
+                    "none",
+                    "--package",
+                    "rdocx-layout@0.10.1",
+                ),
+                cwd=consumer,
                 env=env,
                 check=False,
                 capture_output=True,
@@ -4560,6 +4816,14 @@ class SprintWorkflowTests(unittest.TestCase):
         )
         self.assertIn(
             "rdocx-layout v0.10.1",
+            completed.stdout + completed.stderr,
+        )
+        self.assertIn(
+            "oxml-layout v0.6.0",
+            completed.stdout + completed.stderr,
+        )
+        self.assertNotIn(
+            "oxml-layout v0.7.0",
             completed.stdout + completed.stderr,
         )
 
@@ -4576,6 +4840,46 @@ class SprintWorkflowTests(unittest.TestCase):
             "Word and PowerPoint CLI paths",
         ):
             self.assertIn(addition, normalized_notes, addition)
+
+    def test_release_notes_v0_11_1_reconcile_release_inventory(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = self.assert_v0_11_1_release_notes_truth_contract(changelog)
+        normalized = " ".join(notes.split())
+        for claim in (
+            "conditional hyphenation",
+            "Arabic, Devanagari, Thai, and Simplified Chinese",
+            "paragraph and run direction",
+            "bounded restart pagination",
+            "published shared 0.8.0 family",
+            "Python, WASM, npm, and PyPI publication authority is unchanged",
+        ):
+            self.assertIn(claim, normalized, claim)
+
+    def test_release_notes_v0_11_1_reject_partial_or_notification_drift(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = self.assert_v0_11_1_release_notes_truth_contract(changelog)
+        mutations = (
+            notes.replace(
+                "`rdocx-oxml@0.11.0`.",
+                "`rdocx-oxml@0.11.0` and `rdocx-layout@0.11.0`.",
+                1,
+            ),
+            notes.replace(
+                "Both issues remain open",
+                "Both issues are closed",
+                1,
+            ),
+            notes.replace(
+                "All four pull requests remain open",
+                "All four pull requests are closed",
+                1,
+            ),
+        )
+        for mutated_notes in mutations:
+            self.assertNotEqual(mutated_notes, notes)
+            mutated = changelog.replace(notes, mutated_notes, 1)
+            with self.assertRaises(AssertionError):
+                self.assert_v0_11_1_release_notes_truth_contract(mutated)
 
     def test_release_notes_v0_10_1_reject_reversed_landing_truth(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -4726,7 +5030,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_6_0(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_8_0(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -4745,9 +5049,9 @@ class SprintWorkflowTests(unittest.TestCase):
             "rpptx-cli",
         )
         preparation_packages = (*incubating_packages, "rpptx-wasm")
-        expected_version = "0.6.0"
+        expected_version = "0.8.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.10.1")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.11.1")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -4780,21 +5084,21 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(lock_versions["rpptx-wasm"], expected_version)
 
         readme_requirements = {
-            "crates/oxml-core/README.md": ('oxml-core = "0.6.0"',),
-            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.6.0"',),
-            "crates/oxml-layout/README.md": ('version = "0.6.0"',),
-            "crates/oxml-media/README.md": ('oxml-media = "0.6.0"',),
-            "crates/oxml-opc/README.md": ('oxml-opc = "0.6.0"',),
+            "crates/oxml-core/README.md": ('oxml-core = "0.8.0"',),
+            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.8.0"',),
+            "crates/oxml-layout/README.md": ('version = "0.8.0"',),
+            "crates/oxml-media/README.md": ('oxml-media = "0.8.0"',),
+            "crates/oxml-opc/README.md": ('oxml-opc = "0.8.0"',),
             "crates/oxml-pdf/README.md": (
-                'oxml-pdf = "0.6.0"',
-                'oxml-layout = "0.6.0"',
+                'oxml-pdf = "0.8.0"',
+                'oxml-layout = "0.8.0"',
             ),
-            "crates/oxml-chart/README.md": ('oxml-chart = "0.6.0"',),
-            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.6.0"',),
-            "crates/rpptx-cli/README.md": ("--version '^0.6.0'",),
-            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.6.0"',),
-            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.6.0"',),
-            "crates/rpptx-render/README.md": ('rpptx-render = "0.6.0"',),
+            "crates/oxml-chart/README.md": ('oxml-chart = "0.8.0"',),
+            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.8.0"',),
+            "crates/rpptx-cli/README.md": ("--version '^0.8.0'",),
+            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.8.0"',),
+            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.8.0"',),
+            "crates/rpptx-render/README.md": ('rpptx-render = "0.8.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -4803,29 +5107,29 @@ class SprintWorkflowTests(unittest.TestCase):
 
         source_requirements = {
             "crates/oxml-chart/src/lib.rs": (
-                'manifest.contains("version = \\"0.6.0\\"")',
+                'manifest.contains("version = \\"0.8.0\\"")',
             ),
             "crates/oxml-drawing/src/lib.rs": (
-                'manifest.contains("version = \\"0.6.0\\"")',
+                'manifest.contains("version = \\"0.8.0\\"")',
             ),
             "crates/rdocx-wasm/src/lib.rs": (
                 'oxml-layout = { path = \\"crates/oxml-layout\\", '
-                'version = \\"0.6.0\\", default-features = false }',
+                'version = \\"0.8.0\\", default-features = false }',
             ),
             "crates/rpptx-oxml/tests/integration.rs": (
-                'manifest.contains("version = \\"0.6.0\\"")',
+                'manifest.contains("version = \\"0.8.0\\"")',
             ),
             "crates/rpptx-render/src/lib.rs": (
-                'manifest.contains("version = \\"0.6.0\\"")',
+                'manifest.contains("version = \\"0.8.0\\"")',
             ),
             "crates/rpptx-wasm/src/lib.rs": (
-                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.6.0\\", '
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.8.0\\", '
                 'default-features = false }',
             ),
             "crates/rpptx/tests/integration.rs": (
-                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.6.0\\", '
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.8.0\\", '
                 'default-features = false }',
-                'manifest.contains("version = \\"0.6.0\\"")',
+                'manifest.contains("version = \\"0.8.0\\"")',
             ),
         }
         for path, requirements in source_requirements.items():
@@ -4839,7 +5143,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             ci.count(
                 'verify_package "$package_root/rpptx-wasm" '
-                '"@tensorbee/rpptx-wasm" "0.6.0" "rpptx_wasm"'
+                '"@tensorbee/rpptx-wasm" "0.8.0" "rpptx_wasm"'
             ),
             1,
         )
@@ -4851,30 +5155,27 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             publish.count(
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_incubating_release_family_is_prepared_at_0_6_0"
+                "test_incubating_release_family_is_prepared_at_0_8_0"
             ),
             1,
         )
 
+    def test_release_notes_rpptx_v0_8_0_cover_direction_recovery_boundary(
+        self,
+    ) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        notes = workflow.render_release_notes(changelog, "rpptx-v0.6.0")
-        for record in (
-            "https://github.com/tensorbee/rdocx/issues/44",
-            "https://github.com/tensorbee/rdocx/pull/45",
-            "https://github.com/tensorbee/rdocx/issues/46",
+        notes = workflow.render_release_notes(changelog, "rpptx-v0.8.0")
+        normalized = " ".join(notes.split())
+        for claim in (
+            "TextSegment.direction",
+            "stable 0.11.1 recovery",
+            "0.8.0",
         ):
-            self.assertEqual(notes.count(record), 2, record)
-        self.assertGreaterEqual(notes.count("@emptinessform"), 1)
-        self.assertIn("hardened equivalent", notes)
-        for stable_only_record in (
-            "https://github.com/tensorbee/rdocx/pull/47",
-            "https://github.com/tensorbee/rdocx/pull/48",
-            "https://github.com/tensorbee/rdocx/pull/49",
-            "https://github.com/tensorbee/rdocx/pull/50",
-            "https://github.com/tensorbee/rdocx/pull/51",
-            "https://github.com/tensorbee/rdocx/pull/52",
-        ):
-            self.assertNotIn(stable_only_record, notes)
+            self.assertIn(claim, normalized, claim)
+        self.assertIn("stable workspace remains prepared at 0.11.0", normalized)
+        self.assertNotIn("stable Word family moves", normalized)
+        self.assertNotIn("github.com/tensorbee/rdocx/issues/", notes)
+        self.assertNotIn("github.com/tensorbee/rdocx/pull/", notes)
 
     def assert_release_preparation_metadata_contract(
         self, manifest_overrides: dict[str, str] | None = None
@@ -4949,7 +5250,7 @@ class SprintWorkflowTests(unittest.TestCase):
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
-        self.assertEqual(wasm_package["version"], "0.6.0")
+        self.assertEqual(wasm_package["version"], "0.8.0")
         self.assertTrue(wasm_package.get("description", "").strip())
         self.assertFalse(wasm_package["publish"])
         self.assertEqual(
@@ -4968,7 +5269,7 @@ class SprintWorkflowTests(unittest.TestCase):
             for package in lock["package"]
             if package["name"] == "rpptx-wasm"
         )
-        self.assertEqual(wasm_lock_versions, ("0.6.0",))
+        self.assertEqual(wasm_lock_versions, ("0.8.0",))
 
     def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
         self.assert_release_preparation_metadata_contract()
@@ -5003,7 +5304,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 1,
             ),
             "workspace-version": manifest.replace(
-                'version = "0.6.0"',
+                'version = "0.8.0"',
                 "version.workspace = true",
                 1,
             ),
@@ -5012,6 +5313,215 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertNotEqual(mutated, manifest, name)
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_release_preparation_metadata_contract({member: mutated})
+
+    def assert_partial_v0_11_0_cleanup_contract(self, plan: str) -> None:
+        approach = plan[
+            plan.index("## Approach") : plan.index("## Rejected alternatives")
+        ]
+        normalized = " ".join(approach.split())
+        bash_blocks = re.findall(r"```bash\n(.*?)```", plan, flags=re.DOTALL)
+        self.assertEqual(len(bash_blocks), 1)
+        fenced_commands = tuple(
+            line.strip() for line in bash_blocks[0].splitlines() if line.strip()
+        )
+        authorized_commands = (
+            "cargo yank --registry crates-io --version 0.11.0 rdocx-opc",
+            "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml",
+        )
+        self.assertEqual(fenced_commands, authorized_commands)
+
+        authorized_block = (
+            "```bash\n" + "\n".join(authorized_commands) + "\n```"
+        )
+        self.assertEqual(plan.count(authorized_block), 1)
+        plan_without_authorized_commands = plan.replace(authorized_block, "", 1)
+        command_token = re.compile(
+            r"\b(?:env|command|sudo|cargo|git|gh|curl|wget|python|python3|npm|"
+            r"npx|bash|sh|zsh)\s+"
+        )
+        self.assertNotRegex(plan_without_authorized_commands, command_token)
+        for contract in (
+            "Complete coherent stable releases remain available.",
+            "separate final approval immediately before the first yank",
+            "No other external mutation is authorized.",
+            "Do not delete or move tags, create a release, post comments, close external issues or pull requests, or alter any other version.",
+        ):
+            self.assertIn(contract, normalized)
+
+    def test_partial_v0_11_0_cleanup_contract(self) -> None:
+        plan = (workflow.REPO / ".claude/plans/F-X070-design.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_partial_v0_11_0_cleanup_contract(plan)
+        self.assertEqual(plan.count("`docs/hld/11-migration-plan.md`"), 2)
+
+        migration = (
+            workflow.REPO / "docs/hld/11-migration-plan.md"
+        ).read_text(encoding="utf-8")
+        normalized_migration = " ".join(migration.split())
+        self.assertIn("Do not yank a complete coherent release.", migration)
+        self.assertIn(
+            "Both incomplete 0.11.0 entries are yanked after the complete "
+            "0.11.1 family verified and a separate immediate approval was granted.",
+            normalized_migration,
+        )
+        self.assertIn(
+            "The complete seven-package rdocx family is published at stable "
+            "0.11.1",
+            normalized_migration,
+        )
+        self.assertIn(
+            "The complete 15-package shared and PowerPoint family is published "
+            "at 0.8.0",
+            normalized_migration,
+        )
+        self.assertIn(
+            "The immutable 0.6.0 stable and 0.1.3 shared family releases remain "
+            "available as historical boundaries.",
+            normalized_migration,
+        )
+        self.assertIn(
+            "Normal local sprint ledgers, progress notes, review artifacts, and "
+            "handoff records still advance through the feature workflow.",
+            normalized_migration,
+        )
+        self.assertIn(
+            "Both incomplete 0.11.0 entries are yanked after the complete "
+            "0.11.1 family verified and a separate immediate approval was granted.",
+            normalized_migration,
+        )
+
+        backlog = (
+            workflow.REPO / "docs/hld/14-development-backlog.md"
+        ).read_text(encoding="utf-8")
+        normalized_backlog = " ".join(backlog.split())
+        local_record_contract = (
+            "Normal local sprint ledgers, progress notes, review artifacts, and "
+            "handoff records still advance through the feature workflow."
+        )
+        self.assertIn(local_record_contract, normalized_backlog)
+        self.assertIn(local_record_contract, " ".join(plan.split()))
+
+        normalized_plan = " ".join(plan.split())
+        for evidence in (
+            "`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` read back with "
+            "`yanked=true`",
+            "all seven 0.11.1 packages read back with `yanked=false` under sole "
+            "owner `mantissaman (Atul Sharma)`",
+            "the other five 0.11.0 package endpoints return 404",
+            "The remote annotated `v0.11.0` tag still peels to "
+            "`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`",
+            "the v0.11.0 GitHub release lookup returns 404",
+        ):
+            self.assertIn(evidence, normalized_plan)
+        for completed_item in (
+            "- [x] Stop for separate final approval immediately before the first yank.",
+            "- [x] Yank exactly `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`.",
+            "- [x] Verify yanked flags, complete live 0.11.1 family, immutable tag, and absent v0.11.0 release.",
+        ):
+            self.assertIn(completed_item, plan)
+        self.assertIn(
+            "- [x] Complete the delivery records without any unrelated external mutation.",
+            plan,
+        )
+
+        mutations = {
+            "missing-package": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "",
+                1,
+            ),
+            "other-version": plan.replace(
+                "--version 0.11.0 rdocx-opc",
+                "--version 0.11.1 rdocx-opc",
+                1,
+            ),
+            "extra-package": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-layout\n",
+                1,
+            ),
+            "tag-deletion": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "git push origin --delete refs/tags/v0.11.0\n",
+                1,
+            ),
+            "github-release-creation": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "gh release create v0.11.0\n",
+                1,
+            ),
+            "issue-closure": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "gh issue close 53\n",
+                1,
+            ),
+            "pr-closure": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "gh pr close 54\n",
+                1,
+            ),
+            "unrelated-registry-mutation": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "cargo publish --registry crates-io -p rdocx\n",
+                1,
+            ),
+            "out-of-block-mutation": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\ncargo publish --registry crates-io -p rdocx\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "outside-approach-release": plan.replace(
+                "## Rejected alternatives\n",
+                "## Rejected alternatives\n\ngh release create v0.11.0\n",
+                1,
+            ),
+            "env-prefixed-release": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\nenv gh release create v0.11.0\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "env-prefixed-tag-deletion": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\nenv git push origin --delete refs/tags/v0.11.0\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "env-prefixed-registry-mutation": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\nenv cargo publish --registry crates-io -p rdocx\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "shell-wrapped-pr-closure": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\ncommand sh -c 'gh pr close 54'\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "missing-immediate-approval": plan.replace(
+                "separate final approval immediately before the first yank",
+                "general sprint approval",
+                1,
+            ),
+            "release-mutation": plan.replace(
+                "No other external mutation is authorized.",
+                "Create a release after the cleanup.",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, plan, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_partial_v0_11_0_cleanup_contract(mutated)
 
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(
@@ -5071,6 +5581,124 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertNotEqual(mutated, release)
         with self.assertRaises(AssertionError):
             self.assertIn("The 22 patches keep packaged", " ".join(mutated.split()))
+
+    def assert_run_sprint_dependency_release_checkpoint_contract(
+        self, run_sprint: str
+    ) -> None:
+        normalized = " ".join(run_sprint.split())
+        checkpoint = run_sprint[
+            run_sprint.index("#### Release dependency extension") :
+            run_sprint.index("## 5. Integrate")
+        ]
+
+        self.assertIn(
+            "a release F-ID is a dependency of any unfinished story in the same sprint",
+            normalized,
+        )
+        ordered_steps = (
+            "Prepare and integrate the release F-ID",
+            "Run `/verify --full` and `/sprint-review`",
+            "Follow `/release <tag>`",
+            "Finalise the release F-ID's delivery records",
+            "Return the phase to `implementation` again",
+        )
+        positions = tuple(checkpoint.index(step) for step in ordered_steps)
+        self.assertEqual(positions, tuple(sorted(positions)))
+        self.assertIn("separate final approval", checkpoint)
+        self.assertGreaterEqual(checkpoint.count("current HEAD"), 2)
+        self.assertIn("Never use checkpoint evidence for final closure", checkpoint)
+        self.assertIn("close-preflight SNN", run_sprint)
+
+    def assert_run_sprint_dependency_prefix_checkpoint_contract(
+        self, run_sprint: str
+    ) -> None:
+        normalized = " ".join(run_sprint.split())
+        checkpoint = run_sprint[
+            run_sprint.index("### Dependency-prefix checkpoint") :
+            run_sprint.index("#### Release dependency extension")
+        ]
+
+        self.assertIn(
+            "a formal dependency is integrated and `reviewed` but not `completed`",
+            normalized,
+        )
+        ordered_steps = (
+            "Integrate the prepared dependency prefix",
+            "Run `/verify --full`",
+            "Finalise the reviewed non-release prefix",
+            "Commit the clean review file",
+            "record the clean review at the resulting HEAD",
+            "Rerun `/verify --full` because the review commit changed HEAD",
+            "Return the phase to `implementation`",
+        )
+        positions = tuple(checkpoint.index(step) for step in ordered_steps)
+        self.assertEqual(positions, tuple(sorted(positions)))
+        self.assertIn("Do not run a confirmation review", checkpoint)
+        self.assertIn("Do not claim the dependent wave", checkpoint)
+        self.assertIn("Pass numbering remains global", checkpoint)
+        self.assertIn("at most the configured review-pass bound", checkpoint)
+        self.assertIn("scheduled dependency-prefix boundary", checkpoint)
+
+    def test_run_sprint_requires_ordinary_dependency_prefix_checkpoints(self) -> None:
+        run_sprint = (workflow.REPO / ".claude/commands/run-sprint.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_run_sprint_dependency_prefix_checkpoint_contract(run_sprint)
+
+        mutations = {
+            "missing-trigger": run_sprint.replace(
+                "dependency is integrated and `reviewed` but not `completed`",
+                "a formal dependency exists",
+                1,
+            ),
+            "missing-review-commit": run_sprint.replace(
+                "Commit the clean review file", "Leave the review file uncommitted", 1
+            ),
+            "confirmation-review": run_sprint.replace(
+                "Do not run a confirmation review",
+                "Run a confirmation review",
+                1,
+            ),
+            "missing-checkpoint-review-bound": run_sprint.replace(
+                "at most the configured review-pass bound",
+                "an unlimited number of review passes",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, run_sprint, name)
+            with self.subTest(name=name), self.assertRaises(
+                (AssertionError, ValueError)
+            ):
+                self.assert_run_sprint_dependency_prefix_checkpoint_contract(mutated)
+
+    def test_run_sprint_requires_dependency_release_checkpoints(self) -> None:
+        run_sprint = (workflow.REPO / ".claude/commands/run-sprint.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_run_sprint_dependency_release_checkpoint_contract(run_sprint)
+
+        mutations = {
+            "missing-trigger": run_sprint.replace(
+                "a release F-ID is a dependency of any unfinished story in the same sprint",
+                "a release F-ID is ready",
+                1,
+            ),
+            "missing-approval": run_sprint.replace(
+                "separate final approval", "release approval", 1
+            ),
+            "missing-final-evidence-boundary": run_sprint.replace(
+                "Never use checkpoint evidence for final closure",
+                "Checkpoint evidence is reusable for final closure",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, run_sprint, name)
+            with self.subTest(name=name), self.assertRaises(
+                (AssertionError, ValueError)
+            ):
+                self.assert_run_sprint_dependency_release_checkpoint_contract(mutated)
 
     def assert_release_command_notes_contract(self, release: str) -> None:
         preflight = release[release.index("## Preconditions") : release.index("## Final approval")]
@@ -5833,7 +6461,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_10_1",
+                "test_stable_release_family_is_prepared_at_0_11_1",
                 1,
             ),
             "job-condition": ci.replace(
@@ -5962,7 +6590,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertIn("crates/oxml-chart", root["members"])
         self.assertEqual(
             root["dependencies"]["oxml-chart"],
-            {"path": "crates/oxml-chart", "version": "0.6.0"},
+            {"path": "crates/oxml-chart", "version": "0.8.0"},
         )
 
         shim = tomllib.loads(
@@ -6069,32 +6697,55 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_10_1"
+            "test_stable_release_family_is_prepared_at_0_11_1"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_6_0"
+            "test_incubating_release_family_is_prepared_at_0_8_0"
         )
-        registry_check = (
+        packaged_registry_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_rdocx_layout_verifies_against_published_shared_family"
+            "test_prepared_rdocx_layout_0_11_1_requires_published_oxml_layout_0_8_0"
+        )
+        historical_registry_check = (
+            "scripts.test_sprint_workflow.SprintWorkflowTests."
+            "test_immutable_rdocx_layout_0_10_1_registry_graph_remains_at_oxml_layout_0_6_0"
         )
         metadata_command = (
             "python3 -m unittest "
-            f"{stable_check} {registry_check} {incubating_check}"
+            f"{stable_check} {historical_registry_check} {incubating_check}"
         )
+        stable_registry_command = f"python3 -m unittest {packaged_registry_check}"
+
+        def assert_stable_registry_step(candidate: str) -> None:
+            stable_step = self.yaml_step(
+                self.yaml_block(candidate, "  publish:"),
+                "Verify published shared family for stable release",
+            )
+            self.assertEqual(candidate.count(stable_registry_command), 1)
+            self.assertIn("if: startsWith(github.ref_name, 'v')", stable_step)
+            self.assertIn('RDOCX_VERIFY_PUBLISHED_SHARED: "1"', stable_step)
+            self.assertLess(
+                candidate.index(metadata_command),
+                candidate.index(stable_registry_command),
+            )
+            self.assertLess(
+                candidate.index(stable_registry_command),
+                candidate.index("cargo publish --workspace --dry-run"),
+            )
 
         self.assert_publish_preflight_contract(publish)
         self.assertEqual(publish.count(metadata_command), 1)
-        self.assertLess(publish.index(stable_check), publish.index(registry_check))
-        self.assertLess(publish.index(registry_check), publish.index(incubating_check))
+        assert_stable_registry_step(publish)
+        self.assertLess(
+            publish.index(stable_check), publish.index(historical_registry_check)
+        )
+        self.assertLess(
+            publish.index(historical_registry_check), publish.index(incubating_check)
+        )
         self.assertLess(
             publish.index("python3 scripts/hash_harness.py --check"),
             publish.index(metadata_command),
-        )
-        self.assertLess(
-            publish.index(metadata_command),
-            publish.index("cargo publish --workspace --dry-run"),
         )
         self.assertLess(
             publish.index("cargo publish --workspace --dry-run"),
@@ -6102,6 +6753,38 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         self.assertNotIn("--no-verify", publish)
         self.assertNotIn("continue-on-error", publish)
+
+        mutations = (
+            (
+                "missing-stable-only-condition",
+                publish.replace(
+                    "        if: startsWith(github.ref_name, 'v')\n",
+                    "",
+                    1,
+                ),
+            ),
+            (
+                "missing-published-shared-authority",
+                publish.replace(
+                    '          RDOCX_VERIFY_PUBLISHED_SHARED: "1"\n',
+                    "",
+                    1,
+                ),
+            ),
+            (
+                "wrong-published-shared-authority",
+                publish.replace(
+                    '          RDOCX_VERIFY_PUBLISHED_SHARED: "1"',
+                    '          RDOCX_VERIFY_PUBLISHED_SHARED: "0"',
+                    1,
+                ),
+            ),
+        )
+        for name, mutated in mutations:
+            self.assertNotEqual(mutated, publish, name)
+            with self.subTest(name=name):
+                with self.assertRaises(AssertionError):
+                    assert_stable_registry_step(mutated)
 
     def test_publish_workflow_rejects_a_missing_local_patch(self) -> None:
         publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
@@ -6194,11 +6877,75 @@ Pedro Assumpcao and the rdocx maintainers.
                     "integration",
                     "verification",
                     "review",
+                    "implementation",
+                    "integration",
+                    "verification",
+                    "review",
+                    "implementation",
+                    "integration",
+                    "verification",
+                    "review",
                     "ready_to_close",
                 ):
                     workflow.cmd_set_phase(argparse.Namespace(sprint="S01", phase=phase))
                     saved = json.loads((scratch / "S01-run.json").read_text(encoding="utf-8"))
                     self.assertEqual(saved["phase"], phase)
+
+    def test_run_sprint_ordinary_dependency_chain_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            state = {
+                "schema_version": workflow.SCHEMA_VERSION,
+                "sprint": "S01",
+                "phase": "implementation",
+                "features": {
+                    fid: {
+                        "state": "approved",
+                        "size": "S",
+                        "title": title,
+                        "owner": "codex",
+                    }
+                    for fid, title in (
+                        ("F-001", "A"),
+                        ("F-002", "B depends on A"),
+                        ("F-003", "C depends on B"),
+                    )
+                },
+                "reviews": [],
+                "verifications": [],
+            }
+            (scratch / "S01-run.json").write_text(json.dumps(state), encoding="utf-8")
+
+            def mark(fid: str, feature_state: str) -> None:
+                workflow.cmd_mark_feature(
+                    argparse.Namespace(
+                        sprint="S01",
+                        fid=fid,
+                        state=feature_state,
+                        owner=None,
+                        clear_owner=feature_state == "completed",
+                    )
+                )
+
+            with patch.object(workflow, "SCRATCH", scratch):
+                for fid in ("F-001", "F-002"):
+                    mark(fid, "running")
+                    mark(fid, "reviewed")
+                    for phase in ("integration", "verification", "review"):
+                        workflow.cmd_set_phase(
+                            argparse.Namespace(sprint="S01", phase=phase)
+                        )
+                    mark(fid, "completed")
+                    workflow.cmd_set_phase(
+                        argparse.Namespace(sprint="S01", phase="implementation")
+                    )
+                mark("F-003", "running")
+
+            saved = json.loads((scratch / "S01-run.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["features"]["F-001"]["state"], "completed")
+            self.assertEqual(saved["features"]["F-002"]["state"], "completed")
+            self.assertEqual(saved["features"]["F-003"]["state"], "running")
+            self.assertEqual(saved["phase"], "implementation")
 
     def test_completed_feature_requires_every_delivery_record(self) -> None:
         with tempfile.TemporaryDirectory(dir=workflow.REPO) as directory:
@@ -6447,7 +7194,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertIn("system-fonts", features)
         self.assertNotIn("bundled-fonts", features)
         claimed_font_count = re.findall(r"([0-9]+) bundled TTFs", claude)
-        self.assertEqual(claimed_font_count, ["20"])
+        self.assertEqual(claimed_font_count, ["24"])
         fonts = font_path / "fonts"
         self.assertEqual(len(tuple(fonts.glob("*.ttf"))), int(claimed_font_count[0]))
         for legal_file in (
@@ -6455,6 +7202,9 @@ Pedro Assumpcao and the rdocx maintainers.
             "NOTICE-Caladea",
             "LICENSE-Carlito",
             "LICENSE-Liberation",
+            "LICENSE-Noto",
+            "NOTICE-Noto",
+            "SUBSET-NotoSansSC.md",
         ):
             self.assertTrue((fonts / legal_file).is_file(), legal_file)
 
@@ -6515,7 +7265,7 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace(
-                    "prepared at\n  0.10.1",
+                    "prepared at\n  0.11.1",
                     "prepared at\n  0.2.0",
                     1,
                 ),

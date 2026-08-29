@@ -438,8 +438,9 @@ fn replace_run_display(run: &mut CT_R, replacement: &mut DisplayReplacement<'_>)
                 .iter_mut()
                 .zip(original_raw_positions)
             {
-                if original > property_boundary {
-                    *position += 1;
+                if CT_R::raw_child_position(original) > property_boundary {
+                    let shifted = CT_R::raw_child_position(*position) + 1;
+                    CT_R::set_raw_child_position(position, shifted);
                 }
             }
         }

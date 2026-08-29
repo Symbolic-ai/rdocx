@@ -5370,12 +5370,40 @@ mod header_footer_pdf {
     fn content_text(content: &[u8], cmaps: &HashMap<String, BTreeMap<u16, String>>) -> String {
         let mut current_font = None;
         let mut text = String::new();
+        let mut inside_actual_text = false;
         for line in content.split(|byte| *byte == b'\n') {
             let line = line
                 .iter()
                 .copied()
                 .skip_while(|byte| byte.is_ascii_whitespace())
                 .collect::<Vec<_>>();
+            if let Some(actual_text) = find_bytes(&line, b"/ActualText <") {
+                let open = actual_text + b"/ActualText <".len();
+                let close = open
+                    + line[open..]
+                        .iter()
+                        .position(|byte| *byte == b'>')
+                        .expect("ActualText hex string");
+                let bytes = parse_hex(&line[open..close]);
+                let utf16 = bytes
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                    .skip_while(|unit| *unit == 0xfeff)
+                    .collect::<Vec<_>>();
+                text.push_str(
+                    &char::decode_utf16(utf16)
+                        .collect::<Result<String, _>>()
+                        .expect("valid ActualText"),
+                );
+                inside_actual_text = true;
+                continue;
+            }
+            if inside_actual_text {
+                if line == b"EMC" {
+                    inside_actual_text = false;
+                }
+                continue;
+            }
             if line.ends_with(b" Tf") && line.starts_with(b"/F") {
                 let end = line
                     .iter()
@@ -5450,6 +5478,243 @@ mod header_footer_pdf {
                 content_text(&decoded_stream(&objects[&content_ref]), &cmaps)
             })
             .collect()
+    }
+
+    #[test]
+    fn hybrid_rtl_hyphenation_keeps_pdf_and_svg_logical_text_with_visual_origins() {
+        let mut seed = Document::new();
+        seed.add_paragraph("seed");
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+            .expect("seed package opens");
+        package.set_part(
+            "/word/document.xml",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/><w:lang w:bidi="ar-SA"/></w:rPr><w:t>العربية</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:rPr><w:rtl/></w:rPr><w:t>99</w:t></w:r></w:fldSimple><w:r><w:rPr><w:rtl w:val="0"/><w:lang w:val="en-US"/><w:sz w:val="72"/></w:rPr><w:t>representation</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="3600" w:h="15840"/><w:pgMar w:top="720" w:right="360" w:bottom="720" w:left="360"/></w:sectPr></w:body></w:document>"#.as_bytes().to_vec(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).expect("hybrid document opens");
+        document.set_auto_hyphenation(true).unwrap();
+
+        let layout = document.layout_deterministic().unwrap();
+        let mut arabic_x = None;
+        let mut english = None::<(String, f64)>;
+        let mut has_conditional_hyphen = false;
+        for page in &layout.layout.pages {
+            walk(&page.elements, &mut |element, _| match element {
+                PositionedElement::MultilingualText(run) if run.logical_text == "العربية" => {
+                    arabic_x = Some(run.origin.x)
+                }
+                PositionedElement::Text(run)
+                    if run.source.is_some() && "representation".starts_with(&run.text) =>
+                {
+                    english = Some((run.text.clone(), run.origin.x))
+                }
+                PositionedElement::Text(run)
+                    if run.source.is_none() && run.field_kind.is_none() && run.text == "-" =>
+                {
+                    has_conditional_hyphen = true
+                }
+                _ => {}
+            });
+        }
+        let (english_text, english_x) = english.expect("hyphenated English prefix");
+        assert!(
+            has_conditional_hyphen,
+            "the line selects a conditional hyphen"
+        );
+        assert!(english_x < arabic_x.unwrap(), "paint remains visual RTL");
+
+        let pdf_text = pdf_page_text(&document.to_pdf_deterministic().unwrap());
+        let page_text = &pdf_text[0];
+        let arabic = page_text
+            .find("العربية")
+            .unwrap_or_else(|| panic!("missing Arabic PDF extraction in {page_text:?}"));
+        let field = page_text
+            .find('1')
+            .unwrap_or_else(|| panic!("missing PAGE PDF extraction in {page_text:?}"));
+        let english = page_text
+            .find(&english_text)
+            .unwrap_or_else(|| panic!("missing English PDF extraction in {page_text:?}"));
+        let hyphen = english
+            + page_text[english..]
+                .find('-')
+                .unwrap_or_else(|| panic!("missing conditional hyphen in {page_text:?}"));
+        assert!(
+            arabic < field && field < english && english < hyphen,
+            "PDF extraction remains logical: {page_text:?}"
+        );
+
+        let svg = document
+            .render_page_to_svg_deterministic(0)
+            .unwrap()
+            .expect("first SVG page");
+        let arabic = svg.svg.find("العربية</text>").unwrap();
+        let field = svg.svg.find(">1</text>").unwrap();
+        let english = svg.svg.find(&format!(">{english_text}</text>")).unwrap();
+        let hyphen = svg.svg[english..].find(">-</text>").unwrap() + english;
+        assert!(
+            arabic < field && field < english && english < hyphen,
+            "SVG DOM text remains logical"
+        );
+    }
+
+    #[test]
+    fn source_less_stored_field_keeps_logical_pdf_and_svg_order() {
+        let mut seed = Document::new();
+        seed.add_paragraph("seed");
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+            .expect("seed package opens");
+        package.set_part(
+            "/word/document.xml",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/><w:lang w:bidi="he-IL"/></w:rPr><w:t>אבג</w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:rPr><w:rtl/></w:rPr><w:t>99</w:t></w:r></w:fldSimple><w:r><w:rPr><w:rtl w:val="0"/><w:lang w:val="en-US"/></w:rPr><w:t>ABC</w:t></w:r></w:p></w:body></w:document>"#.as_bytes().to_vec(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(bytes.get_ref()).expect("field document opens");
+
+        let pdf_text = pdf_page_text(&document.to_pdf_deterministic().unwrap());
+        let page_text = &pdf_text[0];
+        let hebrew = page_text
+            .find("אבג")
+            .unwrap_or_else(|| panic!("missing Hebrew PDF extraction in {page_text:?}"));
+        let page = page_text
+            .find('1')
+            .unwrap_or_else(|| panic!("missing PAGE PDF extraction in {page_text:?}"));
+        let english = page_text
+            .find("ABC")
+            .unwrap_or_else(|| panic!("missing English PDF extraction in {page_text:?}"));
+        assert!(
+            hebrew < page && page < english,
+            "PDF extraction keeps the logical field position: {page_text:?}"
+        );
+
+        let svg = document
+            .render_page_to_svg_deterministic(0)
+            .unwrap()
+            .expect("first SVG page");
+        let hebrew = svg.svg.find("אבג</text>").unwrap();
+        let page = svg.svg.find(">1</text>").unwrap();
+        let english = svg.svg.find("ABC</text>").unwrap();
+        assert!(
+            hebrew < page && page < english,
+            "SVG DOM keeps the logical field position"
+        );
+    }
+
+    #[test]
+    fn mixed_bidi_footnote_and_endnote_keep_logical_pdf_and_svg_order() {
+        let mut seed = Document::new();
+        seed.add_paragraph("seed");
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+            .expect("seed package opens");
+        let (footnote_rel, endnote_rel) = {
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            (
+                relationships.add(
+                    oxml_opc::relationship::rel_types::FOOTNOTES,
+                    "footnotes.xml",
+                ),
+                relationships.add(oxml_opc::relationship::rel_types::ENDNOTES, "endnotes.xml"),
+            )
+        };
+        assert!(!footnote_rel.is_empty() && !endnote_rel.is_empty());
+        package.set_part(
+            "/word/document.xml",
+            br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>BODY</w:t><w:footnoteReference w:id="2"/><w:endnoteReference w:id="3"/></w:r></w:p></w:body></w:document>"#.to_vec(),
+        );
+        package.set_part(
+            "/word/footnotes.xml",
+            r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="2"><w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/><w:lang w:bidi="ar-SA"/></w:rPr><w:t>قدم</w:t></w:r><w:fldSimple w:instr="MERGEFIELD Value"><w:r><w:rPr><w:rtl/></w:rPr><w:t>FOOTFIELD</w:t></w:r></w:fldSimple><w:r><w:rPr><w:rtl w:val="0"/><w:lang w:val="en-US"/></w:rPr><w:t>FOOTTAIL</w:t></w:r></w:p></w:footnote></w:footnotes>"#.as_bytes().to_vec(),
+        );
+        package.set_part(
+            "/word/endnotes.xml",
+            r#"<w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:endnote w:id="3"><w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/><w:lang w:bidi="he-IL"/></w:rPr><w:t>סוף</w:t></w:r><w:fldSimple w:instr="MERGEFIELD Value"><w:r><w:rPr><w:rtl/></w:rPr><w:t>ENDFIELD</w:t></w:r></w:fldSimple><w:r><w:rPr><w:rtl w:val="0"/><w:lang w:val="en-US"/></w:rPr><w:t>ENDTAIL</w:t></w:r></w:p></w:endnote></w:endnotes>"#.as_bytes().to_vec(),
+        );
+        package.content_types.add_override(
+            "/word/footnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+        );
+        package.content_types.add_override(
+            "/word/endnotes.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(bytes.get_ref()).expect("note document opens");
+
+        let pdf_text = pdf_page_text(&document.to_pdf_deterministic().unwrap()).join("\n");
+        for expected in [
+            ("قدم", "FOOTFIELD", "FOOTTAIL"),
+            ("סוף", "ENDFIELD", "ENDTAIL"),
+        ] {
+            let first = pdf_text.find(expected.0).unwrap();
+            let second = pdf_text.find(expected.1).unwrap();
+            let third = pdf_text.find(expected.2).unwrap();
+            assert!(
+                first < second && second < third,
+                "PDF note extraction stays logical: {pdf_text:?}"
+            );
+        }
+
+        let svg = (0..document.layout_deterministic().unwrap().layout.pages.len())
+            .filter_map(|page| document.render_page_to_svg_deterministic(page).unwrap())
+            .map(|page| page.svg)
+            .collect::<String>();
+        for expected in [
+            ("قدم", "FOOTFIELD", "FOOTTAIL"),
+            ("סוף", "ENDFIELD", "ENDTAIL"),
+        ] {
+            let first = svg.find(expected.0).unwrap();
+            let second = svg.find(expected.1).unwrap();
+            let third = svg.find(expected.2).unwrap();
+            assert!(
+                first < second && second < third,
+                "SVG note extraction stays logical"
+            );
+        }
+    }
+
+    #[test]
+    fn source_less_numbering_marker_keeps_logical_pdf_and_svg_order() {
+        let mut seed = Document::new();
+        seed.add_numbered_list_item("seed", 0);
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+            .expect("seed package opens");
+        package.set_part(
+            "/word/document.xml",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl w:val="0"/><w:lang w:val="en-US"/></w:rPr><w:t xml:space="preserve">123 </w:t></w:r><w:r><w:rPr><w:rtl/><w:lang w:bidi="ar-SA"/></w:rPr><w:t>العربية</w:t></w:r></w:p></w:body></w:document>"#.as_bytes().to_vec(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(bytes.get_ref()).expect("numbered document opens");
+
+        let pdf_text = pdf_page_text(&document.to_pdf_deterministic().unwrap());
+        let page_text = &pdf_text[0];
+        let marker = page_text
+            .find("1.")
+            .unwrap_or_else(|| panic!("missing numbering marker in {page_text:?}"));
+        let number = page_text
+            .find("123")
+            .unwrap_or_else(|| panic!("missing number in {page_text:?}"));
+        let arabic = page_text
+            .find("العربية")
+            .unwrap_or_else(|| panic!("missing Arabic in {page_text:?}"));
+        assert!(
+            marker < number && number < arabic,
+            "PDF extraction keeps the logical marker prefix: {page_text:?}"
+        );
+
+        let svg = document
+            .render_page_to_svg_deterministic(0)
+            .unwrap()
+            .expect("first SVG page");
+        let marker = svg.svg.find(">1.</text>").unwrap();
+        let number = svg.svg.find("123").unwrap();
+        let arabic = svg.svg.find("العربية</text>").unwrap();
+        assert!(
+            marker < number && number < arabic,
+            "SVG DOM keeps the logical marker prefix"
+        );
     }
 
     #[test]

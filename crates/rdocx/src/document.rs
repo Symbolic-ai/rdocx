@@ -1277,6 +1277,42 @@ const CORE_PROPERTIES_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
 const CORE_PROPERTIES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-package.core-properties+xml";
+const SETTINGS_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
+const DEFAULT_SETTINGS_PART: &str = "/word/settings.xml";
+
+fn package_part_name_is_occupied(package: &OpcPackage, part_name: &str) -> bool {
+    package.parts.contains_key(part_name)
+        || package.part_rels.contains_key(part_name)
+        || package.content_types.overrides.contains_key(part_name)
+}
+
+fn available_settings_part_name(package: &OpcPackage) -> Result<String> {
+    if !package_part_name_is_occupied(package, DEFAULT_SETTINGS_PART) {
+        return Ok(DEFAULT_SETTINGS_PART.to_owned());
+    }
+
+    let prefix = "/word/settings";
+    let suffix = ".xml";
+    let maximum = package
+        .parts
+        .keys()
+        .chain(package.part_rels.keys())
+        .chain(package.content_types.overrides.keys())
+        .filter_map(|part_name| {
+            part_name
+                .strip_prefix(prefix)
+                .and_then(|value| value.strip_suffix(suffix))
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|number| *number > 0)
+        })
+        .max()
+        .unwrap_or(0);
+    let number = maximum
+        .checked_add(1)
+        .ok_or_else(|| Error::Other("no free Word settings part name".to_owned()))?;
+    Ok(format!("{prefix}{number}{suffix}"))
+}
 
 #[cfg(test)]
 thread_local! {
@@ -2469,6 +2505,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -2544,6 +2581,7 @@ impl Document {
             columns: (0..cols)
                 .map(|_| CT_TblGridCol { width: col_width })
                 .collect(),
+            ..Default::default()
         };
 
         let mut tbl = CT_Tbl::new();
@@ -3707,6 +3745,21 @@ impl Document {
     /// Enable or disable different first page header/footer.
     pub fn set_different_first_page(&mut self, val: bool) {
         self.section_properties_mut().title_pg = Some(val);
+    }
+
+    /// Enable or disable automatic document hyphenation.
+    pub fn set_auto_hyphenation(&mut self, enabled: bool) -> Result<()> {
+        let part_name = match &self.settings_part_name {
+            Some(part_name) => part_name.clone(),
+            None => available_settings_part_name(&self.package)?,
+        };
+        self.settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_automatic_hyphenation(enabled)?;
+        self.invalidate_layout();
+        self.settings_part_name = Some(part_name.clone());
+        self.ensure_part_relationship(&part_name, rel_types::SETTINGS, SETTINGS_CONTENT_TYPE);
+        Ok(())
     }
 
     // ---- Metadata access ----
@@ -5339,6 +5392,10 @@ impl Document {
         LayoutInput {
             revision_view: rdocx_layout::RevisionView::Accepted,
             document,
+            automatic_hyphenation: self
+                .settings
+                .as_ref()
+                .is_some_and(CT_Settings::automatic_hyphenation),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             headers,
@@ -7070,7 +7127,8 @@ mod tests {
             .layout_with_fonts_and_bundled_fallback(&fonts)
             .expect("prime font receiver");
         let mut changed_bytes = caller_bytes.clone();
-        changed_bytes.push(0);
+        let last = changed_bytes.last_mut().expect("caller font has bytes");
+        *last ^= 1;
         assert!(
             !font_receiver.transfer_reusable_bundled_fallback_layout_from(
                 &mut font_source,
@@ -9466,6 +9524,7 @@ mod tests {
                 CT_TblGridCol { width: Twips(1800) },
                 CT_TblGridCol { width: Twips(1800) },
             ],
+            ..Default::default()
         });
         table.rows.push(marker_row("{% for item in items %}"));
         table
@@ -10506,6 +10565,68 @@ mod tests {
                 .as_ref()
                 .and_then(|properties| properties.indent.as_ref()),
             Some(&rdocx_oxml::table::CT_TblWidth::dxa(720))
+        );
+    }
+
+    #[test]
+    fn authored_hyphenation_setting_and_run_language_round_trip_into_layout() {
+        let mut document = Document::new();
+        document.set_auto_hyphenation(true).unwrap();
+        document
+            .add_paragraph("")
+            .add_run("representation")
+            .language("en-US");
+
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert!(reopened.build_layout_input().automatic_hyphenation);
+        assert_eq!(
+            reopened.paragraphs()[0].run(0).unwrap().language(),
+            Some("en-US")
+        );
+        let settings_part = reopened.settings_part_name.as_deref().unwrap();
+        let settings_xml =
+            std::str::from_utf8(reopened.package.get_part(settings_part).unwrap()).unwrap();
+        assert!(settings_xml.contains("<w:autoHyphenation/>"));
+    }
+
+    #[test]
+    fn authored_settings_do_not_overwrite_an_unrelated_conventional_part() {
+        let mut document = Document::new();
+        let unrelated = br#"<producer:metadata xmlns:producer="urn:producer"/>"#.to_vec();
+        document
+            .package
+            .set_part(DEFAULT_SETTINGS_PART, unrelated.clone());
+        document
+            .package
+            .content_types
+            .add_override(DEFAULT_SETTINGS_PART, "application/example+xml");
+
+        document.set_auto_hyphenation(true).unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+
+        assert_eq!(
+            package.get_part(DEFAULT_SETTINGS_PART),
+            Some(unrelated.as_slice())
+        );
+        assert_eq!(
+            package
+                .content_types
+                .content_type_for(DEFAULT_SETTINGS_PART),
+            Some("application/example+xml")
+        );
+        let relationship = package
+            .get_part_rels("/word/document.xml")
+            .and_then(|relationships| relationships.get_by_type(rel_types::SETTINGS))
+            .expect("authored settings relationship");
+        let settings_part =
+            OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target);
+        assert_ne!(settings_part, DEFAULT_SETTINGS_PART);
+        assert!(
+            std::str::from_utf8(package.get_part(&settings_part).unwrap())
+                .unwrap()
+                .contains("<w:autoHyphenation/>")
         );
     }
 

@@ -1,7 +1,8 @@
 //! Conversion from WordprocessingML flow values to shared layout values.
 
 use oxml_layout::{
-    Align, LayoutLine, LineBreakParams, LineSpacing, TabAlign, TabLeader, TabStop, Underline,
+    Align, LayoutLine, LineBreakParams, LineSpacing, TabAlign, TabLeader, TabStop, TextDirection,
+    Underline,
 };
 use rdocx_oxml::borders::CT_TabStop;
 use rdocx_oxml::properties::CT_PPr;
@@ -14,6 +15,21 @@ pub(crate) fn alignment(value: Option<ST_Jc>) -> Option<Align> {
         ST_Jc::End | ST_Jc::Right => Align::End,
         ST_Jc::Both => Align::Justify,
         ST_Jc::Distribute => Align::Distribute,
+    })
+}
+
+pub(crate) fn alignment_for_direction(
+    value: Option<ST_Jc>,
+    direction: TextDirection,
+) -> Option<Align> {
+    value.map(|value| match (value, direction) {
+        (ST_Jc::Start, TextDirection::RightToLeft) => Align::End,
+        (ST_Jc::End, TextDirection::RightToLeft) => Align::Start,
+        (ST_Jc::Start | ST_Jc::Left, _) => Align::Start,
+        (ST_Jc::End | ST_Jc::Right, _) => Align::End,
+        (ST_Jc::Center, _) => Align::Center,
+        (ST_Jc::Both, _) => Align::Justify,
+        (ST_Jc::Distribute, _) => Align::Distribute,
     })
 }
 
@@ -124,6 +140,26 @@ mod tests {
             assert_eq!(alignment(Some(word)), Some(shared));
         }
         assert_eq!(alignment(None), None);
+    }
+
+    #[test]
+    fn logical_alignment_uses_the_paragraph_base_direction() {
+        assert_eq!(
+            alignment_for_direction(Some(ST_Jc::Start), TextDirection::RightToLeft),
+            Some(Align::End)
+        );
+        assert_eq!(
+            alignment_for_direction(Some(ST_Jc::End), TextDirection::RightToLeft),
+            Some(Align::Start)
+        );
+        assert_eq!(
+            alignment_for_direction(Some(ST_Jc::Left), TextDirection::RightToLeft),
+            Some(Align::Start)
+        );
+        assert_eq!(
+            alignment_for_direction(Some(ST_Jc::Right), TextDirection::LeftToRight),
+            Some(Align::End)
+        );
     }
 
     #[test]

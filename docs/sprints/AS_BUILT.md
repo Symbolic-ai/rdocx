@@ -9400,3 +9400,794 @@ Poppler 26.01.0 identities.
 18 pages at SSIM 0.95 or greater. The 5.56 percent trend is deliberately
 visible but advisory. Future shaping stories should improve or intentionally
 explain this evidence without weakening complete-union coverage.
+
+### F-202, Incremental layout
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Restart pagination now retains up to 1,024 page and
+checkpoint entries under the existing 8 MiB restart and 64 MiB aggregate byte
+ceilings. Editing one paragraph in the source-built thousand-page document
+rebuilds at most two pages through both the engine and public facade paths.
+
+**Non-obvious choices.** The retained partition keeps exact body, provenance,
+font, substitution, tail-context, and suffix equality. Oversized or unsafe
+state still falls back to full pagination. Substituted-page reuse stays bounded
+at the 1,024 and 1,025 page boundary, and retained page frames use shared
+`Arc` identity without changing the public API.
+
+**Deviations from the design plan.** None. Microscope tightened the invocation
+gate so it proves 1,000 initial page layouts and only one or two warm page
+layouts instead of accepting a zero-work false positive.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The engine and facade thousand-page restart regressions,
+substituted-page boundary equality, the existing locked F-201 release gate,
+and the dependency-prefix full workspace gate passed. The latter included
+no-default fonts, both WASM targets, warning-free docs, 27 README inventories,
+the exact 22-package dry run, archive size checks, and cargo-deny.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** The 1,024 entry ceiling is an explicit bounded
+editor contract. F-X062 may widen restart eligibility for unchanged related
+stories, but it must preserve the same byte ceilings and exact fresh equality.
+
+### F-X061, Support staged dependency checkpoints in run-sprint
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** `/run-sprint` now finalises an integrated dependency prefix
+before claiming its consumer, then resumes the same sprint state. Release
+dependencies extend that route with prepared-release evidence, separate final
+approval, verified publication, and post-publication delivery records.
+
+**Non-obvious choices.** A clean review file is committed first, the clean
+verdict is recorded at that resulting HEAD, and full verification is rerun at
+the same HEAD. No self-confirming review is added for the evidence-only commit.
+Each scheduled boundary keeps its own remediation bound while global pass
+numbers remain monotonic. `init --resume` refreshes canonical title and size
+metadata while preserving state, ownership, worker, review, and verification
+facts.
+
+**Deviations from the design plan.** The approved release-only repair was
+generalised before integration after an independent A to B to C forward test
+proved that ordinary dependencies had the same finalisation deadlock.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Eighty-four workflow regressions and an independent forward test
+covered ordinary A to B to C chains, release R to D chains, review commit
+ordering, and resume preservation. The dependency-prefix full workspace gate
+also passed with all package, documentation, WASM, hash, and supply-chain
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Use the dependency-prefix route before every
+consumer whose formal prerequisite is reviewed but not completed. Earlier
+HEAD-bound evidence remains historical and cannot satisfy a later boundary.
+
+### F-X062, Reuse restart pagination with notes and headers
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Restart pagination now reuses unchanged footnote, endnote,
+header, and footer context at note-clean page boundaries. The reporter-scale
+700-paragraph facade workload retains all but at most two pages while remaining
+exactly equal to a fresh layout.
+
+**Non-obvious choices.** Exact related-story and body note-reference equality
+is required before reuse. Note-bearing tables and other traversal-sensitive
+content keep conservative full pagination. Restarted completion appends
+endnotes exactly once with final page numbers offset by the retained prefix,
+while exact cached tails keep their attached endnote pages.
+
+**Deviations from the design plan.** Microscope pass 1 found that restarted
+completion appended endnotes before accounting for the retained prefix. The
+remediation added a no-cached-tail regression and supplies the full selected
+note sequence plus retained-prefix page offset only on that completion path.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Five planned engine and facade regressions, the restarted-completion
+endnote regression, 175 `rdocx-layout` tests, the full `rdocx` and workspace
+suites, the F-201 release performance gate, no-default fonts, both WASM
+targets, documentation, README, package, archive-size, and dependency-policy
+gates passed. Microscope pass 2 reported zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Restart checkpoints remain note-clean. Changed
+related stories, changed note-reference sequences, and note-bearing tables are
+intentional full-pagination boundaries.
+
+### F-X063, Avoid duplicate caller-font byte comparisons
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Normal warm layout now skips the second retained-context
+font byte equality after `FontManager::load_additional_fonts` has already
+proved the ordered caller-font family and byte set unchanged. The measured
+duplicate work for the 22 MiB reporter workload falls from 23,068,672 bytes to
+zero.
+
+**Non-obvious choices.** The optimization is private and applies only after the
+font manager's authoritative exact comparison. Checked engine transfer still
+uses the complete ordered family and byte comparison, and equal-length changed
+font bytes still invalidate reusable work.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Three exact byte-accounting controls and the public five-font,
+40-alias regression passed with complete warm and fresh equality. All 178
+`rdocx-layout` tests, full `rdocx` and workspace suites, the F-201 release
+performance gate, no-default fonts, both WASM targets, documentation, README,
+package, archive-size, and dependency-policy gates passed. Microscope pass 1
+reported zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Do not replace the exact comparison with family
+and length checks or a full-input hash. Any new warm path must prove the font
+manager has already accepted the exact bytes before using the font-elided
+retained-context comparison.
+
+### F-X058, Shared multilingual text substrate
+
+**Sprint.** S58
+**Completed.** 2026-08-26
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The shared layout family now provides additive multilingual
+shaping, cluster-safe line breaking, conditional hyphenation, paragraph
+direction, and line-local bidi ordering. DrawingML direction reaches the rich
+PowerPoint path, and PDF, raster, and SVG consume validated positioned glyphs
+while preserving logical searchable text. Deterministic Noto Arabic,
+Devanagari, Thai, and reproducibly subset CJK fonts include complete licence
+and provenance records.
+
+**Non-obvious choices.** Existing exhaustive public structs and legacy Latin
+entry points keep their exact shapes and behavior. New direction information
+travels through a sibling sidecar. Rich shaping is paragraph-wide across
+forced breaks, line layout applies UAX 9 L1 before L2, and malformed public
+rich runs fail safely in every backend.
+
+**Deviations from the design plan.** Six microscope passes tightened the
+approved implementation without changing scope. Remediation preserved legacy
+struct literals, moved direction to an additive carrier, made bidi resolution
+paragraph-wide, applied line-local whitespace resets at cluster granularity,
+and aligned SVG validation with PDF and raster. The final pass reported zero
+defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/11-migration-plan.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The conditional-hyphen, Arabic, Indic, Thai, CJK, bidi,
+DrawingML-direction, rich PowerPoint output, legacy source-compatibility, and
+font-inventory regressions pass. Full workspace tests, no-default layout, both
+WASM targets, rustdoc, 27 README inventories, the exact 22-package dry run,
+archive limits, and cargo-deny also pass.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-X059 must publish the complete 0.7.0 shared
+family before stable Word consumers opt into this rich path. F-198 owns the
+first declared rendering-baseline movement.
+
+### F-X059, Tag rpptx-v0.7.0
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete fifteen-package shared OOXML and PowerPoint
+family was published at 0.7.0 from reviewed SHA
+`1b076c16fb494fe47b054d761e061181a1ea0b15`. The release publishes the shared
+multilingual shaping, breaking, direction, deterministic font, and rich
+backend substrate. `rpptx-wasm` remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[33049354630](https://github.com/tensorbee/rdocx/actions/runs/33049354630)
+passed output stability, release metadata, reviewed notes, archive
+verification, the exact fifteen-crate publication, and GitHub Release jobs.
+Every selected 0.7.0 registry entry resolved under owner
+`mantissaman (Atul Sharma)`. The annotated
+[`rpptx-v0.7.0`](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.7.0)
+tag dereferenced to the reviewed SHA, and its 2,529-byte body was
+byte-identical to the committed changelog render.
+
+**Contribution inventory.** The selected F-X058 substrate added no new
+authenticated external issue or pull-request record after `rpptx-v0.6.0`.
+PRs 55 through 57 remain open and belong to later F-X064 through F-X066
+stable-reader stories, so they are not part of this release inventory.
+
+**Notifications.** None. The reviewed contribution inventory was empty, and
+no issue or pull-request state changed during this release.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed SHA with all workspace,
+no-default, WASM, documentation, README, exact 22-package dry-run, archive,
+and cargo-deny gates. The hash harness remained unchanged at 49 of 49. The
+publication workflow and independent registry, owner, tag, release-target,
+and byte-for-byte release-body checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.7.0` tag.
+F-X064 through F-X066 may now land the three open contributor PR outcomes,
+and F-198 through F-200 may consume the published shared 0.7.0 boundary.
+
+### F-X064, Accept whole-valued decimal table measurements
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Word table widths, cell widths, table indents, and default
+cell margins now accept whole-valued decimal lexical forms such as `9345.0`
+through one exact string parser. Fractional decimals, exponent forms, overflow,
+percentages, universal measures, and malformed values return explicit errors
+instead of becoming zero. Serialization retains the canonical integer form.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 55](https://github.com/tensorbee/rdocx/pull/55) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`056d48fdf23f35e3538ef3d6ff78cf9e3863e3a5`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** The existing signed integer public projection remains
+unchanged. Valid percentage and universal-measure union arms are reported as
+unsupported until a separate lossless model is designed. Parsing is
+namespace-aware and does not use floating point.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** Four focused lexical, namespace, negative, and round-trip
+regressions passed. The full workspace, no-default, WASM, rustdoc, README,
+22-package dry-run, archive-size, and supply-chain gates passed. The pinned
+five-document Word corpus produced all 18 expected evidence pages. Its
+advisory SSIM trend remained 1 of 18 pages at or above 0.95.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep unsupported union arms explicit. Do not
+restore malformed-to-zero behavior or replace exact lexical parsing with
+floating-point conversion.
+
+### F-X067, Prime Word fidelity Cargo dependencies
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The Word fidelity job now runs one named
+`cargo fetch --locked` step immediately after the pinned Rust cache restore and
+before corpus setup or the locked offline harness. Existing workflow tests
+prove the step is present exactly once, locked, and in the correct job and
+position.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 58](https://github.com/tensorbee/rdocx/pull/58) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`c8fed1d1268fd765d602bac2da6524900c1c1cfd`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** Dependency priming is the only network boundary. The
+fidelity helper remains locked and offline, so a cold hosted runner cannot
+silently resolve a different graph while producing oracle evidence.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The complete 86-test workflow module passed, including missing,
+unlocked, duplicate, misplaced, and wrong-job mutations. The full workspace,
+no-default, WASM, rustdoc, README, 22-package dry-run, archive-size, and
+supply-chain gates passed. The integrated pinned Word gate fetched the locked
+graph first and produced nonempty JSON and TSV evidence for five documents and
+18 union pages.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the single explicit network boundary
+before the offline helper. The integrated hosted Word job remains a sprint
+completion rider.
+
+### F-X065, Expose tracked table grid changes
+
+**Sprint.** S58
+**Completed.** 2026-08-27
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Table-grid parsing now recognizes `w:tblGrid`,
+`w:gridCol`, and `w:tblGridChange` by namespace URI. One historical grid
+subtree is preserved exactly and written after active columns, duplicates fail
+closed, and foreign same-local children remain raw. The public table facade can
+report the presence of tracked grid history, while layout continues to use
+only active columns.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 56](https://github.com/tensorbee/rdocx/pull/56) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`8b79c4cd0452defafe0a58e86b332c98e7fe52d7`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** Historical grid XML remains a preservation sidecar
+and never changes active layout widths. Captured historical and foreign
+subtrees receive the ancestor namespace bindings they need to serialize as
+self-contained XML. Adding the optional historical field to the pre-1.0 public
+`CT_TblGrid` literal is an intentional source compatibility change for v0.11.0.
+
+**Deviations from the design plan.** Microscope pass 1 found that raw grid
+subtrees could lose namespace bindings declared only by ancestors. The
+remediation reused the existing owner-binding normalization and added a
+save, reparse, and repeated-serialization regression. Microscope pass 2
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** Six focused namespace, preservation, duplicate, facade, and
+active-layout regressions passed. The full `rdocx-oxml`, `rdocx-layout`,
+`rdocx`, and workspace suites passed. The no-default, WASM, rustdoc, README,
+22-package dry-run, archive-size, and supply-chain gates passed. The pinned
+five-document Word corpus produced nonempty evidence for all 18 union pages.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep historical grid data inert for layout and
+preserve its namespace context. Do not accept a second modeled grid change by
+discarding bytes.
+
+### F-X066, Classify legacy VML horizontal rules
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Native run inspection now classifies the narrow legacy
+horizontal-rule form as `RunItemRef::LegacyHorizontalRule` and exposes its
+exact raw XML. Classification resolves WordprocessingML, VML, and Office names
+by namespace URI, accepts only the documented true lexical forms, and leaves
+all foreign, malformed, ambiguous, or visible-content cases unsupported. No
+layout or renderer draws the rule.
+
+**Contribution evidence.** This is a hardened equivalent of
+[PR 57](https://github.com/tensorbee/rdocx/pull/57) from authenticated
+contributor `@pedroassumpcao`, reviewed at source SHA
+`44498f042a2290ef40c7a6c26025f38e38e9ce2a`. The original pull request remains
+open and unchanged.
+
+**Non-obvious choices.** Classification occurs once at the OXML parse boundary
+and is encoded in the existing raw-position sidecar. This preserves the
+published `CT_R` struct-literal shape, makes equality reflect observable
+classification, and avoids retaining namespace-scope allocations on ordinary
+runs. `RunItemRef` was already non-exhaustive, so the new variant is additive.
+
+**Deviations from the design plan.** Microscope pass 1 found that reparsing a
+raw child lost namespace bindings declared by ancestors. The first remediation
+threaded namespace scope into `CT_R`, but microscope pass 2 found a published
+struct-literal break, equality drift, and eager scope cloning. The final
+parse-boundary sidecar design remediated all three findings. Microscope pass 3
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** URI-aware positive, negative, raw-order, equality, allocation, and
+package save-reopen regressions passed. The full workspace, no-default, WASM,
+rustdoc, README, 22-package dry-run, archive-size, and supply-chain gates
+passed. The pinned five-document Word corpus produced nonempty evidence for
+all 18 union pages. Its advisory SSIM trend remained 1 of 18 pages at or above
+0.95.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the classification reader-only and
+namespace-aware. Rendering legacy VML horizontal rules requires a separate
+story with its own output contract.
+
+### F-198, Hyphenation
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Word settings and run properties now project, preserve,
+and author automatic hyphenation plus all three modeled language attributes,
+while retaining foreign attributes separately. The layout
+path uses the effective run language to select the farthest fitting Liang
+opportunity and emits a generated hyphen without claiming a source character.
+The page-one showcase enables English hyphenation and renders
+`representation` as consecutive `repre-` and `sentation` lines.
+
+**Non-obvious choices.** Automatic hyphenation remains off unless the document
+enables it, and unsupported languages remain unchanged. Restart pagination
+retains a compact canonical XML identity plus current-view note references,
+then performs exact byte equality after its fingerprint accelerator. This keeps
+all four 700-paragraph related-story gates within the unchanged 8 MiB budget
+without weakening retained-context identity.
+
+**Deviations from the design plan.** Recovery discarded the obsolete local
+shared-layout implementation and consumed the published `oxml-layout` 0.7.0
+contract from F-X058. Microscope passes 3 and 4 found settings preservation,
+target allocation, malformed-language ordering, source-compatibility prose,
+and retained-state budget defects. Each received a red regression and a
+separate remediation. Microscope pass 5 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Parser, round-trip, authoring, language inheritance, conditional
+hyphen, source-span, no-wrap, field exclusion, cache-identity, and all four
+700-paragraph related-story regressions passed. The deterministic golden gate
+matched 7 of 7 page-one buffers. LibreOffice Writer 26.2.5.2 rendered exact
+consecutive `repre-` and `sentation` lines. The pinned Word corpus produced
+complete evidence for five documents and 18 union pages. The 1,000-page release
+gate, current 0.7.0 registry carrier, immutable 0.6.0 historical carrier, full
+workspace, no-default, WASM, documentation, 22-package dry-run, archive-size,
+and supply-chain gates passed.
+
+**Hash harness.** The reviewed delta changes exactly five
+`feature_showcase` keys: page-one PNG, PDF bytes, PDF pages, PDF resources, and
+Word document XML. The reason is the explicit page-one English hyphenation
+example. All 49 baseline entries match after accepting that isolated delta.
+
+**Notes for future sessions.** Preserve generated hyphens as `source: None`,
+keep regional English tags mapped to the approved language data, and retain
+the exact 700-paragraph restart boundary and 8 MiB budget. The recovery stash
+and patch remain available until sprint close for auditability.
+
+### F-199, Complex script shaping
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Word layout now projects Arabic, Devanagari, Thai, and
+Simplified Chinese text through the shared multilingual shaping and line
+breaking path published in `oxml-layout` 0.7.0. Script-local language values,
+glyph clusters, offsets, logical source spans, conditional hyphens, field
+formatting, note references, and cached-story provenance survive pagination,
+drawing reflow, PDF, raster, and searchable SVG output. Latin-only content
+continues to use the byte-identical legacy path.
+
+**Non-obvious choices.** Exact-spaced rich Word lines use Word's 0.8em
+baseline instead of each fallback font's `hhea` ascent. The Simplified Chinese
+oracle uses a static Thin instance derived reproducibly from the approved Noto
+Sans SC variable subset because LibreOffice selects its Regular instance while
+the product consumes the file's Thin default. The fixture is oracle-only,
+licenced and hash-pinned, and excluded from published crates. A bounded POSIX
+lock serialises the complete macOS CoreText registration, Writer conversion,
+and unregistration lifetime.
+
+**Deviations from the design plan.** The approved oracle amendment added the
+static Thin fixture after exact-font calibration proved variation-axis
+selection was the only remaining CJK mismatch. Microscope passes 1 and 2 found
+interaction defects involving hyphenation, mixed language slots, field
+metadata, drawing reflow, cached source rebinding, hybrid bidirectional order,
+and concurrent oracle font registration. Each received a focused red
+regression and separate remediation. Microscope pass 3 reported zero defects,
+zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The shared Arabic joining, Indic cluster, Thai break, CJK
+punctuation, mixed fallback, positioned-cluster, searchable-output, source,
+hyphenation, field, drawing, cache, and paragraph-wide UAX 9 regressions
+passed. The pinned multi-script hard gate passed all 4 pages at raw SSIM 0.95
+or better: Arabic 0.985079311, Devanagari 0.972241230, Thai 0.997558968, and
+Simplified Chinese 0.997294132. The five-document corpus retained complete
+18-page evidence with its aggregate SSIM trend advisory. The full workspace,
+no-default, WASM, documentation, 22-package dry-run, archive-size, and
+supply-chain gates passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep pure Latin on the legacy identity path and
+resolve bidirectional order across both legacy hyphenatable items and rich
+complex-script items as one paragraph. The static CJK oracle font is evidence
+for the approved variable source bytes, not a product font or a new public
+variation-axis contract.
+
+### F-200, Vertical and bidirectional text
+
+**Sprint.** S58
+**Completed.** 2026-08-28
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Word paragraph `w:bidi` and run `w:rtl` are typed without
+losing unsupported attributes, duplicate occurrences, namespace identity, or
+schema order. Paragraph and run direction now reach the shared UAX 9 layout
+path across body text, tables, headers, footers, footnotes, endnotes, fields,
+numbering, tabs, conditional hyphens, and drawing reflow. Visual painting order
+and direction-sensitive alignment remain separate from logical PDF and SVG
+extraction order and exact source attribution.
+
+**Non-obvious choices.** Absent Word direction uses one inferred paragraph base
+instead of forcing left-to-right, while explicit run overrides preserve their
+internal digit and whitespace levels. Private reflow and cache sidecars carry
+direction and logical provenance without changing the public
+`ParagraphReflow` shape. Source-less fields, markers, generated hyphens, and tab
+leaders use distinct private provenance so visually reordered lines remain
+searchable in logical order. Existing whole-group quarter-turn vertical text
+remains the documented approximation.
+
+**Deviations from the design plan.** The approved bidi-only scope and five-file
+HLD impact were retained. Eleven microscope passes found parser occurrence,
+direction inference, hybrid line, field, object, note, table, header, cache,
+reflow, and source-less provenance interactions. Each defect received an
+existing-file red regression and a separate remediation turn. Microscope pass
+11 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** Typed direction round-trip, raw replay, paragraph and run override,
+line-local L1 and L2, logical extraction, drawing reflow, table and story cache,
+field, numbering, note, conditional-hyphen, tab-leader, and quarter-turn
+regressions passed. The pinned raw oracle passed all five pages at SSIM 0.95 or
+better: Arabic 0.956809869, Devanagari 0.972241230, Thai 0.997558968,
+Simplified Chinese 0.997294132, and bidirectional 0.992810907. Full workspace,
+no-default, WASM, documentation, 22-package dry-run, archive-size, and
+supply-chain gates passed at the integrated SHA.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve logical source order independently of
+visual positions, including for source-less generated content. Keep direction
+transport private where the existing public aggregate is exhaustive, and do
+not expand the quarter-turn approximation into upright vertical layout without
+an explicit scope and HLD revision.
+
+### F-X068, Tag rpptx-v0.8.0
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete fifteen-package shared OOXML and PowerPoint
+family was published at 0.8.0 from reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The release publishes the shared
+text-direction carrier required by current stable Word source while preserving
+the multilingual shaping, deterministic fonts, rich output, and logical text
+contracts from 0.7.0. `rpptx-wasm` remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[33258210706](https://github.com/tensorbee/rdocx/actions/runs/33258210706)
+passed output stability, release metadata, reviewed notes, archive
+verification, the exact fifteen-crate publication, and GitHub Release jobs.
+Every selected 0.8.0 registry entry resolved under owner
+`mantissaman (Atul Sharma)`. The annotated
+[`rpptx-v0.8.0`](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.8.0)
+tag dereferenced to the reviewed SHA, and its 2,016-byte body was
+byte-identical to the committed changelog render. `rpptx-wasm@0.8.0` remained
+absent from crates.io, and the prepared stable layout graph resolved the
+published `oxml-layout@0.8.0` boundary.
+
+**Contribution inventory.** This shared-family carrier release added no
+authenticated external issue or pull-request record. Issues 53 and 54 and PRs
+55 through 58 remain assigned to the later stable 0.11.1 recovery inventory.
+
+**Notifications.** None. The reviewed contribution inventory was empty, and
+no issue or pull-request state changed during this release.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed SHA with all workspace,
+no-default, WASM, documentation, README, exact 22-package dry-run, archive,
+and cargo-deny gates. The hash harness remained unchanged at 49 of 49. The
+publication workflow and independent registry, owner, tag, release-target,
+stable-graph, unpublished-WASM, and byte-for-byte release-body checks then
+passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.8.0` tag.
+F-X069 may now prepare and publish the coherent stable 0.11.1 recovery against
+the complete published shared 0.8.0 family.
+
+### F-X069, Tag v0.11.1
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete seven-package stable Word family was
+published at 0.11.1 from reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6`. The release publishes
+`rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`,
+and `rdocx-cli` against the complete shared 0.8.0 registry family. Python,
+WASM, npm, PyPI, shared, and PowerPoint publication authority remains
+unchanged.
+
+**Release evidence.** GitHub Actions run
+[33266482507](https://github.com/tensorbee/rdocx/actions/runs/33266482507)
+passed output stability, release metadata, reviewed notes, archive
+verification, the exact seven-crate publication, and GitHub Release jobs.
+Every selected 0.11.1 registry entry resolved unyanked under sole owner
+`mantissaman (Atul Sharma)`. The annotated
+[`v0.11.1`](https://github.com/tensorbee/rdocx/releases/tag/v0.11.1) tag
+dereferenced to the reviewed SHA. Its 6,102-byte body was byte-identical to the
+committed changelog render with SHA-256
+`a5111e521f1adcb5ca856b54bfb2c69c6cccdd855a608e75737fce74a8f5de47`.
+
+**Contribution inventory.** Issues
+[53](https://github.com/tensorbee/rdocx/issues/53) and
+[54](https://github.com/tensorbee/rdocx/issues/54) credit authenticated
+`@emptinessform`. Pull requests
+[55](https://github.com/tensorbee/rdocx/pull/55),
+[56](https://github.com/tensorbee/rdocx/pull/56),
+[57](https://github.com/tensorbee/rdocx/pull/57), and
+[58](https://github.com/tensorbee/rdocx/pull/58) credit authenticated
+`@pedroassumpcao`. Each outcome landed through a reviewed hardened equivalent.
+
+**Notifications.** The six release-bound comments are
+[Issue 53](https://github.com/tensorbee/rdocx/issues/53#issuecomment-5463995347),
+[Issue 54](https://github.com/tensorbee/rdocx/issues/54#issuecomment-5463995659),
+[PR 55](https://github.com/tensorbee/rdocx/pull/55#issuecomment-5463995914),
+[PR 56](https://github.com/tensorbee/rdocx/pull/56#issuecomment-5463996200),
+[PR 57](https://github.com/tensorbee/rdocx/pull/57#issuecomment-5463996504), and
+[PR 58](https://github.com/tensorbee/rdocx/pull/58#issuecomment-5463996746).
+All six records remain open.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed SHA with all workspace,
+no-default, WASM, documentation, README, exact 22-package dry-run, archive,
+and cargo-deny gates. The hash harness remained unchanged at 49 of 49. The
+publication workflow and independent registry, owner, tag, release-body,
+shared dependency, and notification checks then passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `v0.11.1` tag and all
+seven live packages. F-X070 may separately prepare the cleanup of exactly
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`, but the yanks still require a new
+final approval at its reviewed SHA.
+
+### F-X070, Yank incomplete v0.11.0 packages
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** After the complete stable 0.11.1 recovery verified, the
+separately approved cleanup yanked exactly `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0`. Both entries remain available as immutable package bytes
+but no longer participate in ordinary dependency selection. All seven 0.11.1
+packages remain live and unyanked under sole owner
+`mantissaman (Atul Sharma)`.
+
+**Non-obvious choices.** The cleanup is limited to an incomplete family, not a
+general policy for older versions. Complete coherent releases remain live. The
+annotated v0.11.0 tag still peels to
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, no v0.11.0 GitHub release exists,
+and no issue, pull request, notification, tag, release, package byte, or other
+registry version changed.
+
+**Deviations from the design plan.** HLD 11 joined the impact list after the
+preimplementation audit found its former blanket no-yank rule. The user
+approved the narrow incomplete-family exception. Four microscope passes
+hardened the exact command allowlist, corrected current release-family prose,
+clarified local delivery records, and verified the post-yank evidence. Pass 4
+reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/11-migration-plan.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The cleanup contract regression permits exactly the two approved
+version-specific yank commands and rejects wrappers, commands elsewhere in the
+plan, tag or release mutation, comments, closures, publication, and every
+other package or version. Independent readback reported both 0.11.0 targets as
+yanked, the other five stable 0.11.0 package endpoints as absent, all seven
+0.11.1 entries as live and unyanked under the sole authenticated owner, the
+tag target unchanged, and the GitHub release absent. Full integrated
+verification passed with the workspace, deterministic hash, no-default, WASM,
+documentation, README, exact 22-package dry-run, archive-size, and supply-chain
+gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve both yanked flags and the immutable
+v0.11.0 tag. Do not generalize this incomplete-family cleanup into authority to
+yank a complete coherent release.
+
+### F-X031, Require the CI gate in branch protection
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The default branch now has active repository ruleset
+`21823007`, named `Require CI gate on default branch`. It targets
+`~DEFAULT_BRANCH` and requires the exact aggregate check `CI gate`. The sole
+bypass is repository role 5, `admin`, in `always` mode so the reviewed
+`/close-sprint` direct-push workflow remains executable.
+
+**Non-obvious choices.** A repository ruleset preserves the pre-mutation state
+without replacing a classic protection document. The bypass is limited to the
+repository-administrator role. No team, app, user, or broader repository role
+can bypass the gate. Both proof pull requests were closed without merging and
+their disposable branches were deleted after their exact refs were checked.
+
+**Deviations from the design plan.** None. The user separately approved the
+persistent ruleset and its narrow administrator bypass before mutation.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The docs-only
+[PR 59](https://github.com/tensorbee/rdocx/pull/59) reached CLEAN and MERGEABLE
+after run
+[33275852961](https://github.com/tensorbee/rdocx/actions/runs/33275852961)
+reported a successful required `CI gate` while eight filtered product jobs
+stayed skipped. The deliberately failing
+[PR 60](https://github.com/tensorbee/rdocx/pull/60) became BLOCKED after run
+[33276064981](https://github.com/tensorbee/rdocx/actions/runs/33276064981)
+reported a failed `CI gate`, while `viewerCanMergeAsAdmin=true` proved the
+approved close-sprint bypass. Independent readback verified the active ruleset,
+sole bypass, exact check, closed-unmerged pull requests, and absent disposable
+refs. Full integrated verification passed with workspace, no-default, WASM,
+documentation, README, exact 22-package dry-run, archive-size, and supply-chain
+gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve ruleset `21823007` and the exact
+`CI gate` check identity. A future workflow rename must update the ruleset in a
+separately reviewed operational story. Use `/close-sprint` for the reviewed
+administrator-bypass push to `main`.

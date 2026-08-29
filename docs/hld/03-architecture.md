@@ -124,6 +124,34 @@ output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
 format.
 
+The same boundary owns multilingual text mechanics. Rich segments retain
+logical text and source ranges while carrying script, language, direction,
+bidi level, glyph clusters, and two-dimensional advances and offsets. Script
+and coverage segmentation, ICU break opportunities, conditional hyphenation,
+HarfRust shaping, and line-local UAX 9 visual ordering therefore remain shared
+by document formats. Logical order is the extraction contract. Visual order is
+applied only to completed lines for painting.
+
+Word and Presentation both project complex text into those shared rich values.
+`rdocx-layout` selects the effective direct, bidirectional, or East Asian
+`w:lang` value for each logical run, retains its exact Word source interval,
+and leaves script, coverage, cluster, and line segmentation to `oxml-layout`.
+It also projects `w:bidi` as the paragraph base direction and `w:rtl` as an
+exact run-span override. Shared layout resolves the complete logical paragraph,
+applies line-local whitespace reset and visual ordering after fitting, and
+keeps the original text and source intervals authoritative.
+Paragraphs containing Arabic, Devanagari, Thai, or CJK use the rich path across
+PDF, raster, and SVG. Paragraphs on the established Latin path retain their
+legacy shaped values and byte identity.
+
+Language-aware automatic hyphenation keeps that boundary intact. `rdocx-oxml`
+owns the Word `w:autoHyphenation`, `w:lang`, and paragraph suppression values.
+`rdocx-layout` resolves them and projects only a boolean plus a BCP 47 language
+tag into `oxml-layout`. The shared line breaker maps the `en`, `fr`, `de`, and
+`es` primary subtags to embedded `hypher` 0.1.7 Liang patterns. The dependency
+therefore stays inside the format-neutral crate and creates no reverse edge to
+a Word crate.
+
 Completed layout results share each immutable page frame and each font byte
 buffer through `Arc`. Word and Presentation producers establish that ownership
 at their format boundary. PDF, raster, SVG, facade page access, diagnostics,
@@ -514,22 +542,30 @@ an endnote sharing a number.
 
 The 15 shared and PowerPoint publication candidates use the explicit common
 incubating version in their manifests and workspace pins. All 15 candidates
-are published together at 0.6.0 from the annotated `rpptx-v0.6.0` tag at
-reviewed SHA `55fb2f54caf91d7dedc8936b4c7b116354590628`. The unpublished
-`rpptx-wasm` preparation member is also at 0.6.0 but has no crates.io
-publication path. The family adds
+are published coherently at 0.8.0 from the immutable annotated
+`rpptx-v0.8.0` tag at reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The unpublished `rpptx-wasm`
+preparation member is also at 0.8.0 without gaining a crates.io publication
+path. The family includes
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates use the
-separate workspace version. That stable workspace and its exact seven-package
-crates.io family are published coherently at 0.10.1 from the annotated
-`v0.10.1` tag at reviewed SHA
-`ae0dcb162a7805e59e5890464b226765645ad547`. The immutable v0.10.0
-attempt published `rdocx-opc` and `rdocx-oxml`, then stopped before the other
-five packages and GitHub release when `rdocx-layout` proved it needed the newer
-shared layout API. The last complete stable family is 0.10.1. The workspace
-includes nine internal pins, eleven inherited lockfile packages, two Python project
-versions, and the unpublished `rdocx-wasm` package at 0.10.1. Earlier immutable
-registry releases remain available. Version preparation and manifest
+separate workspace version. Its exact seven-package crates.io family is
+published at 0.11.1 from the immutable annotated `v0.11.1` tag at reviewed SHA
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6`. The stable workspace uses 0.11.1
+across nine internal pins, eleven inherited lockfile packages, two Python
+project versions, and the unpublished `rdocx-wasm` package. The immutable
+v0.11.0 attempt at reviewed SHA
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published `rdocx-opc` and
+`rdocx-oxml`, then stopped before the other five packages and GitHub release
+when `rdocx-layout` proved it needed `TextSegment.direction` from a newer
+shared registry family. Stable source pins the published shared 0.8.0
+boundary. The complete 0.11.1 recovery is published and verified. The
+separately approved cleanup yanked exactly the incomplete
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries. Complete coherent stable
+releases remain live and unyanked. The v0.11.0 tag remains immutable, and no
+v0.11.0 GitHub release exists. The last published complete stable family is
+0.11.1.
+Earlier immutable registry releases remain available. Version preparation and manifest
 eligibility do not authorize any later publication. `oxml-cli-support` is the
 format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either

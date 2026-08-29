@@ -112,6 +112,9 @@ pub struct ResolvedSlide {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Paragraph base directions parallel to one resolved slide's shape and text-body order.
+pub type ResolvedSlideTextDirections = Vec<Vec<Vec<oxml_layout::TextDirection>>>;
+
 /// One concrete slide background ready for renderer lowering.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResolvedBackground {

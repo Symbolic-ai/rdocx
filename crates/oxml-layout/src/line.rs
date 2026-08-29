@@ -2,8 +2,8 @@
 //!
 //! Uses a greedy algorithm with unicode-linebreak for break opportunities.
 
-use crate::error::Result;
-use crate::font::FontManager;
+use crate::error::{LayoutError, Result};
+use crate::font::{FontManager, MultilingualTextSegment, TextDirection, explicit_direction_levels};
 use crate::output::{Color, FieldKind, FontId, GroupElement, MediaId, SourceSpan, StructureId};
 
 /// A tab stop positioned in typographic points.
@@ -75,6 +75,13 @@ pub enum LineSpacing {
 pub enum InlineItem {
     /// A shaped text segment.
     Text(TextSegment),
+    /// A validated script, font, and bidi-level text span.
+    MultilingualText(MultilingualTextSegment),
+    /// A shaped text segment eligible for language-aware automatic hyphenation.
+    HyphenatedText {
+        segment: TextSegment,
+        language: String,
+    },
     /// A tab character.
     Tab,
     /// A forced line break.
@@ -130,6 +137,8 @@ pub struct NoteRef {
 #[derive(Debug, Clone)]
 pub struct TextSegment {
     pub text: String,
+    /// Requested character direction before paragraph-wide bidi resolution.
+    pub direction: TextDirection,
     /// Exact source range for this segment, when directly attributable.
     pub source: Option<SourceSpan>,
     pub font_id: FontId,
@@ -167,6 +176,8 @@ pub struct TextSegment {
 #[non_exhaustive]
 pub enum LineItem {
     Text(TextSegment),
+    /// A validated script, font, and bidi-level text span.
+    MultilingualText(MultilingualTextSegment),
     Tab {
         width: f64,
         /// Pre-shaped leader text to fill the tab gap (e.g., dots, hyphens).
@@ -195,6 +206,7 @@ impl LineItem {
     pub fn width(&self) -> f64 {
         match self {
             LineItem::Text(seg) => seg.width,
+            LineItem::MultilingualText(seg) => seg.width(),
             LineItem::Tab { width, .. } => *width,
             LineItem::Image { width, .. } => *width,
             LineItem::Group { width, .. } => *width,
@@ -324,16 +336,23 @@ pub fn break_into_lines(
     let mut font_ctx: Option<(FontId, f64)> = None;
     // Initialize from the first text segment if available
     for item in items {
-        if let InlineItem::Text(seg) | InlineItem::Marker(seg) = item {
+        if let InlineItem::Text(seg)
+        | InlineItem::HyphenatedText { segment: seg, .. }
+        | InlineItem::Marker(seg) = item
+        {
             font_ctx = Some((seg.font_id, seg.font_size));
+            break;
+        }
+        if let InlineItem::MultilingualText(seg) = item {
+            font_ctx = Some((seg.font_id(), seg.base().font_size));
             break;
         }
     }
 
     // Build breakable segments from inline items
-    let segments = build_breakable_segments(items, fm)?;
+    let mut segments = std::collections::VecDeque::from(build_breakable_segments(items, fm)?);
 
-    for seg in &segments {
+    while let Some(seg) = segments.pop_front() {
         match seg {
             BreakableSegment::Items(seg_items) => {
                 let seg_width: f64 = seg_items.iter().map(inline_item_width).sum();
@@ -374,7 +393,7 @@ pub fn break_into_lines(
                 }
 
                 // Add segment items to current line
-                for item in seg_items {
+                for item in &seg_items {
                     let (w, a, d, natural_height, font_size) = item_metrics(item);
                     current_width += w;
                     if a > current_ascent {
@@ -388,9 +407,148 @@ pub fn break_into_lines(
                     // Update font context from text segments
                     if let InlineItem::Text(seg) | InlineItem::Marker(seg) = item {
                         font_ctx = Some((seg.font_id, seg.font_size));
+                    } else if let InlineItem::MultilingualText(seg) = item {
+                        font_ctx = Some((seg.font_id(), seg.base().font_size));
                     }
                     current_items.push(inline_to_line_item(
                         item,
+                        current_width,
+                        &params.tab_stops,
+                        fm,
+                        font_ctx,
+                    ));
+                }
+            }
+            BreakableSegment::Hyphenated(boxed) => {
+                let HyphenatedSegment {
+                    segment,
+                    break_points,
+                } = *boxed;
+                let fits = current_width + segment.width <= line_avail + 0.01;
+                if !params.wrap || fits {
+                    let item = InlineItem::Text(segment);
+                    let (w, a, d, natural_height, font_size) = item_metrics(&item);
+                    current_width += w;
+                    current_ascent = current_ascent.max(a);
+                    current_descent = current_descent.max(d);
+                    current_natural_height = current_natural_height.max(natural_height);
+                    current_font_size = current_font_size.max(font_size);
+                    font_ctx = Some((segment_font_id(&item), segment_font_size(&item)));
+                    current_items.push(inline_to_line_item(
+                        &item,
+                        current_width,
+                        &params.tab_stops,
+                        fm,
+                        font_ctx,
+                    ));
+                    continue;
+                }
+
+                if let Some(FittingHyphenation {
+                    prefix,
+                    hyphen,
+                    remainder,
+                    remaining_points,
+                }) = fitting_hyphenation(&segment, &break_points, current_width, line_avail, fm)?
+                {
+                    for text in [prefix, hyphen] {
+                        let item = InlineItem::Text(text);
+                        let (w, a, d, natural_height, font_size) = item_metrics(&item);
+                        current_width += w;
+                        current_ascent = current_ascent.max(a);
+                        current_descent = current_descent.max(d);
+                        current_natural_height = current_natural_height.max(natural_height);
+                        current_font_size = current_font_size.max(font_size);
+                        font_ctx = Some((segment_font_id(&item), segment_font_size(&item)));
+                        current_items.push(inline_to_line_item(
+                            &item,
+                            current_width,
+                            &params.tab_stops,
+                            fm,
+                            font_ctx,
+                        ));
+                    }
+
+                    let indent = line_indent_at(params, line_index, is_first_line);
+                    let line_gap =
+                        effective_line_gap(current_ascent, current_descent, current_natural_height);
+                    lines.push(LayoutLine {
+                        items: std::mem::take(&mut current_items),
+                        width: current_width,
+                        ascent: current_ascent,
+                        descent: current_descent,
+                        line_gap,
+                        height: compute_line_height(
+                            current_ascent,
+                            current_descent,
+                            line_gap,
+                            current_font_size,
+                            params,
+                        ),
+                        indent_left: indent,
+                        available_width: line_avail,
+                        is_last: false,
+                    });
+                    current_width = 0.0;
+                    current_ascent = 0.0;
+                    current_descent = 0.0;
+                    current_natural_height = 0.0;
+                    current_font_size = 0.0;
+                    is_first_line = false;
+                    line_index += 1;
+                    line_avail = line_width_at(params, line_index, false);
+                    segments.push_front(BreakableSegment::Hyphenated(Box::new(
+                        HyphenatedSegment {
+                            segment: remainder,
+                            break_points: remaining_points,
+                        },
+                    )));
+                } else if !current_items.is_empty() {
+                    let indent = line_indent_at(params, line_index, is_first_line);
+                    let line_gap =
+                        effective_line_gap(current_ascent, current_descent, current_natural_height);
+                    lines.push(LayoutLine {
+                        items: std::mem::take(&mut current_items),
+                        width: current_width,
+                        ascent: current_ascent,
+                        descent: current_descent,
+                        line_gap,
+                        height: compute_line_height(
+                            current_ascent,
+                            current_descent,
+                            line_gap,
+                            current_font_size,
+                            params,
+                        ),
+                        indent_left: indent,
+                        available_width: line_avail,
+                        is_last: false,
+                    });
+                    current_width = 0.0;
+                    current_ascent = 0.0;
+                    current_descent = 0.0;
+                    current_natural_height = 0.0;
+                    current_font_size = 0.0;
+                    is_first_line = false;
+                    line_index += 1;
+                    line_avail = line_width_at(params, line_index, false);
+                    segments.push_front(BreakableSegment::Hyphenated(Box::new(
+                        HyphenatedSegment {
+                            segment,
+                            break_points,
+                        },
+                    )));
+                } else {
+                    let item = InlineItem::Text(segment);
+                    let (w, a, d, natural_height, font_size) = item_metrics(&item);
+                    current_width += w;
+                    current_ascent = current_ascent.max(a);
+                    current_descent = current_descent.max(d);
+                    current_natural_height = current_natural_height.max(natural_height);
+                    current_font_size = current_font_size.max(font_size);
+                    font_ctx = Some((segment_font_id(&item), segment_font_size(&item)));
+                    current_items.push(inline_to_line_item(
+                        &item,
                         current_width,
                         &params.tab_stops,
                         fm,
@@ -455,14 +613,198 @@ pub fn break_into_lines(
     Ok(lines)
 }
 
+/// Break rich text in logical order, then reorder each completed line for painting.
+pub fn break_multilingual_into_lines(
+    items: &[InlineItem],
+    params: &LineBreakParams,
+    fm: &FontManager,
+    base_direction: TextDirection,
+) -> Result<Vec<LayoutLine>> {
+    let mut lines = break_into_lines(items, params, fm)?;
+    let mut paragraph_text = String::new();
+    let mut line_maps = Vec::with_capacity(lines.len());
+    let mut has_text = false;
+    for line in &lines {
+        let line_start = paragraph_text.len();
+        let mut positions = Vec::new();
+        for (index, item) in line.items.iter().enumerate() {
+            let (text, direction, shaped_level) = match item {
+                LineItem::Text(segment) | LineItem::Marker(segment) => {
+                    (segment.text.as_str(), segment.direction, None)
+                }
+                LineItem::MultilingualText(segment) => (
+                    segment.text(),
+                    segment.base().direction,
+                    Some(unicode_bidi::Level::new(segment.bidi_level()).map_err(|_| {
+                        LayoutError::Layout("rich text carried an invalid bidi level".to_owned())
+                    })?),
+                ),
+                LineItem::Tab { .. } => ("\t", TextDirection::Auto, None),
+                LineItem::Image { .. } | LineItem::Group { .. } | LineItem::Figure { .. } => {
+                    ("\u{fffc}", TextDirection::Auto, None)
+                }
+            };
+            has_text |= !text.is_empty();
+            let start = paragraph_text.len();
+            paragraph_text.push_str(text);
+            let end = paragraph_text.len();
+            positions.push((
+                index,
+                start,
+                end,
+                direction,
+                text.chars().all(char::is_whitespace),
+                shaped_level,
+            ));
+        }
+        line_maps.push((line_start..paragraph_text.len(), positions));
+    }
+    if !has_text {
+        return Ok(lines);
+    }
+    let paragraph_level = match base_direction {
+        TextDirection::Auto => None,
+        TextDirection::LeftToRight => Some(unicode_bidi::Level::ltr()),
+        TextDirection::RightToLeft => Some(unicode_bidi::Level::rtl()),
+    };
+    let bidi = unicode_bidi::BidiInfo::new(&paragraph_text, paragraph_level);
+    let [paragraph] = bidi.paragraphs.as_slice() else {
+        return Err(LayoutError::Layout(
+            "multilingual line layout requires one bidi paragraph".to_owned(),
+        ));
+    };
+    for (line, (line_range, mapped_positions)) in lines.iter_mut().zip(line_maps) {
+        let positions = mapped_positions
+            .iter()
+            .map(|(index, _, _, _, _, _)| *index)
+            .collect::<Vec<_>>();
+        if positions.is_empty() {
+            continue;
+        }
+        let adjusted_levels = bidi.reordered_levels(paragraph, line_range);
+        let levels = mapped_positions
+            .into_iter()
+            .map(|(_, start, end, direction, whitespace, shaped_level)| {
+                let adjusted = adjusted_levels.get(start).copied().ok_or_else(|| {
+                    LayoutError::Layout(
+                        "multilingual line range exceeded its bidi paragraph".to_owned(),
+                    )
+                })?;
+                Ok(if whitespace {
+                    adjusted
+                } else if let Some(shaped_level) = shaped_level {
+                    shaped_level
+                } else if direction == TextDirection::Auto {
+                    adjusted
+                } else {
+                    explicit_direction_levels(
+                        &paragraph_text[start..end],
+                        direction,
+                        paragraph.level,
+                    )?
+                    .first()
+                    .copied()
+                    .unwrap_or(adjusted)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let visual_order = unicode_bidi::BidiInfo::reorder_visual(&levels);
+        let logical_items = positions
+            .iter()
+            .zip(&levels)
+            .map(|(index, level)| match &line.items[*index] {
+                LineItem::MultilingualText(segment) => Ok(LineItem::MultilingualText(
+                    multilingual_segment_with_level(segment, *level)?,
+                )),
+                item => Ok(item.clone()),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (visual_slot, logical_index) in positions.into_iter().zip(visual_order) {
+            line.items[visual_slot] = logical_items[logical_index].clone();
+        }
+    }
+    Ok(lines)
+}
+
+fn multilingual_segment_with_level(
+    segment: &MultilingualTextSegment,
+    level: unicode_bidi::Level,
+) -> Result<MultilingualTextSegment> {
+    let parity_changed = segment.bidi_level() % 2 != level.number() % 2;
+    let cluster_order = if parity_changed {
+        (0..segment.clusters().len()).rev().collect::<Vec<_>>()
+    } else {
+        (0..segment.clusters().len()).collect::<Vec<_>>()
+    };
+    let mut glyph_ids = Vec::with_capacity(segment.glyph_ids().len());
+    let mut x_advances = Vec::with_capacity(segment.x_advances().len());
+    let mut y_advances = Vec::with_capacity(segment.y_advances().len());
+    let mut x_offsets = Vec::with_capacity(segment.x_offsets().len());
+    let mut y_offsets = Vec::with_capacity(segment.y_offsets().len());
+    let mut clusters = Vec::with_capacity(segment.clusters().len());
+    for index in cluster_order {
+        let cluster = &segment.clusters()[index];
+        let glyph_range = cluster.glyph_start as usize..cluster.glyph_end as usize;
+        let glyph_start = glyph_ids.len() as u32;
+        glyph_ids.extend_from_slice(&segment.glyph_ids()[glyph_range.clone()]);
+        x_advances.extend_from_slice(&segment.x_advances()[glyph_range.clone()]);
+        y_advances.extend_from_slice(&segment.y_advances()[glyph_range.clone()]);
+        x_offsets.extend_from_slice(&segment.x_offsets()[glyph_range.clone()]);
+        y_offsets.extend_from_slice(&segment.y_offsets()[glyph_range]);
+        clusters.push(crate::font::GlyphCluster {
+            glyph_start,
+            glyph_end: glyph_ids.len() as u32,
+            char_start: cluster.char_start,
+            char_end: cluster.char_end,
+        });
+    }
+    let mut base = segment.base().clone();
+    base.glyph_ids = glyph_ids;
+    base.advances = x_advances.clone();
+
+    MultilingualTextSegment::new(
+        base,
+        segment.logical_index(),
+        segment.language().map(str::to_owned),
+        segment.script(),
+        if level.is_rtl() {
+            TextDirection::RightToLeft
+        } else {
+            TextDirection::LeftToRight
+        },
+        level.number(),
+        x_advances,
+        y_advances,
+        x_offsets,
+        y_offsets,
+        clusters,
+        segment.break_after(),
+    )
+}
+
 // ---- Internal helpers ----
 
 #[derive(Debug)]
 enum BreakableSegment {
     /// A group of items that should be kept together (word or cluster).
     Items(Vec<InlineItem>),
+    /// One language-aware text chunk and its byte-index break candidates.
+    Hyphenated(Box<HyphenatedSegment>),
     /// A forced break.
     ForcedBreak(ForcedBreakType),
+}
+
+#[derive(Debug)]
+struct HyphenatedSegment {
+    segment: TextSegment,
+    break_points: Vec<usize>,
+}
+
+struct FittingHyphenation {
+    prefix: TextSegment,
+    hyphen: TextSegment,
+    remainder: TextSegment,
+    remaining_points: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -470,6 +812,16 @@ enum ForcedBreakType {
     Line,
     Page,
     Column,
+}
+
+/// Whether a complex-script line may break between two logical characters.
+pub(crate) fn multilingual_break_allowed(before: char, after: char) -> bool {
+    const OPENING: &[char] = &['(', '[', '{', '〈', '《', '「', '『', '【', '〔', '〖'];
+    const CLOSING_OR_NONSTARTER: &[char] = &[
+        ')', ']', '}', '〉', '》', '」', '』', '】', '〕', '〗', '、', '。', '，', '．', '！',
+        '？', '：', '；', '％', '‰',
+    ];
+    !OPENING.contains(&before) && !CLOSING_OR_NONSTARTER.contains(&after)
 }
 
 /// Build breakable segments by finding break opportunities in text.
@@ -511,7 +863,7 @@ fn build_breakable_segments(
                 }
                 segments.push(BreakableSegment::Items(vec![item.clone()]));
             }
-            InlineItem::Text(seg) => {
+            InlineItem::Text(seg) | InlineItem::HyphenatedText { segment: seg, .. } => {
                 if seg.text.is_empty() {
                     if !current_group.is_empty() {
                         segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
@@ -549,7 +901,28 @@ fn build_breakable_segments(
 
                     // Create a sub-segment for just this chunk (not the entire text)
                     let sub_item = split_text_subsegment(seg, tb.start, tb.end, spacing, fm)?;
-                    current_group.push(sub_item);
+                    let language = match item {
+                        InlineItem::HyphenatedText { language, .. } => Some(language.as_str()),
+                        _ => None,
+                    };
+                    let break_points = language.map_or_else(Vec::new, |language| {
+                        hyphenation_opportunities(language, chunk)
+                    });
+                    if break_points.is_empty() {
+                        current_group.push(sub_item);
+                    } else {
+                        if !current_group.is_empty() {
+                            segments
+                                .push(BreakableSegment::Items(std::mem::take(&mut current_group)));
+                        }
+                        let InlineItem::Text(segment) = sub_item else {
+                            unreachable!("split text always returns text")
+                        };
+                        segments.push(BreakableSegment::Hyphenated(Box::new(HyphenatedSegment {
+                            segment,
+                            break_points,
+                        })));
+                    }
 
                     if tb.is_break {
                         segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
@@ -558,6 +931,12 @@ fn build_breakable_segments(
 
                 // Flush any remaining
                 if !current_group.is_empty() {
+                    segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
+                }
+            }
+            InlineItem::MultilingualText(segment) => {
+                current_group.push(InlineItem::MultilingualText(segment.clone()));
+                if segment.break_after() {
                     segments.push(BreakableSegment::Items(std::mem::take(&mut current_group)));
                 }
             }
@@ -611,6 +990,7 @@ fn split_text_subsegment(
 
     Ok(InlineItem::Text(TextSegment {
         text: sub_text,
+        direction: seg.direction,
         source,
         font_id: seg.font_id,
         font_size: seg.font_size,
@@ -632,6 +1012,142 @@ fn split_text_subsegment(
         field_kind: seg.field_kind,
         note: seg.note,
     }))
+}
+
+fn supported_hyphenation_language(language: &str) -> Option<hypher::Lang> {
+    let primary = language.split('-').next()?;
+    if primary.eq_ignore_ascii_case("en") {
+        Some(hypher::Lang::English)
+    } else if primary.eq_ignore_ascii_case("fr") {
+        Some(hypher::Lang::French)
+    } else if primary.eq_ignore_ascii_case("de") {
+        Some(hypher::Lang::German)
+    } else if primary.eq_ignore_ascii_case("es") {
+        Some(hypher::Lang::Spanish)
+    } else {
+        None
+    }
+}
+
+fn hyphenation_opportunities(language: &str, text: &str) -> Vec<usize> {
+    let Some(language) = supported_hyphenation_language(language) else {
+        return Vec::new();
+    };
+    let word_end = text
+        .char_indices()
+        .take_while(|(_, character)| character.is_alphabetic())
+        .map(|(offset, character)| offset + character.len_utf8())
+        .last()
+        .unwrap_or(0);
+    if word_end == 0 || text[word_end..].chars().any(char::is_alphabetic) {
+        return Vec::new();
+    }
+    let word = &text[..word_end];
+    let syllables = hypher::hyphenate(word, language).collect::<Vec<_>>();
+    let mut offset = 0usize;
+    syllables
+        .iter()
+        .take(syllables.len().saturating_sub(1))
+        .map(|syllable| {
+            offset += syllable.len();
+            offset
+        })
+        .collect()
+}
+
+fn fitting_hyphenation(
+    segment: &TextSegment,
+    break_points: &[usize],
+    current_width: f64,
+    available_width: f64,
+    fm: &FontManager,
+) -> Result<Option<FittingHyphenation>> {
+    let spacing = text_segment_spacing(segment, fm)?;
+    let hyphen = generated_hyphen(segment, spacing, fm)?;
+    for &break_point in break_points.iter().rev() {
+        let InlineItem::Text(prefix) = split_text_subsegment(segment, 0, break_point, spacing, fm)?
+        else {
+            unreachable!("split text always returns text")
+        };
+        if current_width + prefix.width + hyphen.width > available_width + 0.01 {
+            continue;
+        }
+        let InlineItem::Text(remainder) =
+            split_text_subsegment(segment, break_point, segment.text.len(), spacing, fm)?
+        else {
+            unreachable!("split text always returns text")
+        };
+        let remaining_points = break_points
+            .iter()
+            .copied()
+            .filter(|point| *point > break_point)
+            .map(|point| point - break_point)
+            .collect();
+        return Ok(Some(FittingHyphenation {
+            prefix,
+            hyphen,
+            remainder,
+            remaining_points,
+        }));
+    }
+    Ok(None)
+}
+
+fn text_segment_spacing(segment: &TextSegment, fm: &FontManager) -> Result<f64> {
+    let original = fm.shape_text(segment.font_id, &segment.text, segment.font_size)?;
+    Ok(
+        if original.advances.len() == segment.advances.len() && !original.advances.is_empty() {
+            (segment.width - original.width) / original.advances.len() as f64
+        } else {
+            0.0
+        },
+    )
+}
+
+fn generated_hyphen(segment: &TextSegment, spacing: f64, fm: &FontManager) -> Result<TextSegment> {
+    let mut shaped = fm.shape_text(segment.font_id, "-", segment.font_size)?;
+    for advance in &mut shaped.advances {
+        *advance += spacing;
+    }
+    shaped.width += spacing * shaped.advances.len() as f64;
+    Ok(TextSegment {
+        text: "-".to_owned(),
+        direction: segment.direction,
+        source: None,
+        font_id: segment.font_id,
+        font_size: segment.font_size,
+        glyph_ids: shaped.glyph_ids,
+        advances: shaped.advances,
+        width: shaped.width,
+        ascent: segment.ascent,
+        descent: segment.descent,
+        line_gap: segment.line_gap,
+        color: segment.color,
+        bold: segment.bold,
+        italic: segment.italic,
+        underline: segment.underline,
+        strike: segment.strike,
+        dstrike: segment.dstrike,
+        highlight: segment.highlight,
+        baseline_offset: segment.baseline_offset,
+        hyperlink_url: segment.hyperlink_url.clone(),
+        field_kind: segment.field_kind,
+        note: segment.note,
+    })
+}
+
+fn segment_font_id(item: &InlineItem) -> FontId {
+    match item {
+        InlineItem::Text(segment) | InlineItem::HyphenatedText { segment, .. } => segment.font_id,
+        _ => unreachable!("called only for text"),
+    }
+}
+
+fn segment_font_size(item: &InlineItem) -> f64 {
+    match item {
+        InlineItem::Text(segment) | InlineItem::HyphenatedText { segment, .. } => segment.font_size,
+        _ => unreachable!("called only for text"),
+    }
 }
 
 struct TextBreakInfo {
@@ -685,7 +1201,8 @@ fn split_text_at_break_opportunities(seg: &TextSegment) -> Vec<TextBreakInfo> {
 
 fn inline_item_width(item: &InlineItem) -> f64 {
     match item {
-        InlineItem::Text(seg) => seg.width,
+        InlineItem::Text(seg) | InlineItem::HyphenatedText { segment: seg, .. } => seg.width,
+        InlineItem::MultilingualText(seg) => seg.width(),
         InlineItem::Tab => 36.0, // Default tab width, will be resolved
         InlineItem::Image { width, .. } => *width,
         InlineItem::Group { width, .. } => *width,
@@ -698,12 +1215,19 @@ fn inline_item_width(item: &InlineItem) -> f64 {
 fn item_metrics(item: &InlineItem) -> (f64, f64, f64, f64, f64) {
     // Returns (width, ascent, descent, natural height, text font size)
     match item {
-        InlineItem::Text(seg) => (
+        InlineItem::Text(seg) | InlineItem::HyphenatedText { segment: seg, .. } => (
             seg.width,
             seg.ascent,
             seg.descent,
             seg.ascent + seg.descent + seg.line_gap,
             seg.font_size,
+        ),
+        InlineItem::MultilingualText(seg) => (
+            seg.width(),
+            seg.base().ascent,
+            seg.base().descent,
+            seg.base().ascent + seg.base().descent + seg.base().line_gap,
+            seg.base().font_size,
         ),
         InlineItem::Marker(seg) => (
             seg.width,
@@ -730,7 +1254,10 @@ fn inline_to_line_item(
     font_ctx: Option<(FontId, f64)>,
 ) -> LineItem {
     match item {
-        InlineItem::Text(seg) => LineItem::Text(seg.clone()),
+        InlineItem::Text(seg) | InlineItem::HyphenatedText { segment: seg, .. } => {
+            LineItem::Text(seg.clone())
+        }
+        InlineItem::MultilingualText(seg) => LineItem::MultilingualText(seg.clone()),
         InlineItem::Marker(seg) => LineItem::Marker(seg.clone()),
         InlineItem::Tab => {
             let (tab_width, leader_char) = resolve_tab_width(current_x, tab_stops);
@@ -827,6 +1354,7 @@ fn shape_leader(
 
     Some(TextSegment {
         text: leader_text,
+        direction: TextDirection::Auto,
         source: None,
         font_id,
         font_size,
@@ -973,6 +1501,7 @@ mod tests {
     fn make_text_segment(text: &str, width: f64) -> TextSegment {
         TextSegment {
             text: text.to_string(),
+            direction: TextDirection::Auto,
             source: None,
             font_id: FontId(0),
             font_size: 12.0,
@@ -1012,6 +1541,7 @@ mod tests {
         shaped.width += spacing * shaped.advances.len() as f64;
         TextSegment {
             text: text.to_owned(),
+            direction: TextDirection::Auto,
             source: None,
             font_id,
             font_size: 30.0,
@@ -1033,6 +1563,528 @@ mod tests {
             field_kind: None,
             note: None,
         }
+    }
+
+    #[test]
+    fn automatic_hyphenation_selects_the_farthest_fitting_break_and_has_no_source() {
+        let mut fm = deterministic_font_manager();
+        let node = crate::SourceNodeId::new(9).unwrap();
+        let mut segment = shaped_text_segment(&mut fm, "representation", 0.0);
+        segment.source = Some(SourceSpan {
+            node,
+            char_start: 20,
+            char_end: 34,
+        });
+        let width = fm
+            .shape_text(segment.font_id, "represen-", segment.font_size)
+            .unwrap()
+            .width
+            + 0.01;
+        let lines = break_into_lines(
+            &[InlineItem::HyphenatedText {
+                segment,
+                language: "en-US".to_owned(),
+            }],
+            &LineBreakParams {
+                available_width: width,
+                ..Default::default()
+            },
+            &fm,
+        )
+        .unwrap();
+        let first = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            first
+                .iter()
+                .map(|text| text.text.as_str())
+                .collect::<String>(),
+            "represen-"
+        );
+        assert_eq!(first.last().unwrap().source, None);
+        assert_eq!(first[0].source.unwrap().char_start, 20);
+        assert_eq!(first[0].source.unwrap().char_end, 28);
+    }
+
+    #[test]
+    fn liang_candidates_map_supported_regional_languages_only() {
+        assert_eq!(
+            hyphenation_opportunities("en-US", "representation"),
+            vec![3, 5, 8, 10]
+        );
+        assert_eq!(
+            hyphenation_opportunities("fr-CA", "représentation"),
+            vec![2, 6, 9, 11]
+        );
+        assert!(!hyphenation_opportunities("de-AT", "Silbentrennung").is_empty());
+        assert!(!hyphenation_opportunities("es-MX", "representación").is_empty());
+        assert!(hyphenation_opportunities("it-IT", "rappresentazione").is_empty());
+    }
+
+    #[test]
+    fn unwrapped_hyphenated_text_never_emits_a_conditional_hyphen() {
+        let mut fm = deterministic_font_manager();
+        let segment = shaped_text_segment(&mut fm, "representation", 0.0);
+        let lines = break_into_lines(
+            &[InlineItem::HyphenatedText {
+                segment,
+                language: "en-US".to_owned(),
+            }],
+            &LineBreakParams {
+                available_width: 20.0,
+                wrap: false,
+                ..Default::default()
+            },
+            &fm,
+        )
+        .unwrap();
+        assert_eq!(lines.len(), 1);
+        let text = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+
+        assert_eq!(text, "representation");
+    }
+
+    #[test]
+    fn mixed_direction_line_uses_uax9_visual_order_without_changing_logical_text() {
+        let mut fm = deterministic_font_manager();
+        let mut segment = shaped_text_segment(&mut fm, "abc אבג 123", 0.0);
+        segment.source = Some(SourceSpan {
+            node: crate::SourceNodeId::new(7).unwrap(),
+            char_start: 50,
+            char_end: 61,
+        });
+        let rich = fm
+            .shape_multilingual_text(segment, Some("he-IL"), TextDirection::Auto, false)
+            .unwrap();
+        let logical_text = rich.iter().map(|span| span.text()).collect::<String>();
+        let sources = rich
+            .iter()
+            .map(|span| span.base().source.expect("logical span keeps source"))
+            .collect::<Vec<_>>();
+        assert_eq!(sources.first().unwrap().char_start, 50);
+        assert_eq!(sources.last().unwrap().char_end, 61);
+        assert!(
+            sources
+                .windows(2)
+                .all(|pair| pair[0].char_end == pair[1].char_start)
+        );
+        let items = rich
+            .into_iter()
+            .map(InlineItem::MultilingualText)
+            .collect::<Vec<_>>();
+        let lines = break_multilingual_into_lines(
+            &items,
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::Auto,
+        )
+        .unwrap();
+        let visual_text = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) => Some(span.text()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(logical_text, "abc אבג 123");
+        assert_eq!(visual_text, "abc 123 אבג");
+        assert_eq!(
+            lines[0]
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    LineItem::MultilingualText(span) => {
+                        Some((span.text(), span.logical_index(), span.bidi_level()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("abc", 0, 0),
+                (" ", 1, 0),
+                ("123", 4, 2),
+                (" ", 3, 1),
+                ("אבג", 2, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_run_directions_reorder_with_the_rtl_paragraph_once() {
+        let mut fm = deterministic_font_manager();
+        let mut arabic = shaped_text_segment(&mut fm, "العربية ", 0.0);
+        arabic.direction = TextDirection::RightToLeft;
+        let mut latin = shaped_text_segment(&mut fm, "ABC 123", 0.0);
+        latin.direction = TextDirection::LeftToRight;
+        let rich = fm
+            .shape_multilingual_paragraph(
+                vec![
+                    (arabic, Some("ar-SA".to_owned())),
+                    (latin, Some("en-US".to_owned())),
+                ],
+                TextDirection::RightToLeft,
+                false,
+            )
+            .unwrap();
+        let lines = break_multilingual_into_lines(
+            &rich
+                .into_iter()
+                .map(InlineItem::MultilingualText)
+                .collect::<Vec<_>>(),
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::RightToLeft,
+        )
+        .unwrap();
+
+        let visual = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) => {
+                    Some((span.text(), span.bidi_level(), span.base().direction))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visual.iter().map(|span| span.0).collect::<String>(),
+            "ABC 123 العربية",
+            "{visual:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_rtl_run_retains_numeric_levels_and_line_local_whitespace_reset() {
+        let mut fm = deterministic_font_manager();
+        let node = crate::SourceNodeId::new(13).unwrap();
+        let mut segment = shaped_text_segment(&mut fm, "אבג 123   ", 0.0);
+        segment.direction = TextDirection::RightToLeft;
+        segment.source = Some(SourceSpan {
+            node,
+            char_start: 40,
+            char_end: 50,
+        });
+        let rich = fm
+            .shape_multilingual_paragraph(
+                vec![(segment, Some("he-IL".to_owned()))],
+                TextDirection::LeftToRight,
+                false,
+            )
+            .unwrap();
+        assert!(
+            rich.iter()
+                .any(|span| span.text() == "123" && span.bidi_level() == 2),
+            "numeric span must retain its higher even level: {:?}",
+            rich.iter()
+                .map(|span| (span.text(), span.bidi_level()))
+                .collect::<Vec<_>>()
+        );
+
+        let lines = break_multilingual_into_lines(
+            &rich
+                .into_iter()
+                .map(InlineItem::MultilingualText)
+                .collect::<Vec<_>>(),
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::LeftToRight,
+        )
+        .unwrap();
+        let spans = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) => Some(span),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(spans.iter().any(|span| {
+            span.text().chars().all(char::is_whitespace) && span.bidi_level() == 0
+        }));
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.base().source.unwrap().node == node)
+        );
+    }
+
+    #[test]
+    fn inline_object_participates_in_rtl_visual_order_without_changing_text_source() {
+        let mut fm = deterministic_font_manager();
+        let node = crate::SourceNodeId::new(14).unwrap();
+        let mut segment = shaped_text_segment(&mut fm, "אבג", 0.0);
+        segment.source = Some(SourceSpan {
+            node,
+            char_start: 8,
+            char_end: 11,
+        });
+        let mut rich = fm
+            .shape_multilingual_text(segment, Some("he-IL"), TextDirection::RightToLeft, false)
+            .unwrap();
+        assert_eq!(rich.len(), 1);
+        let items = vec![
+            InlineItem::MultilingualText(rich.remove(0)),
+            InlineItem::Image {
+                width: 12.0,
+                height: 12.0,
+                media_id: MediaId(77),
+            },
+        ];
+
+        let lines = break_multilingual_into_lines(
+            &items,
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::RightToLeft,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            lines[0].items[0],
+            LineItem::Image {
+                media_id: MediaId(77),
+                ..
+            }
+        ));
+        let LineItem::MultilingualText(text) = &lines[0].items[1] else {
+            panic!("RTL text must paint after the inline object")
+        };
+        assert_eq!(text.text(), "אבג");
+        assert_eq!(
+            text.base().source.unwrap(),
+            SourceSpan {
+                node,
+                char_start: 8,
+                char_end: 11,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_rtl_hyphenatable_latin_spans_keep_their_natural_even_levels() {
+        let mut fm = deterministic_font_manager();
+        let mut letters = shaped_text_segment(&mut fm, "ABC ", 0.0);
+        letters.direction = TextDirection::RightToLeft;
+        let mut digits = shaped_text_segment(&mut fm, "123", 0.0);
+        digits.direction = TextDirection::RightToLeft;
+        let lines = break_multilingual_into_lines(
+            &[
+                InlineItem::HyphenatedText {
+                    segment: letters,
+                    language: "en-US".to_owned(),
+                },
+                InlineItem::HyphenatedText {
+                    segment: digits,
+                    language: "en-US".to_owned(),
+                },
+            ],
+            &LineBreakParams {
+                available_width: 1_000.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::LeftToRight,
+        )
+        .unwrap();
+        let visual = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::Text(segment) => Some(segment.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(visual, "ABC 123");
+    }
+
+    #[test]
+    fn one_styled_run_applies_line_local_l1_before_l2_without_losing_source() {
+        let mut fm = deterministic_font_manager();
+        let node = crate::SourceNodeId::new(9).unwrap();
+        let mut segment = shaped_text_segment(&mut fm, "אבג   אבג", 0.0);
+        segment.source = Some(SourceSpan {
+            node,
+            char_start: 20,
+            char_end: 29,
+        });
+        let rich = fm
+            .shape_multilingual_paragraph(vec![(segment, None)], TextDirection::LeftToRight, false)
+            .unwrap();
+        assert_eq!(
+            rich.iter().map(|span| span.text()).collect::<Vec<_>>(),
+            ["אבג", "   ", "אבג"]
+        );
+        let first_line_width = rich[0].width() + rich[1].width() + 0.01;
+        let items = rich
+            .into_iter()
+            .map(InlineItem::MultilingualText)
+            .collect::<Vec<_>>();
+
+        let lines = break_multilingual_into_lines(
+            &items,
+            &LineBreakParams {
+                available_width: first_line_width,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::LeftToRight,
+        )
+        .unwrap();
+        let spans = lines
+            .iter()
+            .flat_map(|line| &line.items)
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) => Some((
+                    span.text(),
+                    span.logical_index(),
+                    span.bidi_level(),
+                    span.direction(),
+                    span.base().source.unwrap(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            spans
+                .iter()
+                .map(|(text, index, level, direction, source)| (
+                    *text,
+                    *index,
+                    *level,
+                    *direction,
+                    source.char_start..source.char_end,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("אבג", 0, 1, TextDirection::RightToLeft, 20..23),
+                ("   ", 1, 0, TextDirection::LeftToRight, 23..26),
+                ("אבג", 2, 1, TextDirection::RightToLeft, 26..29),
+            ]
+        );
+        assert!(spans.iter().all(|(_, _, _, _, source)| source.node == node));
+        let first_line = lines[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LineItem::MultilingualText(span) => Some(span.text()),
+                _ => None,
+            })
+            .collect::<String>();
+
+        assert_eq!(first_line, "אבג   ");
+    }
+
+    #[test]
+    fn cjk_prohibited_punctuation_never_starts_or_ends_a_line() {
+        let mut fm = deterministic_font_manager();
+        let mut segment = shaped_text_segment(&mut fm, "〈中〉、你好世界", 0.0);
+        segment.source = Some(SourceSpan {
+            node: crate::SourceNodeId::new(8).unwrap(),
+            char_start: 5,
+            char_end: 13,
+        });
+        let rich = fm
+            .shape_multilingual_text(segment, Some("zh-CN"), TextDirection::LeftToRight, false)
+            .unwrap();
+        let items = rich
+            .into_iter()
+            .map(InlineItem::MultilingualText)
+            .collect::<Vec<_>>();
+        let lines = break_multilingual_into_lines(
+            &items,
+            &LineBreakParams {
+                available_width: 35.0,
+                ..Default::default()
+            },
+            &fm,
+            TextDirection::LeftToRight,
+        )
+        .unwrap();
+        let line_text = lines
+            .iter()
+            .map(|line| {
+                line.items
+                    .iter()
+                    .filter_map(|item| match item {
+                        LineItem::MultilingualText(span) => Some(span.text()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(line_text, ["〈中〉、", "你", "好", "世", "界"]);
+        assert!(
+            line_text
+                .iter()
+                .all(|text| { !text.starts_with(['〉', '、']) && !text.ends_with('〈') })
+        );
+    }
+
+    #[test]
+    fn legacy_stable_source_fixture_compiles_unchanged_public_shapes() {
+        let segment = make_text_segment("legacy", 42.0);
+        let _inline = InlineItem::Text(segment.clone());
+        let _line = LineItem::Text(segment.clone());
+        let _params = LineBreakParams {
+            available_width: 468.0,
+            ind_left: 0.0,
+            ind_right: 0.0,
+            ind_first_line: 0.0,
+            ind_hanging: 0.0,
+            tab_stops: Vec::new(),
+            line_spacing: LineSpacing::Single,
+            jc: None,
+            wrap: true,
+            line_prefix_widths: Vec::new(),
+            line_suffix_widths: Vec::new(),
+        };
+        let _shaped = crate::ShapedText {
+            glyph_ids: segment.glyph_ids.clone(),
+            advances: segment.advances.clone(),
+            width: segment.width,
+        };
+        let _run = crate::GlyphRun {
+            origin: crate::Point { x: 0.0, y: 0.0 },
+            font_id: segment.font_id,
+            font_size: segment.font_size,
+            glyph_ids: segment.glyph_ids,
+            advances: segment.advances,
+            text: segment.text,
+            source: segment.source,
+            color: segment.color,
+            bold: segment.bold,
+            italic: segment.italic,
+            field_kind: segment.field_kind,
+            note: segment.note,
+        };
     }
 
     #[test]

@@ -840,6 +840,7 @@ pub struct CT_TextParagraphProperties {
     pub level: Option<u8>,
     pub indent: Option<i32>,
     pub alignment: Option<TextAlignment>,
+    pub right_to_left: Option<bool>,
     pub line_spacing: Option<TextSpacing>,
     pub space_before: Option<TextSpacing>,
     pub space_after: Option<TextSpacing>,
@@ -873,6 +874,7 @@ impl CT_TextParagraphProperties {
             level,
             indent: parse_optional_i32(start, b"indent", -MAX_TEXT_MARGIN, MAX_TEXT_MARGIN)?,
             alignment: parse_optional_enum(start, b"algn", TextAlignment::parse)?,
+            right_to_left: parse_optional_bool(start, b"rtl")?,
             raw_attributes: capture_raw_attributes(
                 start,
                 &[b"marL", b"marR", b"lvl", b"indent", b"algn"],
@@ -984,7 +986,20 @@ impl CT_TextParagraphProperties {
         if let Some(value) = self.alignment {
             start.push_attribute(("algn", value.as_str()));
         }
-        push_raw_attributes(&mut start, &self.raw_attributes);
+        let mut wrote_right_to_left = false;
+        for (name, value) in &self.raw_attributes {
+            if name == "rtl" {
+                if let Some(value) = self.right_to_left {
+                    start.push_attribute(("rtl", if value { "1" } else { "0" }));
+                    wrote_right_to_left = true;
+                }
+            } else {
+                start.push_attribute((name.as_str(), value.as_str()));
+            }
+        }
+        if !wrote_right_to_left {
+            push_optional_bool(&mut start, "rtl", self.right_to_left);
+        }
 
         let modelled = self.line_spacing.is_some()
             || self.space_before.is_some()
@@ -1035,6 +1050,13 @@ impl CT_TextParagraphProperties {
 
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
+    }
+
+    /// Serialises a complete paragraph-property fragment.
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let mut writer = Writer::new(Vec::new());
+        self.write_xml(&mut writer, "a:pPr")?;
+        Ok(writer.into_inner())
     }
 }
 
@@ -1931,6 +1953,29 @@ mod tests {
     use crate::color::ColorChoice;
     use crate::text::CT_TextBody;
     use crate::text::{TextAutoNumberScheme, TextBulletChoice, TextBulletSizeValue};
+
+    #[test]
+    fn drawingml_rtl_attribute_becomes_typed_without_reordering_unknown_content() {
+        let parsed = CT_TextParagraphProperties::from_xml(
+            br#"<q:pPr xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:test" defTabSz="457200" rtl="1" x:keep="yes"/>"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.right_to_left, Some(true));
+        let serialized = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(serialized.contains("rtl=\"1\""));
+        assert!(serialized.contains("x:keep=\"yes\""));
+        assert!(
+            serialized.find("defTabSz").unwrap() < serialized.find("rtl").unwrap(),
+            "{serialized}"
+        );
+
+        let mut changed = parsed;
+        changed.right_to_left = Some(false);
+        let serialized = String::from_utf8(changed.to_xml().unwrap()).unwrap();
+        assert!(serialized.contains("rtl=\"0\""), "{serialized}");
+        assert!(!serialized.contains("rtl=\"1\""), "{serialized}");
+    }
 
     #[test]
     fn leading_and_trailing_text_whitespace_survives_via_xml_space_preserve() {

@@ -355,6 +355,9 @@ fn collect_marks(
 pub(crate) fn has_content_stream_output(elements: &[PositionedElement]) -> bool {
     elements.iter().any(|element| match element {
         PositionedElement::Text(run) => !(run.text.is_empty() && run.glyph_ids.is_empty()),
+        PositionedElement::MultilingualText(run) => {
+            !(run.logical_text.is_empty() && run.glyph_ids.is_empty())
+        }
         PositionedElement::LinkAnnotation { .. } => false,
         PositionedElement::Group(group) => has_content_stream_output(&group.children),
         PositionedElement::MarkedContent { children, .. } => has_content_stream_output(children),

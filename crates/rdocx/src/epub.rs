@@ -4276,6 +4276,7 @@ mod tests {
             columns: (0..=MAX_PROJECTED_NODES)
                 .map(|_| CT_TblGridCol { width: Twips(1) })
                 .collect(),
+            ..Default::default()
         });
         table.rows.push(CT_Row::new());
         grid.document.body.content.push(BodyContent::Table(table));

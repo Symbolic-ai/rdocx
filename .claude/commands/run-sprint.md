@@ -1,12 +1,13 @@
 ---
-description: Run every unfinished F-ID in the current sprint. Designs first, implements in safe parallel waves, verifies once over the integrated result, then loops on review until clean.
+description: Run every unfinished F-ID in the current sprint. Designs first, implements in safe parallel waves, verifies dependency-prefix checkpoints and the final integrated result, then loops on review until clean.
 ---
 
 # /run-sprint [--max-review-passes N] [--max-workers N]
 
 Drive the whole active sprint. Design every story before implementing any of
-them, run independent stories in parallel worktrees, verify once over the
-integrated result, and loop on `/sprint-review` until it comes back clean.
+them, run independent stories in parallel worktrees, verify dependency-prefix
+checkpoints and the final integrated result, and loop on `/sprint-review` until
+it comes back clean.
 
 Defaults are three review passes and as many workers as the wave allows.
 
@@ -31,6 +32,10 @@ exception described below, and it delegates the release tag to `/release`.
    python3 scripts/sprint_workflow.py init SNN --resume \
      --max-review-passes {N} [--max-workers {N}]
    ```
+
+   Resume refreshes each known F-ID's title and size from
+   `CURRENT_SPRINT.md`. It preserves phase, feature state, owner, wave, worker,
+   verification, and review facts already recorded in the run state.
 
 5. Audit for leftovers from an interrupted run. `git worktree list` and
    `git branch --list 'work/*'` against the run state. Report anything the state
@@ -119,9 +124,19 @@ Record waves, dependencies, exclusive resources, branches and worktrees in the
 state with `mark-feature --wave N`. **Report the wave plan before launching
 anything.**
 
+Mark a dependency-prefix checkpoint before any later wave when a formal
+dependency is integrated and `reviewed` but not `completed`. Every formal edge
+is a completion barrier, including ordinary A to B to C chains. A release F-ID
+that is a dependency of an unfinished story adds the release extension below.
+Neither checkpoint is a reason to put dependent work in the same wave.
+
 ## 4. Run each wave
 
-Per F-ID in the wave:
+Run ordinary waves only while their dependencies are completed. When the next
+boundary is a dependency-prefix checkpoint, prepare its dependency prefix, then
+follow the checkpoint route below instead of waiting for all later waves.
+
+Per ordinary F-ID in the wave:
 
 1. Claim it from the canonical worktree following
    `.claude/commands/claim-feature.md`. The orchestrator issues these claims
@@ -141,9 +156,81 @@ Per F-ID in the wave:
 A worker failure blocks that F-ID and everything depending on it, and nothing
 else. Mark it `blocked`, say why, and carry on with the independent waves.
 
+### Dependency-prefix checkpoint
+
+Use this route whenever the step 3 trigger matches. Keep the same sprint state
+file and repeat the route before every later wave whose formal dependency is not
+completed. Do not claim the dependent wave while its prerequisite is only
+prepared, integrated, or reviewed.
+
+Pass numbering remains global in the sprint state. Treat each prefix-record,
+prepared-release, post-publication, and final-closure review as a distinct
+boundary with at most the configured review-pass bound. When the global pass
+number exceeds that bound only because earlier boundaries finished clean, use
+`record-review --extend` and record `scheduled dependency-prefix boundary` as
+the reason in the review file. This does not extend the current boundary's own
+remediation limit. If that limit is reached with actionable findings, mark the
+sprint blocked.
+
+1. Set the phase to `integration`. Integrate the prepared dependency prefix in
+   dependency order through `/integrate-feature ... --batch`. Do not integrate
+   or claim its unfinished consumer.
+2. Run `/verify --full`, add the prefix's risk riders, and record the passing
+   result at the current HEAD.
+3. Finalise the reviewed non-release prefix through `## 7. Finalise the record`.
+   Update its HLD and delivery records, mark each prefix F-ID completed, clear
+   its owner, and commit the records.
+4. Run `/verify --full` at the record HEAD, then complete the bounded
+   `/sprint-review` loop. When a pass is clean, preserve this exact order:
+   - Commit the clean review file without any other change.
+   - Run `record-review` to record the clean review at the resulting HEAD.
+   - Rerun `/verify --full` because the review commit changed HEAD, and record
+     that passing result at the same HEAD.
+
+   Do not run a confirmation review solely because its clean review file was
+   committed. The committed review remains the review evidence for that HEAD,
+   and the repeated full verification proves the commit introduced no failure.
+5. Return the phase to `implementation`. Start only waves whose formal
+   dependencies are now completed. For A to B to C, complete this route for A
+   before B starts and again for B before C starts.
+
+#### Release dependency extension
+
+When a release F-ID is a dependency of any unfinished story in the same sprint,
+first use the ordinary checkpoint above to complete its non-release dependency
+prefix, then extend the route:
+
+1. Prepare and integrate the release F-ID through the normal worker,
+   `/microscope`, `/complete-feature --prepare`, and batch integration route.
+   Keep it `reviewed` in run state and `in-progress` in both delivery trackers
+   under the release exception.
+2. Run `/verify --full` and `/sprint-review` at the prepared release current
+   HEAD. Apply every release risk rider and use the exact clean-review commit,
+   record, and verification sequence from the ordinary checkpoint.
+3. Follow `/release <tag>` at that exact reviewed and fully verified HEAD.
+   `/release` remains the only tag and publication authority and obtains its
+   separate final approval immediately before the first external mutation. If
+   approval is withheld or publication fails, preserve the recorded state and
+   stop without starting a consumer.
+4. Finalise the release F-ID's delivery records only after `/release` verifies
+   every required registry entry, tag, release body, owner, notification, and
+   other selected-family evidence. Commit those records, mark the release F-ID
+   completed, clear its owner, then run the ordinary checkpoint's full
+   verification and clean-review evidence sequence at the new current HEAD.
+5. Return the phase to `implementation` again. Resume only the later waves whose
+   dependencies are now completed. Never start an unfinished dependent story
+   before verified publication and release-F-ID completion.
+
+Every verification and review record remains bound to its exact current HEAD.
+Never use checkpoint evidence for final closure after later waves or delivery
+records change HEAD. The ordinary final integration, verification, review,
+`close-preflight SNN`, and sprint push still run after all waves finish.
+
 ## 5. Integrate
 
-From the canonical worktree, in dependency order, one at a time:
+From the canonical worktree, integrate every remaining prepared branch that a
+dependency-prefix checkpoint did not already consume. Process them in
+dependency order, one at a time:
 
 ```text
 /integrate-feature F-XXX work/<fid-lower>-<agent> --batch
@@ -156,7 +243,8 @@ human.
 
 ## 6. Verify once, over the integrated result
 
-Only after every branch is integrated:
+For the ordinary final gate, only after every branch is integrated or consumed
+by a dependency-prefix checkpoint:
 
 1. Run `/verify --full`. Not per worker, and not `--fast`.
 2. Add the union of every `## Risk routing` rider the sprint's plans declared.
@@ -179,7 +267,8 @@ Only after every branch is integrated:
 
 After verification passes:
 
-First identify any release F-ID whose gate requires real publication. Leave it
+First identify any remaining release F-ID whose gate requires real
+publication. Leave it
 `reviewed` in run state and `in-progress` in the delivery trackers, retain its
 owner and approved plan, and defer its delivery ledgers until step 9. It still
 participates in the integrated full verification and sprint review.
@@ -227,13 +316,13 @@ push, and report what is outstanding. Closure stays forbidden.
 
 When the latest pass is clean:
 
-0. If an unfinished release F-ID requires a real publication gate, pause at the
-   reviewed and fully verified SHA. Report the exact `/release vX.Y.Z` command
-   and follow it. `/release` performs its own separate final approval before
-   any external mutation. After the release is verified, create that F-ID's
-   delivery records, set its plan and state to completed, clear its owner,
-   re-run the affected checks and the bounded sprint review, then continue
-   here.
+0. If a remaining unfinished release F-ID requires a real publication gate,
+   pause at the reviewed and fully verified SHA. Report the exact `/release
+   vX.Y.Z` command and follow it. `/release` performs its own separate final
+   approval before any external mutation. After the release is verified, create
+   that F-ID's delivery records, set its plan and state to completed, clear its
+   owner, re-run the affected checks and the bounded sprint review, then
+   continue here.
 
 1. Run `close-preflight SNN`. It refuses on an unconsumed handoff, a feature
    that is neither completed nor carried, a blocking review finding, a missing
@@ -256,8 +345,9 @@ When the latest pass is clean:
 ## Refused situations
 
 - **Implementing while any plan is `draft`.**
-- **Verifying per worker instead of once over the integrated result.** That is
-  precisely the failure `/sprint-review` exists to catch.
+- **Verifying per worker instead of over an integrated checkpoint or the final
+  integrated result.** That is precisely the failure `/sprint-review` exists to
+  catch.
 - **Re-recording the hash baseline to make step 6 pass.**
 - **Deleting a worker branch or worktree.** `/close-sprint` owns cleanup after
   the sprint is safely pushed.

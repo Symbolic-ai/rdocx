@@ -72,6 +72,7 @@ defended.
 | S55 | M18, X | 4 | 4 | 0 | 13 | 1 | Added bounded HTML and ODT input, restored exact relayout performance within the Issue 46 budget, and completed migration and contribution records. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review clean on pass 2. M18 continues in S56 with ODT writing and outbound formats |
 | S56 | M18, X | 7 | 6 | 1 | 15 | 1 | Completed M18 with deterministic ODT writing, EPUB 3 export, searchable SVG pages, and hardened outcomes from PRs 47 through 52. The partial v0.10.0 attempt was archived and recovered by publishing the complete 15-package incubating 0.6.0 family before the complete seven-package stable 0.10.1 family. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and the sprint review clean on the authorized exact-HEAD pass 6 |
 | S57 | M20 | 3 | 3 | 0 | 10 | 1 | Established the pinned Word corpus, complete-union SSIM evidence, and thousand-page performance limits. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review clean on pass 1. M20 continues in S58 with shaping and incremental layout |
+| S58 | M20, X | 18 | 17 | 1 | 32 | 4 | Completed M20 with multilingual shaping, automatic hyphenation, bidirectional layout, and bounded incremental pagination. Published the shared 0.7.0 and 0.8.0 families and stable 0.11.1 recovery, then yanked the two incomplete 0.11.0 entries. Hardened Issues 53 and 54 plus PRs 55 through 58, and required the aggregate CI gate on the default branch. F-X060 records the archived partial 0.11.0 attempt. The full close gate passed with 49 of 49 hashes, the approved five-key feature-showcase delta, 22 package archives below 10 MiB, and final sprint review pass 26 clean |
 
 ## Completed features
 
@@ -329,6 +330,23 @@ defended.
 | F-196 | S57 | M | 2 | 1 | 2026-08-25 | Five-document pinned Word corpus with strict provenance and checksum verification |
 | F-201 | S57 | L | 4 | 1 | 2026-08-25 | Thousand-page deterministic layout and PDF performance gate |
 | F-197 | S57 | L | 4 | 1 | 2026-08-25 | Complete-union Word SSIM harness against pinned Writer and Poppler |
+| F-202 | S58 | L | 4 | 1 | 2026-08-26 | Bounded thousand-page restart pagination with exact warm and fresh equality |
+| F-X061 | S58 | S | 1 | 1 | 2026-08-26 | Resumable ordinary and release dependency-prefix checkpoints |
+| F-X062 | S58 | M | 2 | 1 | 2026-08-26 | Note-clean restart pagination for unchanged related stories |
+| F-X063 | S58 | S | 1 | 1 | 2026-08-26 | Eliminate the redundant 22 MiB retained-font comparison |
+| F-X058 | S58 | L | 4 | 1 | 2026-08-26 | Additive multilingual shaping, breaking, direction, fonts, and rich backend output |
+| F-X059 | S58 | S | 1 | 1 | 2026-08-27 | Published and verified the complete 15-package rpptx 0.7.0 family |
+| F-X064 | S58 | S | 1 | 1 | 2026-08-27 | Hardened PR 55 table measurement parsing with exact whole-decimal tolerance |
+| F-X067 | S58 | S | 1 | 1 | 2026-08-27 | Prime the locked Word fidelity graph before the offline harness |
+| F-X065 | S58 | S | 1 | 1 | 2026-08-27 | Preserve tracked table grids without changing active layout widths |
+| F-X066 | S58 | S | 1 | 1 | 2026-08-28 | Classify strict namespace-aware legacy VML horizontal rules without rendering them |
+| F-198 | S58 | L | 4 | 1 | 2026-08-28 | Automatic English hyphenation with exact source spans and pinned Writer parity |
+| F-199 | S58 | L | 4 | 1 | 2026-08-28 | Shared rich shaping for Arabic, Devanagari, Thai, and Simplified Chinese Word text |
+| F-200 | S58 | M | 2 | 1 | 2026-08-28 | Bidirectional Word layout with logical extraction, visual ordering, and retained vertical approximations |
+| F-X068 | S58 | S | 1 | 1 | 2026-08-29 | Published and verified the complete 15-package rpptx 0.8.0 recovery family |
+| F-X069 | S58 | S | 1 | 1 | 2026-08-29 | Published and verified the complete seven-package rdocx 0.11.1 recovery family |
+| F-X070 | S58 | S | 1 | 1 | 2026-08-29 | Yanked exactly the two incomplete stable 0.11.0 registry entries after verified 0.11.1 recovery |
+| F-X031 | S58 | S | 1 | 1 | 2026-08-29 | Required the aggregate CI gate on the default branch with a narrow administrator bypass and two live pull request proofs |
 
 ## Velocity
 
@@ -401,6 +419,7 @@ five working days.
 | S55 | 4 | 1 | 20.00 |
 | S56 | 6 | 1 | 30.00 |
 | S57 | 3 | 1 | 15.00 |
+| S58 | 17 | 4 | 21.25 |
 
 ## Escalation record
 
@@ -461,3 +480,4 @@ was done about it. Empty is the expected state.
 | 2026-08-24 | Sprint estimate variance exceeded 30 percent | S55 | Record 1 actual day against 13 estimated. Four isolated workers and established import, layout, differential, and contribution workflows allowed independent work to overlap safely. The resulting 20.00 stories per week is not a sustainable forecast, so retain the dependency-defined S56 boundary |
 | 2026-08-25 | Sprint estimate variance exceeded 30 percent | S56 | Record 1 actual day against 15 estimated. Isolated workers, established exporter and release workflows, and the v0.10.1 recovery allowed implementation, review, and publication work to overlap safely. The resulting 30.00 stories per week is not a sustainable forecast, so retain the dependency-defined future release checkpoints starting at S58 |
 | 2026-08-25 | Sprint estimate variance exceeded 30 percent | S57 | Record 1 actual day against 10 estimated. Isolated workers, established corpus and oracle infrastructure, and test-only reuse of existing render paths reduced delivery time while preserving the dependency-defined S58 shaping boundary. The resulting 15.00 stories per week is not a sustainable forecast, so retain the planned S58 scope |
+| 2026-08-29 | Sprint estimate variance exceeded 30 percent | S58 | Record 4 actual days against 32 estimated. Parallel isolated workers, staged release checkpoints, established corpus oracles, and contribution hardening allowed independent work to overlap safely. The resulting 21.25 stories per week is not a sustainable forecast, so retain dependency-defined future sprint boundaries |
