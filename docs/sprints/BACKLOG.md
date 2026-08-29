@@ -483,7 +483,7 @@ regenerated, never hand-edited.
 | F-X028 | Repair the agent-facing documentation drift | S44 | M | done |
 | F-X029 | Path-filtered CI jobs                       | S44 | M | done |
 | F-X030 | Decouple the npm package versions           | -   | S | archived |
-| F-X031 | Require the CI gate in branch protection    | S58 | S | pending |
+| F-X031 | Require the CI gate in branch protection    | S58 | S | in-progress |
 | F-X032 | Expose complete Word layout results         | S51 | S | done |
 | F-X033 | Integrate PR 36 ordered body items          | S51 | S | done |
 | F-X034 | Reviewed release notes for every release    | S51 | S | done |
