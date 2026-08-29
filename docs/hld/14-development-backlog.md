@@ -3311,14 +3311,15 @@ F-X069, and F-X070, not a completed stable-family release.
 
 ### F-X068, Tag rpptx-v0.8.0 (S)
 
-Publish the complete 15-package incubating family at 0.8.0 before retrying the
+The complete 15-package incubating family is prepared at 0.8.0 before retrying the
 stable release. The failed v0.11.0 attempt proves that stable source needs the
 additive `TextSegment.direction` contract added after the immutable 0.7.0
-shared release. Move all 15 publishable incubating manifests, the 15 workspace
-pins, the sixteenth preparation-only `rpptx-wasm` manifest, lockfile records,
-README requirements, CI literals, release regressions, and reviewed changelog
-section to 0.8.0. Keep the stable family prepared at 0.11.0 during this
-separate tag.
+shared release. All 15 publishable incubating manifests, the 15 workspace pins,
+the sixteenth preparation-only `rpptx-wasm` manifest, lockfile records, README
+requirements, CI literals, release regressions, and the reviewed changelog
+section move together. The stable family remains prepared at 0.11.0 and pins
+the shared 0.8.0 boundary during this separate tag. Publication remains gated
+on the separately approved release.
 
 **Depends on**: F-200, F-X064, F-X065, F-X066, F-X067.
 **Test gate**: release. All 15 incubating registry entries resolve at 0.8.0

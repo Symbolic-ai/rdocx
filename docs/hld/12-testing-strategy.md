@@ -1160,16 +1160,20 @@ The stable 0.11.0 preparation regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
-are 0.7.0 while `rpptx-wasm` remains ineligible for publication.
+are 0.8.0 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.7.0. It separately proves the stable
+15-package publication preflight at 0.8.0. It separately proves the stable
 workspace remains at its prepared 0.11.0 boundary and `rpptx-wasm` remains
 ineligible for publication.
 The stable shared-family gate packages `rdocx-layout@0.11.0`, requires its
-normalized archive dependency on `oxml-layout@0.7.0` to contain no local path,
+normalized archive dependency on `oxml-layout@0.8.0` to contain no local path,
 and resolves the exact shared registry version without an `oxml-layout` patch.
+That registry consumer is excluded from the incubating tag preflight because
+0.8.0 does not exist before its own publication. The stable tag preflight runs
+it with explicit published-shared authority, and the F-X068 post-publication
+gate runs it independently before stable recovery starts.
 A separate recovery gate constructs an isolated registry consumer of exact
 `rdocx-layout@0.10.1` and inspects its unpatched normal dependency tree. It
 requires registry `oxml-layout@0.6.0` and rejects 0.7.0, so the immutable

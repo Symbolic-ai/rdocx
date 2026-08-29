@@ -111,13 +111,13 @@ only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Confirm the immutable v0.11.0 failure evidence and all completed dependencies.
-- [ ] Move all incubating carriers and shared pins to 0.8.0.
-- [ ] Update exact carrier, isolation, workflow, and registry regressions.
-- [ ] Prepare the reviewed shared 0.8.0 notes with an empty contribution inventory.
-- [ ] Update exactly the five listed HLD files.
-- [ ] Run `/verify --full`, packaging, assets, bindings, WASM, registry, supply-chain, notes, and hash gates.
-- [ ] Stop at `/release rpptx-v0.8.0` for separate final approval.
+- [x] Confirm the immutable v0.11.0 failure evidence and all completed dependencies.
+- [x] Move all incubating carriers and shared pins to 0.8.0.
+- [x] Update exact carrier, isolation, workflow, and registry regressions.
+- [x] Prepare the reviewed shared 0.8.0 notes with an empty contribution inventory.
+- [x] Update exactly the five listed HLD files.
+- [x] Run `/verify --full`, packaging, assets, bindings, WASM, registry, supply-chain, notes, and hash gates.
+- [x] Stop at `/release rpptx-v0.8.0` for separate final approval.
 - [ ] Verify all publications, owners, tag, body, exclusions, and the stable registry graph.
 
 ## Open questions

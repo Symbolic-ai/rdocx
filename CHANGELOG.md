@@ -2,7 +2,54 @@
 
 ## Unreleased
 
-No changes have been recorded since the v0.11.0 preparation.
+No changes have been recorded since the rpptx-v0.8.0 preparation.
+
+## rpptx-v0.8.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family publishes the complete text-direction
+contract required by current stable Word source. This release supplies the
+registry boundary needed for the stable 0.11.1 recovery after the immutable
+partial v0.11.0 attempt stopped during `rdocx-layout` verification.
+
+### Added
+
+- Carry resolved text direction in the shared `TextSegment.direction` field so
+  Word, PowerPoint, PDF, raster, and SVG paths use one reviewed direction
+  contract.
+- Preserve paragraph-wide bidirectional levels, line-local reordering, logical
+  searchable text, inline objects, tab leaders, numbering markers, stored
+  fields, and conditional hyphens across the shared layout path.
+- Retain the deterministic Arabic, Devanagari, Thai, and Simplified Chinese
+  font and shaping substrate published in the previous shared family.
+
+### Fixed
+
+- Make the current stable layout source compile against a complete published
+  shared family instead of relying on an API added after 0.7.0.
+- Keep malformed rich-run validation, source mapping, and logical extraction
+  behavior aligned across PDF, raster, and SVG backends.
+
+### Compatibility
+
+The exact 15-package incubating crates.io family moves together from 0.7.0 to
+0.8.0. The additive `TextSegment.direction` field is an intentional pre-1.0
+Rust source change for callers that construct full `TextSegment` literals.
+Callers using existing shaping and layout entry points receive the resolved
+direction from those APIs.
+
+The stable workspace remains prepared at 0.11.0 during this shared release.
+The later stable 0.11.1 recovery pins shared dependencies to 0.8.0. The
+unpublished `rpptx-wasm` preparation carrier moves to 0.8.0 without gaining
+crates.io, npm, or other publication authority.
+
+### Contributors
+
+Atul Sharma maintained the release with the rdocx maintainers. This
+shared-family carrier release adds no authenticated external issue or pull
+request to its selected contribution inventory, so it prepares no external
+notification.
 
 ## v0.11.0
 

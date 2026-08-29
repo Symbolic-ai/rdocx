@@ -21,4 +21,4 @@ let pdf = render_to_pdf(&layout);
 assert!(pdf.starts_with(b"%PDF-"));
 ```
 
-Add `oxml-pdf = "0.7.0"` and `oxml-layout = "0.7.0"` to your dependencies. See the [renderer API](https://docs.rs/oxml-pdf) for the accepted layout model.
+Add `oxml-pdf = "0.8.0"` and `oxml-layout = "0.8.0"` to your dependencies. See the [renderer API](https://docs.rs/oxml-pdf) for the accepted layout model.
