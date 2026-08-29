@@ -2615,7 +2615,7 @@ existing protections without an explicit reviewed decision. Bind the evidence
 to the repository, branch pattern, ruleset or protection identifier, and the
 reviewed sprint SHA.
 
-**Depends on**: F-X029, F-X060.
+**Depends on**: F-X029, F-X070.
 **Test gate**: integration. A docs-only pull request reports a successful
 required `ci-gate` while the filtered expensive jobs stay skipped, and a
 selected failing job makes the required gate fail.
@@ -3286,25 +3286,83 @@ published.
 
 ### F-X060, Tag v0.11.0 (S)
 
-The stable workspace is prepared at 0.11.0 across every version carrier,
-binding metadata value, README requirement, CI literal, lock record, release
-regression, and the selected changelog section. Every shared dependency stays
-pinned to the verified 0.7.0 family from F-X059. The complete seven-package
-stable publication remains gated on the separately approved release. Python,
-WASM, npm, and PyPI packages remain outside publication authority.
+The immutable v0.11.0 attempt prepared the stable workspace and exact
+seven-package family at reviewed SHA
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`. The annotated `v0.11.0` tag
+targets that SHA. The release workflow published `rdocx-opc` and
+`rdocx-oxml`, then stopped while verifying `rdocx-layout` because current
+stable source uses `TextSegment.direction`, which is newer than the published
+`oxml-layout@0.7.0` registry contract. The other five stable packages and the
+GitHub release were not published.
 
-The stable contribution inventory credits authenticated `@emptinessform` for
-Issues 53 and 54 and authenticated `@pedroassumpcao` for open PRs 55 through
-58 at their reviewed source SHAs. Each outcome is a hardened equivalent.
-Release-bound notifications leave every issue and pull-request state unchanged
-unless separately authorized.
+No contribution notification is attributed to the partial attempt. Issues 53
+and 54 and PRs 55 through 58 remain open. F-X068 publishes the required shared
+family at 0.8.0, F-X069 owns the coherent seven-package stable recovery at
+0.11.1 and its six leave-open notifications, and F-X070 owns the separately
+approved post-recovery yank of the two incomplete 0.11.0 registry entries. The
+v0.11.0 tag is never moved or deleted. Python, WASM, npm, and PyPI packages
+remain outside publication authority.
 
 **Depends on**: F-198, F-199, F-200, F-202, F-X059, F-X062, F-X063, F-X064, F-X065, F-X066, F-X067.
-**Test gate**: release. All seven stable registry entries resolve at 0.11.0
-against incubating 0.7.0 dependencies, their owners match the authenticated
+**Test gate**: release. Preparation and every local gate passed at the reviewed
+SHA. Publication did not complete because the shared registry graph could not
+verify `rdocx-layout`. The immutable partial result is the input to F-X068,
+F-X069, and F-X070, not a completed stable-family release.
+
+### F-X068, Tag rpptx-v0.8.0 (S)
+
+Publish the complete 15-package incubating family at 0.8.0 before retrying the
+stable release. The failed v0.11.0 attempt proves that stable source needs the
+additive `TextSegment.direction` contract added after the immutable 0.7.0
+shared release. Move all 15 publishable incubating manifests, the 15 workspace
+pins, the sixteenth preparation-only `rpptx-wasm` manifest, lockfile records,
+README requirements, CI literals, release regressions, and reviewed changelog
+section to 0.8.0. Keep the stable family prepared at 0.11.0 during this
+separate tag.
+
+**Depends on**: F-200, F-X064, F-X065, F-X066, F-X067.
+**Test gate**: release. All 15 incubating registry entries resolve at 0.8.0
+from the reviewed SHA, their owners match the authenticated registry inventory,
+the annotated tag and GitHub release body match the reviewed evidence,
+`rpptx-wasm@0.8.0` is absent, and no stable package publishes from this tag.
+
+### F-X069, Tag v0.11.1 (S)
+
+Recover the complete stable release at 0.11.1 after F-X068 publishes the
+required shared 0.8.0 family. Move every stable carrier, internal pin, lockfile
+record, Python metadata value, WASM contract literal, CI identity, README
+requirement, release regression, and reviewed changelog section from 0.11.0 to
+0.11.1. Pin every shared dependency to 0.8.0. Publish exactly `rdocx-opc`,
+`rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and
+`rdocx-cli` in dependency order.
+
+The reviewed notes describe the partial v0.11.0 attempt accurately. The
+selected contribution inventory credits authenticated `@emptinessform` for
+Issues 53 and 54 and authenticated `@pedroassumpcao` for PRs 55 through 58.
+After publication verifies, post exactly one release-bound thank-you to each
+record and leave all six records open.
+
+**Depends on**: F-198, F-199, F-200, F-202, F-X062, F-X063, F-X064, F-X065, F-X066, F-X067, F-X068.
+**Test gate**: release. All seven stable registry entries resolve at 0.11.1
+against incubating 0.8.0 dependencies, their owners match the authenticated
 registry inventory, the annotated tag targets the reviewed SHA, the GitHub
-release body is byte-identical to the reviewed notes, and every selected
-external record receives its reviewed notification.
+release body is byte-identical to the reviewed notes, and all six leave-open
+notification URLs verify.
+
+### F-X070, Yank incomplete v0.11.0 packages (S)
+
+After the complete v0.11.1 family verifies, remove the two incomplete v0.11.0
+registry entries from ordinary dependency selection without rewriting release
+history. Obtain a separate final approval immediately before yanking exactly
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Keep the annotated `v0.11.0` tag
+immutable, create no v0.11.0 GitHub release, and do not claim the other five
+0.11.0 packages ever existed.
+
+**Depends on**: F-X069.
+**Test gate**: integration. crates.io readback reports the two incomplete
+0.11.0 entries yanked, the other five absent, and all seven 0.11.1 entries
+live and owned by the authenticated publisher. The immutable v0.11.0 tag still
+targets the reviewed partial-attempt SHA and no v0.11.0 GitHub release exists.
 
 ### F-X061, Support staged dependency checkpoints in run-sprint (S)
 

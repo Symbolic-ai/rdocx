@@ -286,6 +286,15 @@ without a separately approved `/release` invocation at the exact reviewed
 SHA. The unpublished `rpptx-wasm` preparation member is also at 0.7.0 but has
 no crates.io publication path.
 
+The next release sequence is shared 0.8.0 followed by stable 0.11.1. It
+recovers the immutable partial v0.11.0 attempt, whose tag targets reviewed SHA
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`. That attempt published only
+`rdocx-opc` and `rdocx-oxml` before package verification exposed the missing
+shared `TextSegment.direction` registry contract. It created no GitHub release
+and posted no contribution notifications. After the complete stable 0.11.1
+family verifies, a separate approval may authorize yanking exactly those two
+incomplete 0.11.0 entries. The tag is never moved or deleted.
+
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
@@ -376,12 +385,14 @@ cargo-release's effective `workspace` shared-version group and the
 versions, and the rdocx WASM contract literals are prepared at 0.11.0. The
 exact seven-package stable family remains published at 0.10.1 from the
 annotated `v0.10.1` tag at reviewed SHA
-`ae0dcb162a7805e59e5890464b226765645ad547` until the separately approved
-stable release.
-The immutable v0.10.0 attempt published only `rdocx-opc` and `rdocx-oxml`
-before package verification failed. The remaining five packages and GitHub
-release were not published at that version. The last published complete stable
-family is 0.10.1. Earlier immutable
+`ae0dcb162a7805e59e5890464b226765645ad547`.
+The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
+before package verification failed against the published shared 0.7.0 API.
+The remaining five packages and GitHub release were not published at that
+version. Shared 0.8.0 and stable 0.11.1 are the approved recovery sequence. A
+post-recovery cleanup may yank the two incomplete 0.11.0 entries only after a
+separate final approval. The last published complete stable family is 0.10.1.
+Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version

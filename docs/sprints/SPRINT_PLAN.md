@@ -1070,6 +1070,9 @@ the advanced spreadsheet programme begins.
 | F-X065 | Expose tracked table grid changes | S |
 | F-X066 | Classify legacy VML horizontal rules | S |
 | F-X060 | Tag v0.11.0 | S |
+| F-X068 | Tag rpptx-v0.8.0 | S |
+| F-X069 | Tag v0.11.1 | S |
+| F-X070 | Yank incomplete v0.11.0 packages | S |
 | F-X031 | Require the CI gate in branch protection | S |
 
 F-198 changes line breaking and therefore every line after the first hyphenated
@@ -1085,11 +1088,16 @@ before the stable Word consumers verify against crates.io. F-X064 lands the
 first external reader fix, and F-X067 primes the locked Word fidelity graph
 before F-X065 and F-X066 land the remaining reader fixes. Together these are
 the hardened or directly adopted outcomes of PRs 55 through 58 before the
-paused Word text stories resume. F-X060 publishes the settled stable family at
-0.11.0 after every S58 product story completes.
-Each release retains the separate final approval required by `/release`.
+paused Word text stories resume. F-X060 records the immutable partial v0.11.0
+attempt, which published two packages before registry verification exposed the
+missing shared source boundary. F-X068 publishes that shared boundary at
+0.8.0, and F-X069 publishes the complete stable recovery at 0.11.1. F-X070
+then yanks the two incomplete 0.11.0 registry entries after separate approval
+without moving the tag. Each release retains the separate final approval
+required by `/release`.
 
-F-X031 remains at the non-spreadsheet boundary. F-X029 creates the stable
+F-X031 remains at the non-spreadsheet boundary after the recovery and cleanup.
+F-X029 creates the stable
 repository-side `ci-gate` in S44. This operational story makes it a required
 GitHub check after the Word fidelity and release gates have settled and before
 the larger spreadsheet programme starts.

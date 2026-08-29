@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 70 | 63 | 3 | 2  |
-| **Total** | **317** | **259** | **6** | **50** |
+| X, Cross-cutting (opportunistic)            | 73 | 63 | 2 | 5  |
+| **Total** | **320** | **259** | **5** | **53** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -512,7 +512,7 @@ regenerated, never hand-edited.
 | F-X057 | Tag v0.10.1                               | S56 | S | done |
 | F-X058 | Shared multilingual text substrate        | S58 | L | done |
 | F-X059 | Tag rpptx-v0.7.0                          | S58 | S | done |
-| F-X060 | Tag v0.11.0                               | S58 | S | in-progress |
+| F-X060 | Tag v0.11.0                               | S58 | S | archived |
 | F-X061 | Support staged dependency checkpoints in run-sprint | S58 | S | done |
 | F-X062 | Reuse restart pagination with notes and headers | S58 | M | done |
 | F-X063 | Avoid duplicate caller-font byte comparisons | S58 | S | done |
@@ -520,4 +520,7 @@ regenerated, never hand-edited.
 | F-X065 | Expose tracked table grid changes             | S58 | S | done |
 | F-X066 | Classify legacy VML horizontal rules          | S58 | S | done |
 | F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | done |
+| F-X068 | Tag rpptx-v0.8.0                          | S58 | S | pending |
+| F-X069 | Tag v0.11.1                               | S58 | S | pending |
+| F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

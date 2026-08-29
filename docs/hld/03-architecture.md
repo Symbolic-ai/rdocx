@@ -552,11 +552,15 @@ separate workspace version. The stable workspace is prepared at 0.11.0 across
 nine internal pins, eleven inherited lockfile packages, two Python project
 versions, and the unpublished `rdocx-wasm` package. Its exact seven-package
 crates.io family remains published at 0.10.1 from the annotated `v0.10.1` tag
-at reviewed SHA `ae0dcb162a7805e59e5890464b226765645ad547` until the separately
-approved stable release. The immutable v0.10.0
-attempt published `rdocx-opc` and `rdocx-oxml`, then stopped before the other
-five packages and GitHub release when `rdocx-layout` proved it needed the newer
-shared layout API. The last published complete stable family is 0.10.1.
+at reviewed SHA `ae0dcb162a7805e59e5890464b226765645ad547`. The immutable
+v0.11.0 attempt at reviewed SHA
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published `rdocx-opc` and
+`rdocx-oxml`, then stopped before the other five packages and GitHub release
+when `rdocx-layout` proved it needed `TextSegment.direction` from a newer
+shared registry family. The complete recovery publishes shared 0.8.0 before
+stable 0.11.1. Only after 0.11.1 verifies may a separately approved cleanup
+yank the two incomplete 0.11.0 entries. The v0.11.0 tag remains immutable. The
+last published complete stable family is 0.10.1.
 Earlier immutable registry releases remain available. Version preparation and manifest
 eligibility do not authorize any later publication. `oxml-cli-support` is the
 format-neutral owner of range parsing,

@@ -21,7 +21,7 @@ protection at the reviewed sprint SHA.
   SSIM evidence, deliberate render sensitivity, performance regression gates,
   and the always-reporting `ci-gate` contract.
 - `docs/hld/14-development-backlog.md`, for the exact F-198, F-199, F-200,
-  F-202, F-X031, and F-X058 through F-X067 dependencies and acceptance gates.
+  F-202, F-X031, and F-X058 through F-X070 dependencies and acceptance gates.
 - `docs/hld/15-build-and-toolchain.md`, for bundled-font deterministic output,
   cache ceilings, pinned corpus and oracle runtimes, the CI matrix, and the
   separation between tracked workflow state and repository protection state.
@@ -43,7 +43,10 @@ protection at the reviewed sprint SHA.
 | F-199 | Complex script shaping | L | done | - |
 | F-202 | Incremental layout | L | done | - |
 | F-200 | Vertical and bidirectional text | M | done | - |
-| F-X060 | Tag v0.11.0 | S | in-progress | codex |
+| F-X060 | Tag v0.11.0 | S | archived | - |
+| F-X068 | Tag rpptx-v0.8.0 | S | pending | - |
+| F-X069 | Tag v0.11.1 | S | pending | - |
+| F-X070 | Yank incomplete v0.11.0 packages | S | pending | - |
 | F-X031 | Require the CI gate in branch protection | S | pending | - |
 
 ## Sequencing note
@@ -58,11 +61,16 @@ F-X067 primes the locked Word fidelity dependency graph before F-X065 and
 F-X066 land the remaining hardened equivalents of PRs 56 and 57. The paused
 stable Word work is then reconstructed. F-198, F-199, and then F-200 consume
 the published shared boundary. F-202 is already independently reviewed.
-F-X060 publishes the settled stable family at 0.11.0. F-X031 is the final
-operational step because the stable `ci-gate`, reviewed workflow, releases, and
-sprint SHA must have settled before repository protection is changed. F-198 is
-expected to move rendered output, so its hash delta must be isolated and
-declared.
+F-X060 is the immutable partial v0.11.0 attempt. It published only
+`rdocx-opc` and `rdocx-oxml` before registry verification exposed the missing
+shared 0.8.0 source boundary. F-X068 publishes that complete shared family,
+then F-X069 publishes the coherent stable 0.11.1 recovery and posts the six
+reviewed leave-open contribution notifications. F-X070 separately yanks the
+two incomplete 0.11.0 registry entries after another explicit approval while
+preserving the tag. F-X031 is the final operational step because the stable
+`ci-gate`, reviewed workflow, releases, registry cleanup, and sprint SHA must
+have settled before repository protection is changed. F-198 is expected to
+move rendered output, so its hash delta must be isolated and declared.
 
 ## Definition of done for this sprint
 
@@ -72,8 +80,13 @@ declared.
   rules within the recorded corpus threshold.
 - Mixed-direction runs and supported vertical text render in the correct visual
   order without losing preserved source content.
-- The complete incubating 0.7.0 and stable 0.11.0 crate families publish from
-  their separately approved reviewed SHAs, and their registry graphs verify.
+- The complete incubating 0.7.0 and 0.8.0 families publish from their
+  separately approved reviewed SHAs. The immutable partial stable 0.11.0
+  attempt is recorded accurately, and the complete stable 0.11.1 recovery
+  publishes against shared 0.8.0.
+- After stable 0.11.1 verifies and a separate approval is granted, the two
+  incomplete 0.11.0 registry entries are yanked without moving the v0.11.0
+  tag or creating a v0.11.0 GitHub release.
 - Each dependency release checkpoint records full verification and clean review
   at its release SHA, then resumes later waves in the same sprint state.
 - Unchanged notes, endnotes, headers, and footers retain safe restart
