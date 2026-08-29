@@ -45,7 +45,7 @@ protection at the reviewed sprint SHA.
 | F-200 | Vertical and bidirectional text | M | done | - |
 | F-X060 | Tag v0.11.0 | S | archived | - |
 | F-X068 | Tag rpptx-v0.8.0 | S | done | - |
-| F-X069 | Tag v0.11.1 | S | pending | - |
+| F-X069 | Tag v0.11.1 | S | in-progress | codex |
 | F-X070 | Yank incomplete v0.11.0 packages | S | pending | - |
 | F-X031 | Require the CI gate in branch protection | S | pending | - |
 
