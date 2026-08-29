@@ -1195,6 +1195,12 @@ reviewed SHA `1b076c16fb494fe47b054d761e061181a1ea0b15`, the stable-family
 exclusion, byte-identical GitHub release notes, and the absence of
 `rpptx-wasm@0.7.0` from crates.io. Its selected contribution inventory is
 empty, so it requires no external notification.
+The 0.8.0 release gate verified all 15 incubating registry entries under sole
+owner `mantissaman (Atul Sharma)`, the annotated `rpptx-v0.8.0` tag at
+reviewed SHA `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`, stable-family exclusion,
+byte-identical GitHub release notes, the published stable shared-family graph,
+and the absence of `rpptx-wasm@0.8.0` from crates.io. Its selected contribution
+inventory is empty, so it requires no external notification.
 The failed stable 0.11.0 release gate is not a passing family gate. Its
 annotated tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full
@@ -1202,8 +1208,9 @@ verification, notes, and archive preflights passed. Publication then stopped
 after `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` because packaged
 `rdocx-layout@0.11.0` could not compile against registry
 `oxml-layout@0.7.0`. The other five stable packages, GitHub release, and six
-notifications are absent. Recovery gates must first prove all 15 shared 0.8.0
-entries, then all seven stable 0.11.1 entries and six leave-open notifications.
+notifications are absent. The shared recovery gate proves all 15 shared 0.8.0
+entries. The stable recovery gate must prove all seven stable 0.11.1 entries
+and six leave-open notifications.
 A separate cleanup gate may yank only the two incomplete 0.11.0 entries after
 0.11.1 verifies and another final approval is granted.
 

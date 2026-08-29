@@ -3311,18 +3311,18 @@ F-X069, and F-X070, not a completed stable-family release.
 
 ### F-X068, Tag rpptx-v0.8.0 (S)
 
-The complete 15-package incubating family is prepared at 0.8.0 before retrying the
-stable release. The failed v0.11.0 attempt proves that stable source needs the
-additive `TextSegment.direction` contract added after the immutable 0.7.0
-shared release. All 15 publishable incubating manifests, the 15 workspace pins,
-the sixteenth preparation-only `rpptx-wasm` manifest, lockfile records, README
-requirements, CI literals, release regressions, and the reviewed changelog
-section move together. The stable family remains prepared at 0.11.0 and pins
-the shared 0.8.0 boundary during this separate tag. Publication remains gated
-on the separately approved release.
+The complete 15-package incubating family is published at 0.8.0 from the
+immutable annotated `rpptx-v0.8.0` tag at reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. It supplies the additive
+`TextSegment.direction` contract required by stable source after the immutable
+0.7.0 shared release. All 15 registry entries resolve under sole owner
+`mantissaman (Atul Sharma)`, the release body matches the reviewed notes, and
+`rpptx-wasm@0.8.0` remains absent from crates.io. The stable family remains
+prepared at 0.11.0 and pins this published shared boundary before the coherent
+0.11.1 recovery.
 
 **Depends on**: F-200, F-X064, F-X065, F-X066, F-X067.
-**Test gate**: release. All 15 incubating registry entries resolve at 0.8.0
+**Test gate**: release, passed. All 15 incubating registry entries resolve at 0.8.0
 from the reviewed SHA, their owners match the authenticated registry inventory,
 the annotated tag and GitHub release body match the reviewed evidence,
 `rpptx-wasm@0.8.0` is absent, and no stable package publishes from this tag.

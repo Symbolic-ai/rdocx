@@ -278,16 +278,16 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
 `rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15
-are prepared at 0.8.0. The last complete published family remains 0.7.0 from
-the annotated `rpptx-v0.7.0` tag at reviewed SHA
-`1b076c16fb494fe47b054d761e061181a1ea0b15`. The earlier 0.6.0, 0.5.0, and 0.4.0
+are published at 0.8.0 from the immutable annotated `rpptx-v0.8.0` tag at
+reviewed SHA `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The earlier 0.7.0, 0.6.0,
+0.5.0, and 0.4.0
 registry releases remain available, and no existing version or tag was moved. Manifest
 eligibility and allowlist membership do not authorize a later publication
 without a separately approved `/release` invocation at the exact reviewed
 SHA. The unpublished `rpptx-wasm` preparation member is also at 0.8.0 but has
 no crates.io publication path.
 
-The next release sequence is shared 0.8.0 followed by stable 0.11.1. It
+The next release is stable 0.11.1 against the published shared 0.8.0 family. It
 recovers the immutable partial v0.11.0 attempt, whose tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`. That attempt published only
 `rdocx-opc` and `rdocx-oxml` before package verification exposed the missing
@@ -400,8 +400,8 @@ The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.8.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 preparation group contains unpublished `rpptx-wasm`, while the crates.io
 allowlist remains exactly 15 packages. The last published complete family is
-the immutable `rpptx-v0.7.0` release at reviewed SHA
-`1b076c16fb494fe47b054d761e061181a1ea0b15`, and earlier registry releases
+the immutable `rpptx-v0.8.0` release at reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`, and earlier registry releases
 remain available. The stable 0.10.1 registry consumer proof remains pinned to
 the immutable `oxml-layout@0.6.0` dependency rather than the current workspace
 family.
