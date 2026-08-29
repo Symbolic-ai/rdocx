@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 73 | 64 | 4 | 2  |
-| **Total** | **320** | **260** | **7** | **50** |
+| X, Cross-cutting (opportunistic)            | 73 | 65 | 3 | 2  |
+| **Total** | **320** | **261** | **6** | **50** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -483,7 +483,7 @@ regenerated, never hand-edited.
 | F-X028 | Repair the agent-facing documentation drift | S44 | M | done |
 | F-X029 | Path-filtered CI jobs                       | S44 | M | done |
 | F-X030 | Decouple the npm package versions           | -   | S | archived |
-| F-X031 | Require the CI gate in branch protection    | S58 | S | in-progress |
+| F-X031 | Require the CI gate in branch protection    | S58 | S | done |
 | F-X032 | Expose complete Word layout results         | S51 | S | done |
 | F-X033 | Integrate PR 36 ordered body items          | S51 | S | done |
 | F-X034 | Reviewed release notes for every release    | S51 | S | done |

@@ -10145,3 +10145,49 @@ gates.
 **Notes for future sessions.** Preserve both yanked flags and the immutable
 v0.11.0 tag. Do not generalize this incomplete-family cleanup into authority to
 yank a complete coherent release.
+
+### F-X031, Require the CI gate in branch protection
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The default branch now has active repository ruleset
+`21823007`, named `Require CI gate on default branch`. It targets
+`~DEFAULT_BRANCH` and requires the exact aggregate check `CI gate`. The sole
+bypass is repository role 5, `admin`, in `always` mode so the reviewed
+`/close-sprint` direct-push workflow remains executable.
+
+**Non-obvious choices.** A repository ruleset preserves the pre-mutation state
+without replacing a classic protection document. The bypass is limited to the
+repository-administrator role. No team, app, user, or broader repository role
+can bypass the gate. Both proof pull requests were closed without merging and
+their disposable branches were deleted after their exact refs were checked.
+
+**Deviations from the design plan.** None. The user separately approved the
+persistent ruleset and its narrow administrator bypass before mutation.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The docs-only
+[PR 59](https://github.com/tensorbee/rdocx/pull/59) reached CLEAN and MERGEABLE
+after run
+[33275852961](https://github.com/tensorbee/rdocx/actions/runs/33275852961)
+reported a successful required `CI gate` while eight filtered product jobs
+stayed skipped. The deliberately failing
+[PR 60](https://github.com/tensorbee/rdocx/pull/60) became BLOCKED after run
+[33276064981](https://github.com/tensorbee/rdocx/actions/runs/33276064981)
+reported a failed `CI gate`, while `viewerCanMergeAsAdmin=true` proved the
+approved close-sprint bypass. Independent readback verified the active ruleset,
+sole bypass, exact check, closed-unmerged pull requests, and absent disposable
+refs. Full integrated verification passed with workspace, no-default, WASM,
+documentation, README, exact 22-package dry-run, archive-size, and supply-chain
+gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve ruleset `21823007` and the exact
+`CI gate` check identity. A future workflow rename must update the ruleset in a
+separately reviewed operational story. Use `/close-sprint` for the reviewed
+administrator-bypass push to `main`.
