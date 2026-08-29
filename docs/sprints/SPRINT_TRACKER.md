@@ -342,6 +342,7 @@ defended.
 | F-198 | S58 | L | 4 | 1 | 2026-08-28 | Automatic English hyphenation with exact source spans and pinned Writer parity |
 | F-199 | S58 | L | 4 | 1 | 2026-08-28 | Shared rich shaping for Arabic, Devanagari, Thai, and Simplified Chinese Word text |
 | F-200 | S58 | M | 2 | 1 | 2026-08-28 | Bidirectional Word layout with logical extraction, visual ordering, and retained vertical approximations |
+| F-X068 | S58 | S | 1 | 1 | 2026-08-29 | Published and verified the complete 15-package rpptx 0.8.0 recovery family |
 
 ## Velocity
 

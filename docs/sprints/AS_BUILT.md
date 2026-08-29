@@ -9984,3 +9984,53 @@ visual positions, including for source-less generated content. Keep direction
 transport private where the existing public aggregate is exhaustive, and do
 not expand the quarter-turn approximation into upright vertical layout without
 an explicit scope and HLD revision.
+
+### F-X068, Tag rpptx-v0.8.0
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The complete fifteen-package shared OOXML and PowerPoint
+family was published at 0.8.0 from reviewed SHA
+`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The release publishes the shared
+text-direction carrier required by current stable Word source while preserving
+the multilingual shaping, deterministic fonts, rich output, and logical text
+contracts from 0.7.0. `rpptx-wasm` remains unpublished.
+
+**Release evidence.** GitHub Actions run
+[33258210706](https://github.com/tensorbee/rdocx/actions/runs/33258210706)
+passed output stability, release metadata, reviewed notes, archive
+verification, the exact fifteen-crate publication, and GitHub Release jobs.
+Every selected 0.8.0 registry entry resolved under owner
+`mantissaman (Atul Sharma)`. The annotated
+[`rpptx-v0.8.0`](https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.8.0)
+tag dereferenced to the reviewed SHA, and its 2,016-byte body was
+byte-identical to the committed changelog render. `rpptx-wasm@0.8.0` remained
+absent from crates.io, and the prepared stable layout graph resolved the
+published `oxml-layout@0.8.0` boundary.
+
+**Contribution inventory.** This shared-family carrier release added no
+authenticated external issue or pull-request record. Issues 53 and 54 and PRs
+55 through 58 remain assigned to the later stable 0.11.1 recovery inventory.
+
+**Notifications.** None. The reviewed contribution inventory was empty, and
+no issue or pull-request state changed during this release.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the reviewed SHA with all workspace,
+no-default, WASM, documentation, README, exact 22-package dry-run, archive,
+and cargo-deny gates. The hash harness remained unchanged at 49 of 49. The
+publication workflow and independent registry, owner, tag, release-target,
+stable-graph, unpublished-WASM, and byte-for-byte release-body checks then
+passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the immutable `rpptx-v0.8.0` tag.
+F-X069 may now prepare and publish the coherent stable 0.11.1 recovery against
+the complete published shared 0.8.0 family.

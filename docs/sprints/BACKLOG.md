@@ -520,7 +520,7 @@ regenerated, never hand-edited.
 | F-X065 | Expose tracked table grid changes             | S58 | S | done |
 | F-X066 | Classify legacy VML horizontal rules          | S58 | S | done |
 | F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | done |
-| F-X068 | Tag rpptx-v0.8.0                          | S58 | S | in-progress |
+| F-X068 | Tag rpptx-v0.8.0                          | S58 | S | done |
 | F-X069 | Tag v0.11.1                               | S58 | S | pending |
 | F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

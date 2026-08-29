@@ -1,6 +1,6 @@
 # F-X068, Tag rpptx-v0.8.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-200, F-X064, F-X065, F-X066, F-X067
@@ -118,7 +118,7 @@ only. Any output delta blocks preparation.
 - [x] Update exactly the five listed HLD files.
 - [x] Run `/verify --full`, packaging, assets, bindings, WASM, registry, supply-chain, notes, and hash gates.
 - [x] Stop at `/release rpptx-v0.8.0` for separate final approval.
-- [ ] Verify all publications, owners, tag, body, exclusions, and the stable registry graph.
+- [x] Verify all publications, owners, tag, body, exclusions, and the stable registry graph.
 
 ## Open questions
 
