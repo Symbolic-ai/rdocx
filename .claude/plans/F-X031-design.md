@@ -8,11 +8,13 @@
 ## Problem
 
 The workflow exposes one stable aggregate `CI gate` check at
-`.github/workflows/ci.yml:631`, and the regression contract at
+`.github/workflows/ci.yml:633`, and the regression contract at
 `scripts/test_sprint_workflow.py:389` proves that the fan-in rejects failed or
 unexpectedly skipped selected jobs. GitHub currently reports no repository
 rulesets and no classic protection for `main`, so a pull request can merge
-without that aggregate result.
+without that aggregate result. The sprint close workflow later pushes its
+reviewed local merge commit directly to `main`. A required check with no bypass
+would reject that commit before GitHub could run the check.
 
 The tracked workflow and the external protection setting must remain separate.
 The protection change must be tied to the final reviewed S58 SHA, must preserve
@@ -35,8 +37,12 @@ write.
 
 Create an active repository ruleset targeting the default branch and requiring
 the exact `CI gate` status check. Preserve every existing rule and protection.
-Use a ruleset because it supplies a stable numeric identifier for the required
-evidence and avoids replacing a classic-protection document wholesale.
+Grant the repository-administrator role an `always` bypass so the reviewed
+`/close-sprint` operator can push the local no-fast-forward merge commit that
+the workflow requires. Do not grant bypass to a broader repository role, team,
+app, or user. Use a ruleset because it supplies a stable numeric identifier for
+the required evidence and avoids replacing a classic-protection document
+wholesale.
 
 Prove the setting with two disposable pull requests based on the current
 default branch. One changes tracked Markdown only and must report a successful
@@ -57,6 +63,10 @@ evidence in the listed HLD sections and sprint ledgers.
   protection added before execution could be removed accidentally.
 - Treat the workflow regression as proof of repository protection. It proves
   fan-in semantics, not the external GitHub setting or merge enforcement.
+- Omit every bypass. That would make the current direct-push sprint close
+  workflow unable to publish its reviewed merge commit.
+- Redesign `/close-sprint` around a pull request. That is a wider workflow
+  change than this repository-setting story needs.
 
 ## Test plan
 
@@ -64,7 +74,7 @@ evidence in the listed HLD sections and sprint ledgers.
 |---|---|---|
 | integration | Docs-only pull request against the protected default branch | Required `CI gate` succeeds while filtered expensive jobs are skipped |
 | integration | Deliberately failing selected-job pull request against the protected default branch | `CI gate` fails and the pull request is blocked from merge |
-| integration | GitHub ruleset readback | The active default-branch ruleset requires exact check `CI gate` and evidence names its identifier and the reviewed S58 SHA |
+| integration | GitHub ruleset readback | The active default-branch ruleset requires exact check `CI gate`, grants only repository administrators an always bypass, and names its identifier and the reviewed S58 SHA |
 
 The backlog test gate is **integration**: a docs-only pull request reports a
 successful required `ci-gate` while the filtered expensive jobs stay skipped,
@@ -88,7 +98,7 @@ tracked delivery evidence, not rendered output.
 
 - [ ] Bind the inspected `ci-gate` job id and `CI gate` check name to the final reviewed S58 SHA.
 - [ ] Re-query rulesets and classic protection immediately before mutation.
-- [ ] Add one active default-branch ruleset that requires exact check `CI gate` without removing existing protections.
+- [ ] Add one active default-branch ruleset that requires exact check `CI gate`, grants only the repository-administrator role an always bypass, and removes no existing protection.
 - [ ] Run the docs-only pull request and record successful required-check evidence with expensive filtered jobs skipped.
 - [ ] Run the selected-failure pull request and record failed-gate and merge-block evidence.
 - [ ] Close the disposable pull requests and remove only their disposable remote branches.
@@ -97,7 +107,9 @@ tracked delivery evidence, not rendered output.
 
 ## Open questions
 
-None. F-X031 uses the approved post-review operational sequence. It remains in
-progress through the first clean sprint review, executes and records the
-external gate at that reviewed SHA, then repeats full verification and sprint
-review over the final evidence commit.
+None. The user approved the narrow repository-administrator bypass so the
+existing direct-push close workflow remains executable. F-X031 uses the
+approved post-review operational sequence. It remains in progress through the
+first clean sprint review, executes and records the external gate at that
+reviewed SHA, then repeats full verification and sprint review over the final
+evidence commit.
