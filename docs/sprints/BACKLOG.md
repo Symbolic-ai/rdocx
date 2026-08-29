@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 73 | 63 | 2 | 5  |
-| **Total** | **320** | **259** | **5** | **53** |
+| X, Cross-cutting (opportunistic)            | 73 | 63 | 3 | 4  |
+| **Total** | **320** | **259** | **6** | **52** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -520,7 +520,7 @@ regenerated, never hand-edited.
 | F-X065 | Expose tracked table grid changes             | S58 | S | done |
 | F-X066 | Classify legacy VML horizontal rules          | S58 | S | done |
 | F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | done |
-| F-X068 | Tag rpptx-v0.8.0                          | S58 | S | pending |
+| F-X068 | Tag rpptx-v0.8.0                          | S58 | S | in-progress |
 | F-X069 | Tag v0.11.1                               | S58 | S | pending |
 | F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->
