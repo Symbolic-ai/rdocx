@@ -1215,8 +1215,14 @@ entries under sole owner `mantissaman (Atul Sharma)`, the annotated tag at
 reviewed SHA `5a850ce9ae6c31f8365594ed2970193266f8b2a6`, byte-identical GitHub release
 notes, the published `oxml-layout@0.8.0` dependency, and all six leave-open
 notifications.
-A separate cleanup gate may yank only the two incomplete 0.11.0 entries after
-0.11.1 verifies and another final approval is granted.
+A separate cleanup gate proved all seven 0.11.1 entries live and unyanked under
+the authenticated owner, exactly `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0` present, the other five 0.11.0 entries absent, the
+immutable v0.11.0 tag target unchanged, and no v0.11.0 GitHub release. After
+another final approval, it yanked only those two incomplete entries and read
+back their yanked flags. A regression pins that exact allowlist and forbids
+tag, release, notification, closure, and other-version mutations. Complete
+coherent releases remain live.
 
 The large-document regression source-builds 1,000 one-page paragraphs and
 measures deterministic pagination separately from direct PDF rendering. Its

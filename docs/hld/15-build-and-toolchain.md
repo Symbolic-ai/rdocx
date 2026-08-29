@@ -295,9 +295,10 @@ v0.11.0 attempt, whose tag targets reviewed SHA
 `rdocx-opc` and `rdocx-oxml` before package verification exposed the missing
 shared `TextSegment.direction` registry contract. It created no GitHub release
 and posted no contribution notifications. All seven 0.11.1 packages and six
-leave-open notifications are verified. A separate approval may authorize
-yanking exactly the two incomplete 0.11.0 entries. The tag is never moved or
-deleted.
+leave-open notifications are verified. After separate approval, exactly
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
+releases remain live and unyanked. The tag is never moved or deleted, no
+v0.11.0 GitHub release exists, and no other external state changes.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
@@ -393,9 +394,10 @@ seven-package stable family is published from the immutable annotated
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed against the published shared 0.7.0 API.
 The remaining five packages and GitHub release were not published at that
-version. Shared 0.8.0 and stable 0.11.1 form the published recovery sequence. A
-post-recovery cleanup may yank the two incomplete 0.11.0 entries only after a
-separate final approval. The last published complete stable family is 0.11.1.
+version. Shared 0.8.0 and stable 0.11.1 form the published recovery sequence.
+After separate immediate approval, the post-recovery cleanup yanked exactly
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Complete coherent stable releases
+remain live and unyanked. The last published complete stable family is 0.11.1.
 Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.

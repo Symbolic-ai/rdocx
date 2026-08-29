@@ -739,7 +739,11 @@ every binding and WASM crate remains unpublished on crates.io. The incubating
 group places the unpublished `rpptx-wasm` crate at 0.8.0. Neither Rust release
 gives binding, WASM, npm, or Python package publication authority. Every later
 release still requires its selected-family gate and a separate final approval
-at the reviewed SHA.
+at the reviewed SHA. Complete coherent stable releases remain live and
+unyanked. After separate immediate approval, the incomplete
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries are yanked. Their package
+bytes, every other version, the immutable v0.11.0 tag, and GitHub release state
+remain unchanged.
 
 ## CI
 

@@ -139,26 +139,29 @@ unchanged.
 
 ## What happens to the published crates
 
-All seven released rdocx crates are published at 0.6.0 from the reviewed
-`v0.6.0` tag. Their immutable 0.4.1 and breaking pre-1.0 0.5.0 releases remain
-available. The eleven-package shared-version group is coherent at 0.6.0. It
-also carries unpublished `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and
-`oxml-py-support` without adding them to crates.io publication. Every stable
-0.6.0 crates.io page renders its package README.
-The complete 14-package `oxml-*` and `rpptx*` crates.io family remains
-published at the immutable 0.1.3 boundary. Released rdocx consumers depend on
-those registry-backed shared crates.
+The complete seven-package rdocx family is published at stable 0.11.1 from the
+immutable reviewed `v0.11.1` tag. The complete 15-package shared and PowerPoint
+family is published at 0.8.0 from the immutable reviewed `rpptx-v0.8.0` tag.
+The immutable 0.6.0 stable and 0.1.3 shared family releases remain available
+as historical boundaries. Released rdocx consumers depend on the
+registry-backed shared 0.8.0 crates.
 
 | Crate | Fate |
 |---|---|
-| `rdocx-opc` | Deprecated compatibility shim that remains in the stable release train while the exact seven-package allowlist is current. Prior versions stay on crates.io forever |
+| `rdocx-opc` | Deprecated compatibility shim that remains in the stable release train while the exact seven-package allowlist is current. Complete coherent versions remain live on crates.io |
 | `rdocx-pdf` | Same, over published `oxml-pdf` |
 | `rdocx-oxml` | **Stays a real crate permanently.** It keeps ~8,700 lines of WordprocessingML |
 | `rdocx-layout` | Stays. Keeps the flow model |
 | `rdocx`, `rdocx-cli`, `rdocx-html` | Names unaffected |
 
-**Do not yank anything.** Yanking is for broken or insecure releases. It breaks
-fresh resolution for existing users and does not remove the crate.
+Do not yank a complete coherent release. Yanking breaks fresh resolution and
+does not remove package bytes. Both incomplete 0.11.0 entries are yanked after
+the complete 0.11.1 family verified and a separate immediate approval was
+granted. The exception applies only to `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0`. The cleanup changes no other registry version, tag,
+release, notification, issue, pull request, or external contribution-record
+state. Normal local sprint ledgers, progress notes, review artifacts, and
+handoff records still advance through the feature workflow.
 
 The `rdocx-opc` shim re-exports `oxml_opc` exactly and carries the package
 description `deprecated: moved to oxml-opc`. That string is what appears on
@@ -206,10 +209,10 @@ exactly `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
 `rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. The
 shared chart owner publishes before its deprecated compatibility shim. The
-stable registry family is published at 0.6.0 from the annotated `v0.6.0` tag,
-while the four non-publishable shared-version members remain local distribution
-only. The
-incubating registry family remains at 0.1.3.
+stable registry family is published at 0.11.1 from the annotated `v0.11.1`
+tag. The shared and PowerPoint registry family is published at 0.8.0 from the
+annotated `rpptx-v0.8.0` tag. Earlier coherent boundaries remain available as
+historical releases.
 
 Before either real allowlist, the workflow reproduces the deterministic hash
 baseline and verifies the full publishable workspace with a dry run. Each real

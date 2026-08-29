@@ -1,6 +1,6 @@
 # F-X070, Yank incomplete v0.11.0 packages
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S58
 **Size**: S
 **Depends on**: F-X069
@@ -22,6 +22,7 @@ and failed workflow evidence remain part of the historical record.
 
 - `docs/hld/03-architecture.md`, "Versioning" and immutable family boundaries.
 - `docs/hld/10-bindings-spec.md`, "Packaging" and publication authority.
+- `docs/hld/11-migration-plan.md`, stable shim availability and the narrow incomplete-family yank exception.
 - `docs/hld/12-testing-strategy.md`, release and registry evidence gates.
 - `docs/hld/14-development-backlog.md`, "F-X070, Yank incomplete v0.11.0 packages".
 - `docs/hld/15-build-and-toolchain.md`, "Publishing" and "Release process".
@@ -35,12 +36,37 @@ other five 0.11.0 entries are absent, the annotated `v0.11.0` tag still targets
 reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and no v0.11.0 GitHub
 release exists.
 
+Complete coherent stable releases remain available. The cleanup is a narrow
+exception for the incomplete family attempt and may affect only
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` after the complete 0.11.1 family
+verifies and a separate immediate approval is given.
+
+The only authorized mutation commands are:
+
+```bash
+cargo yank --registry crates-io --version 0.11.0 rdocx-opc
+cargo yank --registry crates-io --version 0.11.0 rdocx-oxml
+```
+
+No other external mutation is authorized. Normal local sprint ledgers,
+progress notes, review artifacts, and handoff records still advance through
+the feature workflow.
+
 Stop and request a separate final approval immediately before the first yank.
 After approval, run the exact two registry mutations for version 0.11.0 and no
 others. Read crates.io back independently and record the yanked flags, owners,
 complete live 0.11.1 family, absent five 0.11.0 entries, immutable tag target,
 and absent v0.11.0 GitHub release. Do not delete or move tags, create a release,
-post comments, close records, or alter any other version.
+post comments, close external issues or pull requests, or alter any other
+version.
+
+The separately approved cleanup completed with exact readback evidence:
+`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` read back with `yanked=true`, all
+seven 0.11.1 packages read back with `yanked=false` under sole owner
+`mantissaman (Atul Sharma)`, and the other five 0.11.0 package endpoints return
+404. The remote annotated `v0.11.0` tag still peels to
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and the v0.11.0 GitHub release
+lookup returns 404.
 
 ## Rejected alternatives
 
@@ -70,6 +96,7 @@ the complete stable recovery and preserved immutable release history.
 
 - `docs/hld/03-architecture.md`
 - `docs/hld/10-bindings-spec.md`
+- `docs/hld/11-migration-plan.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/14-development-backlog.md`
 - `docs/hld/15-build-and-toolchain.md`
@@ -92,17 +119,17 @@ delivery evidence only. Any output delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Verify F-X069 completed and all seven stable 0.11.1 packages are live.
-- [ ] Add the exact two-package cleanup contract regression.
-- [ ] Reconfirm the pre-yank registry, tag, release, and owner evidence.
-- [ ] Update exactly the five listed HLD files for the pending cleanup state.
-- [ ] Run `/verify --full` and the unchanged hash gate.
-- [ ] Stop for separate final approval immediately before the first yank.
-- [ ] Yank exactly `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`.
-- [ ] Verify yanked flags, complete live 0.11.1 family, immutable tag, and absent v0.11.0 release.
-- [ ] Complete the delivery records without any unrelated external mutation.
+- [x] Verify F-X069 completed and all seven stable 0.11.1 packages are live.
+- [x] Add the exact two-package cleanup contract regression.
+- [x] Reconfirm the pre-yank registry, tag, release, and owner evidence.
+- [x] Update exactly the six listed HLD files for the pending cleanup state.
+- [x] Run `/verify --full` and the unchanged hash gate.
+- [x] Stop for separate final approval immediately before the first yank.
+- [x] Yank exactly `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`.
+- [x] Verify yanked flags, complete live 0.11.1 family, immutable tag, and absent v0.11.0 release.
+- [x] Complete the delivery records without any unrelated external mutation.
 
 ## Open questions
 
-None. The user approved the two-package post-recovery cleanup. The real yank
-retains its separate final go or no-go.
+None. The user separately authorized the exact two-package post-recovery
+cleanup, and independent readback verified the final registry state.

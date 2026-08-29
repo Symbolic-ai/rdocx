@@ -5314,6 +5314,215 @@ rdocx-layout = "=0.10.1"
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_release_preparation_metadata_contract({member: mutated})
 
+    def assert_partial_v0_11_0_cleanup_contract(self, plan: str) -> None:
+        approach = plan[
+            plan.index("## Approach") : plan.index("## Rejected alternatives")
+        ]
+        normalized = " ".join(approach.split())
+        bash_blocks = re.findall(r"```bash\n(.*?)```", plan, flags=re.DOTALL)
+        self.assertEqual(len(bash_blocks), 1)
+        fenced_commands = tuple(
+            line.strip() for line in bash_blocks[0].splitlines() if line.strip()
+        )
+        authorized_commands = (
+            "cargo yank --registry crates-io --version 0.11.0 rdocx-opc",
+            "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml",
+        )
+        self.assertEqual(fenced_commands, authorized_commands)
+
+        authorized_block = (
+            "```bash\n" + "\n".join(authorized_commands) + "\n```"
+        )
+        self.assertEqual(plan.count(authorized_block), 1)
+        plan_without_authorized_commands = plan.replace(authorized_block, "", 1)
+        command_token = re.compile(
+            r"\b(?:env|command|sudo|cargo|git|gh|curl|wget|python|python3|npm|"
+            r"npx|bash|sh|zsh)\s+"
+        )
+        self.assertNotRegex(plan_without_authorized_commands, command_token)
+        for contract in (
+            "Complete coherent stable releases remain available.",
+            "separate final approval immediately before the first yank",
+            "No other external mutation is authorized.",
+            "Do not delete or move tags, create a release, post comments, close external issues or pull requests, or alter any other version.",
+        ):
+            self.assertIn(contract, normalized)
+
+    def test_partial_v0_11_0_cleanup_contract(self) -> None:
+        plan = (workflow.REPO / ".claude/plans/F-X070-design.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_partial_v0_11_0_cleanup_contract(plan)
+        self.assertEqual(plan.count("`docs/hld/11-migration-plan.md`"), 2)
+
+        migration = (
+            workflow.REPO / "docs/hld/11-migration-plan.md"
+        ).read_text(encoding="utf-8")
+        normalized_migration = " ".join(migration.split())
+        self.assertIn("Do not yank a complete coherent release.", migration)
+        self.assertIn(
+            "Both incomplete 0.11.0 entries are yanked after the complete "
+            "0.11.1 family verified and a separate immediate approval was granted.",
+            normalized_migration,
+        )
+        self.assertIn(
+            "The complete seven-package rdocx family is published at stable "
+            "0.11.1",
+            normalized_migration,
+        )
+        self.assertIn(
+            "The complete 15-package shared and PowerPoint family is published "
+            "at 0.8.0",
+            normalized_migration,
+        )
+        self.assertIn(
+            "The immutable 0.6.0 stable and 0.1.3 shared family releases remain "
+            "available as historical boundaries.",
+            normalized_migration,
+        )
+        self.assertIn(
+            "Normal local sprint ledgers, progress notes, review artifacts, and "
+            "handoff records still advance through the feature workflow.",
+            normalized_migration,
+        )
+        self.assertIn(
+            "Both incomplete 0.11.0 entries are yanked after the complete "
+            "0.11.1 family verified and a separate immediate approval was granted.",
+            normalized_migration,
+        )
+
+        backlog = (
+            workflow.REPO / "docs/hld/14-development-backlog.md"
+        ).read_text(encoding="utf-8")
+        normalized_backlog = " ".join(backlog.split())
+        local_record_contract = (
+            "Normal local sprint ledgers, progress notes, review artifacts, and "
+            "handoff records still advance through the feature workflow."
+        )
+        self.assertIn(local_record_contract, normalized_backlog)
+        self.assertIn(local_record_contract, " ".join(plan.split()))
+
+        normalized_plan = " ".join(plan.split())
+        for evidence in (
+            "`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` read back with "
+            "`yanked=true`",
+            "all seven 0.11.1 packages read back with `yanked=false` under sole "
+            "owner `mantissaman (Atul Sharma)`",
+            "the other five 0.11.0 package endpoints return 404",
+            "The remote annotated `v0.11.0` tag still peels to "
+            "`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`",
+            "the v0.11.0 GitHub release lookup returns 404",
+        ):
+            self.assertIn(evidence, normalized_plan)
+        for completed_item in (
+            "- [x] Stop for separate final approval immediately before the first yank.",
+            "- [x] Yank exactly `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`.",
+            "- [x] Verify yanked flags, complete live 0.11.1 family, immutable tag, and absent v0.11.0 release.",
+        ):
+            self.assertIn(completed_item, plan)
+        self.assertIn(
+            "- [x] Complete the delivery records without any unrelated external mutation.",
+            plan,
+        )
+
+        mutations = {
+            "missing-package": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "",
+                1,
+            ),
+            "other-version": plan.replace(
+                "--version 0.11.0 rdocx-opc",
+                "--version 0.11.1 rdocx-opc",
+                1,
+            ),
+            "extra-package": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-layout\n",
+                1,
+            ),
+            "tag-deletion": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "git push origin --delete refs/tags/v0.11.0\n",
+                1,
+            ),
+            "github-release-creation": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "gh release create v0.11.0\n",
+                1,
+            ),
+            "issue-closure": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "gh issue close 53\n",
+                1,
+            ),
+            "pr-closure": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "gh pr close 54\n",
+                1,
+            ),
+            "unrelated-registry-mutation": plan.replace(
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n",
+                "cargo yank --registry crates-io --version 0.11.0 rdocx-oxml\n"
+                "cargo publish --registry crates-io -p rdocx\n",
+                1,
+            ),
+            "out-of-block-mutation": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\ncargo publish --registry crates-io -p rdocx\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "outside-approach-release": plan.replace(
+                "## Rejected alternatives\n",
+                "## Rejected alternatives\n\ngh release create v0.11.0\n",
+                1,
+            ),
+            "env-prefixed-release": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\nenv gh release create v0.11.0\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "env-prefixed-tag-deletion": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\nenv git push origin --delete refs/tags/v0.11.0\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "env-prefixed-registry-mutation": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\nenv cargo publish --registry crates-io -p rdocx\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "shell-wrapped-pr-closure": plan.replace(
+                "```\n\nNo other external mutation is authorized.",
+                "```\ncommand sh -c 'gh pr close 54'\n\n"
+                "No other external mutation is authorized.",
+                1,
+            ),
+            "missing-immediate-approval": plan.replace(
+                "separate final approval immediately before the first yank",
+                "general sprint approval",
+                1,
+            ),
+            "release-mutation": plan.replace(
+                "No other external mutation is authorized.",
+                "Create a release after the cleanup.",
+                1,
+            ),
+        }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, plan, name)
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_partial_v0_11_0_cleanup_contract(mutated)
+
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
         release = (workflow.REPO / ".claude/commands/release.md").read_text(
             encoding="utf-8"

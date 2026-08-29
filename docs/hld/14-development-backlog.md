@@ -3353,10 +3353,14 @@ notification URLs verify.
 
 After the complete v0.11.1 family verifies, remove the two incomplete v0.11.0
 registry entries from ordinary dependency selection without rewriting release
-history. Obtain a separate final approval immediately before yanking exactly
-`rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Keep the annotated `v0.11.0` tag
-immutable, create no v0.11.0 GitHub release, and do not claim the other five
-0.11.0 packages ever existed.
+history. After separate final approval, yank exactly `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0`. The cleanup is complete. The annotated `v0.11.0` tag
+remains immutable, no v0.11.0 GitHub release exists, and the other five 0.11.0
+packages never existed. Complete coherent stable releases remain live and
+unyanked. The cleanup changes no other registry version, tag, release,
+notification, issue, pull request, or external contribution-record state.
+Normal local sprint ledgers, progress notes, review artifacts, and handoff
+records still advance through the feature workflow.
 
 **Depends on**: F-X069.
 **Test gate**: integration. crates.io readback reports the two incomplete
