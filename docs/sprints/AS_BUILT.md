@@ -10096,3 +10096,52 @@ shared dependency, and notification checks then passed.
 seven live packages. F-X070 may separately prepare the cleanup of exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`, but the yanks still require a new
 final approval at its reviewed SHA.
+
+### F-X070, Yank incomplete v0.11.0 packages
+
+**Sprint.** S58
+**Completed.** 2026-08-29
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** After the complete stable 0.11.1 recovery verified, the
+separately approved cleanup yanked exactly `rdocx-opc@0.11.0` and
+`rdocx-oxml@0.11.0`. Both entries remain available as immutable package bytes
+but no longer participate in ordinary dependency selection. All seven 0.11.1
+packages remain live and unyanked under sole owner
+`mantissaman (Atul Sharma)`.
+
+**Non-obvious choices.** The cleanup is limited to an incomplete family, not a
+general policy for older versions. Complete coherent releases remain live. The
+annotated v0.11.0 tag still peels to
+`25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, no v0.11.0 GitHub release exists,
+and no issue, pull request, notification, tag, release, package byte, or other
+registry version changed.
+
+**Deviations from the design plan.** HLD 11 joined the impact list after the
+preimplementation audit found its former blanket no-yank rule. The user
+approved the narrow incomplete-family exception. Four microscope passes
+hardened the exact command allowlist, corrected current release-family prose,
+clarified local delivery records, and verified the post-yank evidence. Pass 4
+reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/11-migration-plan.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The cleanup contract regression permits exactly the two approved
+version-specific yank commands and rejects wrappers, commands elsewhere in the
+plan, tag or release mutation, comments, closures, publication, and every
+other package or version. Independent readback reported both 0.11.0 targets as
+yanked, the other five stable 0.11.0 package endpoints as absent, all seven
+0.11.1 entries as live and unyanked under the sole authenticated owner, the
+tag target unchanged, and the GitHub release absent. Full integrated
+verification passed with the workspace, deterministic hash, no-default, WASM,
+documentation, README, exact 22-package dry-run, archive-size, and supply-chain
+gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve both yanked flags and the immutable
+v0.11.0 tag. Do not generalize this incomplete-family cleanup into authority to
+yank a complete coherent release.

@@ -344,6 +344,7 @@ defended.
 | F-200 | S58 | M | 2 | 1 | 2026-08-28 | Bidirectional Word layout with logical extraction, visual ordering, and retained vertical approximations |
 | F-X068 | S58 | S | 1 | 1 | 2026-08-29 | Published and verified the complete 15-package rpptx 0.8.0 recovery family |
 | F-X069 | S58 | S | 1 | 1 | 2026-08-29 | Published and verified the complete seven-package rdocx 0.11.1 recovery family |
+| F-X070 | S58 | S | 1 | 1 | 2026-08-29 | Yanked exactly the two incomplete stable 0.11.0 registry entries after verified 0.11.1 recovery |
 
 ## Velocity
 
