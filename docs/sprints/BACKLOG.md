@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 0 | 0 | 15 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 73 | 63 | 4 | 3  |
-| **Total** | **320** | **259** | **7** | **51** |
+| X, Cross-cutting (opportunistic)            | 73 | 63 | 5 | 2  |
+| **Total** | **320** | **259** | **8** | **50** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -522,5 +522,5 @@ regenerated, never hand-edited.
 | F-X067 | Prime Word fidelity Cargo dependencies        | S58 | S | done |
 | F-X068 | Tag rpptx-v0.8.0                          | S58 | S | done |
 | F-X069 | Tag v0.11.1                               | S58 | S | done |
-| F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | pending |
+| F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
