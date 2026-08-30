@@ -10272,3 +10272,48 @@ verification passed, and all package archives remained below 10 MiB.
 `digital-signatures` absent from default, Python, WASM, and CLI graphs. Any new
 mutable presentation handle must participate in current-state signature
 invalidation without canonicalizing untouched signed producer bytes.
+
+### F-213, Animation and transition timing model
+
+**Sprint.** S60
+**Completed.** 2026-08-30
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** PresentationML slides, layouts, and masters now expose
+typed timing trees and slide transitions. The model covers parallel and
+sequence containers, conditions and targets, supported animation behaviors,
+set values, motion paths, build metadata, transition parameters, and morph
+metadata while retaining unsupported XML in its original raw slots.
+
+**Non-obvious choices.** Namespace-expanded parsing and capability-aware
+AlternateContent selection keep producer aliases and fallbacks correct.
+Supported mutations replace only the owning lexical range, leaving unsupported
+siblings and descendants byte-identical. A narrow read exception accepts the
+PowerPoint-produced empty layout transition marker immediately before `p:hf`,
+then writes the two typed children in schema order. Private slide-master parse
+staging boxes the large text-style value to keep nested producer groups within
+the default test stack without changing the public model.
+
+**Deviations from the design plan.** None. Nine microscope passes hardened
+schema-choice cardinality, direct-child boundaries, compatibility selection,
+lexical preservation, and valid XML character-data handling before the clean
+review.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`,
+`docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named corpus gate parsed, serialized, and reparsed all 50 pinned
+decks across 421 slides, 766 layouts, and 76 masters. It exercised 272 timing
+roots, 372 transitions, 732 typed nodes, 401 conditions, 25 builds, 82 set
+values, 186 effect parameters, 10 compatibility transitions, and 5 unsupported
+nodes. Full integrated verification passed the workspace, no-default, WASM,
+documentation, README, 22-package dry-run, archive-size, and supply-chain
+gates. The `rpptx-oxml` suite passed 148 tests and the `rpptx` suite passed 97
+tests with 7 ignored.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep timing evaluation outside `rpptx-oxml`.
+Preserve expanded-name parsing, direct-child schema choices, selected
+AlternateContent branches, and surgical raw-byte mutation when extending the
+typed subset.

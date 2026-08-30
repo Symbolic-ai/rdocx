@@ -350,6 +350,7 @@ defended.
 | F-X031 | S58 | S | 1 | 1 | 2026-08-29 | Required the aggregate CI gate on the default branch with a narrow administrator bypass and two live pull request proofs |
 | F-217 | S59 | L | 4 | 1 | 2026-08-30 | Added relationship-safe modern comments, replies, sections, notes headers and footers, and handout settings |
 | F-221 | S59 | M | 2 | 1 | 2026-08-30 | Added default-off native presentation encryption and signatures with current-state invalidation |
+| F-213 | S60 | L | 4 | 1 | 2026-08-30 | Added typed, schema-ordered animation timing and transitions with lossless unsupported XML preservation |
 
 ## Velocity
 
