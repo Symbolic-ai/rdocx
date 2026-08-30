@@ -36,10 +36,10 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
-| M21, Presentation depth                        | 15 | 0 | 1 | 14 |
+| M21, Presentation depth                        | 15 | 0 | 2 | 13 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
 | X, Cross-cutting (opportunistic)            | 73 | 65 | 3 | 2  |
-| **Total** | **320** | **261** | **7** | **49** |
+| **Total** | **320** | **261** | **8** | **48** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -417,7 +417,7 @@ regenerated, never hand-edited.
 | F-218 | Embedded object and macro inventory          | S62 | L | pending |
 | F-219 | SmartArt typed model                         | S62 | L | pending |
 | F-220 | SmartArt layout and rendering                | S62 | L | pending |
-| F-221 | Presentation encryption and signatures      | S59 | M | pending |
+| F-221 | Presentation encryption and signatures      | S59 | M | in-progress |
 | F-222 | ODP read and write                           | S63 | L | pending |
 | F-223 | Modern presentation package variants        | S63 | M | pending |
 | F-224 | HTML slide content import                    | S64 | L | pending |
