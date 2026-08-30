@@ -36,10 +36,10 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
-| M21, Presentation depth                        | 15 | 2 | 0 | 13 |
+| M21, Presentation depth                        | 15 | 2 | 1 | 12 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
 | X, Cross-cutting (opportunistic)            | 73 | 65 | 3 | 2  |
-| **Total** | **320** | **263** | **6** | **48** |
+| **Total** | **320** | **263** | **7** | **47** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -409,7 +409,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M21 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-213 | Animation and transition timing model       | S60 | L | pending |
+| F-213 | Animation and transition timing model       | S60 | L | in-progress |
 | F-214 | Timeline evaluation and transition rendering | S60 | L | pending |
 | F-215 | Audio and video package model                | S61 | L | pending |
 | F-216 | Media poster and playback rendering          | S61 | M | pending |
