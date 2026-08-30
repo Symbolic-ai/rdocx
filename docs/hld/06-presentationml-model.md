@@ -12,7 +12,10 @@ Owner: `rpptx-oxml`, with the facade in `rpptx`.
 | `/ppt/slideMasters/slideMasterN.xml` | `CT_SlideMaster` | at least one |
 | `/ppt/theme/themeN.xml` | `CT_OfficeStyleSheet` | one per master |
 | `/ppt/notesSlides/notesSlideN.xml` | `CT_NotesSlide` | optional |
-| `/ppt/notesMasters/notesMaster1.xml` | `CT_NotesMaster` | required if any notes slide exists |
+| `/ppt/notesMasters/notesMasterN.xml` | `CT_NotesMaster` | required if any notes slide exists |
+| `/ppt/handoutMasters/handoutMasterN.xml` | `CT_HandoutMaster` | optional |
+| `/ppt/authors.xml` | `CommentAuthorList` | optional, relationship-resolved |
+| `/ppt/comments/commentN.xml` | `CommentList` | optional, one owner slide |
 | `/ppt/tableStyles.xml` | `CT_TableStyleList` | conventional, not fatal if absent |
 | `presProps.xml`, `viewProps.xml` | | conventional, not fatal if absent |
 
@@ -23,6 +26,13 @@ exactly one `notesMaster` relationship and exactly one `slide` relationship
 back to its source slide. Every notes master has exactly one `theme`
 relationship. A source slide has at most one `notesSlide` relationship. A deck
 with zero slides is valid, and that is what a template is.
+
+The presentation has at most one modern comment-author relationship. A slide
+with modern comments has exactly one Microsoft comments relationship and one
+matching `p188:commentRel` reference. One modern comment part belongs to one
+slide. Author, comment, and reply ids are unique across the collaboration
+graph, and every author reference resolves. Legacy ISO comment parts remain
+opaque package content.
 
 `CT_Slide` and `CT_SlideLayout` expose the presence-sensitive
 `show_master_shapes` root attribute. An absent `showMasterSp` means true.
@@ -67,6 +77,29 @@ SlideMut::set_hidden(&mut self, hidden: bool);
 SlideMut::set_background(&mut self, fill: Fill) -> Result<()>;
 SlideMut::clear_background(&mut self);
 ```
+
+Native collaboration, section, and master-setting access is also concrete and
+ordered:
+
+```rust
+Presentation::comment_authors(&self) -> &[CommentAuthor];
+Presentation::add_comment_author(&mut self, author: CommentAuthor) -> Result<()>;
+Presentation::comments(&self, slide_index: usize) -> Option<&[Comment]>;
+Presentation::add_comment(&mut self, slide_index: usize, comment: Comment) -> Result<()>;
+Presentation::reply_to_comment(&mut self, slide_index: usize, comment_id: &str, reply: CommentReply) -> Result<()>;
+Presentation::move_comment(&mut self, slide_index: usize, from: usize, to: usize) -> Result<()>;
+Presentation::move_reply(&mut self, slide_index: usize, comment_id: &str, from: usize, to: usize) -> Result<()>;
+Presentation::sections(&self) -> &[Section];
+Presentation::set_sections(&mut self, sections: Vec<Section>) -> Result<()>;
+Presentation::notes_header_footer_mut(&mut self) -> Option<&mut CT_HeaderFooter>;
+Presentation::handout_header_footer_mut(&mut self) -> Option<&mut CT_HeaderFooter>;
+```
+
+Callers supply GUIDs and RFC 3339 timestamps. Mutation validates identities,
+authors, indices, section membership, relationship ownership, and occupied
+part paths before committing a serialized and reopened candidate. Moving a
+slide retains its producer slide id. Removing a slide removes that id from
+section membership and removes only collaboration content owned by that slide.
 
 Core properties use the package-level relationship described in
 `04-opc-and-packaging.md`. Read access does not dirty the source part. Mutable
@@ -327,6 +360,14 @@ are removed, or are inserted.
 value below 256 is a guaranteed repair prompt, and it is the single most common
 defect in naive `add_slide` implementations.
 
+`CT_Presentation` types the direct Office 2010 `p14:sectionLst` under the
+required section extension URI. Sections retain ordered GUIDs, names, and
+slide-id membership. Parsing accepts aliases and inherited default namespace
+bindings. Dirty writing uses schema-ordered fixed-prefix children while
+retaining unsupported attributes, direct events, descendants, and raw
+boundaries. A clear that would strand direct raw list payload fails before
+mutation instead of publishing invalid XML.
+
 The `.pptx` versus `.ppsx` distinction lives entirely in this part's content
 type: `presentationml.presentation.main+xml` against
 `presentationml.slideshow.main+xml`. `Presentation::save_as_show()` changes
@@ -350,14 +391,27 @@ A notes master has this root sequence:
 p:notesMaster
   p:cSld       required
   p:clrMap     required
-  p:hf?        optional, preserved raw
+  p:hf?        optional, typed as CT_HeaderFooter
   p:notesStyle? optional, typed as CT_TextListStyle
   p:extLst?    optional
 ```
 
-Both roots reuse `CT_CommonSlideData`. They read namespace aliases, write fixed
-`p:`, `a:`, and `r:` prefixes, and retain unsupported attributes and children
-in their schema slots.
+A handout master has this root sequence:
+
+```
+p:handoutMaster
+  p:cSld       required
+  p:clrMap     required
+  p:hf?        optional, typed as CT_HeaderFooter
+  p:extLst?    optional
+```
+
+All three roots reuse `CT_CommonSlideData`. They read namespace aliases, write
+fixed `p:`, `a:`, and `r:` prefixes, and retain unsupported attributes,
+elements, text, CDATA, comments, processing instructions, and document types
+in their schema slots. Typed header-footer shells retain the same direct raw
+events and expose presence-sensitive slide-number, header, footer, and
+date-time flags.
 
 `CT_NotesSlide::notes_text()` walks its shape tree in z-order, including
 recursive groups and the selected rendering view of `mc:AlternateContent`.
@@ -502,8 +556,16 @@ This is the scope control for a format that is otherwise unbounded.
 through `oxml_core::raw_xml::capture_element`.
 
 Preserved as opaque bytes in v1: `p:timing`, `p:transition`, `p:custShowLst`,
-`p14:sectionLst`, comments, ink, `p:contentPart`, SmartArt `dgm:` payloads, OLE
-and ActiveX, and every `mc:AlternateContent` alternative.
+legacy comments, ink, `p:contentPart`, SmartArt `dgm:` payloads, OLE and
+ActiveX, and every `mc:AlternateContent` alternative.
+
+Modern Office 2021 comment authors, comments, threaded replies, and
+`p14:sectionLst` are typed only at the fields callers inspect or mutate. Their
+ordered raw sidecars retain unsupported anchors, attributes, namespace
+bindings, direct events, children, extension lists, and text-body source bytes.
+Readers resolve expanded names. Writers use schema order and a safe fixed
+prefix, or fail before changing live state when a producer shadow cannot be
+preserved.
 
 An `mc:AlternateContent` model may inspect its selected fallback and an
 immediate chart choice. The full captured subtree remains opaque for
@@ -592,6 +654,13 @@ pub enum ValidationIssue {
     MissingThemeRel { master: usize },
 }
 ```
+
+Collaboration and navigation validation also rejects duplicate ids, unknown
+authors, shared comment parts, mismatched slide comment references, external
+or wrong-type relationships, duplicate section ids, duplicate section slide
+ids, and section membership that names no presentation slide. Facade mutations
+stage serialization and reopen, so rejection leaves the live package and typed
+model unchanged.
 
 Mapped to the symptoms they prevent:
 

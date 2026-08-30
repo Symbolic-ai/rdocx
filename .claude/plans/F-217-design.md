@@ -1,6 +1,6 @@
 # F-217, Presentation collaboration and navigation model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S59
 **Size**: L
 **Depends on**: none
@@ -150,14 +150,14 @@ parts only. Generated document, PDF, and PNG samples must remain byte-identical.
 
 ## Implementation checklist
 
-- [ ] Add modern comment-author and comment relationship and content-type constants.
-- [ ] Add the approved comment root module with ordered raw preservation.
-- [ ] Type section and handout identifiers in the presentation root.
-- [ ] Type notes-master and handout-master header and footer settings.
-- [ ] Resolve and own collaboration, notes-master, and handout-master package roots.
-- [ ] Add atomic ordered facade mutations and relationship validation.
-- [ ] Add the four in-code tests to the two existing integration binaries.
-- [ ] Run focused `oxml-opc`, `rpptx-oxml`, and `rpptx` checks plus every routed rider.
+- [x] Add modern comment-author and comment relationship and content-type constants.
+- [x] Add the approved comment root module with ordered raw preservation.
+- [x] Type section and handout identifiers in the presentation root.
+- [x] Type notes-master and handout-master header and footer settings.
+- [x] Resolve and own collaboration, notes-master, and handout-master package roots.
+- [x] Add atomic ordered facade mutations and relationship validation.
+- [x] Add the four in-code tests to the two existing integration binaries.
+- [x] Run focused `oxml-opc`, `rpptx-oxml`, and `rpptx` checks plus every routed rider.
 
 ## Open questions
 

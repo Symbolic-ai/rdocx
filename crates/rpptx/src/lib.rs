@@ -43,17 +43,20 @@ use rpptx_layout::{
     ChartResource, FlattenedItem, ResolveCtx, ScopedChartResources, ScopedHyperlinkTargets,
     ScopedMediaIds,
 };
+pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
+use rpptx_oxml::comments::{CommentAuthorList, CommentList};
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
-use rpptx_oxml::notes_parts::CT_NotesSlide;
+use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
 use rpptx_oxml::picture::CT_Picture;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
+pub use rpptx_oxml::presentation::Section;
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
 use rpptx_oxml::relmap::{relationship_ids, rewrite_exact_rel_ids, rewrite_rel_ids};
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
-use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
+use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout};
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
 #[cfg(feature = "render")]
@@ -65,6 +68,8 @@ use thiserror::Error;
 #[cfg(feature = "default-template")]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
 const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
+const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
+const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -107,6 +112,18 @@ pub enum Error {
 
     #[error("cannot create core properties at occupied package part {part_name}")]
     CorePropertiesPartCollision { part_name: String },
+
+    #[error("cannot create collaboration data at occupied package part {part_name}")]
+    CollaborationPartCollision { part_name: String },
+
+    #[error(
+        "{source_part}: found {count} relationships of type {relationship_type}, expected at most one"
+    )]
+    DuplicateRelationships {
+        source_part: String,
+        relationship_type: &'static str,
+        count: usize,
+    },
 
     #[error("{source_part}: found {count} notes-slide relationships, expected at most one")]
     DuplicateNotesSlides { source_part: String, count: usize },
@@ -237,6 +254,15 @@ pub struct Presentation {
     core_properties: Option<CoreProperties>,
     core_properties_part_name: String,
     core_properties_dirty: bool,
+    comment_authors_part: Option<String>,
+    comment_authors: CommentAuthorList,
+    comment_authors_dirty: bool,
+    notes_master_part: Option<String>,
+    notes_master: Option<Box<CT_NotesMaster>>,
+    notes_master_dirty: bool,
+    handout_master_part: Option<String>,
+    handout_master: Option<Box<CT_HandoutMaster>>,
+    handout_master_dirty: bool,
     layouts: Vec<LayoutRecord>,
     slides: Vec<SlideRecord>,
 }
@@ -253,6 +279,14 @@ struct SlideRecord {
     part_name: String,
     slide: CT_Slide,
     notes: Option<NotesRecord>,
+    comments: Option<CommentRecord>,
+}
+
+#[derive(Clone, Debug)]
+struct CommentRecord {
+    part_name: String,
+    comments: CommentList,
+    dirty: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -429,6 +463,11 @@ impl Presentation {
             None
         };
         let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
+        let (comment_authors_part, comment_authors) =
+            resolve_comment_authors(&package, &presentation_part)?;
+        let (notes_master_part, notes_master) = resolve_notes_master(&package, &presentation_part)?;
+        let (handout_master_part, handout_master) =
+            resolve_handout_master(&package, &presentation_part)?;
 
         let presentation_relationships = package.get_part_rels(&presentation_part);
         let mut slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -449,13 +488,21 @@ impl Presentation {
                 message: error.to_string(),
             })?;
             let notes = resolve_notes(&package, &slide_part)?;
+            let comments = resolve_comments(&package, &slide_part, &slide)?;
             slides.push(SlideRecord {
                 id: slide_id.id,
                 part_name: slide_part,
                 slide,
                 notes,
+                comments,
             });
         }
+        validate_collaboration_model(&comment_authors, &slides).map_err(|message| {
+            Error::MalformedPart {
+                part_name: presentation_part.clone(),
+                message,
+            }
+        })?;
 
         Ok(Self {
             package,
@@ -466,6 +513,15 @@ impl Presentation {
             core_properties_part_name: core_properties_part_name
                 .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_owned()),
             core_properties_dirty: false,
+            comment_authors_part,
+            comment_authors,
+            comment_authors_dirty: false,
+            notes_master_part,
+            notes_master,
+            notes_master_dirty: false,
+            handout_master_part,
+            handout_master,
+            handout_master_dirty: false,
             layouts,
             slides,
         })
@@ -560,6 +616,52 @@ impl Presentation {
                     message: error.to_string(),
                 })?,
         );
+        if let Some(part_name) = self
+            .comment_authors_part
+            .as_ref()
+            .filter(|_| self.comment_authors_dirty)
+        {
+            package.set_part(
+                part_name,
+                self.comment_authors
+                    .to_xml()
+                    .map_err(|error| Error::MalformedPart {
+                        part_name: part_name.clone(),
+                        message: error.to_string(),
+                    })?,
+            );
+            package
+                .content_types
+                .add_override(part_name, content_types::POWERPOINT_AUTHORS);
+        }
+        if let (Some(part_name), Some(master)) = (
+            self.notes_master_part
+                .as_ref()
+                .filter(|_| self.notes_master_dirty),
+            &self.notes_master,
+        ) {
+            package.set_part(
+                part_name,
+                master.to_xml().map_err(|error| Error::MalformedPart {
+                    part_name: part_name.clone(),
+                    message: error.to_string(),
+                })?,
+            );
+        }
+        if let (Some(part_name), Some(master)) = (
+            self.handout_master_part
+                .as_ref()
+                .filter(|_| self.handout_master_dirty),
+            &self.handout_master,
+        ) {
+            package.set_part(
+                part_name,
+                master.to_xml().map_err(|error| Error::MalformedPart {
+                    part_name: part_name.clone(),
+                    message: error.to_string(),
+                })?,
+            );
+        }
         for record in &self.slides {
             package.set_part(
                 &record.part_name,
@@ -579,6 +681,21 @@ impl Presentation {
                         message: error.to_string(),
                     })?,
                 );
+            }
+            if let Some(comments) = record.comments.as_ref().filter(|comments| comments.dirty) {
+                package.set_part(
+                    &comments.part_name,
+                    comments
+                        .comments
+                        .to_xml()
+                        .map_err(|error| Error::MalformedPart {
+                            part_name: comments.part_name.clone(),
+                            message: error.to_string(),
+                        })?,
+                );
+                package
+                    .content_types
+                    .add_override(&comments.part_name, content_types::POWERPOINT_COMMENTS);
             }
         }
         Ok(package)
@@ -914,6 +1031,288 @@ impl Presentation {
             .and_then(|record| record.layout.common_slide_data.name.as_deref())
     }
 
+    /// Returns modern PowerPoint comment authors in producer order.
+    pub fn comment_authors(&self) -> &[CommentAuthor] {
+        &self.comment_authors.authors
+    }
+
+    /// Adds a caller-identified modern comment author atomically.
+    pub fn add_comment_author(&mut self, author: CommentAuthor) -> Result<()> {
+        if self
+            .comment_authors
+            .authors
+            .iter()
+            .any(|existing| existing.id == author.id)
+        {
+            return Err(invalid_presentation_mutation(
+                "add comment author",
+                format!("duplicate author id {}", author.id),
+            ));
+        }
+        let mut staged = self.clone();
+        if staged.comment_authors_part.is_none() {
+            if staged
+                .package
+                .parts
+                .contains_key(DEFAULT_POWERPOINT_AUTHORS_PART)
+            {
+                return Err(Error::CollaborationPartCollision {
+                    part_name: DEFAULT_POWERPOINT_AUTHORS_PART.to_owned(),
+                });
+            }
+            staged.comment_authors_part = Some(DEFAULT_POWERPOINT_AUTHORS_PART.to_owned());
+            let target =
+                relative_part_target(&staged.presentation_part, DEFAULT_POWERPOINT_AUTHORS_PART);
+            staged
+                .package
+                .get_or_create_part_rels(&staged.presentation_part)
+                .add(rel_types::POWERPOINT_AUTHORS, &target);
+        }
+        staged.comment_authors.authors.push(author);
+        staged.comment_authors_dirty = true;
+        self.commit_candidate(staged)
+    }
+
+    /// Returns modern comments on one slide in producer order.
+    pub fn comments(&self, slide_index: usize) -> Option<&[Comment]> {
+        self.slides
+            .get(slide_index)
+            .and_then(|slide| slide.comments.as_ref())
+            .map(|comments| comments.comments.comments.as_slice())
+    }
+
+    /// Adds one caller-identified modern comment atomically.
+    pub fn add_comment(&mut self, slide_index: usize, comment: Comment) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        self.validate_comment_identity(&comment.id, &comment.author_id)?;
+        let mut staged = self.clone();
+        if staged.slides[slide_index].comments.is_none() {
+            if staged
+                .package
+                .parts
+                .contains_key(DEFAULT_POWERPOINT_COMMENTS_PART)
+                && !staged.slides.iter().any(|slide| {
+                    slide.comments.as_ref().is_some_and(|comments| {
+                        comments.part_name == DEFAULT_POWERPOINT_COMMENTS_PART
+                    })
+                })
+            {
+                return Err(Error::CollaborationPartCollision {
+                    part_name: DEFAULT_POWERPOINT_COMMENTS_PART.to_owned(),
+                });
+            }
+            let comment_part = MediaNamer::scan(
+                "/ppt/comments",
+                "comment",
+                staged.package.parts.keys().map(String::as_str),
+            )
+            .next_part_name("xml");
+            let slide_part = staged.slides[slide_index].part_name.clone();
+            let relationship_id = staged.package.get_or_create_part_rels(&slide_part).add(
+                rel_types::POWERPOINT_COMMENTS,
+                &relative_part_target(&slide_part, &comment_part),
+            );
+            staged.slides[slide_index]
+                .slide
+                .ensure_modern_comment_relationship(&relationship_id)
+                .map_err(|error| Error::MalformedPart {
+                    part_name: slide_part,
+                    message: error.to_string(),
+                })?;
+            staged.slides[slide_index].comments = Some(CommentRecord {
+                part_name: comment_part,
+                comments: CommentList::new(),
+                dirty: true,
+            });
+        }
+        let comments = staged.slides[slide_index]
+            .comments
+            .as_mut()
+            .expect("comment record was materialized");
+        comments.dirty = true;
+        comments.comments.comments.push(comment);
+        self.commit_candidate(staged)
+    }
+
+    /// Appends one caller-identified reply to an existing comment atomically.
+    pub fn reply_to_comment(
+        &mut self,
+        slide_index: usize,
+        comment_id: &str,
+        reply: CommentReply,
+    ) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        self.validate_comment_identity(&reply.id, &reply.author_id)?;
+        let mut staged = self.clone();
+        let comments = staged.slides[slide_index]
+            .comments
+            .as_mut()
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    "reply to comment",
+                    format!("unknown comment id {comment_id}"),
+                )
+            })?;
+        let comment = comments
+            .comments
+            .comments
+            .iter_mut()
+            .find(|comment| comment.id == comment_id)
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    "reply to comment",
+                    format!("unknown comment id {comment_id}"),
+                )
+            })?;
+        comment.add_reply(reply).map_err(|error| {
+            invalid_presentation_mutation("reply to comment", error.to_string())
+        })?;
+        comments.dirty = true;
+        self.commit_candidate(staged)
+    }
+
+    /// Moves one modern comment to a final zero-based position.
+    pub fn move_comment(&mut self, slide_index: usize, from: usize, to: usize) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let mut staged = self.clone();
+        let comments = staged.slides[slide_index]
+            .comments
+            .as_mut()
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    "move comment",
+                    "slide has no modern comments".to_owned(),
+                )
+            })?;
+        comments
+            .comments
+            .move_comment(from, to)
+            .map_err(|error| invalid_presentation_mutation("move comment", error.to_string()))?;
+        comments.dirty = true;
+        self.commit_candidate(staged)
+    }
+
+    /// Moves one reply within an existing comment to a final zero-based position.
+    pub fn move_reply(
+        &mut self,
+        slide_index: usize,
+        comment_id: &str,
+        from: usize,
+        to: usize,
+    ) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let mut staged = self.clone();
+        let comments = staged.slides[slide_index]
+            .comments
+            .as_mut()
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    "move comment reply",
+                    format!("unknown comment id {comment_id}"),
+                )
+            })?;
+        let comment = comments
+            .comments
+            .comments
+            .iter_mut()
+            .find(|comment| comment.id == comment_id)
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    "move comment reply",
+                    format!("unknown comment id {comment_id}"),
+                )
+            })?;
+        comment.move_reply(from, to).map_err(|error| {
+            invalid_presentation_mutation("move comment reply", error.to_string())
+        })?;
+        comments.dirty = true;
+        self.commit_candidate(staged)
+    }
+
+    /// Returns presentation sections in producer order.
+    pub fn sections(&self) -> &[Section] {
+        self.presentation.sections()
+    }
+
+    /// Replaces all presentation sections after validating stable slide ids.
+    pub fn set_sections(&mut self, sections: Vec<Section>) -> Result<()> {
+        let mut staged = self.clone();
+        staged
+            .presentation
+            .set_sections(sections)
+            .map_err(|error| invalid_presentation_mutation("set sections", error.to_string()))?;
+        self.commit_candidate(staged)
+    }
+
+    /// Returns mutable notes-master header/footer settings when both exist.
+    pub fn notes_header_footer_mut(&mut self) -> Option<&mut CT_HeaderFooter> {
+        self.notes_master_dirty = self
+            .notes_master
+            .as_ref()
+            .is_some_and(|master| master.header_footer.is_some());
+        self.notes_master
+            .as_mut()
+            .and_then(|master| master.header_footer.as_mut())
+    }
+
+    /// Returns mutable handout-master header/footer settings when both exist.
+    pub fn handout_header_footer_mut(&mut self) -> Option<&mut CT_HeaderFooter> {
+        self.handout_master_dirty = self
+            .handout_master
+            .as_ref()
+            .is_some_and(|master| master.header_footer.is_some());
+        self.handout_master
+            .as_mut()
+            .and_then(|master| master.header_footer.as_mut())
+    }
+
+    fn require_slide_index(&self, index: usize) -> Result<()> {
+        if index < self.slides.len() {
+            Ok(())
+        } else {
+            Err(Error::UnknownSlideIndex {
+                index,
+                slide_count: self.slides.len(),
+            })
+        }
+    }
+
+    fn validate_comment_identity(&self, id: &str, author_id: &str) -> Result<()> {
+        if !self
+            .comment_authors
+            .authors
+            .iter()
+            .any(|author| author.id == author_id)
+        {
+            return Err(invalid_presentation_mutation(
+                "mutate comments",
+                format!("unknown comment author id {author_id}"),
+            ));
+        }
+        if self.slides.iter().any(|slide| {
+            slide.comments.as_ref().is_some_and(|comments| {
+                comments.comments.comments.iter().any(|comment| {
+                    comment.id == id || comment.replies().iter().any(|reply| reply.id == id)
+                })
+            })
+        }) {
+            return Err(invalid_presentation_mutation(
+                "mutate comments",
+                format!("duplicate modern comment id {id}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn commit_candidate(&mut self, staged: Self) -> Result<()> {
+        let package = staged.staged_package()?;
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output)?;
+        let reopened = Self::from_bytes(output.get_ref())?;
+        *self = reopened;
+        Ok(())
+    }
+
     /// Removes one slide and its owned package graph by zero-based index.
     pub fn remove_slide(&mut self, index: usize) -> Result<()> {
         if index >= self.slides.len() {
@@ -924,8 +1323,7 @@ impl Presentation {
         }
         let mut staged = self.clone();
         staged.remove_slide_in_place(index)?;
-        *self = staged;
-        Ok(())
+        self.commit_candidate(staged)
     }
 
     /// Moves one slide to an existing final zero-based index.
@@ -975,6 +1373,7 @@ impl Presentation {
 
     fn remove_slide_in_place(&mut self, index: usize) -> Result<()> {
         let record = self.slides[index].clone();
+        self.presentation.remove_slide_from_sections(record.id);
         let presentation_relationship_id =
             self.presentation.slide_ids[index].relationship_id.clone();
         self.presentation
@@ -994,6 +1393,14 @@ impl Presentation {
                 .content_types
                 .overrides
                 .remove(&notes.part_name);
+        }
+        if let Some(comments) = &record.comments {
+            self.package.parts.remove(&comments.part_name);
+            self.package.part_rels.remove(&comments.part_name);
+            self.package
+                .content_types
+                .overrides
+                .remove(&comments.part_name);
         }
         self.package.parts.remove(&record.part_name);
         self.package.part_rels.remove(&record.part_name);
@@ -1015,6 +1422,13 @@ impl Presentation {
 
     fn duplicate_slide_in_place(&mut self, index: usize) -> Result<usize> {
         let source = self.slides[index].clone();
+        if source.comments.is_some() {
+            return Err(Error::InvalidPresentationMutation {
+                operation: "duplicate slide",
+                message: "slides with modern comments require caller-supplied fresh comment ids"
+                    .to_owned(),
+            });
+        }
         let slide_part = MediaNamer::scan(
             "/ppt/slides",
             "slide",
@@ -1183,6 +1597,7 @@ impl Presentation {
                 part_name: slide_part,
                 slide,
                 notes,
+                comments: source.comments.clone(),
             },
         );
         Ok(inserted)
@@ -1284,6 +1699,7 @@ impl Presentation {
             part_name: slide_part,
             slide,
             notes: None,
+            comments: None,
         });
         self.slides
             .last()
@@ -1873,6 +2289,206 @@ fn reject_external(source_part: &str, relationship: &Relationship) -> Result<()>
             source_part: source_part.to_owned(),
             relationship_id: relationship.id.clone(),
         });
+    }
+    Ok(())
+}
+
+fn resolve_comment_authors(
+    package: &OpcPackage,
+    presentation_part: &str,
+) -> Result<(Option<String>, CommentAuthorList)> {
+    let Some(relationships) = package.get_part_rels(presentation_part) else {
+        return Ok((None, CommentAuthorList::new()));
+    };
+    let matches = relationships.get_all_by_type(rel_types::POWERPOINT_AUTHORS);
+    if matches.len() > 1 {
+        return Err(Error::DuplicateRelationships {
+            source_part: presentation_part.to_owned(),
+            relationship_type: rel_types::POWERPOINT_AUTHORS,
+            count: matches.len(),
+        });
+    }
+    let Some(relationship) = matches.first() else {
+        return Ok((None, CommentAuthorList::new()));
+    };
+    reject_external(presentation_part, relationship)?;
+    let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+    let authors =
+        CommentAuthorList::from_xml(required_part(package, &part_name)?).map_err(|error| {
+            Error::MalformedPart {
+                part_name: part_name.clone(),
+                message: error.to_string(),
+            }
+        })?;
+    Ok((Some(part_name), authors))
+}
+
+fn resolve_comments(
+    package: &OpcPackage,
+    slide_part: &str,
+    slide: &CT_Slide,
+) -> Result<Option<CommentRecord>> {
+    let reference =
+        slide
+            .modern_comment_relationship_id()
+            .map_err(|error| Error::MalformedPart {
+                part_name: slide_part.to_owned(),
+                message: error.to_string(),
+            })?;
+    let relationships = package.get_part_rels(slide_part);
+    let typed = relationships
+        .map(|items| items.get_all_by_type(rel_types::POWERPOINT_COMMENTS))
+        .unwrap_or_default();
+    if typed.len() > 1 {
+        return Err(Error::DuplicateRelationships {
+            source_part: slide_part.to_owned(),
+            relationship_type: rel_types::POWERPOINT_COMMENTS,
+            count: typed.len(),
+        });
+    }
+    let Some(reference) = reference else {
+        if let Some(relationship) = typed.first() {
+            reject_external(slide_part, relationship)?;
+            return Err(Error::MalformedPart {
+                part_name: slide_part.to_owned(),
+                message: format!(
+                    "modern comment relationship {} has no p188:commentRel reference",
+                    relationship.id
+                ),
+            });
+        }
+        return Ok(None);
+    };
+    let relationship = relationships
+        .and_then(|items| items.get_by_id(&reference))
+        .ok_or_else(|| Error::MissingRelationship {
+            source_part: slide_part.to_owned(),
+            relationship_id: reference.clone(),
+        })?;
+    require_relationship_type(slide_part, relationship, rel_types::POWERPOINT_COMMENTS)?;
+    reject_external(slide_part, relationship)?;
+    let part_name = OpcPackage::resolve_rel_target(slide_part, &relationship.target);
+    let comments = CommentList::from_xml(required_part(package, &part_name)?).map_err(|error| {
+        Error::MalformedPart {
+            part_name: part_name.clone(),
+            message: error.to_string(),
+        }
+    })?;
+    Ok(Some(CommentRecord {
+        part_name,
+        comments,
+        dirty: false,
+    }))
+}
+
+fn resolve_notes_master(
+    package: &OpcPackage,
+    presentation_part: &str,
+) -> Result<(Option<String>, Option<Box<CT_NotesMaster>>)> {
+    let Some(relationships) = package.get_part_rels(presentation_part) else {
+        return Ok((None, None));
+    };
+    let matches = relationships.get_all_by_type(rel_types::NOTES_MASTER);
+    if matches.len() > 1 {
+        return Err(Error::DuplicateRelationships {
+            source_part: presentation_part.to_owned(),
+            relationship_type: rel_types::NOTES_MASTER,
+            count: matches.len(),
+        });
+    }
+    let Some(relationship) = matches.first() else {
+        return Ok((None, None));
+    };
+    reject_external(presentation_part, relationship)?;
+    let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+    let master =
+        CT_NotesMaster::from_xml(required_part(package, &part_name)?).map_err(|error| {
+            Error::MalformedPart {
+                part_name: part_name.clone(),
+                message: error.to_string(),
+            }
+        })?;
+    Ok((Some(part_name), Some(Box::new(master))))
+}
+
+fn resolve_handout_master(
+    package: &OpcPackage,
+    presentation_part: &str,
+) -> Result<(Option<String>, Option<Box<CT_HandoutMaster>>)> {
+    let Some(relationships) = package.get_part_rels(presentation_part) else {
+        return Ok((None, None));
+    };
+    let matches = relationships.get_all_by_type(rel_types::HANDOUT_MASTER);
+    if matches.len() > 1 {
+        return Err(Error::DuplicateRelationships {
+            source_part: presentation_part.to_owned(),
+            relationship_type: rel_types::HANDOUT_MASTER,
+            count: matches.len(),
+        });
+    }
+    let Some(relationship) = matches.first() else {
+        return Ok((None, None));
+    };
+    reject_external(presentation_part, relationship)?;
+    let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+    let master =
+        CT_HandoutMaster::from_xml(required_part(package, &part_name)?).map_err(|error| {
+            Error::MalformedPart {
+                part_name: part_name.clone(),
+                message: error.to_string(),
+            }
+        })?;
+    Ok((Some(part_name), Some(Box::new(master))))
+}
+
+fn invalid_presentation_mutation(operation: &'static str, message: String) -> Error {
+    Error::InvalidPresentationMutation { operation, message }
+}
+
+fn validate_collaboration_model(
+    authors: &CommentAuthorList,
+    slides: &[SlideRecord],
+) -> std::result::Result<(), String> {
+    let mut author_ids = HashSet::new();
+    for author in &authors.authors {
+        if !author_ids.insert(author.id.as_str()) {
+            return Err(format!("duplicate modern comment author id {}", author.id));
+        }
+    }
+    let mut comment_ids = HashSet::new();
+    let mut comment_parts = HashSet::new();
+    for slide in slides {
+        let Some(comments) = &slide.comments else {
+            continue;
+        };
+        if !comment_parts.insert(comments.part_name.as_str()) {
+            return Err(format!(
+                "modern comment part {} is referenced by more than one slide",
+                comments.part_name
+            ));
+        }
+        for comment in &comments.comments.comments {
+            if !author_ids.contains(comment.author_id.as_str()) {
+                return Err(format!(
+                    "modern comment {} refers to unknown author {}",
+                    comment.id, comment.author_id
+                ));
+            }
+            if !comment_ids.insert(comment.id.as_str()) {
+                return Err(format!("duplicate modern comment id {}", comment.id));
+            }
+            for reply in comment.replies() {
+                if !author_ids.contains(reply.author_id.as_str()) {
+                    return Err(format!(
+                        "modern comment reply {} refers to unknown author {}",
+                        reply.id, reply.author_id
+                    ));
+                }
+                if !comment_ids.insert(reply.id.as_str()) {
+                    return Err(format!("duplicate modern comment id {}", reply.id));
+                }
+            }
+        }
     }
     Ok(())
 }

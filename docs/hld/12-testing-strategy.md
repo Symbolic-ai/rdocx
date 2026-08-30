@@ -42,6 +42,24 @@ a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
 `saving_is_reproducible`.
 
+The Presentation collaboration round-trip gate is
+`modern_comments_replies_sections_and_handout_settings_survive_ordered_mutation_save_and_reopen`.
+It builds a noncanonical package in the existing `rpptx` integration binary,
+authors and reorders comments and replies, replaces section membership, moves
+a slide, changes notes-master and handout-master header-footer values, saves,
+and reopens. The reopened model must retain comment and reply order, producer
+slide ids, section membership, both header-footer changes, relationship
+targets, and the modern authors and comments content-type overrides.
+
+Adjacent `rpptx-oxml` round trips cover namespace aliases, inherited default
+namespaces, fixed-prefix shadows, schema child order, structural reparse, and
+byte-exact unsupported attributes, direct events, anchors, text bodies,
+extension lists, and section sidecars. Facade regressions reject duplicate or
+unknown ids, invalid membership, external or wrong-type relationships, shared
+comment parts, occupied conventional paths, and unserializable staged changes
+without mutating the opened package. All fixtures remain source-built in the
+two existing integration binaries.
+
 The ordered-body integration gate opens an in-code package through the public
 Word facade and compares the exact direct sequence of paragraphs, a table, a
 body content control, preserved producer XML, and a final paragraph. It also

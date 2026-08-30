@@ -78,6 +78,10 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles";
     pub const HANDOUT_MASTER: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/handoutMaster";
+    pub const POWERPOINT_COMMENTS: &str =
+        "http://schemas.microsoft.com/office/2018/10/relationships/comments";
+    pub const POWERPOINT_AUTHORS: &str =
+        "http://schemas.microsoft.com/office/2018/10/relationships/authors";
 }
 
 /// A single relationship entry.
@@ -348,6 +352,14 @@ mod tests {
             assert!(!value.chars().any(char::is_whitespace));
             assert!(relationship_values.insert(value));
         }
+        for value in [
+            rel_types::POWERPOINT_COMMENTS,
+            rel_types::POWERPOINT_AUTHORS,
+        ] {
+            assert!(value.starts_with("http://schemas.microsoft.com/office/"));
+            assert!(!value.chars().any(char::is_whitespace));
+            assert!(relationship_values.insert(value));
+        }
 
         let content_type_values = [
             crate::content_types::RELATIONSHIPS,
@@ -368,6 +380,8 @@ mod tests {
             crate::content_types::VIEW_PROPS,
             crate::content_types::TABLE_STYLES,
             crate::content_types::HANDOUT_MASTER,
+            crate::content_types::POWERPOINT_COMMENTS,
+            crate::content_types::POWERPOINT_AUTHORS,
             crate::content_types::WORKBOOK,
             crate::content_types::EMBEDDED_WORKBOOK,
             crate::content_types::WORKSHEET,

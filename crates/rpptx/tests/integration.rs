@@ -5564,6 +5564,500 @@ fn fixture_bytes() -> Vec<u8> {
     package_bytes(fixture_package())
 }
 
+#[test]
+fn modern_comments_replies_sections_and_handout_settings_survive_ordered_mutation_save_and_reopen()
+{
+    use rpptx::{Comment, CommentAuthor, CommentReply, Section};
+
+    let mut package = fixture_package();
+    package.set_part(
+        "/custom/notes/master.xml",
+        format!(r#"<p:notesMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf sldNum="1"/></p:notesMaster>"#).into_bytes(),
+    );
+    package.set_part(
+        "/custom/handouts/master.xml",
+        format!(r#"<p:handoutMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf hdr="1"/></p:handoutMaster>"#).into_bytes(),
+    );
+    package
+        .content_types
+        .add_override("/custom/notes/master.xml", content_types::NOTES_MASTER);
+    package
+        .content_types
+        .add_override("/custom/handouts/master.xml", content_types::HANDOUT_MASTER);
+    package
+        .get_or_create_part_rels(PRESENTATION_PART)
+        .add(rel_types::NOTES_MASTER, "notes/master.xml");
+    package
+        .get_or_create_part_rels(PRESENTATION_PART)
+        .add(rel_types::HANDOUT_MASTER, "handouts/master.xml");
+
+    let mut presentation = open_package(package).expect("open collaboration fixture");
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(
+                "{11111111-1111-1111-1111-111111111111}",
+                "Ada",
+                Some("A"),
+                "ada@example.test",
+                "test",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .add_comment(
+            0,
+            Comment::new(
+                "{22222222-2222-2222-2222-222222222222}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-08-29T10:11:12Z",
+                "first",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .reply_to_comment(
+            0,
+            "{22222222-2222-2222-2222-222222222222}",
+            CommentReply::new(
+                "{33333333-3333-3333-3333-333333333333}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-08-29T10:12:13Z",
+                "reply",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .reply_to_comment(
+            0,
+            "{22222222-2222-2222-2222-222222222222}",
+            CommentReply::new(
+                "{55555555-5555-5555-5555-555555555555}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-08-29T10:12:14Z",
+                "reply two",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .move_reply(0, "{22222222-2222-2222-2222-222222222222}", 1, 0)
+        .unwrap();
+    presentation
+        .add_comment(
+            0,
+            Comment::new(
+                "{44444444-4444-4444-4444-444444444444}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-08-29T10:13:14Z",
+                "second",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation.move_comment(0, 1, 0).unwrap();
+    presentation
+        .set_sections(vec![
+            Section::new(
+                "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}",
+                "Opening",
+                vec![900, 256],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+    presentation.notes_header_footer_mut().unwrap().footer = Some(false);
+    presentation.handout_header_footer_mut().unwrap().header = Some(false);
+    presentation.move_slide(0, 1).unwrap();
+
+    let saved = presentation.to_bytes().unwrap();
+    let saved_package = open_opc(&saved, "saved collaboration package");
+    assert_eq!(
+        saved_package
+            .content_types
+            .content_type_for("/ppt/authors.xml"),
+        Some(content_types::POWERPOINT_AUTHORS)
+    );
+    assert_eq!(
+        saved_package
+            .content_types
+            .content_type_for("/ppt/comments/comment1.xml"),
+        Some(content_types::POWERPOINT_COMMENTS)
+    );
+    let mut reopened = Presentation::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.comment_authors()[0].name, "Ada");
+    let comments = reopened.comments(1).unwrap();
+    assert_eq!(
+        comments
+            .iter()
+            .map(|comment| comment.text())
+            .collect::<Vec<_>>(),
+        ["second", "first"]
+    );
+    assert_eq!(
+        comments[1]
+            .replies()
+            .iter()
+            .map(|reply| reply.text())
+            .collect::<Vec<_>>(),
+        ["reply two", "reply"]
+    );
+    assert_eq!(reopened.sections()[0].slide_ids, vec![900, 256]);
+    assert_eq!(
+        reopened.notes_header_footer_mut().unwrap().footer,
+        Some(false)
+    );
+    assert_eq!(
+        reopened.handout_header_footer_mut().unwrap().header,
+        Some(false)
+    );
+}
+
+#[test]
+fn invalid_collaboration_graph_does_not_mutate_the_presentation() {
+    use rpptx::{Comment, CommentAuthor, Section};
+
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(
+                "{11111111-1111-1111-1111-111111111111}",
+                "Ada",
+                None,
+                "ada@example.test",
+                "test",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let before = presentation.to_bytes().unwrap();
+    let duplicate = presentation.add_comment_author(
+        CommentAuthor::new(
+            "{11111111-1111-1111-1111-111111111111}",
+            "Other",
+            None,
+            "other@example.test",
+            "test",
+        )
+        .unwrap(),
+    );
+    assert!(duplicate.is_err());
+    let unknown_author = presentation.add_comment(
+        0,
+        Comment::new(
+            "{22222222-2222-2222-2222-222222222222}",
+            "{99999999-9999-9999-9999-999999999999}",
+            "2026-08-29T10:11:12Z",
+            "bad",
+        )
+        .unwrap(),
+    );
+    assert!(unknown_author.is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    presentation
+        .add_comment(
+            0,
+            Comment::new(
+                "{22222222-2222-2222-2222-222222222222}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-08-29T10:11:12Z",
+                "valid",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let with_comment = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .add_comment(
+                1,
+                Comment::new(
+                    "{22222222-2222-2222-2222-222222222222}",
+                    "{11111111-1111-1111-1111-111111111111}",
+                    "2026-08-29T10:12:13Z",
+                    "duplicate",
+                )
+                .unwrap()
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), with_comment);
+    assert!(
+        presentation
+            .set_sections(vec![
+                Section::new(
+                    "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}",
+                    "Bad",
+                    vec![123456],
+                )
+                .unwrap()
+            ])
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), with_comment);
+
+    let mut occupied = fixture_package();
+    occupied.set_part("/ppt/authors.xml", b"unrelated".to_vec());
+    let mut occupied = open_package(occupied).unwrap();
+    assert!(
+        occupied
+            .add_comment_author(
+                CommentAuthor::new(
+                    "{11111111-1111-1111-1111-111111111111}",
+                    "Ada",
+                    None,
+                    "ada@example.test",
+                    "test",
+                )
+                .unwrap()
+            )
+            .is_err()
+    );
+
+    let mut occupied_comments = fixture_package();
+    occupied_comments.set_part("/ppt/comments/comment1.xml", b"unrelated".to_vec());
+    let mut occupied_comments = open_package(occupied_comments).unwrap();
+    occupied_comments
+        .add_comment_author(
+            CommentAuthor::new(
+                "{11111111-1111-1111-1111-111111111111}",
+                "Ada",
+                None,
+                "ada@example.test",
+                "test",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        occupied_comments
+            .add_comment(
+                0,
+                Comment::new(
+                    "{22222222-2222-2222-2222-222222222222}",
+                    "{11111111-1111-1111-1111-111111111111}",
+                    "2026-08-29T10:11:12Z",
+                    "blocked",
+                )
+                .unwrap()
+            )
+            .is_err()
+    );
+
+    let comment_extension = |relationship_id: &str| {
+        format!(
+            r#"<p:extLst><p:ext uri="{{6950BFC3-D8DA-4A85-94F7-54DA5524770B}}"><p188:commentRel xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:r="{R_NS}" r:id="{relationship_id}"/></p:ext></p:extLst></p:sld>"#
+        )
+    };
+    let mut wrong_type = fixture_package();
+    wrong_type
+        .get_or_create_part_rels(SLIDE_ONE_PART)
+        .add_with_id("wrong-comment", rel_types::IMAGE, "../opaque/raw.xml");
+    let slide = String::from_utf8(wrong_type.get_part(SLIDE_ONE_PART).unwrap().to_vec()).unwrap();
+    wrong_type.set_part(
+        SLIDE_ONE_PART,
+        slide
+            .replacen("</p:sld>", &comment_extension("wrong-comment"), 1)
+            .into_bytes(),
+    );
+    assert!(matches!(
+        open_package(wrong_type),
+        Err(Error::WrongRelationshipType { .. })
+    ));
+
+    let mut external = fixture_package();
+    let relationship_id = external
+        .get_or_create_part_rels(SLIDE_ONE_PART)
+        .add_external(
+            rel_types::POWERPOINT_COMMENTS,
+            "https://example.test/comments",
+        );
+    let slide = String::from_utf8(external.get_part(SLIDE_ONE_PART).unwrap().to_vec()).unwrap();
+    external.set_part(
+        SLIDE_ONE_PART,
+        slide
+            .replacen("</p:sld>", &comment_extension(&relationship_id), 1)
+            .into_bytes(),
+    );
+    assert!(matches!(
+        open_package(external),
+        Err(Error::ExternalRelationship { .. })
+    ));
+}
+
+#[test]
+fn matching_mime_on_occupied_conventional_comment_part_fails_atomically() {
+    use rpptx::{Comment, CommentAuthor};
+
+    let mut package = fixture_package();
+    package.set_part(
+        "/ppt/comments/comment1.xml",
+        br#"<unrelated xmlns="urn:f217"/>"#.to_vec(),
+    );
+    package.content_types.overrides.insert(
+        "/ppt/comments/comment1.xml".to_owned(),
+        content_types::POWERPOINT_COMMENTS.to_owned(),
+    );
+    let mut presentation = open_package(package).unwrap();
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(
+                "{11111111-1111-1111-1111-111111111111}",
+                "Ada",
+                None,
+                "ada@example.test",
+                "test",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(matches!(
+        presentation.add_comment(
+            0,
+            Comment::new(
+                "{22222222-2222-2222-2222-222222222222}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-08-29T10:11:12Z",
+                "blocked",
+            )
+            .unwrap(),
+        ),
+        Err(Error::CollaborationPartCollision { part_name })
+            if part_name == "/ppt/comments/comment1.xml"
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn second_commented_slide_allocates_comment2_after_owned_comment1() {
+    use rpptx::{Comment, CommentAuthor};
+
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let author_id = "{11111111-1111-1111-1111-111111111111}";
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(author_id, "Ada", None, "ada@example.test", "test").unwrap(),
+        )
+        .unwrap();
+    presentation
+        .add_comment(
+            0,
+            Comment::new(
+                "{22222222-2222-2222-2222-222222222222}",
+                author_id,
+                "2026-08-29T10:11:12Z",
+                "first",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .add_comment(
+            1,
+            Comment::new(
+                "{33333333-3333-3333-3333-333333333333}",
+                author_id,
+                "2026-08-29T10:12:13Z",
+                "second",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "two commented slides");
+    assert!(package.get_part("/ppt/comments/comment1.xml").is_some());
+    assert!(package.get_part("/ppt/comments/comment2.xml").is_some());
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.comments(0).unwrap()[0].text(), "first");
+    assert_eq!(reopened.comments(1).unwrap()[0].text(), "second");
+}
+
+#[test]
+fn remove_slide_rejects_unserializable_section_mutation_atomically() {
+    let mut package = fixture_package();
+    let xml = String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec()).unwrap();
+    let sections = r#"<p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><q:section name="Unsafe" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" xmlns:p14="urn:f217:p14" xmlns:p14m="urn:f217:p14m" xmlns:p14model="urn:f217:p14model"><p14:one/><p14m:two/><p14model:three/><q:sldIdLst><q:sldId id="900"/><q:sldId id="256"/></q:sldIdLst></q:section></q:sectionLst></p:ext></p:extLst>"#;
+    package.set_part(
+        PRESENTATION_PART,
+        xml.replace("</p:presentation>", &format!("{sections}</p:presentation>"))
+            .into_bytes(),
+    );
+    let mut presentation = open_package(package).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(presentation.remove_slide(0).is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    assert_eq!(presentation.len(), 2);
+    assert_eq!(Presentation::from_bytes(&before).unwrap().len(), 2);
+}
+
+#[test]
+fn commented_slide_duplication_is_atomic_and_removal_keeps_comment_ownership_isolated() {
+    use rpptx::{Comment, CommentAuthor};
+
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(
+                "{11111111-1111-1111-1111-111111111111}",
+                "Ada",
+                None,
+                "ada@example.test",
+                "test",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .add_comment(
+            0,
+            Comment::new(
+                "{22222222-2222-2222-2222-222222222222}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-08-29T10:11:12Z",
+                "owned",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(presentation.duplicate_slide(0).is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    presentation.remove_slide(1).unwrap();
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.comments(0).unwrap()[0].text(), "owned");
+}
+
+#[test]
+fn opening_rejects_two_slides_that_share_one_empty_comment_part() {
+    let mut package = fixture_package();
+    let comment_part = "/custom/comments/shared.xml";
+    package.set_part(
+        comment_part,
+        br#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"/>"#
+            .to_vec(),
+    );
+    package
+        .content_types
+        .add_override(comment_part, content_types::POWERPOINT_COMMENTS);
+    for slide_part in [SLIDE_ONE_PART, SLIDE_TWO_PART] {
+        let relationship_id = package
+            .get_or_create_part_rels(slide_part)
+            .add(rel_types::POWERPOINT_COMMENTS, "../comments/shared.xml");
+        let original = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        let extension = format!(
+            r#"<p:extLst><p:ext uri="{{6950BFC3-D8DA-4A85-94F7-54DA5524770B}}"><p188:commentRel xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" r:id="{relationship_id}"/></p:ext></p:extLst></p:sld>"#
+        );
+        package.set_part(
+            slide_part,
+            original.replacen("</p:sld>", &extension, 1).into_bytes(),
+        );
+    }
+    assert!(Presentation::from_bytes(&package_bytes(package)).is_err());
+}
+
 fn mutation_fixture_bytes() -> Vec<u8> {
     let mut package = fixture_package();
     let original = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();

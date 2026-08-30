@@ -15,12 +15,21 @@ use crate::namespace::{
 
 const MIN_SLIDE_ID: u32 = 256;
 const MAX_SLIDE_ID: u32 = 2_147_483_647;
+const P14_NS: &str = "http://schemas.microsoft.com/office/powerpoint/2010/main";
+const SECTION_EXTENSION_URI: &str = "{521415D9-36F7-43E2-AB2F-B90AF26B5E84}";
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
 type ParsedSlideList = (Vec<CT_SlideId>, RawAttributes, OrderedRawChildren);
 type ParsedMasterList = (Vec<CT_SlideMasterId>, RawAttributes, OrderedRawChildren);
 type ParsedIdentifier = (Option<u32>, String, RawAttributes, OrderedRawChildren);
+type ParsedSectionSlideIds = (
+    Vec<u32>,
+    Vec<u8>,
+    OrderedRawChildren,
+    Vec<SectionSlideIdSidecar>,
+);
+type ParsedSectionList = (Vec<Section>, Option<(usize, usize)>, Vec<(String, String)>);
 
 /// The typed size of a presentation slide or notes page in EMUs.
 #[allow(non_camel_case_types)]
@@ -80,6 +89,49 @@ pub struct CT_SlideMasterId {
     raw_children: OrderedRawChildren,
 }
 
+/// One producer section and the stable slide ids assigned to it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Section {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub slide_ids: Vec<u32>,
+    original_slide_ids: Vec<u32>,
+    raw_attributes: Vec<u8>,
+    slide_id_list_attributes: Vec<u8>,
+    slide_id_list_raw_children: OrderedRawChildren,
+    slide_id_sidecars: Vec<SectionSlideIdSidecar>,
+    raw_children: OrderedRawChildren,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SectionSlideIdSidecar {
+    id: u32,
+    raw_attributes: Vec<u8>,
+    raw_children: Vec<u8>,
+}
+
+impl Section {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        slide_ids: Vec<u32>,
+    ) -> Result<Self> {
+        let id = id.into();
+        validate_guid("section", &id)?;
+        Ok(Self {
+            id: Some(id),
+            name: Some(name.into()),
+            original_slide_ids: slide_ids.clone(),
+            slide_ids,
+            raw_attributes: Vec::new(),
+            slide_id_list_attributes: Vec::new(),
+            slide_id_list_raw_children: OrderedRawChildren::default(),
+            slide_id_sidecars: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        })
+    }
+}
+
 impl CT_SlideMasterId {
     pub fn new(id: u32, relationship_id: impl Into<String>) -> Self {
         Self {
@@ -100,6 +152,11 @@ pub struct CT_Presentation {
     pub slide_size: Option<CT_SlideSize>,
     pub notes_size: CT_SlideSize,
     pub default_text_style: Option<CT_TextListStyle>,
+    sections: Vec<Section>,
+    extension_list_raw: Option<Vec<u8>>,
+    section_list_range: Option<(usize, usize)>,
+    section_list_namespaces: Vec<(String, String)>,
+    sections_dirty: bool,
     raw_attributes: Vec<(String, String)>,
     slide_master_list_present: bool,
     slide_master_list_attributes: Vec<(String, String)>,
@@ -123,6 +180,10 @@ struct PresentationParseState {
     slide_size: Option<CT_SlideSize>,
     notes_size: Option<CT_SlideSize>,
     default_text_style: Option<CT_TextListStyle>,
+    sections: Vec<Section>,
+    extension_list_raw: Option<Vec<u8>>,
+    section_list_range: Option<(usize, usize)>,
+    section_list_namespaces: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
     boundary: usize,
 }
@@ -190,6 +251,18 @@ impl PresentationParseState {
                 );
                 self.boundary = self.boundary.max(13);
             }
+            b"extLst" => {
+                if self.extension_list_raw.is_some() {
+                    return Err(duplicate("extLst"));
+                }
+                let (sections, range, section_namespaces) =
+                    parse_sections_from_extension(&raw, namespaces)?;
+                self.sections = sections;
+                self.section_list_range = range;
+                self.section_list_namespaces = section_namespaces;
+                self.extension_list_raw = Some(raw);
+                self.boundary = self.boundary.max(15);
+            }
             _ => {
                 let slot = root_schema_boundary(name).unwrap_or(self.boundary);
                 self.raw_children.push(slot, raw);
@@ -221,6 +294,11 @@ impl PresentationParseState {
             slide_size: self.slide_size,
             notes_size,
             default_text_style: self.default_text_style,
+            sections: self.sections,
+            extension_list_raw: self.extension_list_raw,
+            section_list_range: self.section_list_range,
+            section_list_namespaces: self.section_list_namespaces,
+            sections_dirty: false,
             raw_attributes: self.raw_attributes,
             slide_master_list_attributes: self.slide_master_list_attributes,
             slide_master_list_raw_children: self.slide_master_list_raw_children,
@@ -242,6 +320,11 @@ impl CT_Presentation {
             slide_size: None,
             notes_size,
             default_text_style: None,
+            sections: Vec::new(),
+            extension_list_raw: None,
+            section_list_range: None,
+            section_list_namespaces: Vec::new(),
+            sections_dirty: false,
             raw_attributes: Vec::new(),
             slide_master_list_present: false,
             slide_master_list_attributes: Vec::new(),
@@ -265,6 +348,37 @@ impl CT_Presentation {
             self.slide_size = Some(CT_SlideSize::new(cx, cy)?);
         }
         Ok(())
+    }
+
+    pub fn sections(&self) -> &[Section] {
+        &self.sections
+    }
+
+    pub fn set_sections(&mut self, sections: Vec<Section>) -> Result<()> {
+        validate_sections(&sections, &self.slide_ids)?;
+        if sections.is_empty()
+            && let (Some(extension_list), Some((start, end))) =
+                (&self.extension_list_raw, self.section_list_range)
+            && section_list_has_raw_content(
+                &extension_list[start..end],
+                &self.section_list_namespaces,
+            )?
+        {
+            return Err(invalid_value(
+                "cannot clear sections while preserving direct section-list raw payload".to_owned(),
+            ));
+        }
+        self.sections = sections;
+        self.sections_dirty = true;
+        Ok(())
+    }
+
+    pub fn remove_slide_from_sections(&mut self, slide_id: u32) {
+        for section in &mut self.sections {
+            let before = section.slide_ids.len();
+            section.slide_ids.retain(|id| *id != slide_id);
+            self.sections_dirty |= section.slide_ids.len() != before;
+        }
     }
 
     /// Parses a complete PresentationML presentation root with any prefix.
@@ -392,6 +506,15 @@ impl CT_Presentation {
         }
         emit_raw(&mut writer, self.raw_children.at(13))?;
         emit_raw(&mut writer, self.raw_children.at(14))?;
+        if let Some(extension_list) = write_extension_list(
+            self.extension_list_raw.as_deref(),
+            self.section_list_range,
+            &self.sections,
+            self.sections_dirty,
+            &self.section_list_namespaces,
+        )? {
+            writer.get_mut().write_all(&extension_list)?;
+        }
         emit_raw(&mut writer, self.raw_children.at(15))?;
         writer.write_event(Event::End(BytesEnd::new("p:presentation")))?;
         Ok(writer.into_inner())
@@ -586,6 +709,976 @@ fn custom_show_slide_relationship_id(
         }
     }
     Ok(None)
+}
+
+fn parse_sections_from_extension(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<ParsedSectionList> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![inherited.clone()];
+    let mut depth = 0usize;
+    let mut section_extension_depth = None;
+    loop {
+        let start_position = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let parent = scopes
+                    .last()
+                    .ok_or_else(|| invalid_value("missing section namespace scope".to_owned()))?;
+                let scope = parent.with_start(&element)?;
+                if depth == 1
+                    && local_name(element.name().as_ref()) == b"ext"
+                    && scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                    && all_attributes(&element)?
+                        .into_iter()
+                        .any(|(name, value)| name == "uri" && value == SECTION_EXTENSION_URI)
+                {
+                    section_extension_depth = Some(depth + 1);
+                }
+                if section_extension_depth == Some(depth)
+                    && local_name(element.name().as_ref()) == b"sectionLst"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                {
+                    let raw = capture_element(&mut reader, &element)?;
+                    let section_namespaces = scope
+                        .entries()
+                        .into_iter()
+                        .filter(|(prefix, _)| raw_uses_namespace_prefix(&raw, prefix))
+                        .collect();
+                    let end_position = reader.buffer_position() as usize;
+                    return Ok((
+                        parse_section_list(&raw, &scope)?,
+                        Some((start_position, end_position)),
+                        section_namespaces,
+                    ));
+                }
+                scopes.push(scope);
+                depth += 1;
+            }
+            Event::Empty(element) => {
+                let parent = scopes
+                    .last()
+                    .ok_or_else(|| invalid_value("missing section namespace scope".to_owned()))?;
+                let scope = parent.with_start(&element)?;
+                if section_extension_depth == Some(depth)
+                    && local_name(element.name().as_ref()) == b"sectionLst"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                {
+                    return Err(OxmlError::MissingElement(
+                        "p14:sectionLst requires p14:section".to_owned(),
+                    ));
+                }
+            }
+            Event::End(_) => {
+                if section_extension_depth == Some(depth) {
+                    section_extension_depth = None;
+                }
+                if scopes.len() > 1 {
+                    scopes.pop();
+                    depth -= 1;
+                }
+            }
+            Event::Eof => return Ok((Vec::new(), None, Vec::new())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_section_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<Vec<Section>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root_scope = inherited.clone();
+    let mut sections = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if local_name(element.name().as_ref()) == b"sectionLst" => {
+                root_scope = inherited.with_start(&element)?;
+            }
+            Event::Start(element) => {
+                let scope = root_scope.with_start(&element)?;
+                let raw = capture_element(&mut reader, &element)?;
+                if local_name(element.name().as_ref()) == b"section"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                {
+                    sections.push(parse_section(&raw, &scope)?);
+                }
+            }
+            Event::Empty(element) => {
+                let scope = root_scope.with_start(&element)?;
+                if local_name(element.name().as_ref()) == b"section"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                {
+                    return Err(OxmlError::MissingElement(
+                        "p14:section requires p14:sldIdLst".to_owned(),
+                    ));
+                }
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"sectionLst" => break,
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(
+                    "closing p14:sectionLst".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if sections.is_empty() {
+        return Err(OxmlError::MissingElement(
+            "p14:sectionLst requires p14:section".to_owned(),
+        ));
+    }
+    Ok(sections)
+}
+
+fn parse_section(xml: &[u8], inherited: &NamespaceBindings) -> Result<Section> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut id = None;
+    let mut name = None;
+    let mut raw_attributes = Vec::new();
+    let mut slide_ids = None;
+    let mut slide_id_list_attributes = Vec::new();
+    let mut slide_id_list_raw_children = OrderedRawChildren::default();
+    let mut slide_id_sidecars = Vec::new();
+    let mut raw_children = OrderedRawChildren::default();
+    let mut section_scope = inherited.clone();
+    let mut boundary = 0;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if local_name(element.name().as_ref()) == b"section" => {
+                section_scope = inherited.with_start(&element)?;
+                for (attribute, value) in all_attributes(&element)? {
+                    match attribute.as_str() {
+                        "id" if id.is_none() => id = Some(value),
+                        "name" if name.is_none() => name = Some(value),
+                        "id" | "name" => return Err(duplicate("section attribute")),
+                        _ => {}
+                    }
+                }
+                raw_attributes = lexical_attributes(&element, &["id", "name"])?;
+                raw_attributes.extend_from_slice(&dependent_p14_shadow_attributes(&element, xml)?);
+                raw_attributes.extend_from_slice(&inherited_p14_shadow_attributes(
+                    inherited,
+                    &element,
+                    xml,
+                    &raw_attributes,
+                ));
+            }
+            Event::Start(element) => {
+                let scope = section_scope.with_start(&element)?;
+                let raw = capture_element(&mut reader, &element)?;
+                if local_name(element.name().as_ref()) == b"sldIdLst"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                    && slide_ids.is_none()
+                {
+                    let parsed = parse_section_slide_ids(&raw, &scope)?;
+                    slide_ids = Some(parsed.0);
+                    slide_id_list_attributes = parsed.1;
+                    slide_id_list_raw_children = parsed.2;
+                    slide_id_sidecars = parsed.3;
+                    boundary = 1;
+                } else {
+                    raw_children.push(boundary, raw);
+                }
+            }
+            Event::Empty(element) => {
+                let scope = section_scope.with_start(&element)?;
+                let raw = capture_empty_element(&element)?;
+                if local_name(element.name().as_ref()) == b"sldIdLst"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                    && slide_ids.is_none()
+                {
+                    slide_ids = Some(Vec::new());
+                    slide_id_list_attributes = lexical_attributes(&element, &[])?;
+                    slide_id_list_attributes
+                        .extend_from_slice(&dependent_p14_shadow_attributes(&element, &raw)?);
+                    slide_id_list_attributes.extend_from_slice(&inherited_p14_shadow_attributes(
+                        &section_scope,
+                        &element,
+                        &raw,
+                        &slide_id_list_attributes,
+                    ));
+                    boundary = 1;
+                } else {
+                    raw_children.push(boundary, raw);
+                }
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"section" => break,
+            Event::Eof => return Err(OxmlError::MissingElement("closing p14:section".to_owned())),
+            event @ (Event::Text(_)
+            | Event::CData(_)
+            | Event::Comment(_)
+            | Event::PI(_)
+            | Event::DocType(_)) => raw_children.push(boundary, capture_misc_event(event)?),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if let Some(value) = &id {
+        validate_guid("section", value)?;
+    }
+    let slide_ids = slide_ids
+        .ok_or_else(|| OxmlError::MissingElement("p14:section requires p14:sldIdLst".to_owned()))?;
+    Ok(Section {
+        id,
+        name,
+        original_slide_ids: slide_ids.clone(),
+        slide_ids,
+        raw_attributes,
+        slide_id_list_attributes,
+        slide_id_list_raw_children,
+        slide_id_sidecars,
+        raw_children,
+    })
+}
+
+fn parse_section_slide_ids(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<ParsedSectionSlideIds> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root_scope = inherited.clone();
+    let mut attributes = Vec::new();
+    let mut ids = Vec::new();
+    let mut raw_children = OrderedRawChildren::default();
+    let mut sidecars = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if local_name(element.name().as_ref()) == b"sldIdLst" => {
+                root_scope = inherited.with_start(&element)?;
+                attributes = lexical_attributes(&element, &[])?;
+                attributes.extend_from_slice(&dependent_p14_shadow_attributes(&element, xml)?);
+                attributes.extend_from_slice(&inherited_p14_shadow_attributes(
+                    inherited,
+                    &element,
+                    xml,
+                    &attributes,
+                ));
+            }
+            Event::Start(element) => {
+                let scope = root_scope.with_start(&element)?;
+                let raw = capture_element(&mut reader, &element)?;
+                if local_name(element.name().as_ref()) == b"sldId"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                {
+                    let sidecar = parse_section_slide_id_sidecar(&raw, &scope)?;
+                    ids.push(sidecar.id);
+                    sidecars.push(sidecar);
+                } else {
+                    raw_children.push(ids.len(), raw);
+                }
+            }
+            Event::Empty(element) => {
+                let scope = root_scope.with_start(&element)?;
+                let raw = capture_empty_element(&element)?;
+                if local_name(element.name().as_ref()) == b"sldId"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                {
+                    let id = parse_section_slide_id(&element)?;
+                    ids.push(id);
+                    let mut raw_attributes = lexical_attributes(&element, &["id"])?;
+                    raw_attributes
+                        .extend_from_slice(&dependent_p14_shadow_attributes(&element, &raw)?);
+                    raw_attributes.extend_from_slice(&inherited_p14_shadow_attributes(
+                        &root_scope,
+                        &element,
+                        &raw,
+                        &raw_attributes,
+                    ));
+                    sidecars.push(SectionSlideIdSidecar {
+                        id,
+                        raw_attributes,
+                        raw_children: Vec::new(),
+                    });
+                } else {
+                    raw_children.push(ids.len(), raw);
+                }
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"sldIdLst" => break,
+            Event::Eof => return Err(OxmlError::MissingElement("closing p14:sldIdLst".to_owned())),
+            event @ (Event::Text(_)
+            | Event::CData(_)
+            | Event::Comment(_)
+            | Event::PI(_)
+            | Event::DocType(_)) => raw_children.push(ids.len(), capture_misc_event(event)?),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok((ids, attributes, raw_children, sidecars))
+}
+
+fn parse_section_slide_id(element: &BytesStart<'_>) -> Result<u32> {
+    all_attributes(element)?
+        .into_iter()
+        .find(|(name, _)| name == "id")
+        .ok_or_else(|| missing_attribute("p14:sldId", "id"))?
+        .1
+        .parse()
+        .map_err(|_| invalid_value("p14:sldId has malformed @id".to_owned()))
+}
+
+fn parse_section_slide_id_sidecar(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<SectionSlideIdSidecar> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut id = None;
+    let mut raw_attributes = Vec::new();
+    let mut raw_children = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if id.is_none() => {
+                id = Some(parse_section_slide_id(&element)?);
+                raw_attributes = lexical_attributes(&element, &["id"])?;
+                raw_attributes.extend_from_slice(&dependent_p14_shadow_attributes(&element, xml)?);
+                raw_attributes.extend_from_slice(&inherited_p14_shadow_attributes(
+                    inherited,
+                    &element,
+                    xml,
+                    &raw_attributes,
+                ));
+            }
+            Event::Start(element) => {
+                raw_children.extend_from_slice(&capture_element(&mut reader, &element)?);
+            }
+            Event::Empty(element) => {
+                raw_children.extend_from_slice(&capture_empty_element(&element)?);
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"sldId" => break,
+            Event::Eof => return Err(OxmlError::MissingElement("closing p14:sldId".to_owned())),
+            event @ (Event::Text(_)
+            | Event::CData(_)
+            | Event::Comment(_)
+            | Event::PI(_)
+            | Event::DocType(_)) => raw_children.extend_from_slice(&capture_misc_event(event)?),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(SectionSlideIdSidecar {
+        id: id.ok_or_else(|| missing_attribute("p14:sldId", "id"))?,
+        raw_attributes,
+        raw_children,
+    })
+}
+
+fn write_extension_list(
+    original: Option<&[u8]>,
+    section_range: Option<(usize, usize)>,
+    sections: &[Section],
+    sections_dirty: bool,
+    section_list_namespaces: &[(String, String)],
+) -> Result<Option<Vec<u8>>> {
+    if original.is_none() && sections.is_empty() {
+        return Ok(None);
+    }
+    if let Some(original) = original {
+        if let Some((start, end)) = section_range {
+            if !sections_dirty {
+                return Ok(Some(original.to_vec()));
+            }
+            if sections.is_empty() {
+                if section_list_has_raw_content(&original[start..end], section_list_namespaces)? {
+                    return Err(invalid_value(
+                        "cannot clear sections while preserving direct section-list raw payload"
+                            .to_owned(),
+                    ));
+                }
+                let mut output = Vec::with_capacity(original.len() - (end - start));
+                output.extend_from_slice(&original[..start]);
+                output.extend_from_slice(&original[end..]);
+                return Ok(Some(output));
+            }
+            let replacement = write_section_list_preserving_raw(
+                &original[start..end],
+                sections,
+                section_list_namespaces,
+            )?;
+            let mut output = Vec::with_capacity(original.len() - (end - start) + replacement.len());
+            output.extend_from_slice(&original[..start]);
+            output.extend_from_slice(&replacement);
+            output.extend_from_slice(&original[end..]);
+            return Ok(Some(output));
+        }
+        if sections.is_empty() {
+            return Ok(Some(original.to_vec()));
+        }
+        let section_xml = write_section_list(sections)?;
+        if original.trim_ascii_end().ends_with(b"/>") {
+            let slash = original
+                .windows(2)
+                .rposition(|window| window == b"/>")
+                .expect("trimmed empty element ends with its slash");
+            let name_end = original[1..]
+                .iter()
+                .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+                .map(|index| index + 1)
+                .ok_or_else(|| invalid_value("malformed empty p:extLst".to_owned()))?;
+            let mut output = Vec::with_capacity(original.len() + section_xml.len() + 80);
+            output.extend_from_slice(&original[..slash]);
+            output.extend_from_slice(b">");
+            output.extend_from_slice(format!("<p:ext uri=\"{SECTION_EXTENSION_URI}\">").as_bytes());
+            output.extend_from_slice(&section_xml);
+            output.extend_from_slice(b"</p:ext></");
+            output.extend_from_slice(&original[1..name_end]);
+            output.extend_from_slice(b">");
+            return Ok(Some(output));
+        }
+        let closing = original
+            .windows(b"</".len())
+            .rposition(|window| window == b"</")
+            .ok_or_else(|| invalid_value("p:extLst has no closing tag".to_owned()))?;
+        let mut output = Vec::with_capacity(original.len() + section_xml.len() + 80);
+        output.extend_from_slice(&original[..closing]);
+        output.extend_from_slice(format!("<p:ext uri=\"{SECTION_EXTENSION_URI}\">").as_bytes());
+        output.extend_from_slice(&section_xml);
+        output.extend_from_slice(b"</p:ext>");
+        output.extend_from_slice(&original[closing..]);
+        return Ok(Some(output));
+    }
+    let section_xml = write_section_list(sections)?;
+    let mut output = format!("<p:extLst><p:ext uri=\"{SECTION_EXTENSION_URI}\">").into_bytes();
+    output.extend_from_slice(&section_xml);
+    output.extend_from_slice(b"</p:ext></p:extLst>");
+    Ok(Some(output))
+}
+
+fn section_list_has_raw_content(
+    original: &[u8],
+    inherited_namespaces: &[(String, String)],
+) -> Result<bool> {
+    let mut reader = Reader::from_reader(original);
+    let mut buffer = Vec::new();
+    let mut root_scope = NamespaceBindings::from_entries(inherited_namespaces);
+    let mut saw_root = false;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if !saw_root => {
+                saw_root = true;
+                root_scope = root_scope.with_start(&element)?;
+                if all_attributes(&element)?.into_iter().any(|(name, value)| {
+                    !((name == "xmlns" || name.starts_with("xmlns:")) && value == P14_NS)
+                }) {
+                    return Ok(true);
+                }
+            }
+            Event::Start(element) => {
+                let scope = root_scope.with_start(&element)?;
+                if local_name(element.name().as_ref()) != b"section"
+                    || scope.element_uri(element.name().as_ref()) != Some(P14_NS)
+                {
+                    return Ok(true);
+                }
+                capture_element(&mut reader, &element)?;
+            }
+            Event::Empty(element) => {
+                let scope = root_scope.with_start(&element)?;
+                if local_name(element.name().as_ref()) != b"section"
+                    || scope.element_uri(element.name().as_ref()) != Some(P14_NS)
+                {
+                    return Ok(true);
+                }
+            }
+            Event::Text(text) => {
+                let bytes: &[u8] = text.as_ref();
+                if bytes.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    return Ok(true);
+                }
+            }
+            Event::Comment(_) | Event::PI(_) | Event::CData(_) | Event::DocType(_) => {
+                return Ok(true);
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"sectionLst" => {
+                return Ok(false);
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn write_section_list(sections: &[Section]) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    let mut root = BytesStart::new("p14:sectionLst");
+    root.push_attribute(("xmlns:p14", P14_NS));
+    writer.write_event(Event::Start(root))?;
+    for section in sections {
+        write_section(&mut writer, section)?;
+    }
+    writer.write_event(Event::End(BytesEnd::new("p14:sectionLst")))?;
+    Ok(writer.into_inner())
+}
+
+fn write_section_list_preserving_raw(
+    original: &[u8],
+    sections: &[Section],
+    inherited_namespaces: &[(String, String)],
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(original);
+    let mut buffer = Vec::new();
+    let mut root_scope = NamespaceBindings::from_entries(inherited_namespaces);
+    let mut opening = Vec::new();
+    let mut closing = Vec::new();
+    let mut originals = Vec::new();
+    let mut raw_children = OrderedRawChildren::default();
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if opening.is_empty() => {
+                root_scope = root_scope.with_start(&element)?;
+                opening.extend_from_slice(&original[..reader.buffer_position() as usize]);
+            }
+            Event::Start(element) => {
+                let scope = root_scope.with_start(&element)?;
+                let raw = capture_element(&mut reader, &element)?;
+                if local_name(element.name().as_ref()) == b"section"
+                    && scope.element_uri(element.name().as_ref()) == Some(P14_NS)
+                {
+                    originals.push(parse_section(&raw, &scope)?);
+                } else {
+                    raw_children.push(originals.len(), raw);
+                }
+            }
+            Event::Empty(element) => {
+                raw_children.push(originals.len(), capture_empty_element(&element)?);
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"sectionLst" => {
+                closing
+                    .extend_from_slice(&original[event_start..reader.buffer_position() as usize]);
+                break;
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(
+                    "closing p14:sectionLst".to_owned(),
+                ));
+            }
+            event @ (Event::Text(_)
+            | Event::CData(_)
+            | Event::Comment(_)
+            | Event::PI(_)
+            | Event::DocType(_)) => {
+                let mut event_writer = Writer::new(Vec::new());
+                event_writer.write_event(event.into_owned())?;
+                raw_children.push(originals.len(), event_writer.into_inner());
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let original_to_current = originals
+        .iter()
+        .map(|original| {
+            sections
+                .iter()
+                .position(|section| section.id == original.id)
+        })
+        .collect::<Vec<_>>();
+    let mut writer = Writer::new(Vec::new());
+    writer.get_mut().write_all(&opening)?;
+    for (index, section) in sections.iter().enumerate() {
+        emit_raw(
+            &mut writer,
+            raw_children.at_reconciled(index, 0, &original_to_current, sections.len()),
+        )?;
+        write_section(&mut writer, section)?;
+    }
+    emit_raw(
+        &mut writer,
+        raw_children.at_reconciled(sections.len(), 0, &original_to_current, sections.len()),
+    )?;
+    writer.get_mut().write_all(&closing)?;
+    Ok(writer.into_inner())
+}
+
+fn write_section<W: Write>(writer: &mut Writer<W>, section: &Section) -> Result<()> {
+    let prefix = section_model_prefix(&section.raw_attributes, "p14")?;
+    let tag = format!("{prefix}:section");
+    let mut start = BytesStart::new(&tag);
+    push_section_namespace(&mut start, prefix);
+    if let Some(name) = &section.name {
+        start.push_attribute(("name", name.as_str()));
+    }
+    if let Some(id) = &section.id {
+        start.push_attribute(("id", id.as_str()));
+    }
+    write_start_with_raw(writer, &start, &section.raw_attributes, false)?;
+    emit_raw(writer, section.raw_children.at(0))?;
+    let list_prefix = section_model_prefix(&section.slide_id_list_attributes, prefix)?;
+    let list_tag = format!("{list_prefix}:sldIdLst");
+    let mut list = BytesStart::new(&list_tag);
+    if list_prefix != prefix {
+        push_section_namespace(&mut list, list_prefix);
+    }
+    write_start_with_raw(writer, &list, &section.slide_id_list_attributes, false)?;
+    let original_to_current = section
+        .original_slide_ids
+        .iter()
+        .map(|id| section.slide_ids.iter().position(|current| current == id))
+        .collect::<Vec<_>>();
+    for (index, id) in section.slide_ids.iter().enumerate() {
+        emit_raw(
+            writer,
+            section.slide_id_list_raw_children.at_reconciled(
+                index,
+                0,
+                &original_to_current,
+                section.slide_ids.len(),
+            ),
+        )?;
+        let value = id.to_string();
+        let sidecar = section.slide_id_sidecars.iter().find(|item| item.id == *id);
+        let slide_prefix = if let Some(sidecar) = sidecar {
+            section_model_prefix(&sidecar.raw_attributes, list_prefix)?
+        } else {
+            list_prefix
+        };
+        let slide_tag = format!("{slide_prefix}:sldId");
+        let mut slide = BytesStart::new(&slide_tag);
+        if slide_prefix != list_prefix {
+            push_section_namespace(&mut slide, slide_prefix);
+        }
+        slide.push_attribute(("id", value.as_str()));
+        if let Some(sidecar) = sidecar {
+            if sidecar.raw_children.is_empty() {
+                write_start_with_raw(writer, &slide, &sidecar.raw_attributes, true)?;
+            } else {
+                write_start_with_raw(writer, &slide, &sidecar.raw_attributes, false)?;
+                writer.get_mut().write_all(&sidecar.raw_children)?;
+                writer.write_event(Event::End(BytesEnd::new(&slide_tag)))?;
+            }
+        } else {
+            writer.write_event(Event::Empty(slide))?;
+        }
+    }
+    emit_raw(
+        writer,
+        section.slide_id_list_raw_children.at_reconciled(
+            section.slide_ids.len(),
+            0,
+            &original_to_current,
+            section.slide_ids.len(),
+        ),
+    )?;
+    writer.write_event(Event::End(BytesEnd::new(&list_tag)))?;
+    emit_raw(writer, section.raw_children.at(1))?;
+    writer.write_event(Event::End(BytesEnd::new(&tag)))?;
+    Ok(())
+}
+
+fn lexical_attributes(start: &BytesStart<'_>, modeled: &[&str]) -> Result<Vec<u8>> {
+    let _ = all_attributes(start)?;
+    let raw = start.attributes_raw();
+    let mut output = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < raw.len() {
+        let span_start = cursor;
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor == raw.len() {
+            output.extend_from_slice(&raw[span_start..]);
+            break;
+        }
+        let name_start = cursor;
+        while cursor < raw.len() && !raw[cursor].is_ascii_whitespace() && raw[cursor] != b'=' {
+            cursor += 1;
+        }
+        let name = &raw[name_start..cursor];
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        cursor += 1;
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let quote = raw[cursor];
+        cursor += 1;
+        while cursor < raw.len() && raw[cursor] != quote {
+            cursor += 1;
+        }
+        cursor += 1;
+        let is_modeled =
+            !name.contains(&b':') && modeled.iter().any(|candidate| name == candidate.as_bytes());
+        let fixed_namespace = matches!(name, b"xmlns:p14" | b"xmlns:p14m" | b"xmlns:p14model");
+        if !is_modeled && !fixed_namespace {
+            output.extend_from_slice(&raw[span_start..cursor]);
+        }
+    }
+    Ok(output)
+}
+
+fn section_model_prefix<'a>(raw_attributes: &[u8], inherited: &'a str) -> Result<&'a str> {
+    if !has_raw_namespace_declaration(raw_attributes, inherited) {
+        return Ok(inherited);
+    }
+    ["p14", "p14m", "p14model"]
+        .into_iter()
+        .find(|prefix| !has_raw_namespace_declaration(raw_attributes, prefix))
+        .ok_or_else(|| invalid_value("no unshadowed section model prefix is available".to_owned()))
+}
+
+fn push_section_namespace(start: &mut BytesStart<'_>, prefix: &str) {
+    match prefix {
+        "p14" => start.push_attribute(("xmlns:p14", P14_NS)),
+        "p14m" => start.push_attribute(("xmlns:p14m", P14_NS)),
+        "p14model" => start.push_attribute(("xmlns:p14model", P14_NS)),
+        _ => unreachable!("section model prefix is selected from fixed candidates"),
+    }
+}
+
+fn has_raw_namespace_declaration(raw_attributes: &[u8], prefix: &str) -> bool {
+    let declaration = format!("xmlns:{prefix}");
+    raw_attributes
+        .windows(declaration.len())
+        .enumerate()
+        .any(|(index, window)| {
+            window == declaration.as_bytes()
+                && raw_attributes
+                    .get(index + declaration.len())
+                    .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'=')
+        })
+}
+
+fn dependent_p14_shadow_attributes(start: &BytesStart<'_>, xml: &[u8]) -> Result<Vec<u8>> {
+    let decoded = all_attributes(start)?;
+    let descendants = xml
+        .iter()
+        .position(|byte| *byte == b'>')
+        .map_or(&[][..], |index| &xml[index + 1..]);
+    let raw = start.attributes_raw();
+    let mut preserved = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < raw.len() {
+        let span_start = cursor;
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let name_start = cursor;
+        while cursor < raw.len() && !raw[cursor].is_ascii_whitespace() && raw[cursor] != b'=' {
+            cursor += 1;
+        }
+        let name = &raw[name_start..cursor];
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor == raw.len() {
+            break;
+        }
+        cursor += 1;
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let quote = *raw
+            .get(cursor)
+            .ok_or_else(|| invalid_value("malformed p14 namespace shadow".to_owned()))?;
+        cursor += 1;
+        while cursor < raw.len() && raw[cursor] != quote {
+            cursor += 1;
+        }
+        cursor += 1;
+        let prefix = match name {
+            b"xmlns:p14" => b"p14".as_slice(),
+            b"xmlns:p14m" => b"p14m".as_slice(),
+            b"xmlns:p14model" => b"p14model".as_slice(),
+            _ => continue,
+        };
+        let value = decoded
+            .iter()
+            .find(|(candidate, _)| candidate.as_bytes() == name)
+            .map(|(_, value)| value.as_str());
+        if value != Some(P14_NS)
+            && (shell_attribute_depends_on_prefix(start, prefix)
+                || descendant_depends_on_prefix(descendants, prefix))
+        {
+            preserved.extend_from_slice(&raw[span_start..cursor]);
+        }
+    }
+    Ok(preserved)
+}
+
+fn inherited_p14_shadow_attributes(
+    inherited: &NamespaceBindings,
+    start: &BytesStart<'_>,
+    xml: &[u8],
+    local_attributes: &[u8],
+) -> Vec<u8> {
+    let descendants = xml
+        .iter()
+        .position(|byte| *byte == b'>')
+        .map_or(&[][..], |index| &xml[index + 1..]);
+    let mut preserved = Vec::new();
+    for (prefix, uri) in inherited.entries() {
+        if !matches!(prefix.as_str(), "p14" | "p14m" | "p14model")
+            || uri == P14_NS
+            || has_raw_namespace_declaration(local_attributes, &prefix)
+            || !(shell_attribute_depends_on_prefix(start, prefix.as_bytes())
+                || descendant_depends_on_prefix(descendants, prefix.as_bytes()))
+        {
+            continue;
+        }
+        let escaped = quick_xml::escape::escape(&uri);
+        preserved.extend_from_slice(format!(" xmlns:{prefix}=\"{escaped}\"").as_bytes());
+    }
+    preserved
+}
+
+fn shell_attribute_depends_on_prefix(start: &BytesStart<'_>, prefix: &[u8]) -> bool {
+    let qualified = [prefix, b":"].concat();
+    start
+        .attributes()
+        .with_checks(false)
+        .filter_map(std::result::Result::ok)
+        .any(|attribute| attribute.key.as_ref().starts_with(&qualified))
+}
+
+fn descendant_depends_on_prefix(xml: &[u8], prefix: &[u8]) -> bool {
+    let qualified = [prefix, b":"].concat();
+    let declaration = [b"xmlns:".as_slice(), prefix].concat();
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut shadowed = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let current = shadowed.last().copied().unwrap_or(false)
+                    || element.attributes().with_checks(false).any(|attribute| {
+                        attribute.is_ok_and(|attribute| attribute.key.as_ref() == declaration)
+                    });
+                if !current && element_uses_prefix(&element, &qualified) {
+                    return true;
+                }
+                shadowed.push(current);
+            }
+            Ok(Event::Empty(element)) => {
+                let current = shadowed.last().copied().unwrap_or(false)
+                    || element.attributes().with_checks(false).any(|attribute| {
+                        attribute.is_ok_and(|attribute| attribute.key.as_ref() == declaration)
+                    });
+                if !current && element_uses_prefix(&element, &qualified) {
+                    return true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                shadowed.pop();
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn element_uses_prefix(element: &BytesStart<'_>, qualified: &[u8]) -> bool {
+    element.name().as_ref().starts_with(qualified)
+        || element
+            .attributes()
+            .with_checks(false)
+            .filter_map(std::result::Result::ok)
+            .any(|attribute| attribute.key.as_ref().starts_with(qualified))
+}
+
+fn raw_uses_namespace_prefix(xml: &[u8], prefix: &str) -> bool {
+    if prefix.is_empty() {
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element) | Event::Empty(element)) => {
+                    if !element.name().as_ref().contains(&b':') {
+                        return true;
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => return false,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+    let qualified = format!("{prefix}:");
+    xml.windows(qualified.len())
+        .any(|window| window == qualified.as_bytes())
+}
+
+fn write_start_with_raw<W: Write>(
+    writer: &mut Writer<W>,
+    start: &BytesStart<'_>,
+    raw_attributes: &[u8],
+    empty: bool,
+) -> Result<()> {
+    writer.get_mut().write_all(b"<")?;
+    writer.get_mut().write_all(start.as_ref())?;
+    writer.get_mut().write_all(raw_attributes)?;
+    writer
+        .get_mut()
+        .write_all(if empty { b"/>" } else { b">" })?;
+    Ok(())
+}
+
+fn capture_misc_event(event: Event<'_>) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(event.into_owned())?;
+    Ok(writer.into_inner())
+}
+
+fn validate_sections(sections: &[Section], slides: &[CT_SlideId]) -> Result<()> {
+    let known = slides
+        .iter()
+        .map(|slide| slide.id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut section_ids = std::collections::HashSet::new();
+    let mut assigned_slides = std::collections::HashSet::new();
+    for section in sections {
+        let id = section
+            .id
+            .as_ref()
+            .ok_or_else(|| invalid_value("section mutation requires an id".to_owned()))?;
+        validate_guid("section", id)?;
+        if !section_ids.insert(id) {
+            return Err(invalid_value(format!("duplicate section id {id}")));
+        }
+        for slide_id in &section.slide_ids {
+            if !known.contains(slide_id) {
+                return Err(invalid_value(format!(
+                    "unknown section slide id {slide_id}"
+                )));
+            }
+            if !assigned_slides.insert(*slide_id) {
+                return Err(invalid_value(format!(
+                    "slide id {slide_id} belongs to more than one section"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_guid(kind: &str, value: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    let valid = bytes.len() == 38
+        && bytes[0] == b'{'
+        && bytes[37] == b'}'
+        && [9, 14, 19, 24]
+            .into_iter()
+            .all(|index| bytes[index] == b'-')
+        && bytes[1..37]
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| [8, 13, 18, 23].contains(&index) || byte.is_ascii_hexdigit());
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid_value(format!(
+            "{kind} id is not a braced GUID: {value}"
+        )))
+    }
 }
 
 fn parse_slide_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedSlideList> {

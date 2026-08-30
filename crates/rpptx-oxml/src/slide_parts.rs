@@ -14,6 +14,9 @@ use crate::namespace::{
     FIXED_MODEL_PREFIXES, NamespaceBindings, P_NS, R_NS, all_attributes, is_fixed_xmlns,
     root_attributes,
 };
+
+const P188_NS: &str = "http://schemas.microsoft.com/office/powerpoint/2018/8/main";
+const COMMENT_EXTENSION_URI: &str = "{6950BFC3-D8DA-4A85-94F7-54DA5524770B}";
 use crate::shape_tree::CT_ShapeTree;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
@@ -178,6 +181,10 @@ impl CT_HeaderFooter {
 
     pub fn footer_enabled(&self) -> bool {
         self.footer.unwrap_or(true)
+    }
+
+    pub fn header_enabled(&self) -> bool {
+        self.header.unwrap_or(true)
     }
 
     pub fn date_time_enabled(&self) -> bool {
@@ -381,6 +388,229 @@ impl CT_Slide {
         {
             self.common_slide_data.background = None;
         }
+    }
+
+    /// Returns the modern-comment relationship referenced by the slide extension.
+    pub fn modern_comment_relationship_id(&self) -> Result<Option<String>> {
+        find_modern_comment_relationship(&self.to_xml()?)
+    }
+
+    /// Adds the schema-final modern-comment extension if it is absent.
+    pub fn ensure_modern_comment_relationship(&mut self, relationship_id: &str) -> Result<()> {
+        let xml = self.to_xml()?;
+        if let Some(existing) = find_modern_comment_relationship(&xml)? {
+            if existing == relationship_id {
+                return Ok(());
+            }
+            return Err(OxmlError::InvalidValue(format!(
+                "slide modern-comment extension references {existing}, not {relationship_id}"
+            )));
+        }
+        let insertion = find_extension_list_closing(&xml)?;
+        let extension = format!(
+            "<p:ext uri=\"{COMMENT_EXTENSION_URI}\"><p188:commentRel xmlns:p188=\"{P188_NS}\" r:id=\"{relationship_id}\"/></p:ext>"
+        );
+        let rewritten = if let Some((start, end)) = insertion {
+            let mut rewritten = Vec::with_capacity(xml.len() + extension.len());
+            rewritten.extend_from_slice(&xml[..start]);
+            if start == end {
+                rewritten.extend_from_slice(extension.as_bytes());
+            } else {
+                let empty = &xml[start..end];
+                let slash = empty
+                    .windows(2)
+                    .rposition(|window| window == b"/>")
+                    .ok_or_else(|| {
+                        OxmlError::InvalidValue("malformed empty p:extLst".to_owned())
+                    })?;
+                let name_end = empty[1..]
+                    .iter()
+                    .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+                    .map(|index| index + 1)
+                    .ok_or_else(|| {
+                        OxmlError::InvalidValue("malformed empty p:extLst".to_owned())
+                    })?;
+                rewritten.extend_from_slice(&empty[..slash]);
+                rewritten.extend_from_slice(b">");
+                rewritten.extend_from_slice(extension.as_bytes());
+                rewritten.extend_from_slice(b"</");
+                rewritten.extend_from_slice(&empty[1..name_end]);
+                rewritten.extend_from_slice(b">");
+            }
+            rewritten.extend_from_slice(&xml[end..]);
+            rewritten
+        } else {
+            let closing = xml
+                .windows(b"</p:sld>".len())
+                .position(|window| window == b"</p:sld>")
+                .ok_or_else(|| OxmlError::MissingElement("closing p:sld".to_owned()))?;
+            let mut rewritten = Vec::with_capacity(xml.len() + extension.len() + 21);
+            rewritten.extend_from_slice(&xml[..closing]);
+            rewritten.extend_from_slice(b"<p:extLst>");
+            rewritten.extend_from_slice(extension.as_bytes());
+            rewritten.extend_from_slice(b"</p:extLst>");
+            rewritten.extend_from_slice(&xml[closing..]);
+            rewritten
+        };
+        *self = Self::from_xml(&rewritten)?;
+        Ok(())
+    }
+}
+
+fn find_modern_comment_relationship(xml: &[u8]) -> Result<Option<String>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![NamespaceBindings::default()];
+    let mut depth = 0usize;
+    let mut root_extension_list_depth = None;
+    let mut comment_extension_depth = None;
+    let mut found = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    OxmlError::InvalidValue("missing comment namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                if depth == 1
+                    && local_name(element.name().as_ref()) == b"extLst"
+                    && scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                {
+                    root_extension_list_depth = Some(depth + 1);
+                } else if root_extension_list_depth == Some(depth)
+                    && local_name(element.name().as_ref()) == b"ext"
+                    && scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                    && extension_uri(&element)?.as_deref() == Some(COMMENT_EXTENSION_URI)
+                {
+                    comment_extension_depth = Some(depth + 1);
+                }
+                if local_name(element.name().as_ref()) == b"commentRel"
+                    && scope.element_uri(element.name().as_ref()) == Some(P188_NS)
+                    && comment_extension_depth == Some(depth)
+                {
+                    let relationship = relationship_id_attribute(&element, &scope)?;
+                    if found.replace(relationship).is_some() {
+                        return Err(duplicate("modern comment relationship"));
+                    }
+                }
+                scopes.push(scope);
+                depth += 1;
+            }
+            Event::Empty(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    OxmlError::InvalidValue("missing comment namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                if local_name(element.name().as_ref()) == b"commentRel"
+                    && scope.element_uri(element.name().as_ref()) == Some(P188_NS)
+                    && comment_extension_depth == Some(depth)
+                {
+                    let relationship = relationship_id_attribute(&element, &scope)?;
+                    if found.replace(relationship).is_some() {
+                        return Err(duplicate("modern comment relationship"));
+                    }
+                }
+            }
+            Event::End(_) => {
+                if depth == 0 || scopes.len() == 1 {
+                    return Err(OxmlError::InvalidValue(
+                        "slide XML has an unmatched closing tag".to_owned(),
+                    ));
+                }
+                if comment_extension_depth == Some(depth) {
+                    comment_extension_depth = None;
+                }
+                if root_extension_list_depth == Some(depth) {
+                    root_extension_list_depth = None;
+                }
+                depth -= 1;
+                scopes.pop();
+            }
+            Event::Eof if depth == 0 && scopes.len() == 1 => return Ok(found),
+            Event::Eof => {
+                return Err(OxmlError::InvalidValue(
+                    "slide XML ended before its root closed".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn extension_uri(element: &BytesStart<'_>) -> Result<Option<String>> {
+    Ok(all_attributes(element)?
+        .into_iter()
+        .find_map(|(name, value)| (name == "uri").then_some(value)))
+}
+
+fn relationship_id_attribute(
+    element: &BytesStart<'_>,
+    namespaces: &NamespaceBindings,
+) -> Result<String> {
+    for (name, value) in all_attributes(element)? {
+        if local_name(name.as_bytes()) == b"id"
+            && namespaces.attribute_uri(name.as_bytes()) == Some(R_NS)
+        {
+            return Ok(value);
+        }
+    }
+    Err(OxmlError::MissingElement(
+        "p188:commentRel requires r:id".to_owned(),
+    ))
+}
+
+fn find_extension_list_closing(xml: &[u8]) -> Result<Option<(usize, usize)>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![NamespaceBindings::default()];
+    let mut depth = 0usize;
+    let mut extension_depth = None;
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    OxmlError::InvalidValue("missing extension namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                depth += 1;
+                if depth == 2
+                    && local_name(element.name().as_ref()) == b"extLst"
+                    && scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                {
+                    extension_depth = Some(depth);
+                }
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                let parent = scopes.last().ok_or_else(|| {
+                    OxmlError::InvalidValue("missing extension namespace scope".to_owned())
+                })?;
+                let scope = parent.with_start(&element)?;
+                if depth == 1
+                    && local_name(element.name().as_ref()) == b"extLst"
+                    && scope.element_uri(element.name().as_ref()) == Some(P_NS)
+                {
+                    return Ok(Some((event_start, reader.buffer_position() as usize)));
+                }
+            }
+            Event::End(_) => {
+                if extension_depth == Some(depth) {
+                    return Ok(Some((event_start, event_start)));
+                }
+                if depth == 0 || scopes.len() == 1 {
+                    return Err(OxmlError::InvalidValue(
+                        "slide XML has an unmatched closing tag".to_owned(),
+                    ));
+                }
+                depth -= 1;
+                scopes.pop();
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 
@@ -739,7 +969,7 @@ fn write_root_start<W: Write>(
 }
 
 impl CT_HeaderFooter {
-    fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+    pub(crate) fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
@@ -777,7 +1007,7 @@ impl CT_HeaderFooter {
         })
     }
 
-    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+    pub(crate) fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         let mut start = BytesStart::new("p:hf");
         push_optional_bool_attribute(&mut start, "sldNum", self.slide_number);
         push_optional_bool_attribute(&mut start, "hdr", self.header);
@@ -1665,6 +1895,11 @@ fn capture_shell_children(
         match reader.read_event_into(&mut buffer)? {
             Event::Start(child) => children.push(0, capture_element(reader, &child)?),
             Event::Empty(child) => children.push(0, capture_empty_element(&child)?),
+            event @ (Event::Text(_)
+            | Event::CData(_)
+            | Event::Comment(_)
+            | Event::PI(_)
+            | Event::DocType(_)) => children.push(0, capture_event(event)?),
             Event::End(end) if local_name(end.name().as_ref()) == root_name => return Ok(children),
             Event::Eof => {
                 return Err(OxmlError::MissingElement(
@@ -1699,6 +1934,12 @@ fn push_attributes(start: &mut BytesStart<'_>, attributes: &RawAttributes) {
     for (name, value) in attributes {
         start.push_attribute((name.as_str(), value.as_str()));
     }
+}
+
+fn capture_event(event: Event<'_>) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(event.into_owned())?;
+    Ok(writer.into_inner())
 }
 
 fn emit_raw<'a, W: Write>(
