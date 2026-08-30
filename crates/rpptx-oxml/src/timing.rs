@@ -4,6 +4,7 @@
 //! remains the serialization source so unsupported siblings, attributes, and
 //! relationship-bearing extensions survive byte for byte.
 
+use std::collections::HashMap;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -202,6 +203,7 @@ pub struct TimingBuild {
 pub struct CT_Timing {
     nodes: Vec<TimingNode>,
     builds: Vec<TimingBuild>,
+    condition_target_presence: HashMap<(u32, bool, usize), bool>,
     raw_xml: Vec<u8>,
     inherited_namespaces: Vec<(String, String)>,
 }
@@ -228,9 +230,12 @@ impl CT_Timing {
                     let namespaces = inherited.with_start(&start)?;
                     validate_element(&start, &namespaces, b"timing")?;
                     let (nodes, builds) = parse_timing_children(&mut reader, &namespaces)?;
+                    let condition_target_presence =
+                        collect_condition_target_presence(xml, inherited)?;
                     return Ok(Self {
                         nodes,
                         builds,
+                        condition_target_presence,
                         raw_xml: xml.to_vec(),
                         inherited_namespaces: inherited.entries(),
                     });
@@ -241,6 +246,7 @@ impl CT_Timing {
                     return Ok(Self {
                         nodes: Vec::new(),
                         builds: Vec::new(),
+                        condition_target_presence: HashMap::new(),
                         raw_xml: xml.to_vec(),
                         inherited_namespaces: inherited.entries(),
                     });
@@ -266,6 +272,18 @@ impl CT_Timing {
 
     pub fn builds(&self) -> &[TimingBuild] {
         &self.builds
+    }
+
+    /// Returns whether one parsed common-node condition contains a target element.
+    pub fn condition_has_explicit_target(
+        &self,
+        node_id: u32,
+        end_condition: bool,
+        index: usize,
+    ) -> Option<bool> {
+        self.condition_target_presence
+            .get(&(node_id, end_condition, index))
+            .copied()
     }
 
     /// Changes one common time-node duration without rewriting unrelated XML.
@@ -1232,6 +1250,153 @@ fn parse_condition_list(
                 return Ok(conditions);
             }
             Event::Eof => return Ok(conditions),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_condition_target_presence(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<HashMap<(u32, bool, usize), bool>> {
+    let mut presence = HashMap::new();
+    collect_condition_target_presence_in_element(xml, inherited, &mut presence)?;
+    Ok(presence)
+}
+
+fn collect_condition_target_presence_in_element(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    presence: &mut HashMap<(u32, bool, usize), bool>,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    let mut node_id = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                let namespaces = inherited.with_start(&start)?;
+                if namespaces.element_uri(start.name().as_ref()) == Some(P_NS)
+                    && local_name(start.name().as_ref()) == b"cTn"
+                {
+                    let attrs = all_attributes(&start)?;
+                    node_id = attribute(&attrs, "id").and_then(|value| value.parse().ok());
+                }
+                root = Some(namespaces);
+            }
+            Event::Start(child) => {
+                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
+                let local = local_name(child.name().as_ref()).to_vec();
+                let raw = capture_element(&mut reader, &child)?;
+                if let Some(node_id) = node_id
+                    && namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && matches!(local.as_slice(), b"stCondLst" | b"endCondLst")
+                {
+                    collect_condition_list_target_presence(
+                        &raw,
+                        root.as_ref().expect("root set"),
+                        node_id,
+                        local == b"endCondLst",
+                        presence,
+                    )?;
+                } else {
+                    collect_condition_target_presence_in_element(
+                        &raw,
+                        root.as_ref().expect("root set"),
+                        presence,
+                    )?;
+                }
+            }
+            Event::Empty(_) => {}
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_condition_list_target_presence(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    node_id: u32,
+    end_condition: bool,
+    presence: &mut HashMap<(u32, bool, usize), bool>,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    let mut index = 0;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                root = Some(inherited.with_start(&start)?);
+            }
+            Event::Start(child) => {
+                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
+                let raw = capture_element(&mut reader, &child)?;
+                if namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cond"
+                {
+                    presence.insert(
+                        (node_id, end_condition, index),
+                        condition_fragment_has_explicit_target(
+                            &raw,
+                            root.as_ref().expect("root set"),
+                        )?,
+                    );
+                    index += 1;
+                }
+            }
+            Event::Empty(child) => {
+                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
+                if namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cond"
+                {
+                    presence.insert((node_id, end_condition, index), false);
+                    index += 1;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn condition_fragment_has_explicit_target(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<bool> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                root = Some(inherited.with_start(&start)?);
+            }
+            Event::Start(child) => {
+                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
+                let explicit = namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && (local_name(child.name().as_ref()) == b"tgtEl"
+                        || condition_direct_target_from_start(&child, &namespaces)?.is_some());
+                let _ = capture_element(&mut reader, &child)?;
+                if explicit {
+                    return Ok(true);
+                }
+            }
+            Event::Empty(child) => {
+                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
+                if namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && (local_name(child.name().as_ref()) == b"tgtEl"
+                        || condition_direct_target_from_start(&child, &namespaces)?.is_some())
+                {
+                    return Ok(true);
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(false),
             _ => {}
         }
         buffer.clear();

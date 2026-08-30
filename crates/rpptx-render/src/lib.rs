@@ -21,6 +21,7 @@ use rpptx_oxml::notes_parts::CT_NotesSlide;
 use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster};
 
 mod text;
+pub mod timeline;
 
 /// The source part whose relationship map owns an identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -300,6 +301,22 @@ fn layout_slide_with_fonts_and_text_directions(
     font_manager: &mut FontManager,
     text_directions: Option<&[Vec<Vec<oxml_layout::TextDirection>>]>,
 ) -> Result<PageFrame, RenderInputError> {
+    layout_slide_with_fonts_text_directions_and_states(
+        input,
+        index,
+        font_manager,
+        text_directions,
+        None,
+    )
+}
+
+pub(crate) fn layout_slide_with_fonts_text_directions_and_states(
+    input: &RenderInput,
+    index: usize,
+    font_manager: &mut FontManager,
+    text_directions: Option<&[Vec<Vec<oxml_layout::TextDirection>>]>,
+    shape_states: Option<&[rpptx_layout::timeline::EvaluatedShapeState]>,
+) -> Result<PageFrame, RenderInputError> {
     let slide = input
         .slides
         .get(index)
@@ -349,6 +366,7 @@ fn layout_slide_with_fonts_and_text_directions(
             .iter()
             .enumerate()
             .map(|(shape_index, shape)| {
+                let state = shape_states.and_then(|states| states.get(shape_index));
                 lower_shape(
                     input,
                     shape,
@@ -358,6 +376,35 @@ fn layout_slide_with_fonts_and_text_directions(
                         .and_then(|directions| directions.get(shape_index))
                         .map(Vec::as_slice),
                 )
+                .map(|mut element| {
+                    let Some(state) = state else {
+                        return element;
+                    };
+                    let opacity = if state.visible {
+                        f64::from(state.opacity.clamp(0.0, 1.0))
+                    } else {
+                        0.0
+                    };
+                    if let PositionedElement::Group(group) = &mut element {
+                        group.opacity *= opacity;
+                        for clip in
+                            state.local_clip_paths((shape.bounds.width, shape.bounds.height))
+                        {
+                            if group.clip.is_none() {
+                                group.clip = Some(clip);
+                            } else {
+                                group.children = vec![PositionedElement::Group(GroupElement {
+                                    transform: Transform::IDENTITY,
+                                    clip: Some(clip),
+                                    opacity: 1.0,
+                                    effects: Vec::new(),
+                                    children: std::mem::take(&mut group.children),
+                                })];
+                            }
+                        }
+                    }
+                    element
+                })
             })
             .collect::<Result<Vec<_>, _>>()?,
     );
@@ -1981,6 +2028,69 @@ mod tests {
             panic!("shape should lower to one group");
         };
         group
+    }
+
+    #[test]
+    fn timeline_lowering_retains_hidden_identity_slots_and_uses_shape_local_clips() {
+        let first = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::WHITE)),
+            None,
+        );
+        let second = shape(
+            Rect {
+                x: 60.0,
+                y: 20.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::BLACK)),
+            None,
+        );
+        let input = render_input(vec![slide((100.0, 60.0), vec![first, second])]);
+        let mut hidden_state = rpptx_layout::timeline::EvaluatedShapeState::default();
+        hidden_state.visible = false;
+        hidden_state.clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.25,
+            height: 1.0,
+        });
+        let states = [
+            hidden_state,
+            rpptx_layout::timeline::EvaluatedShapeState::default(),
+        ];
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let page = layout_slide_with_fonts_text_directions_and_states(
+            &input,
+            0,
+            &mut fonts,
+            None,
+            Some(&states),
+        )
+        .unwrap();
+
+        assert_eq!(page.elements.len(), 2);
+        let hidden = only_group(&page.elements[0]);
+        assert_eq!(hidden.opacity, 0.0);
+        assert_eq!(hidden.transform.e, 10.0);
+        assert_eq!(
+            hidden.clip,
+            Some(Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 20.0,
+            }))
+        );
+        assert_eq!(only_group(&page.elements[1]).opacity, 1.0);
     }
 
     #[test]

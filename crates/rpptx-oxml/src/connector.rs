@@ -131,6 +131,16 @@ impl CT_ConnectionShape {
             .and_then(|(_, value)| value.parse().ok())
     }
 
+    pub(crate) fn non_visual_name(&self) -> Option<&str> {
+        self.raw
+            .non_visual
+            .drawing_properties
+            .raw_attributes
+            .iter()
+            .find(|(name, _)| name == "name")
+            .map(|(_, value)| value.as_str())
+    }
+
     /// Changes the producer-facing non-visual connector name.
     pub fn set_name(&mut self, name: &str) -> Result<()> {
         let attributes = &mut self.raw.non_visual.drawing_properties.raw_attributes;

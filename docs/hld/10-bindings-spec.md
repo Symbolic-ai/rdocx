@@ -732,10 +732,41 @@ mutation methods change one common-node duration, transition speed, or existing
 morph option atomically while retained unsupported XML remains the
 serialization source.
 
-This is an additive pre-1.0 native Rust API. It adds no facade execution API,
-Python method, WASM method, CLI option, production dependency, or feature flag.
-Unsupported timing behaviours remain explicit raw nodes rather than acquiring
-a second authoring surface.
+The low-level model also exposes exactly two additive queries used by the
+timeline resolver:
+
+```rust
+pub fn ShapeTreeChild::non_visual_name(&self) -> Option<String>;
+pub fn CT_Timing::condition_has_explicit_target(
+    &self,
+    node_id: u32,
+    end_condition: bool,
+    index: usize,
+) -> Option<bool>;
+```
+
+The published `rpptx-layout` crate adds `TimelinePosition`,
+`EvaluatedShapeState`, `EvaluatedTransition`, `EvaluatedFrameState`,
+`ResolvedShapeIdentity`, `ResolvedTimelineSlide`, and `evaluate_timeline`.
+`rpptx-render::timeline` lowers an evaluated slide and composes ordinary and
+morph transitions. The native facade adds one deterministic entry point:
+
+```rust
+pub fn Presentation::render_timeline_deterministic(
+    &self,
+    slide_index: usize,
+    position: TimelinePosition,
+    outgoing_slide_index: Option<usize>,
+) -> Result<DeterministicTimelineFrame>;
+```
+
+`DeterministicTimelineFrame` returns the composed `PageFrame`, the exact
+`EvaluatedFrameState` used for that page, and ordered diagnostics. Invalid
+slide indices and non-finite evaluated state fail closed. This remains an
+additive pre-1.0 native Rust API. It adds no Python method, WASM method, CLI
+option, production dependency, or feature flag. Existing static render methods
+do not enter the timeline path. Unsupported timing behaviours remain explicit
+raw nodes rather than acquiring a second authoring surface.
 
 ## Packaging
 

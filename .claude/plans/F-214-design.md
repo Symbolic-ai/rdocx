@@ -1,6 +1,6 @@
 # F-214, Timeline evaluation and transition rendering
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S60
 **Size**: L
 **Depends on**: F-213
@@ -178,19 +178,19 @@ unexplained and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Integrate and verify F-213, then reconcile exact type names and supported
+- [x] Integrate and verify F-213, then reconcile exact type names and supported
   metadata against its completed plan.
-- [ ] Add evaluator tests before implementation.
-- [ ] Implement deterministic sequence, parallel, click, duration, and fill
+- [x] Add evaluator tests before implementation.
+- [x] Implement deterministic sequence, parallel, click, duration, and fill
   evaluation.
-- [ ] Map slide and group shape ids to resolved descendants.
-- [ ] Apply entrance, exit, emphasis, and motion state through the additive
+- [x] Map slide and group shape ids to resolved descendants.
+- [x] Apply entrance, exit, emphasis, and motion state through the additive
   resolver path.
-- [ ] Compose cut, fade, wipe, push, and zoom transitions.
-- [ ] Implement explicit-name bounded morph correlation and crossfade fallback.
-- [ ] Add the deterministic facade frame API without changing static methods.
-- [ ] Add the pinned PowerPoint differential and static-output regression.
-- [ ] Run focused `rpptx-layout`, `rpptx-render`, and `rpptx` checks plus every
+- [x] Compose cut, fade, wipe, push, and zoom transitions.
+- [x] Implement explicit-name bounded morph correlation and crossfade fallback.
+- [x] Add the deterministic facade frame API without changing static methods.
+- [x] Add the pinned PowerPoint differential and static-output regression.
+- [x] Run focused `rpptx-layout`, `rpptx-render`, and `rpptx` checks plus every
   routed rider.
 
 ## Open questions

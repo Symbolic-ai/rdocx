@@ -44,9 +44,13 @@ pub use oxml_opc::{
 };
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 #[cfg(feature = "render")]
+use rpptx_layout::timeline::ResolvedTimelineSlide;
+#[cfg(feature = "render")]
+pub use rpptx_layout::timeline::{EvaluatedFrameState, TimelinePosition};
+#[cfg(feature = "render")]
 use rpptx_layout::{
-    ChartResource, FlattenedItem, ResolveCtx, ScopedChartResources, ScopedHyperlinkTargets,
-    ScopedMediaIds,
+    ChartResource, FlattenedItem, ResolveCtx, ResolvedSlideTextDirections, ScopedChartResources,
+    ScopedHyperlinkTargets, ScopedMediaIds,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
@@ -65,6 +69,10 @@ use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout};
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
 #[cfg(feature = "render")]
+use rpptx_render::timeline::{
+    compose_morph_transition, compose_transition, layout_timeline_slide_deterministic,
+};
+#[cfg(feature = "render")]
 use rpptx_render::{
     MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions,
 };
@@ -73,6 +81,15 @@ use thiserror::Error;
 #[cfg(feature = "default-template")]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
 const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
+
+/// One deterministic evaluated slide frame returned by the native facade.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug)]
+pub struct DeterministicTimelineFrame {
+    pub page: PageFrame,
+    pub state: EvaluatedFrameState,
+    pub diagnostics: Vec<oxml_layout::Diagnostic>,
+}
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
 
@@ -709,6 +726,87 @@ impl Presentation {
     #[cfg(feature = "render")]
     pub fn render_deterministic(&self) -> Result<(RenderInput, LayoutResult)> {
         assemble_render_input(&self.staged_package(false)?)
+    }
+
+    /// Evaluates and renders one slide at an explicit slide-local timestamp.
+    ///
+    /// `outgoing_slide_index` supplies the zero-based previous slide for a
+    /// two-slide transition. Static rendering remains on its independent path.
+    #[cfg(feature = "render")]
+    pub fn render_timeline_deterministic(
+        &self,
+        slide_index: usize,
+        position: TimelinePosition,
+        outgoing_slide_index: Option<usize>,
+    ) -> Result<DeterministicTimelineFrame> {
+        let assembly = assemble_render_input_inner(
+            &self.staged_package(false)?,
+            Some(TimelineRequest {
+                slide_index,
+                outgoing_slide_index,
+                position,
+            }),
+        )?;
+        let incoming = assembly
+            .incoming
+            .as_ref()
+            .ok_or_else(|| render_failure(format!("slide index {slide_index} is out of bounds")))?;
+        if let Some(index) = outgoing_slide_index
+            && assembly.outgoing.is_none()
+        {
+            return Err(Error::UnknownSlideIndex {
+                index,
+                slide_count: self.slides.len(),
+            });
+        }
+        let incoming_page = layout_timeline_slide_deterministic(
+            &assembly.input,
+            slide_index,
+            incoming,
+            assembly.incoming_directions.as_ref(),
+        )
+        .map_err(|error| render_failure(error.to_string()))?;
+        let outgoing_page = match (outgoing_slide_index, assembly.outgoing.as_ref()) {
+            (Some(index), Some(outgoing)) => Some(
+                layout_timeline_slide_deterministic(
+                    &assembly.input,
+                    index,
+                    outgoing,
+                    assembly.outgoing_directions.as_ref(),
+                )
+                .map_err(|error| render_failure(error.to_string()))?,
+            ),
+            _ => None,
+        };
+        let outgoing_page = outgoing_page.as_ref();
+        let transition = incoming.state.transition.as_ref();
+        let composed = if transition.is_some_and(|transition| {
+            matches!(
+                transition.effect,
+                rpptx_oxml::timing::TransitionEffect::Morph
+            )
+        }) {
+            match (outgoing_page, assembly.outgoing.as_ref(), transition) {
+                (Some(page), Some(outgoing), Some(transition)) => {
+                    compose_morph_transition(incoming_page, incoming, page, outgoing, transition)
+                }
+                _ => compose_transition(incoming_page, outgoing_page, transition),
+            }
+        } else {
+            compose_transition(incoming_page, outgoing_page, transition)
+        };
+        let mut diagnostics = incoming.slide.diagnostics.clone();
+        diagnostics.extend(incoming.state.diagnostics.clone());
+        if let Some(outgoing) = assembly.outgoing.as_ref() {
+            diagnostics.extend(outgoing.slide.diagnostics.clone());
+            diagnostics.extend(outgoing.state.diagnostics.clone());
+        }
+        diagnostics.extend(composed.diagnostics);
+        Ok(DeterministicTimelineFrame {
+            page: composed.page,
+            state: incoming.state.clone(),
+            diagnostics,
+        })
     }
 
     /// Renders the current presentation to a complete deterministic PDF.
@@ -4376,6 +4474,33 @@ fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &
 
 #[cfg(feature = "render")]
 fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutResult)> {
+    let assembly = assemble_render_input_inner(package, None)?;
+    Ok((assembly.input, assembly.layout))
+}
+
+#[cfg(feature = "render")]
+#[derive(Clone, Copy)]
+struct TimelineRequest {
+    slide_index: usize,
+    outgoing_slide_index: Option<usize>,
+    position: TimelinePosition,
+}
+
+#[cfg(feature = "render")]
+struct RenderAssembly {
+    input: RenderInput,
+    layout: LayoutResult,
+    incoming: Option<ResolvedTimelineSlide>,
+    incoming_directions: Option<ResolvedSlideTextDirections>,
+    outgoing: Option<ResolvedTimelineSlide>,
+    outgoing_directions: Option<ResolvedSlideTextDirections>,
+}
+
+#[cfg(feature = "render")]
+fn assemble_render_input_inner(
+    package: &OpcPackage,
+    timeline_request: Option<TimelineRequest>,
+) -> Result<RenderAssembly> {
     let presentation_part = package
         .main_document_part()
         .ok_or(Error::MissingMainDocument)?;
@@ -4401,7 +4526,11 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
-    for slide_id in &presentation.slide_ids {
+    let mut incoming = None;
+    let mut incoming_directions = None;
+    let mut outgoing = None;
+    let mut outgoing_directions = None;
+    for (slide_index, slide_id) in presentation.slide_ids.iter().enumerate() {
         let slide_relationship = presentation_relationships
             .get_by_id(&slide_id.relationship_id)
             .ok_or_else(|| Error::MissingRelationship {
@@ -4463,15 +4592,60 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
             [&slide_part, &layout_part, &master_part],
             &mut media,
         )?;
-        let (resolved, slide_text_directions) = context
-            .resolve_slide_with_chart_resources_and_text_directions(
-                size,
-                &slide_media,
-                &slide_hyperlinks,
-                &slide_charts,
-                &mut font_manager,
-            )
-            .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+        let is_incoming =
+            timeline_request.is_some_and(|request| request.slide_index == slide_index);
+        let is_outgoing = timeline_request
+            .and_then(|request| request.outgoing_slide_index)
+            .is_some_and(|index| index == slide_index);
+        let (resolved, slide_text_directions) = if is_incoming {
+            let request = timeline_request.expect("incoming request exists");
+            let (timeline, directions) = context
+                .resolve_slide_with_chart_resources_and_text_directions_at(
+                    size,
+                    &slide_media,
+                    &slide_hyperlinks,
+                    &slide_charts,
+                    &mut font_manager,
+                    request.position,
+                )
+                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+            let resolved = timeline.slide.clone();
+            incoming_directions = Some(directions.clone());
+            incoming = Some(timeline);
+            (resolved, directions)
+        } else if is_outgoing {
+            let (timeline, directions) = context
+                .resolve_slide_with_chart_resources_and_text_directions_at(
+                    size,
+                    &slide_media,
+                    &slide_hyperlinks,
+                    &slide_charts,
+                    &mut font_manager,
+                    TimelinePosition {
+                        elapsed_ms: u64::MAX,
+                        click_count: u32::MAX,
+                    },
+                )
+                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+            let resolved = timeline.slide.clone();
+            outgoing_directions = Some(directions.clone());
+            outgoing = Some(timeline);
+            (resolved, directions)
+        } else {
+            context
+                .resolve_slide_with_chart_resources_and_text_directions(
+                    size,
+                    &slide_media,
+                    &slide_hyperlinks,
+                    &slide_charts,
+                    &mut font_manager,
+                )
+                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?
+        };
+        if is_outgoing && is_incoming {
+            outgoing = incoming.clone();
+            outgoing_directions = incoming_directions.clone();
+        }
         if source_count != resolved.shapes.len() {
             return Err(render_failure(format!(
                 "{slide_part}: dropped bounded source shape, source {source_count}, resolved {}",
@@ -4501,7 +4675,14 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
             input.slides.len()
         )));
     }
-    Ok((input, layout))
+    Ok(RenderAssembly {
+        input,
+        layout,
+        incoming,
+        incoming_directions,
+        outgoing,
+        outgoing_directions,
+    })
 }
 
 #[cfg(feature = "render")]

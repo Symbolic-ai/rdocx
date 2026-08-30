@@ -77,6 +77,10 @@ fn timing_sequences_parallel_groups_triggers_and_effects_round_trip_in_schema_or
         TimingTarget::TimeNode(3)
     );
     assert_eq!(sequence.next_conditions[0].event, Some(TimingEvent::OnNext));
+    assert_eq!(
+        sequence.next_conditions[0].target,
+        TimingTarget::Unsupported
+    );
     let TimingNode::Effect(effect) = &sequence.common.children[0] else {
         panic!("expected entrance effect");
     };
@@ -228,12 +232,65 @@ fn timing_targets_and_attribute_names_use_direct_expanded_name_boundaries() {
         root.common.start_conditions[0].target,
         TimingTarget::Unsupported
     );
+    assert_eq!(
+        timing.condition_has_explicit_target(1, false, 0),
+        Some(false)
+    );
     let TimingNode::Set(set) = &root.common.children[0] else {
         panic!("expected set node");
     };
     assert_eq!(set.target, TimingTarget::Unsupported);
     assert_eq!(set.attribute_name.as_deref(), Some("style.visibility"));
     assert_eq!(timing.to_xml(), xml.as_bytes());
+}
+
+#[test]
+fn timing_condition_target_presence_preserves_the_f213_projection() {
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:q="{P_NS}"><p:tnLst><p:par><p:cTn id="7"><p:stCondLst><p:cond delay="0"/><q:cond delay="1"></q:cond><p:cond delay="2"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond><p:cond delay="3"><p:rtn val="all"/></p:cond><p:cond delay="4"><p:tgtEl><p:sndTgt/></p:tgtEl></p:cond></p:stCondLst><p:endCondLst><p:cond delay="5"/><p:cond delay="6"><p:rtn val="all"/></p:cond></p:endCondLst></p:cTn></p:par></p:tnLst></p:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    let TimingNode::Parallel(root) = &timing.nodes()[0] else {
+        panic!("expected parallel timing node")
+    };
+
+    assert_eq!(
+        root.common
+            .start_conditions
+            .iter()
+            .map(|condition| &condition.target)
+            .collect::<Vec<_>>(),
+        vec![
+            &TimingTarget::Unsupported,
+            &TimingTarget::Unsupported,
+            &TimingTarget::Slide,
+            &TimingTarget::Unsupported,
+            &TimingTarget::Unsupported,
+        ]
+    );
+    assert_eq!(
+        (0..5)
+            .map(|index| timing.condition_has_explicit_target(7, false, index))
+            .collect::<Vec<_>>(),
+        vec![Some(false), Some(false), Some(true), Some(true), Some(true)]
+    );
+    assert_eq!(
+        (0..2)
+            .map(|index| timing.condition_has_explicit_target(7, true, index))
+            .collect::<Vec<_>>(),
+        vec![Some(false), Some(true)]
+    );
+    assert_eq!(timing.condition_has_explicit_target(7, false, 5), None);
+    assert_eq!(timing.condition_has_explicit_target(8, false, 0), None);
+    assert_eq!(timing.to_xml(), xml.as_bytes());
+    let mut mutated = timing.clone();
+    mutated
+        .set_node_duration(7, TimingDuration::Finite(900))
+        .unwrap();
+    assert_eq!(
+        mutated.condition_has_explicit_target(7, false, 3),
+        Some(true)
+    );
 }
 
 #[test]
@@ -248,6 +305,10 @@ fn unsupported_direct_targets_consume_choices_and_direct_cdata_names_are_typed()
     assert_eq!(
         root.common.start_conditions[0].target,
         TimingTarget::Unsupported
+    );
+    assert_eq!(
+        timing.condition_has_explicit_target(1, false, 0),
+        Some(true)
     );
     let TimingNode::Set(set) = &root.common.children[0] else {
         panic!("expected set node");
@@ -1948,6 +2009,23 @@ fn alternate_content_without_fallback_preserves_choices_and_selects_none() {
             .unwrap()
             .windows(raw.len())
             .any(|part| part == raw.as_bytes())
+    );
+}
+
+#[test]
+fn alternate_content_chart_choice_exposes_non_visual_identity() {
+    let raw = r#"<mc:AlternateContent><mc:Choice Requires="p14"><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="42" name="!!Chart &amp; Data"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic></p:graphicFrame></mc:Choice><mc:Fallback/></mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let wrapped = &tree.children[0];
+
+    assert_eq!(wrapped.non_visual_id(), Some(42));
+    assert_eq!(wrapped.non_visual_name().as_deref(), Some("!!Chart & Data"));
+    assert_eq!(
+        tree.to_xml().unwrap(),
+        CT_ShapeTree::from_xml(&tree.to_xml().unwrap())
+            .unwrap()
+            .to_xml()
+            .unwrap()
     );
 }
 

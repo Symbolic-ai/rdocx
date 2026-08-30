@@ -580,6 +580,16 @@ remains the serialization source, and supported mutations replace only their
 own attribute value bytes. Unsupported siblings, owner attributes, namespace
 bindings, and relationship-bearing content therefore remain byte-identical.
 
+Two narrow queries support the timeline resolver without adding a parallel XML
+model. `ShapeTreeChild::non_visual_name` returns the selected child's cached
+`p:cNvPr/@name`, including a selected chart graphic frame inside
+`mc:AlternateContent`. `CT_Timing::condition_has_explicit_target` reports
+whether one projected start or end condition carried any explicit target. The
+second query distinguishes an absent target from an explicitly unsupported
+target without changing the public `TimingCondition` fields. Both queries read
+the existing namespace-aware projection, and the captured subtree remains the
+serialization source.
+
 Readers reject duplicate or out-of-order modelled timing children. One narrow
 PowerPoint compatibility case accepts an attribute-free empty layout
 `p:transition` immediately before `p:hf`, keeps both values typed, and writes

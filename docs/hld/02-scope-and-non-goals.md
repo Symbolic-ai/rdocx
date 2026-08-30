@@ -152,6 +152,14 @@ after v1 leans on that rather than away from it.
 These entries are decisions, not corrections. The v1 positions were right when
 they were written.
 
+Bounded timeline execution is additive to ordinary presentation rendering.
+Native callers select a slide-local elapsed time and click count, then receive
+one deterministic page frame, the evaluated frame state, and ordered
+diagnostics. Supported entrance, exit, emphasis, motion, transition, and
+explicit-name morph cases execute without making timing a prerequisite for
+static rendering. Unsupported or malformed timing stays visible through
+diagnostics and does not acquire guessed behavior.
+
 ### Conditional expansion
 
 `oxml-sml` remains chart-workbook support rather than a spreadsheet library.
