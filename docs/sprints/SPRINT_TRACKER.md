@@ -347,6 +347,8 @@ defended.
 | F-X069 | S58 | S | 1 | 1 | 2026-08-29 | Published and verified the complete seven-package rdocx 0.11.1 recovery family |
 | F-X070 | S58 | S | 1 | 1 | 2026-08-29 | Yanked exactly the two incomplete stable 0.11.0 registry entries after verified 0.11.1 recovery |
 | F-X031 | S58 | S | 1 | 1 | 2026-08-29 | Required the aggregate CI gate on the default branch with a narrow administrator bypass and two live pull request proofs |
+| F-217 | S59 | L | 4 | 1 | 2026-08-30 | Added relationship-safe modern comments, replies, sections, notes headers and footers, and handout settings |
+| F-221 | S59 | M | 2 | 1 | 2026-08-30 | Added default-off native presentation encryption and signatures with current-state invalidation |
 
 ## Velocity
 

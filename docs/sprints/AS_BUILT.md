@@ -10191,3 +10191,84 @@ gates.
 `CI gate` check identity. A future workflow rename must update the ruleset in a
 separately reviewed operational story. Use `/close-sprint` for the reviewed
 administrator-bypass push to `main`.
+
+### F-217, Presentation collaboration and navigation model
+
+**Sprint.** S59
+**Completed.** 2026-08-30
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The presentation facade now owns relationship-safe modern
+comment authors, comments, replies, ordered sections, slide membership, typed
+notes header and footer settings, and typed handout header and footer settings.
+Ordered mutations allocate collision-free package identities, validate the
+complete graph before commit, and preserve unsupported XML and package content.
+
+**Non-obvious choices.** Modern threaded comments are typed while legacy
+comments remain opaque. Mutable collaboration operations use caller-supplied
+identities and timestamps. Notes and handout roots retain byte-exact sidecars,
+namespace bindings, lexical attributes, and schema-order boundaries.
+
+**Deviations from the design plan.** None. Twelve microscope passes hardened
+namespace shadow replay, raw-event placement, relationship ownership, collision
+handling, and atomic failure paths before the final clean review.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named gate
+`modern_comments_replies_sections_and_handout_settings_survive_ordered_mutation_save_and_reopen`
+passed. The affected `oxml-opc`, `rpptx-oxml`, and `rpptx` suites passed,
+including 116 PresentationML integration tests and the 50-deck corpus gates.
+Full integrated verification passed with the workspace, no-default, WASM,
+documentation, packaging, and supply-chain gates.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve typed collaboration graph ownership and
+fail closed when fixed-prefix namespace shadows cannot be replayed safely. Do
+not reinterpret legacy comments as the modern threaded model.
+
+### F-221, Presentation encryption and signatures
+
+**Sprint.** S59
+**Completed.** 2026-08-30
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Native `rpptx::Presentation` callers can open and write
+Agile-encrypted presentations, inspect and verify package signatures, and sign
+the current presentation state. Both security features forward to the shared
+`oxml-opc` implementation and remain disabled by default.
+
+**Non-obvious choices.** Signature parts remain inspectable after mutation,
+but verification stages current typed state and reports the retained signature
+as invalid. Untouched signed content preserves producer bytes. Ordinary unsigned
+serialization retains its established canonical modeled-part output, while
+security operations use selective source-byte staging.
+
+**Deviations from the design plan.** Integrated verification found that the
+first selective-staging implementation also changed ordinary notes output. A
+separate amendment split ordinary and security staging policies and added a
+source-built notes regression before the full gate was rerun.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Encryption round trip, atomic failure, trusted-certificate signing,
+complete coverage, stale-signature invalidation, untouched producer-signature
+validity, ordinary notes staging, and feature-isolation gates passed. PowerPoint
+16.104 build 16.104.25121423 opened candidate SHA-256
+`a0d33171c63ec084231daeef3b35718f5a2d709a5c92c9c0e2017ccaf9fa52d6`
+with the correct password and rejected a wrong password. Full integrated
+verification passed, and all package archives remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep `agile-encryption` and
+`digital-signatures` absent from default, Python, WASM, and CLI graphs. Any new
+mutable presentation handle must participate in current-state signature
+invalidation without canonicalizing untouched signed producer bytes.

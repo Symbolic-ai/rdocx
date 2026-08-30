@@ -31,8 +31,8 @@ unsupported executable payloads without running them.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-217 | Presentation collaboration and navigation model | L | in-progress | codex |
-| F-221 | Presentation encryption and signatures | M | in-progress | codex |
+| F-217 | Presentation collaboration and navigation model | L | done | - |
+| F-221 | Presentation encryption and signatures | M | done | - |
 
 ## Sequencing note
 
