@@ -126,6 +126,17 @@ output, font, and line modules hold page frames, positioned elements, glyph
 runs, colours, fonts, and owned line parameters, none of which name a document
 format.
 
+Presentation timeline execution keeps the same layered boundary.
+`rpptx-oxml` projects typed timing, transitions, target presence, and
+non-visual names without executing them. `rpptx-layout` owns pure slide-local
+evaluation, stable source identity, group-space geometry, and resolved frame
+state. `rpptx-render` lowers that state through the existing page path and
+composes page-frame groups for transitions and bounded morph. The `rpptx`
+facade assembles incoming and optional outgoing slides and returns the page,
+state, and diagnostics together. Static resolver and renderer entry points do
+not pass through the timeline path, and shared output backends remain unaware
+of PresentationML timing.
+
 The same boundary owns multilingual text mechanics. Rich segments retain
 logical text and source ranges while carrying script, language, direction,
 bidi level, glyph clusters, and two-dimensional advances and offsets. Script

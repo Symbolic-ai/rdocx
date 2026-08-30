@@ -4,18 +4,56 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[test]
+fn slide_transitions_and_morph_metadata_survive_mutation_save_and_reopen() {
+    use rpptx_oxml::slide_parts::CT_Slide;
+    use rpptx_oxml::timing::{TransitionEffect, TransitionSpeed};
+
+    let slide_xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:mc="{MC_NS}" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:f213" mc:Ignorable="p14 p159"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><x:before/><mc:AlternateContent x:wrapper='A&#x20;B'><mc:Choice Requires="p159"><p:transition x:owner='C&#x20;D' spd='slow' p14:dur="725" advClick="1" advTm="4000"><x:morph option="foreign"/><p159:morph r:id='rId&#x37;' option='byObject'><x:keep/></p159:morph></p:transition></mc:Choice><mc:Fallback><p:transition spd="slow"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent><p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite"/></p:par></p:tnLst></p:timing><x:after/></p:sld>"#
+    );
+    let mut slide = CT_Slide::from_xml(slide_xml.as_bytes()).unwrap();
+    let transition = slide.transition.as_mut().unwrap();
+    assert_eq!(transition.effect, Some(TransitionEffect::Morph));
+    assert_eq!(transition.duration_ms, Some(725));
+    transition.set_speed(TransitionSpeed::Fast).unwrap();
+    transition.set_morph_option("byWord").unwrap();
+    let expected_slide = slide.to_xml().unwrap();
+
+    let mut package = fixture_package();
+    package.set_part(SLIDE_ONE_PART, expected_slide.clone());
+    let reopened_package = OpcPackage::from_reader(Cursor::new(package_bytes(package))).unwrap();
+    let reopened = CT_Slide::from_xml(reopened_package.get_part(SLIDE_ONE_PART).unwrap()).unwrap();
+    let transition = reopened.transition.unwrap();
+    assert_eq!(transition.speed, Some(TransitionSpeed::Fast));
+    assert_eq!(transition.effect, Some(TransitionEffect::Morph));
+    assert_eq!(transition.duration_ms, Some(725));
+    assert_eq!(transition.morph.unwrap().option.as_deref(), Some("byWord"));
+    let written = String::from_utf8(expected_slide).unwrap();
+    assert!(written.contains(r#"<x:morph option="foreign"/>"#));
+    assert!(written.contains("<mc:AlternateContent x:wrapper='A&#x20;B'>"));
+    assert!(written.contains("<p:transition x:owner='C&#x20;D' spd='fast'"));
+    assert!(written.contains("<p159:morph r:id='rId&#x37;' option='byWord'>"));
+    assert!(written.contains(
+        r#"<mc:Fallback><p:transition spd="slow"><p:fade/></p:transition></mc:Fallback>"#
+    ));
+    assert!(written.contains("<x:keep/>"));
+    assert!(written.contains("<x:before/>"));
+    assert!(written.contains("<x:after/>"));
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_chart::{AxisData, CT_ChartSpace};
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
-use oxml_layout::{PositionedElement, walk};
+use oxml_layout::{MediaId, PageFrame, PositionedElement, Rect, walk};
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
     Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, ChartData,
     ChartKind, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
-    TextBulletCharacter, TextBulletChoice, TextFont,
+    TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -47,6 +85,69 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+const F214_POWERPOINT_ORACLE_WIDTH: u32 = 1920;
+const F214_POWERPOINT_ORACLE_HEIGHT: u32 = 1080;
+const F214_POWERPOINT_COMPARISON_WIDTH: u32 = 2001;
+const F214_POWERPOINT_COMPARISON_HEIGHT: u32 = 1125;
+const F214_POWERPOINT_COMPARISON_DPI: f64 = 150.0;
+const F214_POWERPOINT_FOREGROUND_CHANNEL_CUTOFF: u8 = 240;
+const F214_POWERPOINT_ORACLE_PROVENANCE: [&str; 8] = [
+    "capture_method\tPowerPoint save as movie",
+    "frame_extractor\tAVAssetImageGenerator",
+    "requested_time_tolerance_before_ms\t0",
+    "requested_time_tolerance_after_ms\t0",
+    "normalization_operation\toxml-pdf image render with tiny-skia bilinear filtering",
+    "normalization_input_px\t1920x1080",
+    "normalization_output_px\t2001x1125",
+    "normalization_dpi\t150",
+];
+const F214_POWERPOINT_ORACLE_CLASSIFICATION: &str =
+    "PowerPoint reference frame, no divergence allowed";
+const F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV: &str = "RDOCX_PPTX_TIMELINE_ORACLE_MOVIE_SHA256";
+const F214_POWERPOINT_FRAME_EXTRACTOR_SWIFT: &str = r#"import AVFoundation
+import AppKit
+
+let movie = URL(fileURLWithPath: CommandLine.arguments[1])
+let output = URL(fileURLWithPath: CommandLine.arguments[2])
+let timeValue = CMTimeValue(CommandLine.arguments[3])!
+let timeScale = CMTimeScale(CommandLine.arguments[4])!
+guard timeScale > 0 else {
+    throw NSError(domain: "rpptx.timeline.oracle", code: 2, userInfo: [NSLocalizedDescriptionKey: "movie sample timescale must be positive"])
+}
+let asset = AVURLAsset(url: movie)
+let generator = AVAssetImageGenerator(asset: asset)
+generator.appliesPreferredTrackTransform = true
+generator.requestedTimeToleranceBefore = .zero
+generator.requestedTimeToleranceAfter = .zero
+let requestedTime = CMTime(value: timeValue, timescale: timeScale)
+var actualTime = CMTime.invalid
+let image = try generator.copyCGImage(at: requestedTime, actualTime: &actualTime)
+guard CMTimeCompare(actualTime, requestedTime) == 0 else {
+    throw NSError(domain: "rpptx.timeline.oracle", code: 1, userInfo: [NSLocalizedDescriptionKey: "requested \(requestedTime.value)/\(requestedTime.timescale), received \(actualTime.value)/\(actualTime.timescale)"])
+}
+let bitmap = NSBitmapImageRep(cgImage: image)
+let png = bitmap.representation(using: .png, properties: [:])!
+try png.write(to: output)
+print(image.width, image.height, requestedTime.value, requestedTime.timescale, actualTime.value, actualTime.timescale)
+"#;
+const F214_POWERPOINT_ORACLE_CASES: [(&str, usize, u64, u32, i64, i32); 9] = [
+    ("timeline-appear-active", 0, 330, 0, 198, 600),
+    ("timeline-wipe-mid", 0, 825, 0, 495, 600),
+    ("timeline-opacity-mid", 0, 1_320, 0, 792, 600),
+    ("timeline-parallel-mid", 0, 1_980, 0, 1_188, 600),
+    ("timeline-exit-mid", 0, 2_805, 0, 1_683, 600),
+    (
+        "ordinary-transition-outgoing-terminal",
+        1,
+        u64::MAX,
+        u32::MAX,
+        4_198,
+        600,
+    ),
+    ("ordinary-transition", 2, 425, 0, 4_455, 600),
+    ("morph", 3, 700, 0, 6_336, 600),
+    ("push-transition", 4, 264, 0, 8_118, 600),
+];
 const KEYNOTE_VERSION: &str = "14.4";
 const KEYNOTE_BUILD: &str = "7043.0.93";
 const LIBREOFFICE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
@@ -5138,6 +5239,1799 @@ fn corpus_example_and_facade_rendering_are_identical() {
     assert_eq!(example.input.slides.len(), facade.pages.len());
 }
 
+fn timeline_fixture_bytes() -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("create timeline presentation");
+    presentation.add_slide(0).expect("add timeline slide");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_shape(
+            "rect",
+            Emu(914_400),
+            Emu(914_400),
+            Emu(1_828_800),
+            Emu(914_400),
+        )
+        .unwrap();
+    let bytes = presentation.to_bytes().expect("serialize timeline source");
+    let mut package = open_opc(&bytes, "timeline source");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &relationship.target);
+    let slide = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let slide_model = CT_Slide::from_xml(slide.as_bytes()).unwrap();
+    let shape_id = slide_model.common_slide_data.shape_tree.children[0]
+        .non_visual_id()
+        .unwrap();
+    let timing = format!(
+        r#"<p:timing><p:tnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="1" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl></p:cBhvr></p:animEffect></p:tnLst></p:timing>"#
+    );
+    package.set_part(
+        &slide_part,
+        slide
+            .replacen("</p:sld>", &format!("{timing}</p:sld>"), 1)
+            .into_bytes(),
+    );
+    package_bytes(package)
+}
+
+fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
+    let mut presentation = Presentation::new().expect("create PowerPoint timeline oracle source");
+    for slide_index in 0..6 {
+        presentation.add_slide(0).expect("add oracle slide");
+        let mut slide = presentation.slide_mut(slide_index).unwrap();
+        let mut shape = slide
+            .add_shape(
+                "rect",
+                Emu(if slide_index == 3 { 6_858_000 } else { 914_400 }),
+                Emu(1_371_600),
+                Emu(3_657_600),
+                Emu(2_743_200),
+            )
+            .unwrap();
+        shape.set_name("!!Hero").unwrap();
+        shape
+            .set_fill(
+                Fill::from_xml(
+                    if slide_index == 0 {
+                        br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="D63C32"/></a:solidFill>"#
+                    } else {
+                        br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="3278D6"/></a:solidFill>"#
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        if slide_index == 1 {
+            let mut click_shape = slide
+                .add_shape(
+                    "rect",
+                    Emu(6_858_000),
+                    Emu(4_572_000),
+                    Emu(914_400),
+                    Emu(914_400),
+                )
+                .unwrap();
+            click_shape.set_name("Click fill marker").unwrap();
+            click_shape
+                .set_fill(
+                    Fill::from_xml(
+                        br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="F0C541"/></a:solidFill>"#,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+    }
+    let bytes = presentation.to_bytes().expect("serialize oracle source");
+    let mut package = open_opc(&bytes, "PowerPoint timeline oracle source");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_parts = model
+        .slide_ids
+        .iter()
+        .map(|slide_id| {
+            let relationship = package
+                .get_part_rels(&presentation_part)
+                .unwrap()
+                .get_by_id(&slide_id.relationship_id)
+                .unwrap();
+            OpcPackage::resolve_rel_target(&presentation_part, &relationship.target)
+        })
+        .collect::<Vec<_>>();
+    let evaluator_part = &slide_parts[0];
+    let mut evaluator_slide =
+        CT_Slide::from_xml(package.get_part(evaluator_part).unwrap()).unwrap();
+    let evaluator_target = evaluator_slide.common_slide_data.shape_tree.children[0]
+        .non_visual_id()
+        .unwrap();
+    let timing = format!(
+        r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:seq><p:cTn id="100" dur="4000"><p:childTnLst>
+        <p:animEffect transition="in" filter="appear"><p:cBhvr><p:cTn id="101" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
+        <p:animEffect transition="in" filter="wipe(left)"><p:cBhvr><p:cTn id="102" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
+        <p:anim from="100000" to="50000"><p:cBhvr><p:cTn id="103" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+        <p:par><p:cTn id="104" dur="1000"><p:childTnLst>
+        <p:anim from="100000" to="150000"><p:cBhvr><p:cTn id="105" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>scale</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+        <p:anim from="0" to="5400000"><p:cBhvr><p:cTn id="106" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>spin</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+        <p:animMotion origin="layout" path="M 0 0 L .15 .1 E"><p:cBhvr><p:cTn id="107" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animMotion>
+        </p:childTnLst></p:cTn></p:par>
+        <p:animEffect transition="out" filter="fade"><p:cBhvr><p:cTn id="108" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
+        </p:childTnLst></p:cTn></p:seq>
+        </p:tnLst></p:timing>"#
+    );
+    let parsed_timing = rpptx_oxml::timing::CT_Timing::from_xml(timing.as_bytes()).unwrap();
+    assert_eq!(parsed_timing.nodes().len(), 1);
+    evaluator_slide.timing = Some(parsed_timing);
+    evaluator_slide.transition = Some(
+        rpptx_oxml::timing::CT_SlideTransition::from_xml(
+            format!(r#"<p:transition xmlns:p="{P_NS}" advClick="0" advTm="5000"/>"#).as_bytes(),
+        )
+        .unwrap(),
+    );
+    package.set_part(evaluator_part, evaluator_slide.to_xml().unwrap());
+
+    let click_part = &slide_parts[1];
+    let mut click_slide = CT_Slide::from_xml(package.get_part(click_part).unwrap()).unwrap();
+    let click_target = click_slide.common_slide_data.shape_tree.children[1]
+        .non_visual_id()
+        .unwrap();
+    let click_timing = format!(
+        r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:set><p:cBhvr><p:cTn id="109" dur="500" fill="remove" nodeType="clickEffect"><p:stCondLst><p:cond evt="onClick" delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{click_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set></p:tnLst></p:timing>"#
+    );
+    let parsed_click_timing =
+        rpptx_oxml::timing::CT_Timing::from_xml(click_timing.as_bytes()).unwrap();
+    assert_eq!(parsed_click_timing.nodes().len(), 1);
+    let rpptx_oxml::timing::TimingNode::Set(click_node) = &parsed_click_timing.nodes()[0] else {
+        panic!("oracle click/fill node must remain typed")
+    };
+    assert_eq!(
+        click_node.target,
+        rpptx_oxml::timing::TimingTarget::Shape(click_target)
+    );
+    click_slide.timing = Some(parsed_click_timing);
+    click_slide.transition = Some(
+        rpptx_oxml::timing::CT_SlideTransition::from_xml(
+            format!(r#"<p:transition xmlns:p="{P_NS}" advClick="0" advTm="2000"/>"#).as_bytes(),
+        )
+        .unwrap(),
+    );
+    package.set_part(click_part, click_slide.to_xml().unwrap());
+
+    for (index, effect) in [
+        (2usize, "<p:fade/>"),
+        (4usize, "<p:push dir=\"l\"/>"),
+        (5usize, "<p:zoom dir=\"in\"/>"),
+    ] {
+        let slide_part = &slide_parts[index];
+        let mut slide = CT_Slide::from_xml(package.get_part(slide_part).unwrap()).unwrap();
+        let transition = format!(
+            r#"<p:transition xmlns:p="{P_NS}" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" advClick="0" advTm="2000" p14:dur="1000">{effect}</p:transition>"#
+        );
+        slide.transition =
+            Some(rpptx_oxml::timing::CT_SlideTransition::from_xml(transition.as_bytes()).unwrap());
+        package.set_part(slide_part, slide.to_xml().unwrap());
+    }
+    let morph_part = &slide_parts[3];
+    let morph_slide = String::from_utf8(package.get_part(morph_part).unwrap().to_vec()).unwrap();
+    let morph_slide = morph_slide
+        .replacen(
+            "<p:sld ",
+            &format!(
+                r#"<p:sld xmlns:mc="{MC_NS}" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" mc:Ignorable="p14 p159" "#
+            ),
+            1,
+        )
+        .replacen(
+            "</p:sld>",
+            r#"<mc:AlternateContent><mc:Choice Requires="p159"><p:transition advClick="0" advTm="2000" p14:dur="1000"><p159:morph option="byObject"/></p:transition></mc:Choice><mc:Fallback><p:transition advClick="0" advTm="2000" p14:dur="1000"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>"#,
+            1,
+        );
+    let morph_slide = CT_Slide::from_xml(morph_slide.as_bytes()).unwrap();
+    assert_eq!(
+        morph_slide.transition.as_ref().unwrap().effect,
+        Some(rpptx_oxml::timing::TransitionEffect::Morph)
+    );
+    package.set_part(morph_part, morph_slide.to_xml().unwrap());
+    let bytes = package_bytes(package);
+    let source = Presentation::from_bytes(&bytes).expect("reopen timeline oracle source");
+    assert!(source.validate().is_empty());
+    bytes
+}
+
+fn is_approved_powerpoint_timeline_oracle_source(source: &[u8]) -> bool {
+    source == powerpoint_timeline_oracle_source_bytes()
+}
+
+fn approved_powerpoint_timeline_oracle_case(case: &str) -> Option<(usize, u64, u32, i64, i32)> {
+    F214_POWERPOINT_ORACLE_CASES.iter().find_map(
+        |&(
+            approved_case,
+            slide,
+            local_timestamp_ms,
+            click_count,
+            movie_time_value,
+            movie_time_timescale,
+        )| {
+            (approved_case == case).then_some((
+                slide,
+                local_timestamp_ms,
+                click_count,
+                movie_time_value,
+                movie_time_timescale,
+            ))
+        },
+    )
+}
+
+fn is_approved_powerpoint_timeline_oracle_case(
+    case: &str,
+    slide: usize,
+    local_timestamp_ms: u64,
+    click_count: u32,
+    movie_time_value: i64,
+    movie_time_timescale: i32,
+) -> bool {
+    approved_powerpoint_timeline_oracle_case(case)
+        == Some((
+            slide,
+            local_timestamp_ms,
+            click_count,
+            movie_time_value,
+            movie_time_timescale,
+        ))
+}
+
+fn has_approved_powerpoint_fade_outgoing_binding(
+    cases: &[(&str, usize, u64, u32, i64, i32)],
+) -> bool {
+    let outgoing = cases.iter().enumerate().find(|(_, case)| {
+        **case
+            == (
+                "ordinary-transition-outgoing-terminal",
+                1,
+                u64::MAX,
+                u32::MAX,
+                4_198,
+                600,
+            )
+    });
+    let fade = cases
+        .iter()
+        .enumerate()
+        .find(|(_, case)| **case == ("ordinary-transition", 2, 425, 0, 4_455, 600));
+    matches!((outgoing, fade), (Some((outgoing_index, _)), Some((fade_index, _))) if outgoing_index < fade_index)
+}
+
+fn has_approved_powerpoint_timeline_oracle_provenance(lines: &[&str]) -> bool {
+    F214_POWERPOINT_ORACLE_PROVENANCE.iter().all(|expected| {
+        let key = expected.split_once('\t').unwrap().0;
+        let matching = lines
+            .iter()
+            .filter(|line| line.split_once('\t').map(|(field, _)| field) == Some(key))
+            .collect::<Vec<_>>();
+        matching.len() == 1 && *matching[0] == *expected
+    })
+}
+
+fn is_approved_powerpoint_timeline_oracle_classification(classification: &str) -> bool {
+    classification == F214_POWERPOINT_ORACLE_CLASSIFICATION
+}
+
+fn is_approved_powerpoint_timeline_oracle_movie_pin(
+    actual_movie_sha256: &str,
+    pinned_movie_sha256: &str,
+) -> bool {
+    pinned_movie_sha256.len() == 64
+        && pinned_movie_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && actual_movie_sha256 == pinned_movie_sha256
+}
+
+fn extract_powerpoint_movie_frame(
+    movie: &Path,
+    output: &Path,
+    movie_time_value: i64,
+    movie_time_timescale: i32,
+) -> std::process::Output {
+    Command::new("swift")
+        .args(["-e", F214_POWERPOINT_FRAME_EXTRACTOR_SWIFT])
+        .arg(movie)
+        .arg(output)
+        .arg(movie_time_value.to_string())
+        .arg(movie_time_timescale.to_string())
+        .output()
+        .expect("extract exact PowerPoint movie frame")
+}
+
+fn powerpoint_movie_extractor_returned_exact_time(
+    stdout: &[u8],
+    expected_width: u32,
+    expected_height: u32,
+    movie_time_value: i64,
+    movie_time_timescale: i32,
+) -> bool {
+    let Ok(output) = std::str::from_utf8(stdout) else {
+        return false;
+    };
+    let values = output
+        .split_whitespace()
+        .map(str::parse::<i128>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(values) = values else {
+        return false;
+    };
+    values.len() == 6
+        && values[0] == i128::from(expected_width)
+        && values[1] == i128::from(expected_height)
+        && values[2] == i128::from(movie_time_value)
+        && values[3] == i128::from(movie_time_timescale)
+        && values[4] == i128::from(movie_time_value)
+        && values[5] == i128::from(movie_time_timescale)
+        && movie_time_timescale > 0
+}
+
+fn is_approved_powerpoint_timeline_oracle_movie_binding(
+    fields: &[&str],
+    actual_movie_sha256: &str,
+    pinned_movie_sha256: &str,
+    source_sha256: &str,
+) -> bool {
+    fields.len() == 7
+        && fields[0] == "movie"
+        && fields[1] == "timeline-oracle.mp4"
+        && fields[2] == actual_movie_sha256
+        && fields[2] == pinned_movie_sha256
+        && fields[3] == source_sha256
+        && fields[4] == POWERPOINT_VERSION
+        && fields[5] == POWERPOINT_BUILD
+        && fields[6] == POWERPOINT_APP_BUILD
+}
+
+fn powerpoint_timeline_oracle_frame_matches_reextraction(
+    stored_png: &[u8],
+    reextracted_png: &[u8],
+) -> bool {
+    stored_png == reextracted_png
+}
+
+fn normalize_powerpoint_timeline_oracle_frame_for_comparison(
+    raw_oracle_png: &[u8],
+) -> Option<Vec<u8>> {
+    let raw = oxml_media::probe(raw_oracle_png)?;
+    if (raw.width_px, raw.height_px)
+        != (F214_POWERPOINT_ORACLE_WIDTH, F214_POWERPOINT_ORACLE_HEIGHT)
+    {
+        return None;
+    }
+    let page_width = 960.0;
+    let page_height = 540.0;
+    let image = PositionedElement::Image {
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: page_width,
+            height: page_height,
+        },
+        data: raw_oracle_png.to_vec(),
+        content_type: "image/png".to_owned(),
+        media_id: MediaId(1),
+    };
+    let page = PageFrame::new(1, page_width, page_height, vec![image]);
+    let layout = oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(page)],
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    let normalized = oxml_pdf::render_page_to_png(&layout, 0, F214_POWERPOINT_COMPARISON_DPI)?;
+    let normalized_info = oxml_media::probe(&normalized)?;
+    ((normalized_info.width_px, normalized_info.height_px)
+        == (
+            F214_POWERPOINT_COMPARISON_WIDTH,
+            F214_POWERPOINT_COMPARISON_HEIGHT,
+        ))
+        .then_some(normalized)
+}
+
+#[test]
+fn powerpoint_timeline_oracle_source_round_trips_through_f213_model() {
+    let bytes = powerpoint_timeline_oracle_source_bytes();
+    let presentation = Presentation::from_bytes(&bytes).unwrap();
+    assert!(presentation.validate().is_empty());
+
+    let at = |elapsed_ms, click_count| {
+        presentation
+            .render_timeline_deterministic(
+                0,
+                TimelinePosition {
+                    elapsed_ms,
+                    click_count,
+                },
+                None,
+            )
+            .unwrap()
+    };
+    let wipe = at(750, 0);
+    assert!(wipe.state.shapes.values().next().unwrap().clip.is_some());
+    let opacity = at(1_250, 0);
+    assert_eq!(opacity.state.shapes.values().next().unwrap().opacity, 0.75);
+    let parallel = at(2_000, 0);
+    assert!(
+        !parallel
+            .state
+            .shapes
+            .values()
+            .next()
+            .unwrap()
+            .transform
+            .is_identity()
+    );
+    let click_at = |elapsed_ms| {
+        presentation
+            .render_timeline_deterministic(
+                1,
+                TimelinePosition {
+                    elapsed_ms,
+                    click_count: 1,
+                },
+                None,
+            )
+            .unwrap()
+    };
+    let click_start = click_at(0);
+    assert_eq!(click_start.state.shapes.len(), 1, "{:?}", click_start.state);
+    assert!(!click_start.state.shapes.values().next().unwrap().visible);
+    assert_eq!(click_at(499).state.shapes.len(), 1);
+    assert_eq!(click_at(500).state.shapes.len(), 1);
+    assert!(click_at(501).state.shapes.is_empty());
+
+    for (slide, expected) in [
+        (2, rpptx_oxml::timing::TransitionEffect::Fade),
+        (3, rpptx_oxml::timing::TransitionEffect::Morph),
+        (4, rpptx_oxml::timing::TransitionEffect::Push),
+        (5, rpptx_oxml::timing::TransitionEffect::Zoom),
+    ] {
+        let frame = presentation
+            .render_timeline_deterministic(
+                slide,
+                TimelinePosition {
+                    elapsed_ms: 500,
+                    click_count: 0,
+                },
+                slide.checked_sub(1),
+            )
+            .unwrap();
+        assert_eq!(frame.state.transition.unwrap().effect, expected);
+    }
+}
+
+#[test]
+fn powerpoint_timeline_oracle_fade_starts_from_the_bound_terminal_outgoing_state() {
+    let presentation =
+        Presentation::from_bytes(&powerpoint_timeline_oracle_source_bytes()).unwrap();
+    let terminal_outgoing = presentation
+        .render_timeline_deterministic(
+            1,
+            TimelinePosition {
+                elapsed_ms: u64::MAX,
+                click_count: u32::MAX,
+            },
+            None,
+        )
+        .unwrap();
+    let fade_start = presentation
+        .render_timeline_deterministic(
+            2,
+            TimelinePosition {
+                elapsed_ms: 0,
+                click_count: 0,
+            },
+            Some(1),
+        )
+        .unwrap();
+    let render = |page| {
+        let layout = oxml_layout::LayoutResult::new(
+            vec![std::sync::Arc::new(page)],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        oxml_pdf::render_page_to_png(&layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap()
+    };
+    assert_eq!(
+        render(fade_start.page),
+        render(terminal_outgoing.page),
+        "fade progress zero must use the externally bound terminal outgoing state"
+    );
+}
+
+#[test]
+fn powerpoint_timeline_oracle_source_binding_rejects_substitution() {
+    let source = powerpoint_timeline_oracle_source_bytes();
+    assert!(is_approved_powerpoint_timeline_oracle_source(&source));
+    let mut substituted = source;
+    substituted.push(0);
+    assert!(!is_approved_powerpoint_timeline_oracle_source(&substituted));
+}
+
+#[test]
+fn powerpoint_timeline_oracle_case_binding_rejects_relabelled_or_substituted_coordinates() {
+    for &(case, slide, local_timestamp_ms, click_count, movie_time_value, movie_time_timescale) in
+        &F214_POWERPOINT_ORACLE_CASES
+    {
+        assert!(is_approved_powerpoint_timeline_oracle_case(
+            case,
+            slide,
+            local_timestamp_ms,
+            click_count,
+            movie_time_value,
+            movie_time_timescale
+        ));
+    }
+
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("morph", 2, 700, 0, 6_336, 600),
+        "relabelled transition coordinates must not satisfy another case"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case(
+            "timeline-parallel-mid",
+            0,
+            1_980,
+            1,
+            1_188,
+            600
+        ),
+        "substituting a click count must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("timeline-wipe-mid", 0, 826, 0, 495, 600),
+        "substituting a local timestamp must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("push-transition", 5, 264, 0, 8_118, 600),
+        "substituting a generator slide must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("timeline-opacity-mid", 0, 1_320, 0, 791, 600),
+        "substituting a movie time value must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("morph", 3, 700, 0, 6_335, 600),
+        "a neighboring morph sample must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("push-transition", 4, 264, 0, 8_117, 600),
+        "a neighboring push sample must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("morph", 3, 570, 0, 5_742, 600),
+        "the pre-morph sample from the uncorrected schedule must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case("push-transition", 4, 550, 0, 6_930, 600),
+        "the pre-push sample from the uncorrected schedule must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case(
+            "timeline-opacity-mid",
+            0,
+            1_320,
+            0,
+            792,
+            1_000
+        ),
+        "substituting a movie timescale must be rejected"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case(
+            "ordinary-transition-outgoing-terminal",
+            1,
+            u64::MAX,
+            0,
+            4_198,
+            600
+        ),
+        "the outgoing fade page must use terminal click semantics"
+    );
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_case(
+            "ordinary-transition-outgoing-terminal",
+            1,
+            0,
+            u32::MAX,
+            4_198,
+            600
+        ),
+        "the outgoing fade page must use terminal elapsed-time semantics"
+    );
+    assert!(!is_approved_powerpoint_timeline_oracle_case(
+        "unapproved-case",
+        0,
+        0,
+        0,
+        0,
+        0
+    ));
+}
+
+#[test]
+fn powerpoint_timeline_oracle_uses_unique_samples_and_excludes_collapsed_click_boundaries() {
+    assert_eq!(
+        approved_powerpoint_timeline_oracle_case("timeline-appear-active"),
+        Some((0, 330, 0, 198, 600))
+    );
+
+    let mut samples = HashSet::new();
+    for &(case, slide, local_timestamp_ms, click_count, movie_time_value, movie_time_timescale) in
+        &F214_POWERPOINT_ORACLE_CASES
+    {
+        assert!(
+            samples.insert((movie_time_value, movie_time_timescale)),
+            "{case}: external cases must use unique encoded movie samples"
+        );
+        if case == "ordinary-transition-outgoing-terminal" {
+            assert_eq!(slide, 1);
+            assert_eq!(local_timestamp_ms, u64::MAX);
+            assert_eq!(click_count, u32::MAX);
+            continue;
+        }
+        assert_eq!(click_count, 0, "{case}: incoming cases must be automatic");
+        if case.starts_with("timeline-") {
+            assert_eq!(slide, 0, "{case}: automatic state must use its own slide");
+        }
+        if case == "morph" {
+            assert_eq!((slide, local_timestamp_ms), (3, 700));
+            assert_eq!((movie_time_value, movie_time_timescale), (6_336, 600));
+            assert!(
+                (6_000..6_600).contains(&movie_time_value),
+                "the calibrated morph observation must be inside the corrected 10 to 11 second transition window"
+            );
+            continue;
+        }
+        if case == "push-transition" {
+            assert_eq!((slide, local_timestamp_ms), (4, 264));
+            assert_eq!((movie_time_value, movie_time_timescale), (8_118, 600));
+            assert!(
+                (7_800..8_400).contains(&movie_time_value),
+                "the calibrated push observation must be inside the corrected 13 to 14 second transition window"
+            );
+            continue;
+        }
+        let slide_movie_start_ms = match slide {
+            0 => 0i128,
+            2 => 7_000,
+            _ => panic!("{case}: unsupported external-oracle slide {slide}"),
+        };
+        let movie_time_numerator = i128::from(movie_time_value) * 1_000;
+        assert_eq!(
+            movie_time_numerator % i128::from(movie_time_timescale),
+            0,
+            "{case}: the selected movie sample must map to an exact Rust millisecond"
+        );
+        assert_eq!(
+            movie_time_numerator / i128::from(movie_time_timescale) - slide_movie_start_ms,
+            i128::from(local_timestamp_ms),
+            "{case}: Rust local time must correspond to the encoded movie sample"
+        );
+    }
+
+    for automatic_case in [
+        "timeline-appear-active",
+        "timeline-wipe-mid",
+        "timeline-opacity-mid",
+        "timeline-parallel-mid",
+        "timeline-exit-mid",
+    ] {
+        assert!(approved_powerpoint_timeline_oracle_case(automatic_case).is_some());
+    }
+
+    for collapsed_case in [
+        "timeline-click-start",
+        "timeline-fill-remove-before-end",
+        "timeline-fill-remove-end",
+        "timeline-fill-remove-after-end",
+    ] {
+        assert_eq!(
+            approved_powerpoint_timeline_oracle_case(collapsed_case),
+            None,
+            "{collapsed_case}: 1 ms evaluator boundaries must not be claimed by a movie frame"
+        );
+    }
+}
+
+#[test]
+fn powerpoint_timeline_oracle_excludes_unobservable_zoom_from_identical_source_frames() {
+    assert_eq!(
+        approved_powerpoint_timeline_oracle_case("zoom-transition"),
+        None,
+        "the fixed movie must not claim a zoom observation that is byte-identical to static frames"
+    );
+
+    let (_, layout) = Presentation::from_bytes(&powerpoint_timeline_oracle_source_bytes())
+        .unwrap()
+        .render_deterministic()
+        .unwrap();
+    let outgoing =
+        oxml_pdf::render_page_to_png(&layout, 4, F214_POWERPOINT_COMPARISON_DPI).unwrap();
+    let incoming =
+        oxml_pdf::render_page_to_png(&layout, 5, F214_POWERPOINT_COMPARISON_DPI).unwrap();
+    assert_eq!(
+        outgoing, incoming,
+        "the unchanged source offers no visual discriminator for its zoom transition"
+    );
+}
+
+#[test]
+fn powerpoint_timeline_oracle_fade_requires_the_terminal_outgoing_binding() {
+    assert!(has_approved_powerpoint_fade_outgoing_binding(
+        &F214_POWERPOINT_ORACLE_CASES
+    ));
+
+    let missing = F214_POWERPOINT_ORACLE_CASES
+        .iter()
+        .copied()
+        .filter(|case| case.0 != "ordinary-transition-outgoing-terminal")
+        .collect::<Vec<_>>();
+    assert!(
+        !has_approved_powerpoint_fade_outgoing_binding(&missing),
+        "the fade case must not remain approved without its outgoing terminal observation"
+    );
+
+    let mut substituted = F214_POWERPOINT_ORACLE_CASES.to_vec();
+    let outgoing = substituted
+        .iter_mut()
+        .find(|case| case.0 == "ordinary-transition-outgoing-terminal")
+        .unwrap();
+    outgoing.3 = 0;
+    assert!(
+        !has_approved_powerpoint_fade_outgoing_binding(&substituted),
+        "substituted outgoing click semantics must break the fade binding"
+    );
+}
+
+#[test]
+fn powerpoint_timeline_oracle_rejects_substituted_provenance_and_classification() {
+    let approved = F214_POWERPOINT_ORACLE_PROVENANCE.to_vec();
+    assert!(has_approved_powerpoint_timeline_oracle_provenance(
+        &approved
+    ));
+
+    let mut substituted = approved.clone();
+    substituted[0] = "capture_method\tmanual screenshot";
+    assert!(!has_approved_powerpoint_timeline_oracle_provenance(
+        &substituted
+    ));
+
+    let mut substituted_normalization = approved.clone();
+    substituted_normalization[4] = "normalization_operation\tnearest-neighbor resize";
+    assert!(!has_approved_powerpoint_timeline_oracle_provenance(
+        &substituted_normalization
+    ));
+
+    let mut substituted_dimensions = approved.clone();
+    substituted_dimensions[6] = "normalization_output_px\t2000x1125";
+    assert!(!has_approved_powerpoint_timeline_oracle_provenance(
+        &substituted_dimensions
+    ));
+
+    let mut duplicated = approved;
+    duplicated.push("frame_extractor\tffmpeg");
+    assert!(!has_approved_powerpoint_timeline_oracle_provenance(
+        &duplicated
+    ));
+    assert!(is_approved_powerpoint_timeline_oracle_classification(
+        F214_POWERPOINT_ORACLE_CLASSIFICATION
+    ));
+    assert!(!is_approved_powerpoint_timeline_oracle_classification(
+        "PowerPoint movie frame at 3000 ms"
+    ));
+    assert!(!is_approved_powerpoint_timeline_oracle_classification(""));
+}
+
+#[test]
+fn powerpoint_timeline_oracle_rejects_self_authenticated_movie_and_png_substitutions() {
+    const PINNED_MOVIE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const SUBSTITUTED_MOVIE: &str =
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const SOURCE: &str = "source-sha256";
+    let approved = [
+        "movie",
+        "timeline-oracle.mp4",
+        PINNED_MOVIE,
+        SOURCE,
+        POWERPOINT_VERSION,
+        POWERPOINT_BUILD,
+        POWERPOINT_APP_BUILD,
+    ];
+    assert!(is_approved_powerpoint_timeline_oracle_movie_binding(
+        &approved,
+        PINNED_MOVIE,
+        PINNED_MOVIE,
+        SOURCE
+    ));
+
+    let mut self_authenticated = approved;
+    self_authenticated[2] = SUBSTITUTED_MOVIE;
+    assert!(
+        !is_approved_powerpoint_timeline_oracle_movie_binding(
+            &self_authenticated,
+            SUBSTITUTED_MOVIE,
+            PINNED_MOVIE,
+            SOURCE
+        ),
+        "a substituted movie and its adjacent manifest hash must not replace the independent pin"
+    );
+    let mut wrong_source = approved;
+    wrong_source[3] = "other-source";
+    assert!(!is_approved_powerpoint_timeline_oracle_movie_binding(
+        &wrong_source,
+        PINNED_MOVIE,
+        PINNED_MOVIE,
+        SOURCE
+    ));
+    let mut wrong_version = approved;
+    wrong_version[4] = "16.105";
+    assert!(!is_approved_powerpoint_timeline_oracle_movie_binding(
+        &wrong_version,
+        PINNED_MOVIE,
+        PINNED_MOVIE,
+        SOURCE
+    ));
+
+    assert!(powerpoint_timeline_oracle_frame_matches_reextraction(
+        b"captured png",
+        b"captured png"
+    ));
+    assert!(
+        !powerpoint_timeline_oracle_frame_matches_reextraction(
+            b"stale png from another movie time",
+            b"re-extracted png"
+        ),
+        "a stored PNG and its self-supplied manifest hash cannot replace gate-side re-extraction"
+    );
+}
+
+#[test]
+fn powerpoint_timeline_oracle_existing_movie_requires_the_exact_lowercase_pin() {
+    const EXPORTED_MOVIE_SHA256: &str =
+        "28514432f4aafae9d6c5ddd522d23e87458e08ec59ebf5555398a74e712fa83e";
+    assert!(is_approved_powerpoint_timeline_oracle_movie_pin(
+        EXPORTED_MOVIE_SHA256,
+        EXPORTED_MOVIE_SHA256
+    ));
+    assert!(!is_approved_powerpoint_timeline_oracle_movie_pin(
+        EXPORTED_MOVIE_SHA256,
+        "18514432f4aafae9d6c5ddd522d23e87458e08ec59ebf5555398a74e712fa83e"
+    ));
+    assert!(!is_approved_powerpoint_timeline_oracle_movie_pin(
+        EXPORTED_MOVIE_SHA256,
+        &EXPORTED_MOVIE_SHA256.to_ascii_uppercase()
+    ));
+    assert!(!is_approved_powerpoint_timeline_oracle_movie_pin(
+        EXPORTED_MOVIE_SHA256,
+        "not-a-sha256"
+    ));
+}
+
+#[test]
+fn powerpoint_timeline_oracle_extractor_requires_the_exact_encoded_sample_time() {
+    for &(_, _, _, _, movie_time_value, movie_time_timescale) in &F214_POWERPOINT_ORACLE_CASES {
+        let exact = format!(
+            "{F214_POWERPOINT_ORACLE_WIDTH} {F214_POWERPOINT_ORACLE_HEIGHT} {movie_time_value} {movie_time_timescale} {movie_time_value} {movie_time_timescale}"
+        );
+        assert!(powerpoint_movie_extractor_returned_exact_time(
+            exact.as_bytes(),
+            F214_POWERPOINT_ORACLE_WIDTH,
+            F214_POWERPOINT_ORACLE_HEIGHT,
+            movie_time_value,
+            movie_time_timescale
+        ));
+    }
+
+    let substituted_actual =
+        format!("{F214_POWERPOINT_ORACLE_WIDTH} {F214_POWERPOINT_ORACLE_HEIGHT} 495 600 494 600");
+    assert!(
+        !powerpoint_movie_extractor_returned_exact_time(
+            substituted_actual.as_bytes(),
+            F214_POWERPOINT_ORACLE_WIDTH,
+            F214_POWERPOINT_ORACLE_HEIGHT,
+            495,
+            600
+        ),
+        "a neighboring encoded sample must not satisfy the requested rational time"
+    );
+    let substituted_request =
+        format!("{F214_POWERPOINT_ORACLE_WIDTH} {F214_POWERPOINT_ORACLE_HEIGHT} 825 1000 495 600");
+    assert!(
+        !powerpoint_movie_extractor_returned_exact_time(
+            substituted_request.as_bytes(),
+            F214_POWERPOINT_ORACLE_WIDTH,
+            F214_POWERPOINT_ORACLE_HEIGHT,
+            495,
+            600
+        ),
+        "an equivalent millisecond request must not replace the encoded sample representation"
+    );
+    assert!(
+        !powerpoint_movie_extractor_returned_exact_time(
+            b"2000 1125 198 600 198 600",
+            F214_POWERPOINT_ORACLE_WIDTH,
+            F214_POWERPOINT_ORACLE_HEIGHT,
+            198,
+            600
+        ),
+        "the unsupported 2000 by 1125 export assumption must be rejected"
+    );
+    assert!(!powerpoint_movie_extractor_returned_exact_time(
+        b"1920 1080 198 0 198 0",
+        F214_POWERPOINT_ORACLE_WIDTH,
+        F214_POWERPOINT_ORACLE_HEIGHT,
+        198,
+        0
+    ));
+}
+
+#[test]
+fn powerpoint_timeline_oracle_normalization_is_bounded_deterministic_and_non_mutating() {
+    let source_layout = Presentation::from_bytes(&powerpoint_timeline_oracle_source_bytes())
+        .unwrap()
+        .render_deterministic()
+        .unwrap()
+        .1;
+    let static_before =
+        oxml_pdf::render_page_to_png(&source_layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap();
+    let static_info = oxml_media::probe(&static_before).unwrap();
+    assert_eq!(
+        (static_info.width_px, static_info.height_px),
+        (
+            F214_POWERPOINT_COMPARISON_WIDTH,
+            F214_POWERPOINT_COMPARISON_HEIGHT
+        ),
+        "the approved source's unchanged static path must render at literal 150 dpi"
+    );
+
+    let raw = oxml_pdf::render_page_to_png(&source_layout, 0, 144.0).unwrap();
+    let raw_info = oxml_media::probe(&raw).unwrap();
+    assert_eq!(
+        (raw_info.width_px, raw_info.height_px),
+        (F214_POWERPOINT_ORACLE_WIDTH, F214_POWERPOINT_ORACLE_HEIGHT)
+    );
+    let first = normalize_powerpoint_timeline_oracle_frame_for_comparison(&raw).unwrap();
+    let second = normalize_powerpoint_timeline_oracle_frame_for_comparison(&raw).unwrap();
+    assert_eq!(first, second, "normalization output must be deterministic");
+    let normalized_info = oxml_media::probe(&first).unwrap();
+    assert_eq!(
+        (normalized_info.width_px, normalized_info.height_px),
+        (
+            F214_POWERPOINT_COMPARISON_WIDTH,
+            F214_POWERPOINT_COMPARISON_HEIGHT
+        )
+    );
+    assert!(
+        normalize_powerpoint_timeline_oracle_frame_for_comparison(&static_before).is_none(),
+        "normalization must reject input that is not the exact raw movie geometry"
+    );
+
+    let static_after =
+        oxml_pdf::render_page_to_png(&source_layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap();
+    assert_eq!(
+        static_before, static_after,
+        "oracle normalization must not alter static Rust rendering at 150 dpi"
+    );
+}
+
+#[test]
+fn powerpoint_timeline_oracle_foreground_cutoff_ignores_fixed_opacity_halo() {
+    let oracle_dir = std::env::var_os("RDOCX_PPTX_TIMELINE_ORACLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("corpus/pptx-timeline-oracle"));
+    let appear = oracle_dir.join("timeline-appear-active-330.png");
+    let opacity = oracle_dir.join("timeline-opacity-mid-1320.png");
+    if !appear.is_file() || !opacity.is_file() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required fixed opacity-halo oracle frames are missing"
+        );
+        eprintln!("PowerPoint opacity-halo regression skipped because fixed frames are absent");
+        return;
+    }
+    assert_eq!(
+        sha256(&appear),
+        "3970c922c4105875bb57cfd61896cafc345c0aaa520434651415a5e9b2f57f16"
+    );
+    assert_eq!(
+        sha256(&opacity),
+        "14c836fc873c5080e3834eab04b72e2c93b30e814440cd0f845942faa5d71c69"
+    );
+
+    let script = r#"from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[1])
+from pptx_ssim_harness import decode_png
+
+def foreground_bounds(image, cutoff):
+    width, height, rgba = image
+    points = []
+    for index in range(width * height):
+        red, green, blue, alpha = rgba[index * 4:index * 4 + 4]
+        red = (red * alpha + 255 * (255 - alpha) + 127) // 255
+        green = (green * alpha + 255 * (255 - alpha) + 127) // 255
+        blue = (blue * alpha + 255 * (255 - alpha) + 127) // 255
+        if min(red, green, blue) < cutoff:
+            points.append((index % width, index // width))
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+appear = decode_png(Path(sys.argv[2]))
+opacity = decode_png(Path(sys.argv[3]))
+cutoff = int(sys.argv[4])
+print(*foreground_bounds(appear, cutoff), *foreground_bounds(opacity, cutoff), *foreground_bounds(appear, 250), *foreground_bounds(opacity, 250))
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .arg(workspace_root().join("scripts"))
+        .arg(&appear)
+        .arg(&opacity)
+        .arg(F214_POWERPOINT_FOREGROUND_CHANNEL_CUTOFF.to_string())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "fixed opacity-halo helper failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bounds = String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(bounds.len(), 16);
+    assert_eq!(
+        &bounds[0..4],
+        &bounds[4..8],
+        "approved foreground cutoff must keep geometry invariant under opacity"
+    );
+    assert_ne!(
+        &bounds[8..12],
+        &bounds[12..16],
+        "legacy near-white cutoff must expose the fixed movie's opacity halo"
+    );
+}
+
+#[test]
+fn fade_composition_matches_the_fixed_powerpoint_observation() {
+    let oracle_dir = std::env::var_os("RDOCX_PPTX_TIMELINE_ORACLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("corpus/pptx-timeline-oracle"));
+    let oracle = oracle_dir.join("ordinary-transition-425.png");
+    if !oracle.is_file() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required fixed fade oracle frame is missing"
+        );
+        eprintln!("PowerPoint fade regression skipped because the fixed frame is absent");
+        return;
+    }
+    assert_eq!(
+        sha256(&oracle),
+        "61d45d85bd3d6a36361cdad6d438fc60e0a3295e932b582f6e046af16879818d"
+    );
+
+    let presentation =
+        Presentation::from_bytes(&powerpoint_timeline_oracle_source_bytes()).unwrap();
+    let frame = presentation
+        .render_timeline_deterministic(
+            2,
+            TimelinePosition {
+                elapsed_ms: 425,
+                click_count: 0,
+            },
+            Some(1),
+        )
+        .unwrap();
+    let layout = oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(frame.page)],
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    let rust_png =
+        oxml_pdf::render_page_to_png(&layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap();
+    let normalized_oracle =
+        normalize_powerpoint_timeline_oracle_frame_for_comparison(&fs::read(&oracle).unwrap())
+            .unwrap();
+    let rust_path = std::env::temp_dir().join(format!(
+        "rpptx-f214-fixed-fade-rust-{}.png",
+        std::process::id()
+    ));
+    let oracle_path = std::env::temp_dir().join(format!(
+        "rpptx-f214-fixed-fade-oracle-{}.png",
+        std::process::id()
+    ));
+    fs::write(&rust_path, rust_png).unwrap();
+    fs::write(&oracle_path, normalized_oracle).unwrap();
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            "from pathlib import Path; import sys; sys.path.insert(0, sys.argv[1]); from pptx_ssim_harness import decode_png, structural_similarity; print(structural_similarity(decode_png(Path(sys.argv[2])), decode_png(Path(sys.argv[3]))))",
+        ])
+        .arg(workspace_root().join("scripts"))
+        .arg(&rust_path)
+        .arg(&oracle_path)
+        .output()
+        .unwrap();
+    fs::remove_file(&rust_path).unwrap();
+    fs::remove_file(&oracle_path).unwrap();
+    assert!(
+        output.status.success(),
+        "fixed fade helper failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let score = String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .parse::<f64>()
+        .unwrap();
+    assert!(score >= 0.99, "fixed PowerPoint fade SSIM {score}");
+}
+
+#[test]
+#[ignore = "launches pinned PowerPoint and writes ignored oracle artifacts"]
+fn generate_powerpoint_timeline_frame_oracle() {
+    let oracle_dir = std::env::var_os("RDOCX_PPTX_TIMELINE_ORACLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("corpus/pptx-timeline-oracle"));
+    fs::create_dir_all(&oracle_dir).unwrap();
+    let source = oracle_dir.join("timeline-oracle-source.pptx");
+    let movie = oracle_dir.join("timeline-oracle.mp4");
+    fs::write(&source, powerpoint_timeline_oracle_source_bytes()).unwrap();
+    let pinned_movie_sha256 = std::env::var(F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV).ok();
+    if let Some(pinned_movie_sha256) = pinned_movie_sha256.as_deref() {
+        assert!(
+            movie.is_file(),
+            "{F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV} was supplied but {} is missing",
+            movie.display()
+        );
+        let actual_movie_sha256 = sha256(&movie);
+        assert!(
+            is_approved_powerpoint_timeline_oracle_movie_pin(
+                &actual_movie_sha256,
+                pinned_movie_sha256
+            ),
+            "existing PowerPoint movie SHA-256 does not match {F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV}"
+        );
+    } else {
+        assert!(
+            !movie.exists(),
+            "refusing to overwrite {}; supply its exact SHA-256 in {F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV} to ingest it",
+            movie.display()
+        );
+        assert_powerpoint_build();
+        let app = Path::new("/Applications/Microsoft PowerPoint.app");
+        assert!(app.is_dir(), "pinned Microsoft PowerPoint is not installed");
+        let source_argument = format!(
+            "set sourceFile to POSIX file {:?}",
+            source.to_string_lossy()
+        );
+        let movie_argument = format!("set movieFile to POSIX file {:?}", movie.to_string_lossy());
+        let width_argument = format!(
+            "set «class mFrW» of «class pSMs» of item 1 of presentations to {F214_POWERPOINT_ORACLE_WIDTH}"
+        );
+        let height_argument = format!(
+            "set «class mFrH» of «class pSMs» of item 1 of presentations to {F214_POWERPOINT_ORACLE_HEIGHT}"
+        );
+        let output = Command::new("osascript")
+            .args(["-e", "tell application \"Microsoft PowerPoint\""])
+            .args(["-e", &source_argument])
+            .args(["-e", &movie_argument])
+            .args(["-e", "open sourceFile"])
+            .args(["-e", &width_argument])
+            .args(["-e", &height_argument])
+            .args([
+                "-e",
+                "save item 1 of presentations in movieFile as save as movie",
+            ])
+            .args(["-e", "close item 1 of presentations saving no"])
+            .args(["-e", "end tell"])
+            .output()
+            .expect("launch pinned PowerPoint movie export");
+        assert!(
+            output.status.success(),
+            "PowerPoint movie export failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        movie.is_file(),
+        "PowerPoint did not create {}",
+        movie.display()
+    );
+    assert!(has_approved_powerpoint_fade_outgoing_binding(
+        &F214_POWERPOINT_ORACLE_CASES
+    ));
+
+    let mut frame_lines = Vec::new();
+    for &(case, slide, local_timestamp_ms, click_count, movie_time_value, movie_time_timescale) in
+        &F214_POWERPOINT_ORACLE_CASES
+    {
+        let png = oracle_dir.join(format!("{case}-{local_timestamp_ms}.png"));
+        let output =
+            extract_powerpoint_movie_frame(&movie, &png, movie_time_value, movie_time_timescale);
+        assert!(
+            output.status.success(),
+            "PowerPoint frame extraction failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            powerpoint_movie_extractor_returned_exact_time(
+                &output.stdout,
+                F214_POWERPOINT_ORACLE_WIDTH,
+                F214_POWERPOINT_ORACLE_HEIGHT,
+                movie_time_value,
+                movie_time_timescale
+            ),
+            "{case}: extractor did not return the exact requested movie time: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        frame_lines.push(format!(
+            "frame\t{case}\t{slide}\t{local_timestamp_ms}\t{click_count}\t{movie_time_value}\t{movie_time_timescale}\t{}\t{}\t{F214_POWERPOINT_ORACLE_WIDTH}\t{F214_POWERPOINT_ORACLE_HEIGHT}\t{F214_POWERPOINT_ORACLE_CLASSIFICATION}",
+            png.file_name().unwrap().to_string_lossy(),
+            sha256(&png)
+        ));
+    }
+    let source_sha256 = sha256(&source);
+    let movie_sha256 = sha256(&movie);
+    if let Some(pinned_movie_sha256) = pinned_movie_sha256.as_deref() {
+        assert!(is_approved_powerpoint_timeline_oracle_movie_pin(
+            &movie_sha256,
+            pinned_movie_sha256
+        ));
+    }
+    let manifest = format!(
+        "application\tMicrosoft PowerPoint\nversion\t{POWERPOINT_VERSION}\nbundle_build\t{POWERPOINT_BUILD}\napp_build\t{POWERPOINT_APP_BUILD}\n{}\ndpi\t150\ngeometry_tolerance_pt\t1\nssim_threshold\t0.99\nsource\t{}\t{}\nmovie\t{}\t{}\t{}\t{POWERPOINT_VERSION}\t{POWERPOINT_BUILD}\t{POWERPOINT_APP_BUILD}\nframe\tcase\tslide\ttimestamp_ms\tclick_count\tmovie_time_value\tmovie_time_timescale\tpng\tsha256\twidth\theight\tclassification\n{}\n",
+        F214_POWERPOINT_ORACLE_PROVENANCE.join("\n"),
+        source.file_name().unwrap().to_string_lossy(),
+        source_sha256,
+        movie.file_name().unwrap().to_string_lossy(),
+        movie_sha256,
+        source_sha256,
+        frame_lines.join("\n")
+    );
+    fs::write(oracle_dir.join("manifest.tsv"), manifest).unwrap();
+}
+
+#[test]
+fn timeline_frames_render_through_the_existing_resolved_slide_boundary() {
+    let presentation = Presentation::from_bytes(&timeline_fixture_bytes()).unwrap();
+    let frame = presentation
+        .render_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 500,
+                click_count: 0,
+            },
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(frame.state.shapes.len(), 1);
+    assert_eq!(frame.state.shapes.values().next().unwrap().opacity, 0.5);
+    let PositionedElement::Group(shape) = &frame.page.elements[0] else {
+        panic!("timeline shape should reuse the normal renderer group")
+    };
+    assert_eq!(shape.opacity, 0.5);
+}
+
+#[test]
+fn timeline_render_rejects_a_supplied_outgoing_index_out_of_bounds() {
+    let presentation = Presentation::from_bytes(&timeline_fixture_bytes()).unwrap();
+    let error = presentation
+        .render_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 500,
+                click_count: 0,
+            },
+            Some(1),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::UnknownSlideIndex {
+            index: 1,
+            slide_count: 1
+        }
+    ));
+}
+
+#[test]
+fn morph_uses_the_timestamped_outgoing_page_that_matches_its_evaluated_state() {
+    let bytes = powerpoint_timeline_oracle_source_bytes();
+    let mut package = open_opc(&bytes, "timestamped outgoing morph source");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let outgoing_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[2].relationship_id)
+        .unwrap();
+    let outgoing_part =
+        OpcPackage::resolve_rel_target(&presentation_part, &outgoing_relationship.target);
+    let outgoing_xml =
+        String::from_utf8(package.get_part(&outgoing_part).unwrap().to_vec()).unwrap();
+    let outgoing_model = CT_Slide::from_xml(outgoing_xml.as_bytes()).unwrap();
+    let shape_id = outgoing_model.common_slide_data.shape_tree.children[0]
+        .non_visual_id()
+        .unwrap();
+    let timing = format!(
+        r#"<p:timing><p:tnLst><p:anim from="0" to="100000"><p:cBhvr><p:cTn id="1" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr></p:anim><p:cmd type="call" cmd="unsupported"/></p:tnLst></p:timing>"#
+    );
+    package.set_part(
+        &outgoing_part,
+        outgoing_xml
+            .replacen("</p:sld>", &format!("{timing}</p:sld>"), 1)
+            .into_bytes(),
+    );
+
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let outgoing_start = presentation
+        .render_timeline_deterministic(
+            2,
+            TimelinePosition {
+                elapsed_ms: 0,
+                click_count: 0,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(outgoing_start.state.shapes[&shape_id].opacity, 0.0);
+    let outgoing = presentation
+        .render_timeline_deterministic(
+            2,
+            TimelinePosition {
+                elapsed_ms: u64::MAX,
+                click_count: u32::MAX,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(outgoing.state.shapes[&shape_id].opacity, 1.0);
+    let frame = presentation
+        .render_timeline_deterministic(
+            3,
+            TimelinePosition {
+                elapsed_ms: 0,
+                click_count: 0,
+            },
+            Some(2),
+        )
+        .unwrap();
+    assert!(
+        frame
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == "unsupported timing node cmd"),
+        "{:?}",
+        frame.diagnostics
+    );
+    assert!(matches!(
+        frame
+            .state
+            .transition
+            .as_ref()
+            .map(|transition| &transition.effect),
+        Some(rpptx_oxml::timing::TransitionEffect::Morph)
+    ));
+    let render = |page| {
+        let layout = oxml_layout::LayoutResult::new(
+            vec![std::sync::Arc::new(page)],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        oxml_pdf::render_page_to_png(&layout, 0, 150.0).unwrap()
+    };
+    assert_eq!(
+        render(frame.page),
+        render(outgoing.page),
+        "morph progress zero must equal the terminal evaluated outgoing page"
+    );
+}
+
+#[test]
+fn timeline_facade_retains_resolver_diagnostics() {
+    let bytes = timeline_fixture_bytes();
+    let mut package = open_opc(&bytes, "timeline resolver diagnostic");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &relationship.target);
+    let slide = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let unsupported = slide.replacen("prst=\"rect\"", "prst=\"not-a-preset\"", 1);
+    assert_ne!(unsupported, slide);
+    package.set_part(&slide_part, unsupported.into_bytes());
+
+    let frame = Presentation::from_bytes(&package_bytes(package))
+        .unwrap()
+        .render_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 500,
+                click_count: 0,
+            },
+            None,
+        )
+        .unwrap();
+
+    assert!(frame.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("unknown preset geometry `not-a-preset`")
+    }));
+}
+
+#[test]
+fn ordinary_static_rendering_does_not_execute_the_timeline() {
+    let timeline = Presentation::from_bytes(&timeline_fixture_bytes()).unwrap();
+    let timeline_layout = timeline.render_deterministic().unwrap().1;
+
+    let mut static_presentation = Presentation::new().unwrap();
+    static_presentation.add_slide(0).unwrap();
+    static_presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_shape(
+            "rect",
+            Emu(914_400),
+            Emu(914_400),
+            Emu(1_828_800),
+            Emu(914_400),
+        )
+        .unwrap();
+    let static_layout = static_presentation.render_deterministic().unwrap().1;
+
+    assert_eq!(
+        oxml_pdf::render_to_pdf(&timeline_layout),
+        oxml_pdf::render_to_pdf(&static_layout)
+    );
+    assert_eq!(
+        oxml_pdf::render_page_to_png(&timeline_layout, 0, 150.0).unwrap(),
+        oxml_pdf::render_page_to_png(&static_layout, 0, 150.0).unwrap()
+    );
+}
+
+#[test]
+fn pinned_timestamps_match_powerpoint_frame_oracle_within_declared_tolerances() {
+    const HEADER: &str = "frame\tcase\tslide\ttimestamp_ms\tclick_count\tmovie_time_value\tmovie_time_timescale\tpng\tsha256\twidth\theight\tclassification";
+    let oracle_dir = std::env::var_os("RDOCX_PPTX_TIMELINE_ORACLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("corpus/pptx-timeline-oracle"));
+    if !oracle_dir.is_dir() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required PowerPoint timeline oracle is missing at {}",
+            oracle_dir.display()
+        );
+        eprintln!(
+            "PowerPoint timeline oracle skipped because {} is absent",
+            oracle_dir.display()
+        );
+        return;
+    }
+    let manifest_path = oracle_dir.join("manifest.tsv");
+    if !manifest_path.is_file() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required PowerPoint timeline oracle manifest is missing at {}",
+            manifest_path.display()
+        );
+        eprintln!(
+            "PowerPoint timeline oracle skipped because {} is absent",
+            manifest_path.display()
+        );
+        return;
+    }
+    let manifest = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|error| panic!("{}: {error}", manifest_path.display()));
+    let lines = manifest.lines().collect::<Vec<_>>();
+    assert!(lines.contains(&"application\tMicrosoft PowerPoint"));
+    assert!(lines.contains(&format!("version\t{POWERPOINT_VERSION}").as_str()));
+    assert!(lines.contains(&format!("bundle_build\t{POWERPOINT_BUILD}").as_str()));
+    assert!(lines.contains(&format!("app_build\t{POWERPOINT_APP_BUILD}").as_str()));
+    assert!(lines.contains(&"dpi\t150"));
+    assert!(lines.contains(&"geometry_tolerance_pt\t1"));
+    assert!(lines.contains(&"ssim_threshold\t0.99"));
+    assert!(
+        has_approved_powerpoint_timeline_oracle_provenance(&lines),
+        "PowerPoint timeline oracle capture provenance is missing, duplicated, or substituted"
+    );
+    let source_fields = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("source\t"))
+        .expect("timeline oracle manifest source")
+        .split('\t')
+        .collect::<Vec<_>>();
+    assert_eq!(source_fields.len(), 2);
+    let source = oracle_dir.join(source_fields[0]);
+    assert_eq!(sha256(&source), source_fields[1]);
+    let source_bytes = fs::read(&source).unwrap();
+    assert!(
+        is_approved_powerpoint_timeline_oracle_source(&source_bytes),
+        "PowerPoint timeline oracle source does not match the approved deterministic generator"
+    );
+    let presentation = Presentation::from_bytes(&source_bytes).unwrap();
+    let pinned_movie_sha256 = match std::env::var(F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV) {
+        Ok(value) => value,
+        Err(_) => {
+            assert!(
+                std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+                "required PowerPoint timeline oracle movie SHA-256 is not pinned in {F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV}"
+            );
+            eprintln!(
+                "PowerPoint timeline oracle skipped because {F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV} is unset"
+            );
+            return;
+        }
+    };
+    let movie_fields = lines
+        .iter()
+        .find(|line| line.starts_with("movie\t"))
+        .expect("timeline oracle manifest movie")
+        .split('\t')
+        .collect::<Vec<_>>();
+    let movie = oracle_dir.join(movie_fields.get(1).copied().unwrap_or_default());
+    let actual_movie_sha256 = sha256(&movie);
+    assert!(
+        is_approved_powerpoint_timeline_oracle_movie_pin(
+            &actual_movie_sha256,
+            &pinned_movie_sha256
+        ),
+        "{F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV} must be the actual lowercase movie SHA-256"
+    );
+    assert!(
+        is_approved_powerpoint_timeline_oracle_movie_binding(
+            &movie_fields,
+            &actual_movie_sha256,
+            &pinned_movie_sha256,
+            source_fields[1]
+        ),
+        "PowerPoint timeline oracle movie is not independently pinned to the exact source and PowerPoint builds"
+    );
+    let header_index = lines.iter().position(|line| *line == HEADER).unwrap();
+    let frames = &lines[header_index + 1..];
+    assert!(!frames.is_empty());
+    let mut covered_cases = HashSet::new();
+    let mut fade_outgoing_bound = false;
+    for (frame_index, line) in frames.iter().enumerate() {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 12, "{}", manifest_path.display());
+        assert_eq!(fields[0], "frame");
+        let case = fields[1];
+        assert!(covered_cases.insert(case), "duplicate oracle case {case}");
+        let slide = fields[2].parse::<usize>().unwrap();
+        let timestamp_ms = fields[3].parse::<u64>().unwrap();
+        let click_count = fields[4].parse::<u32>().unwrap();
+        let movie_time_value = fields[5].parse::<i64>().unwrap();
+        let movie_time_timescale = fields[6].parse::<i32>().unwrap();
+        assert!(
+            is_approved_powerpoint_timeline_oracle_case(
+                case,
+                slide,
+                timestamp_ms,
+                click_count,
+                movie_time_value,
+                movie_time_timescale
+            ),
+            "{case}: manifest slide, local timestamp, click count, and encoded movie sample time must match the approved generator capture"
+        );
+        if case == "ordinary-transition" {
+            assert!(
+                fade_outgoing_bound,
+                "ordinary-transition requires the preceding verified terminal outgoing observation"
+            );
+        }
+        let oracle_png = oracle_dir.join(fields[7]);
+        assert_eq!(sha256(&oracle_png), fields[8]);
+        let width = fields[9].parse::<u32>().unwrap();
+        let height = fields[10].parse::<u32>().unwrap();
+        assert_eq!(
+            (width, height),
+            (F214_POWERPOINT_ORACLE_WIDTH, F214_POWERPOINT_ORACLE_HEIGHT),
+            "{case}: PowerPoint oracle frame dimensions must match the standard movie export"
+        );
+        assert!(
+            is_approved_powerpoint_timeline_oracle_classification(fields[11]),
+            "{case}: substituted or unsupported divergence classification"
+        );
+        let reextracted_path = std::env::temp_dir().join(format!(
+            "rpptx-f214-powerpoint-{}-{frame_index}.png",
+            std::process::id()
+        ));
+        let extraction = extract_powerpoint_movie_frame(
+            &movie,
+            &reextracted_path,
+            movie_time_value,
+            movie_time_timescale,
+        );
+        assert!(
+            extraction.status.success(),
+            "{case}: gate-side PowerPoint frame re-extraction failed: {}",
+            String::from_utf8_lossy(&extraction.stderr)
+        );
+        assert!(
+            powerpoint_movie_extractor_returned_exact_time(
+                &extraction.stdout,
+                width,
+                height,
+                movie_time_value,
+                movie_time_timescale
+            ),
+            "{case}: gate-side extractor did not return the exact requested movie time: {}",
+            String::from_utf8_lossy(&extraction.stdout)
+        );
+        let oracle_png_bytes = fs::read(&oracle_png).unwrap();
+        let reextracted_png_bytes = fs::read(&reextracted_path).unwrap();
+        fs::remove_file(&reextracted_path).unwrap();
+        assert!(
+            powerpoint_timeline_oracle_frame_matches_reextraction(
+                &oracle_png_bytes,
+                &reextracted_png_bytes
+            ),
+            "{case}: stored PNG bytes do not match gate-side extraction from the pinned movie sample time"
+        );
+        let normalized_oracle_png =
+            normalize_powerpoint_timeline_oracle_frame_for_comparison(&oracle_png_bytes)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{case}: verified raw PowerPoint frame could not be normalized to the comparison geometry"
+                    )
+                });
+        let normalized_oracle_path = std::env::temp_dir().join(format!(
+            "rpptx-f214-powerpoint-normalized-{}-{frame_index}.png",
+            std::process::id()
+        ));
+        fs::write(&normalized_oracle_path, normalized_oracle_png).unwrap();
+        let outgoing_slide_index = if case == "ordinary-transition-outgoing-terminal" {
+            None
+        } else {
+            slide.checked_sub(1)
+        };
+        let frame = presentation
+            .render_timeline_deterministic(
+                slide,
+                TimelinePosition {
+                    elapsed_ms: timestamp_ms,
+                    click_count,
+                },
+                outgoing_slide_index,
+            )
+            .unwrap();
+        let layout = oxml_layout::LayoutResult::new(
+            vec![std::sync::Arc::new(frame.page)],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let rust_png =
+            oxml_pdf::render_page_to_png(&layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap();
+        let rust_path = std::env::temp_dir().join(format!(
+            "rpptx-f214-{}-{frame_index}.png",
+            std::process::id()
+        ));
+        fs::write(&rust_path, rust_png).unwrap();
+        let script = r#"from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[1])
+from pptx_ssim_harness import decode_png, structural_similarity
+
+def foreground_bounds(image, cutoff):
+    width, height, rgba = image
+    points = []
+    for index in range(width * height):
+        red, green, blue, alpha = rgba[index * 4:index * 4 + 4]
+        red = (red * alpha + 255 * (255 - alpha) + 127) // 255
+        green = (green * alpha + 255 * (255 - alpha) + 127) // 255
+        blue = (blue * alpha + 255 * (255 - alpha) + 127) // 255
+        if min(red, green, blue) < cutoff:
+            points.append((index % width, index // width))
+    if not points:
+        raise ValueError("image has no measurable foreground geometry")
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+rust = decode_png(Path(sys.argv[2]))
+oracle = decode_png(Path(sys.argv[3]))
+cutoff = int(sys.argv[4])
+rust_bounds = foreground_bounds(rust, cutoff)
+oracle_bounds = foreground_bounds(oracle, cutoff)
+geometry_error_pt = max(abs(left - right) for left, right in zip(rust_bounds, oracle_bounds)) * 72 / 150
+print(rust[0], rust[1], oracle[0], oracle[1], structural_similarity(rust, oracle), geometry_error_pt, *rust_bounds, *oracle_bounds)
+"#;
+        let output = Command::new("python3")
+            .args(["-c", script])
+            .arg(workspace_root().join("scripts"))
+            .arg(&rust_path)
+            .arg(&normalized_oracle_path)
+            .arg(F214_POWERPOINT_FOREGROUND_CHANNEL_CUTOFF.to_string())
+            .output()
+            .unwrap();
+        fs::remove_file(&rust_path).unwrap();
+        fs::remove_file(&normalized_oracle_path).unwrap();
+        assert!(
+            output.status.success(),
+            "{case}: SSIM helper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let values = String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 14);
+        assert_eq!(
+            values[0].parse::<u32>().unwrap(),
+            F214_POWERPOINT_COMPARISON_WIDTH
+        );
+        assert_eq!(
+            values[1].parse::<u32>().unwrap(),
+            F214_POWERPOINT_COMPARISON_HEIGHT
+        );
+        assert_eq!(
+            values[2].parse::<u32>().unwrap(),
+            F214_POWERPOINT_COMPARISON_WIDTH
+        );
+        assert_eq!(
+            values[3].parse::<u32>().unwrap(),
+            F214_POWERPOINT_COMPARISON_HEIGHT
+        );
+        let score = values[4].parse::<f64>().unwrap();
+        let geometry_error = values[5].parse::<f64>().unwrap();
+        let rust_bounds = &values[6..10];
+        let oracle_bounds = &values[10..14];
+        eprintln!(
+            "{case}: geometry_error_pt={geometry_error:.6}, ssim={score:.6}, rust_bounds={}, oracle_bounds={}",
+            rust_bounds.join(","),
+            oracle_bounds.join(",")
+        );
+        assert!(
+            geometry_error <= 1.0,
+            "{case}: measured geometry error {geometry_error} pt, {}",
+            fields[11]
+        );
+        assert!(score >= 0.99, "{case}: SSIM {score}, {}", fields[11]);
+        if case == "ordinary-transition-outgoing-terminal" {
+            fade_outgoing_bound = true;
+        }
+    }
+    assert!(
+        fade_outgoing_bound,
+        "PowerPoint timeline oracle must verify the fade's terminal outgoing observation"
+    );
+    assert_eq!(
+        covered_cases,
+        F214_POWERPOINT_ORACLE_CASES
+            .iter()
+            .map(|(case, ..)| *case)
+            .collect(),
+        "PowerPoint timeline oracle manifest must cover every evaluator and compositor case"
+    );
+}
+
 #[test]
 fn native_presentation_pdfa_method_selects_the_requested_profile() {
     let mut presentation = Presentation::new().expect("create presentation");
@@ -5902,8 +7796,20 @@ fn assert_powerpoint_build() {
         .args(["-c", "Print :CFBundleVersion", app])
         .output()
         .expect("read PowerPoint build");
+    let app_build = Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"Microsoft PowerPoint\" to return build as text",
+        ])
+        .output()
+        .expect("read PowerPoint AppleScript build");
     assert!(version.status.success());
     assert!(build.status.success());
+    assert!(
+        app_build.status.success(),
+        "PowerPoint AppleScript build query failed: {}",
+        String::from_utf8_lossy(&app_build.stderr)
+    );
     assert_eq!(
         String::from_utf8(version.stdout).unwrap().trim(),
         POWERPOINT_VERSION
@@ -5911,6 +7817,10 @@ fn assert_powerpoint_build() {
     assert_eq!(
         String::from_utf8(build.stdout).unwrap().trim(),
         POWERPOINT_BUILD
+    );
+    assert_eq!(
+        String::from_utf8(app_build.stdout).unwrap().trim(),
+        POWERPOINT_APP_BUILD
     );
 }
 

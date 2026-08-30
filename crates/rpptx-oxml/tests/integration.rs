@@ -29,10 +29,695 @@ use rpptx_oxml::shape_tree::{
 use rpptx_oxml::slide_parts::{
     BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
 };
+use rpptx_oxml::timing::{
+    CT_SlideTransition, CT_Timing, TimingDuration, TimingEvent, TimingNode, TimingNodeType,
+    TimingTarget, TransitionEffect,
+};
 
 const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
 const EXPECTED_DECKS: usize = 50;
 type DrawingElements = (Vec<Vec<u8>>, Vec<Vec<u8>>);
+
+#[test]
+fn timing_sequences_parallel_groups_triggers_and_effects_round_trip_in_schema_order() {
+    let xml = format!(
+        r#"<q:timing xmlns:q="{P_NS}" xmlns:r="{R_NS}" xmlns:x="urn:f213"><q:tnLst><q:par><q:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><q:stCondLst><q:cond evt="onClick" delay="0"><q:tgtEl><q:sldTgt/></q:tgtEl></q:cond></q:stCondLst><q:childTnLst><q:seq concurrent="1" nextAc="seek"><q:cTn id="2" grpId="2" dur="1000" nodeType="mainSeq"><q:childTnLst><q:animEffect transition="in" filter="fade"><q:cBhvr><q:cTn id="3" dur="250" presetID="1" presetClass="entr" presetSubtype="0"/><q:tgtEl><q:spTgt spid="7"/></q:tgtEl></q:cBhvr></q:animEffect><q:animMotion path="M 0 0 L 1 1 E" origin="layout"><q:cBhvr><q:cTn id="4" dur="750"/><q:tgtEl><q:spTgt spid="8"/></q:tgtEl></q:cBhvr></q:animMotion><q:set><q:cBhvr><q:cTn id="5" dur="1"/><q:tgtEl><q:spTgt spid="7"/></q:tgtEl><q:attrNameLst><q:attrName>style.visibility</q:attrName></q:attrNameLst></q:cBhvr><q:to><q:strVal val="visible"/></q:to></q:set><x:command r:id="rId9"/></q:childTnLst></q:cTn><q:prevCondLst><q:cond evt="onPrev" delay="0"><q:tn val="3"/></q:cond></q:prevCondLst><q:nextCondLst><q:cond evt="onNext" delay="0"/></q:nextCondLst></q:seq></q:childTnLst></q:cTn></q:par></q:tnLst><q:bldLst><q:bldP spid="7" grpId="2" build="p" bldLvl="2" rev="1" advAuto="500" animBg="0" autoUpdateAnimBg="1" uiExpand="1"/></q:bldLst></q:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(timing.builds().len(), 1);
+    let build = &timing.builds()[0];
+    assert_eq!(build.group_id, Some(2));
+    assert_eq!(build.build_mode.as_deref(), Some("p"));
+    assert_eq!(build.build_level, Some(2));
+    assert_eq!(build.reverse, Some(true));
+    assert_eq!(
+        build.advance_automatically,
+        Some(TimingDuration::Finite(500))
+    );
+    let TimingNode::Parallel(root) = &timing.nodes()[0] else {
+        panic!("expected timing root parallel node");
+    };
+    assert_eq!(root.common.node_type, Some(TimingNodeType::TimingRoot));
+    assert_eq!(
+        root.common.start_conditions[0].event,
+        Some(TimingEvent::OnClick)
+    );
+    assert_eq!(root.common.start_conditions[0].target, TimingTarget::Slide);
+    let TimingNode::Sequence(sequence) = &root.common.children[0] else {
+        panic!("expected main sequence");
+    };
+    assert_eq!(sequence.common.duration, TimingDuration::Finite(1000));
+    assert_eq!(sequence.common.group_id, build.group_id);
+    assert_eq!(
+        sequence.previous_conditions[0].event,
+        Some(TimingEvent::OnPrevious)
+    );
+    assert_eq!(
+        sequence.previous_conditions[0].target,
+        TimingTarget::TimeNode(3)
+    );
+    assert_eq!(sequence.next_conditions[0].event, Some(TimingEvent::OnNext));
+    assert_eq!(
+        sequence.next_conditions[0].target,
+        TimingTarget::Unsupported
+    );
+    let TimingNode::Effect(effect) = &sequence.common.children[0] else {
+        panic!("expected entrance effect");
+    };
+    assert_eq!(effect.target, TimingTarget::Shape(7));
+    let TimingNode::Motion(motion) = &sequence.common.children[1] else {
+        panic!("expected motion path");
+    };
+    assert_eq!(motion.target, TimingTarget::Shape(8));
+    let TimingNode::Set(set) = &sequence.common.children[2] else {
+        panic!("expected set behavior");
+    };
+    assert_eq!(set.value.as_deref(), Some("visible"));
+    assert!(matches!(
+        sequence.common.children[3],
+        TimingNode::Unsupported(_)
+    ));
+    assert_eq!(timing.to_xml(), xml.as_bytes());
+    assert_eq!(timing, CT_Timing::from_xml(&timing.to_xml()).unwrap());
+}
+
+#[test]
+fn timing_mutation_preserves_every_unsupported_sibling_and_relationship_attribute() {
+    let xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{R_NS}" xmlns:x="urn:f213"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><x:before/><p:timing xmlns:a="urn:shadow-a" xmlns:r="urn:shadow-r"><p:tnLst><x:before-node r:id="rId4"><x:data/></x:before-node><p:par><p:cTn x:keep='A&#x20;B' r:id='rId&#x37;' id='1' dur='100'><p:childTnLst><x:media r:id="rId7"/></p:childTnLst></p:cTn></p:par><x:after-node/></p:tnLst><x:after-list/></p:timing><x:after/></p:sld>"#
+    );
+    let mut slide = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    slide
+        .timing
+        .as_mut()
+        .unwrap()
+        .set_node_duration(1, TimingDuration::Finite(275))
+        .unwrap();
+    let written = String::from_utf8(slide.to_xml().unwrap()).unwrap();
+    assert!(written.contains("dur='275'"));
+    assert!(written.contains("<p:cTn x:keep='A&#x20;B' r:id='rId&#x37;' id='1' dur='275'>"));
+    assert!(written.contains(r#"<x:before-node r:id="rId4"><x:data/></x:before-node>"#));
+    assert!(written.contains(r#"<x:media r:id="rId7"/>"#));
+    assert!(written.contains("<x:after-node/>"));
+    assert!(written.contains("<x:after-list/>"));
+    assert_order(
+        written.as_bytes(),
+        &["<x:before/>", "<p:timing", "<x:after/>"],
+    );
+    let reopened = CT_Slide::from_xml(written.as_bytes()).unwrap();
+    let reopened_timing = reopened.timing.unwrap();
+    let root = reopened_timing
+        .nodes()
+        .iter()
+        .find_map(|node| match node {
+            TimingNode::Parallel(root) => Some(root),
+            _ => None,
+        })
+        .expect("expected parallel node");
+    assert_eq!(root.common.duration, TimingDuration::Finite(275));
+}
+
+#[test]
+fn timing_duration_mutation_never_searches_unsupported_node_subtrees() {
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst><x:node><p:cTn id="2" dur="900" x:keep="yes"/></x:node><p:par><p:cTn id="1" dur="100"><p:childTnLst><p:set><p:cBhvr><p:cTn id="2" dur="125"/></p:cBhvr></p:set></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"#
+    );
+    let mut timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    timing
+        .set_node_duration(2, TimingDuration::Finite(275))
+        .unwrap();
+    let written = String::from_utf8(timing.to_xml()).unwrap();
+    assert!(written.contains(r#"<x:node><p:cTn id="2" dur="900" x:keep="yes"/></x:node>"#));
+    assert!(written.contains(r#"<p:cBhvr><p:cTn id="2" dur="275"/></p:cBhvr>"#));
+
+    let unsupported_only = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst><x:node><p:cTn id="9" dur="900"/></x:node></p:tnLst></p:timing>"#
+    );
+    let mut timing = CT_Timing::from_xml(unsupported_only.as_bytes()).unwrap();
+    let before = timing.clone();
+    assert!(
+        timing
+            .set_node_duration(9, TimingDuration::Finite(275))
+            .is_err()
+    );
+    assert_eq!(timing, before);
+}
+
+#[test]
+fn malformed_timing_does_not_partially_mutate_the_slide() {
+    for timing in [
+        r#"<p:timing><p:tnLst><p:par><p:cTn id="1" dur="broken"/></p:par></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:par><p:cTn dur="1"/></p:par></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst/><p:tnLst/></p:timing>"#,
+        r#"<p:timing><p:bldLst/><p:tnLst/></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:par><p:cTn id="1"><p:childTnLst/><p:stCondLst/></p:cTn></p:par></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:par><p:cTn id="1"><p:stCondLst/><p:stCondLst/></p:cTn></p:par></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:set><p:cBhvr><p:tgtEl><p:spTgt spid="1"/></p:tgtEl><p:cTn id="2"/></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:set><p:cBhvr><p:cTn id="2"/><p:tgtEl><p:spTgt spid="1"/></p:tgtEl><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:set><p:to><p:strVal val="visible"/></p:to><p:cBhvr><p:cTn id="2"/></p:cBhvr></p:set></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:set><x:wrapper><p:cBhvr><p:cTn id="2"/></p:cBhvr></x:wrapper></p:set></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:set><p:cBhvr><p:cTn id="2"/></p:cBhvr><p:cBhvr><p:cTn id="3"/></p:cBhvr></p:set></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:par><x:wrapper><p:cTn id="1"/></x:wrapper></p:par></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:par><p:cTn id="1"/><p:cTn id="2"/></p:par></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:par><p:cTn id="1"><p:stCondLst><p:cond><p:tn val="2"/><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:stCondLst></p:cTn></p:par></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:set><p:cBhvr><p:cTn id="2"/></p:cBhvr><p:to><p:strVal val="visible"/></p:to><p:to><p:strVal val="hidden"/></p:to></p:set></p:tnLst></p:timing>"#,
+        r#"<p:timing><p:tnLst><p:set><p:cBhvr><p:cTn id="2"/></p:cBhvr><p:to><p:strVal val="visible"/><p:intVal val="1"/></p:to></p:set></p:tnLst></p:timing>"#,
+    ] {
+        let xml = format!(
+            r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld>{timing}</p:sld>"#
+        );
+        assert!(CT_Slide::from_xml(xml.as_bytes()).is_err(), "{timing}");
+    }
+
+    let valid = format!(
+        r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:par><p:cTn id="1" dur="100"/></p:par></p:tnLst></p:timing>"#
+    );
+    let mut timing = CT_Timing::from_xml(valid.as_bytes()).unwrap();
+    let before = timing.clone();
+    assert!(
+        timing
+            .set_node_duration(99, TimingDuration::Finite(200))
+            .is_err()
+    );
+    assert_eq!(timing, before);
+}
+
+#[test]
+fn foreign_and_nested_set_variants_do_not_become_typed_values() {
+    for value in [
+        r#"<p:to><x:strVal val="visible"/></p:to>"#,
+        r#"<x:wrapper><p:to><p:strVal val="visible"/></p:to></x:wrapper>"#,
+    ] {
+        let xml = format!(
+            r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst><p:set><p:cBhvr><p:cTn id="1"/><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr>{value}</p:set></p:tnLst></p:timing>"#
+        );
+        let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+        let TimingNode::Set(set) = &timing.nodes()[0] else {
+            panic!("expected set behavior");
+        };
+        assert_eq!(set.value, None, "{value}");
+    }
+}
+
+#[test]
+fn timing_targets_and_attribute_names_use_direct_expanded_name_boundaries() {
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst><p:par><p:cTn id="1"><p:stCondLst><p:cond><x:wrapper><p:tn val="2"/></x:wrapper></p:cond></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="2"/><p:tgtEl><p:tn val="3"/><x:wrapper><p:spTgt spid="4"/></x:wrapper></p:tgtEl><p:attrNameLst>  <x:attrName>style.foreign</x:attrName>  <p:attrName> style.visibility </p:attrName>  </p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    let TimingNode::Parallel(root) = &timing.nodes()[0] else {
+        panic!("expected parallel node");
+    };
+    assert_eq!(
+        root.common.start_conditions[0].target,
+        TimingTarget::Unsupported
+    );
+    assert_eq!(
+        timing.condition_has_explicit_target(1, false, 0),
+        Some(false)
+    );
+    let TimingNode::Set(set) = &root.common.children[0] else {
+        panic!("expected set node");
+    };
+    assert_eq!(set.target, TimingTarget::Unsupported);
+    assert_eq!(set.attribute_name.as_deref(), Some("style.visibility"));
+    assert_eq!(timing.to_xml(), xml.as_bytes());
+}
+
+#[test]
+fn timing_condition_target_presence_preserves_the_f213_projection() {
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:q="{P_NS}"><p:tnLst><p:par><p:cTn id="7"><p:stCondLst><p:cond delay="0"/><q:cond delay="1"></q:cond><p:cond delay="2"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond><p:cond delay="3"><p:rtn val="all"/></p:cond><p:cond delay="4"><p:tgtEl><p:sndTgt/></p:tgtEl></p:cond></p:stCondLst><p:endCondLst><p:cond delay="5"/><p:cond delay="6"><p:rtn val="all"/></p:cond></p:endCondLst></p:cTn></p:par></p:tnLst></p:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    let TimingNode::Parallel(root) = &timing.nodes()[0] else {
+        panic!("expected parallel timing node")
+    };
+
+    assert_eq!(
+        root.common
+            .start_conditions
+            .iter()
+            .map(|condition| &condition.target)
+            .collect::<Vec<_>>(),
+        vec![
+            &TimingTarget::Unsupported,
+            &TimingTarget::Unsupported,
+            &TimingTarget::Slide,
+            &TimingTarget::Unsupported,
+            &TimingTarget::Unsupported,
+        ]
+    );
+    assert_eq!(
+        (0..5)
+            .map(|index| timing.condition_has_explicit_target(7, false, index))
+            .collect::<Vec<_>>(),
+        vec![Some(false), Some(false), Some(true), Some(true), Some(true)]
+    );
+    assert_eq!(
+        (0..2)
+            .map(|index| timing.condition_has_explicit_target(7, true, index))
+            .collect::<Vec<_>>(),
+        vec![Some(false), Some(true)]
+    );
+    assert_eq!(timing.condition_has_explicit_target(7, false, 5), None);
+    assert_eq!(timing.condition_has_explicit_target(8, false, 0), None);
+    assert_eq!(timing.to_xml(), xml.as_bytes());
+    let mut mutated = timing.clone();
+    mutated
+        .set_node_duration(7, TimingDuration::Finite(900))
+        .unwrap();
+    assert_eq!(
+        mutated.condition_has_explicit_target(7, false, 3),
+        Some(true)
+    );
+}
+
+#[test]
+fn unsupported_direct_targets_consume_choices_and_direct_cdata_names_are_typed() {
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:r="{R_NS}" xmlns:x="urn:producer"><p:tnLst><p:par><p:cTn id="1"><p:stCondLst><p:cond><p:rtn val="all"/></p:cond></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="2"/><p:tgtEl><p:sndTgt r:embed="rId7"/></p:tgtEl><p:attrNameLst><p:attrName>  <x:format><![CDATA[style.foreign]]></x:format><![CDATA[ style.visibility ]]></p:attrName></p:attrNameLst></p:cBhvr></p:set></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    let TimingNode::Parallel(root) = &timing.nodes()[0] else {
+        panic!("expected parallel node");
+    };
+    assert_eq!(
+        root.common.start_conditions[0].target,
+        TimingTarget::Unsupported
+    );
+    assert_eq!(
+        timing.condition_has_explicit_target(1, false, 0),
+        Some(true)
+    );
+    let TimingNode::Set(set) = &root.common.children[0] else {
+        panic!("expected set node");
+    };
+    assert_eq!(set.target, TimingTarget::Unsupported);
+    assert_eq!(set.attribute_name.as_deref(), Some("style.visibility"));
+    assert_eq!(timing.to_xml(), xml.as_bytes());
+
+    for invalid in [
+        r#"<p:par><p:cTn id="1"><p:stCondLst><p:cond><p:rtn val="all"/><p:tn val="2"/></p:cond></p:stCondLst></p:cTn></p:par>"#,
+        r#"<p:set><p:cBhvr><p:cTn id="1"/><p:tgtEl><p:sndTgt r:embed="rId7"/><p:spTgt spid="4"/></p:tgtEl></p:cBhvr></p:set>"#,
+        r#"<p:set><p:cBhvr><p:cTn id="1"/><p:tgtEl><p:inkTgt spid="3"/><p:sldTgt/></p:tgtEl></p:cBhvr></p:set>"#,
+    ] {
+        let xml = format!(
+            r#"<p:timing xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:tnLst>{invalid}</p:tnLst></p:timing>"#
+        );
+        assert!(CT_Timing::from_xml(xml.as_bytes()).is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn direct_attribute_name_resolves_numeric_references_without_descending() {
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst><p:set><p:cBhvr><p:cTn id="1"/><p:attrNameLst><p:attrName><x:format>wrong&#x2E;name&amp;state</x:format>style&#x2E;visibility</p:attrName></p:attrNameLst></p:cBhvr></p:set></p:tnLst></p:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    let TimingNode::Set(set) = &timing.nodes()[0] else {
+        panic!("expected set node");
+    };
+    assert_eq!(set.attribute_name.as_deref(), Some("style.visibility"));
+    assert_eq!(timing.to_xml(), xml.as_bytes());
+}
+
+#[test]
+fn compatibility_transition_selects_supported_choice_or_fallback_only() {
+    use rpptx_oxml::timing::TransitionSpeed;
+
+    let xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="{MC_NS}" xmlns:u="urn:unsupported" xmlns:x="urn:producer"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><mc:AlternateContent><mc:Choice Requires="u"><p:transition spd="slow"><p:wipe dir="d"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>"#
+    );
+    let mut slide = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    let transition = slide.transition.as_mut().unwrap();
+    assert_eq!(transition.speed, Some(TransitionSpeed::Fast));
+    assert_eq!(transition.effect, Some(TransitionEffect::Fade));
+    transition.set_speed(TransitionSpeed::Medium).unwrap();
+    let written = String::from_utf8(slide.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"<mc:Choice Requires="u"><p:transition spd="slow">"#));
+    assert!(written.contains(r#"<mc:Fallback><p:transition spd="med">"#));
+
+    let nested = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="{MC_NS}" xmlns:x="urn:producer"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><mc:AlternateContent><mc:Fallback><x:wrapper><p:transition/></x:wrapper></mc:Fallback></mc:AlternateContent></p:sld>"#
+    );
+    let slide = CT_Slide::from_xml(nested.as_bytes()).unwrap();
+    assert!(slide.transition.is_none());
+    assert!(
+        String::from_utf8(slide.to_xml().unwrap())
+            .unwrap()
+            .contains("<x:wrapper><p:transition/></x:wrapper>")
+    );
+}
+
+#[test]
+fn selected_compatibility_branches_enforce_transition_and_effect_singletons() {
+    let slide = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="{MC_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><mc:AlternateContent><mc:Fallback><p:transition/><p:transition/></mc:Fallback></mc:AlternateContent></p:sld>"#
+    );
+    assert!(CT_Slide::from_xml(slide.as_bytes()).is_err());
+
+    let transition = format!(
+        r#"<p:transition xmlns:p="{P_NS}" xmlns:mc="{MC_NS}"><mc:AlternateContent><mc:Fallback><p:fade/><p:wipe/></mc:Fallback></mc:AlternateContent></p:transition>"#
+    );
+    assert!(CT_SlideTransition::from_xml(transition.as_bytes()).is_err());
+}
+
+#[test]
+fn transition_effect_choice_and_following_children_enforce_schema_sequence() {
+    for transition in [
+        r#"<p:transition><p:wipe/><p:push/></p:transition>"#,
+        r#"<p:transition><p:sndAc/><p:wipe/></p:transition>"#,
+        r#"<p:transition><p:extLst/><p:sndAc/></p:transition>"#,
+    ] {
+        let xml = transition.replace(
+            "<p:transition",
+            &format!(r#"<p:transition xmlns:p="{P_NS}""#),
+        );
+        assert!(
+            CT_SlideTransition::from_xml(xml.as_bytes()).is_err(),
+            "{xml}"
+        );
+    }
+}
+
+#[test]
+fn slide_like_roots_reject_earlier_modelled_children_after_transition() {
+    let slide = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:transition/><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"#
+    );
+    assert!(CT_Slide::from_xml(slide.as_bytes()).is_err());
+
+    let layout = format!(
+        r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:transition><p:fade/></p:transition><p:hf/></p:sldLayout>"#
+    );
+    assert!(CT_SlideLayout::from_xml(layout.as_bytes()).is_err());
+
+    for transition in [
+        r#"<p:transition spd="fast"/>"#,
+        r#"<p:transition></p:transition>"#,
+        r#"<p:transition/><x:between/>"#,
+    ] {
+        let layout = format!(
+            r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld>{transition}<p:hf/></p:sldLayout>"#
+        );
+        assert!(CT_SlideLayout::from_xml(layout.as_bytes()).is_err());
+    }
+}
+
+#[test]
+fn empty_layout_transition_immediately_before_hf_is_typed_and_canonicalized() {
+    let xml = format!(
+        r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:transition/><p:hf hdr="0" dt="0"/></p:sldLayout>"#
+    );
+    let layout = CT_SlideLayout::from_xml(xml.as_bytes()).unwrap();
+    assert!(layout.transition.is_some());
+    assert!(layout.header_footer.is_some());
+
+    let written = layout.to_xml().unwrap();
+    assert_order(&written, &["<p:hf", "<p:transition"]);
+    let reparsed = CT_SlideLayout::from_xml(&written).unwrap();
+    assert!(reparsed.transition.is_some());
+    assert!(reparsed.header_footer.is_some());
+    assert_eq!(reparsed.to_xml().unwrap(), written);
+}
+
+#[test]
+fn transition_parameters_and_extension_duration_use_expanded_names() {
+    let xml = format!(
+        r#"<p:transition xmlns:p="{P_NS}" xmlns:z="http://schemas.microsoft.com/office/powerpoint/2010/main" z:dur="725" spd="med"><p:wipe dir="d" thruBlk="1"/></p:transition>"#
+    );
+    let transition = CT_SlideTransition::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(transition.duration_ms, Some(725));
+    assert_eq!(transition.effect, Some(TransitionEffect::Wipe));
+    assert_eq!(
+        transition
+            .effect_parameters
+            .iter()
+            .map(|parameter| (parameter.name.as_str(), parameter.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("dir", "d"), ("thruBlk", "1")]
+    );
+
+    let unqualified = format!(r#"<p:transition xmlns:p="{P_NS}" dur="725"/>"#);
+    assert_eq!(
+        CT_SlideTransition::from_xml(unqualified.as_bytes())
+            .unwrap()
+            .duration_ms,
+        None
+    );
+}
+
+#[test]
+fn transition_effect_compatibility_choice_uses_capabilities_and_fallback() {
+    let fallback = format!(
+        r#"<p:transition xmlns:p="{P_NS}" xmlns:mc="{MC_NS}" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:u="urn:unsupported"><mc:AlternateContent><mc:Choice Requires="u"><p159:morph option="byObject"/></mc:Choice><mc:Fallback><p:fade/></mc:Fallback></mc:AlternateContent></p:transition>"#
+    );
+    let transition = CT_SlideTransition::from_xml(fallback.as_bytes()).unwrap();
+    assert_eq!(transition.effect, Some(TransitionEffect::Fade));
+    assert_eq!(transition.morph, None);
+
+    let supported = format!(
+        r#"<p:transition xmlns:p="{P_NS}" xmlns:mc="{MC_NS}" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:u="urn:unsupported"><mc:AlternateContent><mc:Choice Requires="u"><p159:morph option="foreign"/></mc:Choice><mc:Choice Requires="p159"><p159:morph option="byObject"/></mc:Choice><mc:Fallback><p:fade/></mc:Fallback></mc:AlternateContent></p:transition>"#
+    );
+    let mut transition = CT_SlideTransition::from_xml(supported.as_bytes()).unwrap();
+    assert_eq!(transition.effect, Some(TransitionEffect::Morph));
+    assert_eq!(
+        transition.morph.as_ref().unwrap().option.as_deref(),
+        Some("byObject")
+    );
+    transition.set_morph_option("byWord").unwrap();
+    let written = String::from_utf8(transition.to_xml()).unwrap();
+    assert!(written.contains(r#"<p159:morph option="foreign"/>"#));
+    assert!(written.contains(r#"<p159:morph option="byWord"/>"#));
+}
+
+#[test]
+fn direct_morph_mutation_ignores_unsupported_nested_morph() {
+    let nested = r#"<x:wrapper marker='A&#x20;B'><p159:morph option='nested' x:keep='C&#x20;D'/></x:wrapper>"#;
+    let xml = format!(
+        r#"<p:transition xmlns:p="{P_NS}" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:x="urn:producer">{nested}<p159:morph option="byObject"/></p:transition>"#
+    );
+    let mut transition = CT_SlideTransition::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(transition.effect, Some(TransitionEffect::Morph));
+    assert_eq!(
+        transition.morph.as_ref().unwrap().option.as_deref(),
+        Some("byObject")
+    );
+
+    transition.set_morph_option("byWord").unwrap();
+    let written = String::from_utf8(transition.to_xml()).unwrap();
+    assert!(written.contains(nested));
+    assert!(written.contains(r#"<p159:morph option="byWord"/>"#));
+    let reparsed = CT_SlideTransition::from_xml(written.as_bytes()).unwrap();
+    assert_eq!(
+        reparsed.morph.as_ref().unwrap().option.as_deref(),
+        Some("byWord")
+    );
+}
+
+#[test]
+fn empty_layout_transition_remains_typed_and_enforces_root_sequence() {
+    let prefix = format!(
+        r#"<p:sldLayout xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:hf/>"#
+    );
+    let layout =
+        CT_SlideLayout::from_xml(format!("{prefix}<p:transition/></p:sldLayout>").as_bytes())
+            .unwrap();
+    assert!(layout.transition.is_some());
+
+    let duplicate = format!("{prefix}<p:transition/><p:transition/></p:sldLayout>");
+    assert!(CT_SlideLayout::from_xml(duplicate.as_bytes()).is_err());
+
+    let backward = format!("{prefix}<p:transition/><p:timing/></p:sldLayout>");
+    assert!(CT_SlideLayout::from_xml(backward.as_bytes()).is_err());
+}
+
+#[test]
+fn the_corpus_timeline_preserves_every_unsupported_sibling() {
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = TimelineCoverage::default();
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, xml) in &package.parts {
+            if !part.ends_with(".xml") {
+                continue;
+            }
+            if part.starts_with("/ppt/slides/slide") {
+                coverage.slides += 1;
+                let slide = CT_Slide::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                let written = slide.to_xml().unwrap();
+                let reparsed = CT_Slide::from_xml(&written).unwrap();
+                record_timeline_round_trip(
+                    slide.timing.as_ref(),
+                    slide.transition.as_ref(),
+                    reparsed.timing.as_ref(),
+                    reparsed.transition.as_ref(),
+                    &mut coverage,
+                );
+                assert_eq!(slide, reparsed);
+            } else if part.starts_with("/ppt/slideLayouts/slideLayout") {
+                coverage.layouts += 1;
+                let layout = CT_SlideLayout::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                let written = layout.to_xml().unwrap();
+                let reparsed = CT_SlideLayout::from_xml(&written).unwrap();
+                record_timeline_round_trip(
+                    layout.timing.as_ref(),
+                    layout.transition.as_ref(),
+                    reparsed.timing.as_ref(),
+                    reparsed.transition.as_ref(),
+                    &mut coverage,
+                );
+                assert_eq!(layout, reparsed);
+            } else if part.starts_with("/ppt/slideMasters/slideMaster") {
+                coverage.masters += 1;
+                let master = CT_SlideMaster::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                let written = master.to_xml().unwrap();
+                let reparsed = CT_SlideMaster::from_xml(&written).unwrap();
+                record_timeline_round_trip(
+                    master.timing.as_ref(),
+                    master.transition.as_ref(),
+                    reparsed.timing.as_ref(),
+                    reparsed.transition.as_ref(),
+                    &mut coverage,
+                );
+                assert_eq!(master, reparsed);
+            }
+        }
+    }
+    assert!(coverage.slides > 0, "corpus has no slide coverage");
+    assert!(coverage.layouts > 0, "corpus has no layout coverage");
+    assert!(coverage.masters > 0, "corpus has no master coverage");
+    assert!(coverage.timing_roots > 0, "corpus has no timing coverage");
+    assert!(
+        coverage.transitions > 0,
+        "corpus has no transition coverage"
+    );
+    assert!(coverage.typed_nodes > 0, "corpus has no typed timing nodes");
+    assert!(
+        coverage.conditions > 0,
+        "corpus has no typed timing triggers"
+    );
+    assert!(coverage.builds > 0, "corpus has no typed timing builds");
+    assert!(coverage.set_values > 0, "corpus has no typed set values");
+    assert!(
+        coverage.effect_parameters > 0,
+        "corpus has no typed effect parameters"
+    );
+    assert!(
+        coverage.compatibility_transitions > 0,
+        "corpus has no typed compatibility transitions"
+    );
+    assert!(
+        coverage.unsupported_nodes > 0,
+        "corpus has no unsupported timing-node inventory"
+    );
+    eprintln!("timeline corpus coverage: {coverage:?}");
+}
+
+#[derive(Debug, Default)]
+struct TimelineCoverage {
+    slides: usize,
+    layouts: usize,
+    masters: usize,
+    timing_roots: usize,
+    transitions: usize,
+    typed_nodes: usize,
+    conditions: usize,
+    builds: usize,
+    set_values: usize,
+    effect_parameters: usize,
+    compatibility_transitions: usize,
+    unsupported_nodes: usize,
+}
+
+fn record_timeline_round_trip(
+    timing: Option<&CT_Timing>,
+    transition: Option<&CT_SlideTransition>,
+    reparsed_timing: Option<&CT_Timing>,
+    reparsed_transition: Option<&CT_SlideTransition>,
+    coverage: &mut TimelineCoverage,
+) {
+    assert_eq!(
+        timing.map(CT_Timing::raw_xml),
+        reparsed_timing.map(CT_Timing::raw_xml)
+    );
+    assert_eq!(
+        transition.map(CT_SlideTransition::raw_xml),
+        reparsed_transition.map(CT_SlideTransition::raw_xml)
+    );
+    if let Some(timing) = timing {
+        coverage.timing_roots += 1;
+        coverage.builds += timing.builds().len();
+        let mut unsupported = Vec::new();
+        for node in timing.nodes() {
+            record_timing_node(node, coverage, &mut unsupported);
+        }
+        let mut reparsed_unsupported = Vec::new();
+        if let Some(reparsed) = reparsed_timing {
+            let mut ignored = TimelineCoverage::default();
+            for node in reparsed.nodes() {
+                record_timing_node(node, &mut ignored, &mut reparsed_unsupported);
+            }
+        }
+        assert_eq!(unsupported, reparsed_unsupported);
+    }
+    if let Some(transition) = transition {
+        coverage.transitions += 1;
+        coverage.effect_parameters += transition.effect_parameters.len();
+        if transition
+            .raw_xml()
+            .windows(b"AlternateContent".len())
+            .any(|window| window == b"AlternateContent")
+        {
+            coverage.compatibility_transitions += 1;
+        }
+    }
+}
+
+fn record_timing_node(
+    node: &TimingNode,
+    coverage: &mut TimelineCoverage,
+    unsupported: &mut Vec<Vec<u8>>,
+) {
+    let common = match node {
+        TimingNode::Parallel(container) => Some(&container.common),
+        TimingNode::Sequence(sequence) => {
+            coverage.conditions +=
+                sequence.previous_conditions.len() + sequence.next_conditions.len();
+            Some(&sequence.common)
+        }
+        TimingNode::Set(set) => {
+            coverage.set_values += usize::from(set.value.is_some());
+            Some(&set.common)
+        }
+        TimingNode::Animate(animate) => Some(&animate.common),
+        TimingNode::Effect(effect) => {
+            coverage.effect_parameters +=
+                usize::from(effect.filter.is_some()) + usize::from(effect.transition.is_some());
+            Some(&effect.common)
+        }
+        TimingNode::Motion(motion) => Some(&motion.common),
+        TimingNode::Unsupported(node) => {
+            coverage.unsupported_nodes += 1;
+            unsupported.push(node.raw_xml().to_vec());
+            None
+        }
+    };
+    if let Some(common) = common {
+        coverage.typed_nodes += 1;
+        coverage.conditions += common.start_conditions.len() + common.end_conditions.len();
+        for child in &common.children {
+            record_timing_node(child, coverage, unsupported);
+        }
+    }
+}
 
 #[test]
 fn slide_size_mutation_preserves_kind_and_unmodelled_xml() {
@@ -1324,6 +2009,23 @@ fn alternate_content_without_fallback_preserves_choices_and_selects_none() {
             .unwrap()
             .windows(raw.len())
             .any(|part| part == raw.as_bytes())
+    );
+}
+
+#[test]
+fn alternate_content_chart_choice_exposes_non_visual_identity() {
+    let raw = r#"<mc:AlternateContent><mc:Choice Requires="p14"><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="42" name="!!Chart &amp; Data"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic></p:graphicFrame></mc:Choice><mc:Fallback/></mc:AlternateContent>"#;
+    let tree = alternate_content_tree(raw.as_bytes(), &[]).unwrap();
+    let wrapped = &tree.children[0];
+
+    assert_eq!(wrapped.non_visual_id(), Some(42));
+    assert_eq!(wrapped.non_visual_name().as_deref(), Some("!!Chart & Data"));
+    assert_eq!(
+        tree.to_xml().unwrap(),
+        CT_ShapeTree::from_xml(&tree.to_xml().unwrap())
+            .unwrap()
+            .to_xml()
+            .unwrap()
     );
 }
 

@@ -60,6 +60,19 @@ comment parts, occupied conventional paths, and unserializable staged changes
 without mutating the opened package. All fixtures remain source-built in the
 two existing integration binaries.
 
+The Presentation timing round-trip gate is
+`the_corpus_timeline_preserves_every_unsupported_sibling`. It walks every
+slide, layout, and master in the 50-deck corpus. The gate requires nonzero
+coverage for timing roots, transitions, typed nodes, conditions, builds, set
+values, transition parameters, compatibility-wrapped transitions, and
+unsupported timing nodes. It serializes and reparses each model, compares the
+typed projection, and inventories unsupported node bytes before and after.
+Source-built regressions cover namespace aliases, compatibility choice and
+fallback selection, singleton and schema order rejection, lexical owner-tag
+preservation, atomic mutation, morph metadata, and the narrow PowerPoint empty
+layout-transition compatibility shape. A parse-state size guard and the full
+`rpptx` corpus package test keep the default test-thread stack sufficient.
+
 The ordered-body integration gate opens an in-code package through the public
 Word facade and compares the exact direct sequence of paragraphs, a table, a
 body content control, preserved producer XML, and a final paragraph. It also
@@ -672,7 +685,7 @@ slide text, and optional speaker-note text. Empty python-pptx names and shape
 text capability without a stored `p:txBody` are normalized to the facade's
 explicit `Option` contract.
 
-Four gates run against it:
+Five gates run against it:
 
 1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
    serialises and reparses to a structurally equal value. The pinned corpus has
@@ -693,7 +706,11 @@ Four gates run against it:
    content types, relationships, part names, part counts, and every part byte
    against that expectation. The gate requires nonzero corpus coverage for all
    seven root types.
-4. **Opens without repair** (M8 and M11): every saved deck opened manually in
+4. **Timing model round-trip**: every slide, layout, and master timing or
+   transition subtree projects the supported model while unsupported siblings
+   retain exact bytes. Coverage counters must remain nonzero for every bounded
+   timing category, including compatibility transitions and raw nodes.
+5. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
@@ -713,6 +730,33 @@ corpus gates. A missing configured corpus skips them when
 `RDOCX_PPTX_CORPUS_REQUIRED` is unset and fails them when it is set. The
 one-time native acceptance record does not require the external files to remain
 present after review.
+
+The native timeline differential uses a source-built deck and Microsoft
+PowerPoint 16.104, Info.plist build 16.104.25121423, and AppleScript build 1214.
+The ignored source, movie, raw PNGs, and manifest are bound by SHA-256. The
+source hash is
+`a1f610feab5ee9ba0629c1b4731cf5e5b1453f6980a7574770036010b1f833fa`,
+the movie hash is
+`28514432f4aafae9d6c5ddd522d23e87458e08ec59ebf5555398a74e712fa83e`,
+and the nine-case manifest hash is
+`cd0e3f582e55546432c83528e1967926c45f3ba6258a5c8c195c0421974d611c`.
+Each case binds a source slide, Rust slide-local timestamp and click count, and
+an exact rational movie sample. Gate-side AVFoundation re-extraction must
+return the same sample and the same 1920 by 1080 raw bytes. One deterministic
+in-memory resize normalizes only the verified oracle image to the unchanged
+2001 by 1125 Rust raster produced at literal 150 dpi.
+
+The required gate covers five automatic timeline states, a terminal outgoing
+state, fade, morph, and push. Exact click and fill one-millisecond boundaries
+stay in Rust regressions because the 600-timescale movie cannot distinguish
+them. Zoom remains covered by Rust direction and composition regressions because
+the source movie's zoom interval is byte-identical and therefore cannot supply
+independent external evidence. Foreground geometry permits at most 1 point
+error and global luminance SSIM must be at least 0.99. The recorded nine cases
+have geometry errors from 0.48 to 0.96 points and SSIM from 0.997866 to
+0.999953. Mean geometry error is 0.533333 points and mean SSIM is 0.999543.
+Required-corpus mode fails closed on missing artifacts, hashes, provenance,
+sample identity, dimensions, normalization provenance, or case coverage.
 
 ## The Word corpus
 
@@ -868,6 +912,12 @@ and maximum.
 automatic gate: every slide renders without panic, missing output, dimension
 mismatch, or a dropped bounded shape. Hard manual gate: the pinned native
 PowerPoint representative review is recorded and accepted.**
+
+The current complete 50-deck run covers 421 slides and passes both corpus
+orchestration tests. Twenty-five slides reach at least 0.95 SSIM, or 5.938
+percent. The minimum is -0.091350, the median is 0.512539, and the maximum is
+1.0. `target_met` is false. This is recorded trend evidence, not a claim that
+the advisory quality target passed.
 
 The trend line is not a PowerPoint-conformance threshold. A calibration over
 all 34 slides of the ecodesign representative uses Microsoft PowerPoint 16.104

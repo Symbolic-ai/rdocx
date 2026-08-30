@@ -11,6 +11,7 @@ mod context;
 mod font;
 mod style;
 mod text;
+pub mod timeline;
 
 pub use context::{
     BackgroundContent, BackgroundSource, EffectiveBackground, FlattenedItem, FlattenedSource,

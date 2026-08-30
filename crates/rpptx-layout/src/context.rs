@@ -38,6 +38,10 @@ use rpptx_oxml::slide_parts::{BackgroundRendering, CT_Slide, CT_SlideLayout, CT_
 use crate::ResolveError;
 use crate::style::{referenced_fill, substitute_fill};
 use crate::text::EffectiveListStyle;
+use crate::timeline::{
+    EvaluatedFrameState, EvaluatedShapeState, ResolvedShapeIdentity, ResolvedTimelineSlide,
+    TimelinePosition, evaluate_timeline,
+};
 use crate::{
     ChartResource, ParagraphAlignment, ResolvedAutofit, ResolvedBackground, ResolvedBullet,
     ResolvedBulletSize, ResolvedContent, ResolvedGeometry, ResolvedImage, ResolvedImagePlacement,
@@ -331,6 +335,27 @@ impl<'a> ResolveCtx<'a> {
             .map(|(slide, _)| slide)
     }
 
+    /// Resolves one slide through the additive slide-local timeline path.
+    pub fn resolve_slide_at(
+        &self,
+        size: (f64, f64),
+        position: TimelinePosition,
+    ) -> Result<ResolvedTimelineSlide, ResolveError> {
+        let (slide, _, identities) =
+            self.resolve_slide_inner_with_identities(size, None, None, None, None)?;
+        let state = evaluate_timeline(
+            self.slide.timing.as_ref(),
+            self.slide.transition.as_ref(),
+            position,
+        )?;
+        Ok(apply_timeline_state(
+            slide,
+            identities,
+            state,
+            timeline_group_geometries(&self.slide.common_slide_data.shape_tree.children),
+        ))
+    }
+
     /// Resolves one slide using embedded media identifiers scoped to source parts.
     pub fn resolve_slide_with_media(
         &self,
@@ -393,13 +418,85 @@ impl<'a> ResolveCtx<'a> {
         )
     }
 
+    /// Resolves one timestamped slide while retaining text directions and target identity.
+    pub fn resolve_slide_with_chart_resources_and_text_directions_at(
+        &self,
+        size: (f64, f64),
+        media: &ScopedMediaIds,
+        hyperlinks: &ScopedHyperlinkTargets,
+        charts: &ScopedChartResources,
+        fonts: &mut FontManager,
+        position: TimelinePosition,
+    ) -> Result<(ResolvedTimelineSlide, ResolvedSlideTextDirections), ResolveError> {
+        let (slide, directions, identities) = self.resolve_slide_inner_with_identities(
+            size,
+            Some(media),
+            Some(hyperlinks),
+            Some(charts),
+            Some(fonts),
+        )?;
+        let state = evaluate_timeline(
+            self.slide.timing.as_ref(),
+            self.slide.transition.as_ref(),
+            position,
+        )?;
+        Ok((
+            apply_timeline_state(
+                slide,
+                identities,
+                state,
+                timeline_group_geometries(&self.slide.common_slide_data.shape_tree.children),
+            ),
+            directions,
+        ))
+    }
+
     fn resolve_slide_inner(
         &self,
         size: (f64, f64),
         media: Option<&ScopedMediaIds>,
         hyperlinks: Option<&ScopedHyperlinkTargets>,
         charts: Option<&ScopedChartResources>,
+        fonts: Option<&mut FontManager>,
+    ) -> Result<(ResolvedSlide, ResolvedSlideTextDirections), ResolveError> {
+        self.resolve_slide_inner_common(size, media, hyperlinks, charts, fonts, None)
+    }
+
+    fn resolve_slide_inner_with_identities(
+        &self,
+        size: (f64, f64),
+        media: Option<&ScopedMediaIds>,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
+        charts: Option<&ScopedChartResources>,
+        fonts: Option<&mut FontManager>,
+    ) -> Result<
+        (
+            ResolvedSlide,
+            ResolvedSlideTextDirections,
+            Vec<ResolvedShapeIdentity>,
+        ),
+        ResolveError,
+    > {
+        let mut identities = Vec::new();
+        let (slide, directions) = self.resolve_slide_inner_common(
+            size,
+            media,
+            hyperlinks,
+            charts,
+            fonts,
+            Some(&mut identities),
+        )?;
+        Ok((slide, directions, identities))
+    }
+
+    fn resolve_slide_inner_common(
+        &self,
+        size: (f64, f64),
+        media: Option<&ScopedMediaIds>,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
+        charts: Option<&ScopedChartResources>,
         mut fonts: Option<&mut FontManager>,
+        mut identities: Option<&mut Vec<ResolvedShapeIdentity>>,
     ) -> Result<(ResolvedSlide, ResolvedSlideTextDirections), ResolveError> {
         let mut slide = ResolvedSlide {
             size,
@@ -470,6 +567,9 @@ impl<'a> ResolveCtx<'a> {
                         fonts.as_deref_mut(),
                         (&mut slide.diagnostics, &mut shape_text_directions),
                     )? {
+                        if let Some(identities) = identities.as_deref_mut() {
+                            identities.push(self.shape_identity(source, child));
+                        }
                         slide.shapes.push(shape);
                         text_directions.push(shape_text_directions);
                     }
@@ -477,6 +577,27 @@ impl<'a> ResolveCtx<'a> {
             }
         }
         Ok((slide, text_directions))
+    }
+
+    fn shape_identity(
+        &self,
+        source: FlattenedSource,
+        child: &ShapeTreeChild,
+    ) -> ResolvedShapeIdentity {
+        let children: &[ShapeTreeChild] = match source {
+            FlattenedSource::Slide => &self.slide.common_slide_data.shape_tree.children,
+            FlattenedSource::Layout => &self.layout.common_slide_data.shape_tree.children,
+            FlattenedSource::Master => &self.master.common_slide_data.shape_tree.children,
+            FlattenedSource::Background => &[],
+        };
+        let mut containing_group_ids = Vec::new();
+        find_group_lineage(children, child, &mut Vec::new(), &mut containing_group_ids);
+        ResolvedShapeIdentity {
+            source,
+            shape_id: child.non_visual_id(),
+            containing_group_ids,
+            name: child.non_visual_name(),
+        }
     }
 
     fn resolve_flattened_shape(
@@ -2858,6 +2979,441 @@ fn push_unmatched(keys: &mut Vec<PlaceholderKey>, key: PlaceholderKey) {
     }
 }
 
+fn find_group_lineage(
+    children: &[ShapeTreeChild],
+    target: &ShapeTreeChild,
+    lineage: &mut Vec<u32>,
+    found: &mut Vec<u32>,
+) -> bool {
+    for child in children {
+        if std::ptr::eq(child, target) {
+            *found = lineage.clone();
+            return true;
+        }
+        match child {
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(id) = child.non_visual_id() {
+                    lineage.push(id);
+                }
+                if find_group_lineage(&group.children, target, lineage, found) {
+                    return true;
+                }
+                if child.non_visual_id().is_some() {
+                    lineage.pop();
+                }
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                if let Some(fallback) = alternate.selected_fallback()
+                    && find_group_lineage(fallback, target, lineage, found)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn apply_timeline_state(
+    mut slide: ResolvedSlide,
+    identities: Vec<ResolvedShapeIdentity>,
+    mut state: EvaluatedFrameState,
+    mut group_geometries: BTreeMap<u32, TimelineGroupGeometry>,
+) -> ResolvedTimelineSlide {
+    let invalid_targets = state
+        .shapes
+        .iter()
+        .filter_map(|(target, evaluated)| (!evaluated.is_finite()).then_some(*target))
+        .collect::<Vec<_>>();
+    for target in invalid_targets {
+        state.shapes.insert(target, EvaluatedShapeState::default());
+        state.diagnostics.push(Diagnostic {
+            message: format!("non-finite timeline state ignored for target {target}"),
+        });
+    }
+    let slide_size = slide.size;
+    for (group_id, bounds) in timeline_group_bounds(&slide, &identities) {
+        group_geometries
+            .entry(group_id)
+            .or_insert_with(|| TimelineGroupGeometry::from_page_bounds(bounds));
+    }
+    let shape_states = identities
+        .iter()
+        .zip(&mut slide.shapes)
+        .map(|(identity, shape)| {
+            if identity.source != FlattenedSource::Slide {
+                return EvaluatedShapeState::default();
+            }
+            let mut evaluated = EvaluatedShapeState::default();
+            let original_bounds = shape.bounds;
+            let original_shape = shape.clone();
+            let mut group_transform = Transform::IDENTITY;
+            let mut group_page_clips = Vec::new();
+            for group_id in &identity.containing_group_ids {
+                let Some(target_state) = state.shapes.get(group_id) else {
+                    continue;
+                };
+                evaluated.visible &= target_state.visible;
+                evaluated.opacity *= target_state.opacity;
+                let Some(geometry) = group_geometries.get(group_id).copied() else {
+                    continue;
+                };
+                let target_transform =
+                    target_state.resolved_page_transform(geometry.center(), slide_size);
+                group_transform = target_transform.then(group_transform);
+                if let Some(clip) = target_state.clip {
+                    group_page_clips.push(group_clip_page_points(clip, geometry, group_transform));
+                }
+            }
+            let direct_state = identity.shape_id.and_then(|id| state.shapes.get(&id));
+            if let Some(direct_state) = direct_state {
+                evaluated.visible &= direct_state.visible;
+                evaluated.opacity *= direct_state.opacity;
+                evaluated.clip = intersect_optional_rect(evaluated.clip, direct_state.clip);
+            }
+            let (scale_x, scale_y, rotation_deg) = direct_state.map_or(
+                (1.0, 1.0, 0.0),
+                EvaluatedShapeState::resolved_shape_geometry,
+            );
+            let original_page_bounds = resolved_shape_page_bounds(&original_shape);
+            let original_page_center = (
+                original_page_bounds.x + original_page_bounds.width / 2.0,
+                original_page_bounds.y + original_page_bounds.height / 2.0,
+            );
+            let page_motion = direct_state.map_or(Transform::IDENTITY, |direct_state| {
+                direct_state.resolved_motion_translation(original_page_center, slide_size)
+            });
+            evaluated.transform = page_motion.then(group_transform);
+            let animated_bounds = Rect {
+                x: original_bounds.x + original_bounds.width * (1.0 - scale_x) / 2.0,
+                y: original_bounds.y + original_bounds.height * (1.0 - scale_y) / 2.0,
+                width: original_bounds.width * scale_x,
+                height: original_bounds.height * scale_y,
+            };
+            let animated_rotation = shape.rotation_deg + rotation_deg;
+            let mut animated_shape = shape.clone();
+            animated_shape.bounds = animated_bounds;
+            animated_shape.rotation_deg = animated_rotation;
+            animated_shape.group_transform = animated_shape
+                .group_transform
+                .then(page_motion)
+                .then(group_transform);
+            for page_clip in group_page_clips {
+                match page_clip_for_shape(page_clip, &animated_shape) {
+                    Some(clip) => evaluated.push_oriented_clip(clip),
+                    None => state.diagnostics.push(Diagnostic {
+                        message: format!(
+                            "group timeline clip ignored for shape {}",
+                            identity.shape_id.unwrap_or(0)
+                        ),
+                    }),
+                }
+            }
+            if evaluated.is_finite()
+                && [
+                    animated_bounds.x,
+                    animated_bounds.y,
+                    animated_bounds.width,
+                    animated_bounds.height,
+                    animated_rotation,
+                ]
+                .into_iter()
+                .all(f64::is_finite)
+            {
+                *shape = animated_shape;
+            } else {
+                state.diagnostics.push(Diagnostic {
+                    message: format!(
+                        "non-finite timeline state ignored for shape {}",
+                        identity.shape_id.unwrap_or(0)
+                    ),
+                });
+                evaluated = EvaluatedShapeState::default();
+            }
+            evaluated
+        })
+        .collect();
+    ResolvedTimelineSlide {
+        slide,
+        identities,
+        shape_states,
+        state,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TimelineGroupGeometry {
+    normalized_to_page: Transform,
+}
+
+impl TimelineGroupGeometry {
+    fn from_page_bounds(bounds: Rect) -> Self {
+        Self {
+            normalized_to_page: Transform {
+                a: bounds.width,
+                d: bounds.height,
+                e: bounds.x,
+                f: bounds.y,
+                ..Transform::IDENTITY
+            },
+        }
+    }
+
+    fn center(self) -> (f64, f64) {
+        let center = self.normalized_to_page.apply(Point { x: 0.5, y: 0.5 });
+        (center.x, center.y)
+    }
+}
+
+fn timeline_group_geometries(children: &[ShapeTreeChild]) -> BTreeMap<u32, TimelineGroupGeometry> {
+    let mut geometries = BTreeMap::new();
+    collect_timeline_group_geometries(children, Transform::IDENTITY, &mut geometries);
+    geometries
+}
+
+fn collect_timeline_group_geometries(
+    children: &[ShapeTreeChild],
+    parent_to_page: Transform,
+    geometries: &mut BTreeMap<u32, TimelineGroupGeometry>,
+) {
+    for child in children {
+        match child {
+            ShapeTreeChild::GroupShape(group) => {
+                let child_to_parent = group
+                    .group_transform()
+                    .and_then(group_affine)
+                    .map_or(Transform::IDENTITY, |(transform, _)| transform);
+                if let Some((group_id, geometry)) = child
+                    .non_visual_id()
+                    .zip(group.group_transform().and_then(group_extent_geometry))
+                {
+                    geometries.insert(
+                        group_id,
+                        TimelineGroupGeometry {
+                            normalized_to_page: geometry.then(parent_to_page),
+                        },
+                    );
+                }
+                collect_timeline_group_geometries(
+                    &group.children,
+                    child_to_parent.then(parent_to_page),
+                    geometries,
+                );
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                if let Some(fallback) = alternate.selected_fallback() {
+                    collect_timeline_group_geometries(fallback, parent_to_page, geometries);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn group_extent_geometry(transform: &CT_Transform2D) -> Option<Transform> {
+    let offset = transform.offset?;
+    let extent = transform.extent?;
+    let x = emu_to_points(offset.x.0);
+    let y = emu_to_points(offset.y.0);
+    let width = emu_to_points(extent.cx.0);
+    let height = emu_to_points(extent.cy.0);
+    let center_x = x + width / 2.0;
+    let center_y = y + height / 2.0;
+    let mut geometry = Transform {
+        a: width,
+        d: height,
+        e: x,
+        f: y,
+        ..Transform::IDENTITY
+    }
+    .then(Transform::rotate_about(
+        f64::from(transform.rotation.0) / 60_000.0,
+        center_x,
+        center_y,
+    ));
+    if transform.flip_horizontal || transform.flip_vertical {
+        geometry = geometry.then(Transform {
+            a: if transform.flip_horizontal { -1.0 } else { 1.0 },
+            d: if transform.flip_vertical { -1.0 } else { 1.0 },
+            e: if transform.flip_horizontal {
+                2.0 * center_x
+            } else {
+                0.0
+            },
+            f: if transform.flip_vertical {
+                2.0 * center_y
+            } else {
+                0.0
+            },
+            ..Transform::IDENTITY
+        });
+    }
+    [
+        geometry.a, geometry.b, geometry.c, geometry.d, geometry.e, geometry.f,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    .then_some(geometry)
+}
+
+fn timeline_group_bounds(
+    slide: &ResolvedSlide,
+    identities: &[ResolvedShapeIdentity],
+) -> BTreeMap<u32, Rect> {
+    let mut bounds = BTreeMap::new();
+    for (identity, shape) in identities.iter().zip(&slide.shapes) {
+        if identity.source != FlattenedSource::Slide {
+            continue;
+        }
+        let shape_bounds = resolved_shape_page_bounds(shape);
+        for group_id in &identity.containing_group_ids {
+            bounds
+                .entry(*group_id)
+                .and_modify(|group_bounds| *group_bounds = union_rect(*group_bounds, shape_bounds))
+                .or_insert(shape_bounds);
+        }
+    }
+    bounds
+}
+
+fn resolved_shape_page_bounds(shape: &ResolvedShape) -> Rect {
+    resolved_shape_page_transform(shape).transform_rect_bbox(Rect {
+        x: 0.0,
+        y: 0.0,
+        width: shape.bounds.width,
+        height: shape.bounds.height,
+    })
+}
+
+fn resolved_shape_page_transform(shape: &ResolvedShape) -> Transform {
+    let center_x = shape.bounds.width / 2.0;
+    let center_y = shape.bounds.height / 2.0;
+    let flip = Transform {
+        a: if shape.flip_h { -1.0 } else { 1.0 },
+        d: if shape.flip_v { -1.0 } else { 1.0 },
+        e: if shape.flip_h {
+            shape.bounds.width
+        } else {
+            0.0
+        },
+        f: if shape.flip_v {
+            shape.bounds.height
+        } else {
+            0.0
+        },
+        ..Transform::IDENTITY
+    };
+    Transform::rotate_about(shape.rotation_deg, center_x, center_y)
+        .then(flip)
+        .then(timeline_translation(shape.bounds.x, shape.bounds.y))
+        .then(shape.group_transform)
+}
+
+fn group_clip_page_points(
+    clip: Rect,
+    group_geometry: TimelineGroupGeometry,
+    group_transform: Transform,
+) -> [Point; 4] {
+    let normalized_to_page = group_geometry.normalized_to_page.then(group_transform);
+    [
+        Point {
+            x: clip.x,
+            y: clip.y,
+        },
+        Point {
+            x: clip.x + clip.width,
+            y: clip.y,
+        },
+        Point {
+            x: clip.x + clip.width,
+            y: clip.y + clip.height,
+        },
+        Point {
+            x: clip.x,
+            y: clip.y + clip.height,
+        },
+    ]
+    .map(|point| normalized_to_page.apply(point))
+}
+
+fn page_clip_for_shape(page_clip: [Point; 4], shape: &ResolvedShape) -> Option<[Point; 4]> {
+    if shape.bounds.width.abs() <= f64::EPSILON || shape.bounds.height.abs() <= f64::EPSILON {
+        return None;
+    }
+    let page_to_local = inverse_transform(resolved_shape_page_transform(shape))?;
+    Some(page_clip.map(|point| {
+        let local = page_to_local.apply(point);
+        Point {
+            x: local.x / shape.bounds.width,
+            y: local.y / shape.bounds.height,
+        }
+    }))
+}
+
+fn inverse_transform(transform: Transform) -> Option<Transform> {
+    let determinant = transform.a * transform.d - transform.b * transform.c;
+    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
+        return None;
+    }
+    let inverse = Transform {
+        a: transform.d / determinant,
+        b: -transform.b / determinant,
+        c: -transform.c / determinant,
+        d: transform.a / determinant,
+        e: (transform.c * transform.f - transform.d * transform.e) / determinant,
+        f: (transform.b * transform.e - transform.a * transform.f) / determinant,
+    };
+    [
+        inverse.a, inverse.b, inverse.c, inverse.d, inverse.e, inverse.f,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    .then_some(inverse)
+}
+
+fn union_rect(left: Rect, right: Rect) -> Rect {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    let far_x = (left.x + left.width).max(right.x + right.width);
+    let far_y = (left.y + left.height).max(right.y + right.height);
+    Rect {
+        x,
+        y,
+        width: far_x - x,
+        height: far_y - y,
+    }
+}
+
+fn intersect_rect(left: Rect, right: Rect) -> Rect {
+    let x = left.x.max(right.x);
+    let y = left.y.max(right.y);
+    let far_x = (left.x + left.width).min(right.x + right.width);
+    let far_y = (left.y + left.height).min(right.y + right.height);
+    Rect {
+        x,
+        y,
+        width: (far_x - x).max(0.0),
+        height: (far_y - y).max(0.0),
+    }
+}
+
+fn timeline_translation(x: f64, y: f64) -> Transform {
+    Transform {
+        e: x,
+        f: y,
+        ..Transform::IDENTITY
+    }
+}
+
+fn intersect_optional_rect(left: Option<Rect>, right: Option<Rect>) -> Option<Rect> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(rect), None) | (None, Some(rect)) => Some(rect),
+        (Some(left), Some(right)) => Some(intersect_rect(left, right)),
+    }
+}
+
 fn emit_tree<'a>(
     children: &'a [ShapeTreeChild],
     rules: PassRules<'_>,
@@ -3223,7 +3779,10 @@ mod tests {
     use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
     use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind};
 
-    use super::{BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, transform_values};
+    use super::{
+        BackgroundSource, FlattenedItem, FlattenedSource, ResolveCtx, resolved_shape_page_bounds,
+        resolved_shape_page_transform, transform_values,
+    };
     use crate::{
         ChartResource, Diagnostic, ParagraphAlignment, ResolvedAutofit, ResolvedBackground,
         ResolvedBullet, ResolvedBulletSize, ResolvedContent, ResolvedGeometry,
@@ -3354,6 +3913,270 @@ mod tests {
 
         assert!(layout.is_some());
         assert!(master.is_some());
+    }
+
+    #[test]
+    fn group_targets_apply_to_every_resolved_descendant() {
+        let first = shape_with_details(None, None, &transform(0), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"7\" name=\"First\"/>",
+            1,
+        );
+        let second = shape_with_details(None, None, &transform(127_000), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"8\" name=\"Second\"/>",
+            1,
+        );
+        let unrelated = shape_with_details(None, None, &transform(254_000), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"9\" name=\"Other\"/>",
+            1,
+        );
+        let group = format!(
+            "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"10\" name=\"Group\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{first}{second}</p:grpSp>"
+        );
+        let slide = format!(
+            "<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{}</p:cSld><p:timing><p:tnLst><p:set><p:cBhvr><p:cTn id=\"1\" dur=\"1\" fill=\"hold\"/><p:tgtEl><p:spTgt spid=\"10\"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val=\"50000\"/></p:to></p:set></p:tnLst></p:timing></p:sld>",
+            shape_tree(&format!("{group}{unrelated}"))
+        );
+        let fixture = Fixture::from_xml(&slide, &layout_xml(""), &master_xml(""));
+        let resolved = fixture
+            .context()
+            .resolve_slide_at(
+                (720.0, 540.0),
+                crate::timeline::TimelinePosition {
+                    elapsed_ms: 1,
+                    click_count: 0,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(resolved.shape_states.len(), 3);
+        assert_eq!(resolved.shape_states[0].opacity, 0.5);
+        assert_eq!(resolved.shape_states[1].opacity, 0.5);
+        assert_eq!(resolved.shape_states[2].opacity, 1.0);
+        assert_eq!(resolved.identities[0].containing_group_ids, vec![10]);
+        assert_eq!(resolved.identities[1].containing_group_ids, vec![10]);
+        assert!(resolved.identities[2].containing_group_ids.is_empty());
+    }
+
+    #[test]
+    fn alternate_content_chart_choice_keeps_timeline_identity() {
+        let alternate = chart_alternate("chart", None).replacen(
+            "<p:nvGraphicFramePr/>",
+            "<p:nvGraphicFramePr><p:cNvPr id=\"42\" name=\"!!Chart &amp; Data\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>",
+            1,
+        );
+        let slide = format!(
+            r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><p:cSld>{}</p:cSld><p:timing><p:tnLst><p:anim from="100000" to="50000"><p:cBhvr><p:cTn id="1" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="42"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:tnLst></p:timing></p:sld>"#,
+            shape_tree(&alternate)
+        );
+        let fixture = Fixture::from_xml(&slide, &layout_xml(""), &master_xml(""));
+        let resolved = fixture
+            .context()
+            .resolve_slide_at(
+                (720.0, 540.0),
+                crate::timeline::TimelinePosition {
+                    elapsed_ms: 500,
+                    click_count: 0,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(resolved.identities[0].shape_id, Some(42));
+        assert_eq!(
+            resolved.identities[0].name.as_deref(),
+            Some("!!Chart & Data")
+        );
+        assert_eq!(resolved.shape_states[0].opacity, 0.75);
+    }
+
+    #[test]
+    fn timeline_geometry_keeps_shape_centres_and_resolves_motion_origins() {
+        let first = shape_with_details(None, None, &transform(127_000), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"7\" name=\"!!Scale &amp; Spin\"/>",
+            1,
+        );
+        let second = shape_with_details(None, None, &transform(254_000), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"8\" name=\"Target motion\"/>",
+            1,
+        );
+        let slide = format!(
+            r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld>{}</p:cSld><p:timing><p:tnLst>
+            <p:anim from="100000" to="200000"><p:cBhvr><p:cTn id="1" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl><p:attrNameLst><p:attrName>scale</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+            <p:anim from="0" to="5400000"><p:cBhvr><p:cTn id="2" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl><p:attrNameLst><p:attrName>spin</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+            <p:animMotion origin="parent" path="M 0 0 L .5 .25 E"><p:cBhvr><p:cTn id="3" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:animMotion>
+            <p:animMotion origin="layout" path="M 0 0 L .5 .25 E"><p:cBhvr><p:cTn id="4" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cBhvr></p:animMotion>
+            </p:tnLst></p:timing></p:sld>"#,
+            shape_tree(&format!("{first}{second}"))
+        );
+        let fixture = Fixture::from_xml(&slide, &layout_xml(""), &master_xml(""));
+        let static_slide = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let resolved = fixture
+            .context()
+            .resolve_slide_at(
+                (720.0, 540.0),
+                crate::timeline::TimelinePosition {
+                    elapsed_ms: 1_000,
+                    click_count: 0,
+                },
+            )
+            .unwrap();
+
+        let original = static_slide.shapes[0].bounds;
+        let animated = resolved.slide.shapes[0].bounds;
+        assert_close(animated.width, original.width * 2.0);
+        assert_close(animated.height, original.height * 2.0);
+        let animated_page = resolved_shape_page_bounds(&resolved.slide.shapes[0]);
+        assert_close(animated_page.x + animated_page.width / 2.0, 360.0);
+        assert_close(animated_page.y + animated_page.height / 2.0, 135.0);
+        assert_close(resolved.slide.shapes[0].rotation_deg, 90.0);
+        let target_original = resolved_shape_page_bounds(&static_slide.shapes[1]);
+        let target_animated = resolved_shape_page_bounds(&resolved.slide.shapes[1]);
+        assert_close(target_animated.x - target_original.x, 360.0);
+        assert_close(target_animated.y - target_original.y, 135.0);
+        assert_eq!(
+            resolved.identities[0].name.as_deref(),
+            Some("!!Scale & Spin")
+        );
+        assert!(resolved.shape_states.iter().all(|state| state.is_finite()));
+    }
+
+    #[test]
+    fn group_timeline_geometry_uses_one_shared_group_coordinate_space() {
+        let rotated_transform = transform(50).replacen("<a:xfrm>", "<a:xfrm rot=\"2700000\">", 1);
+        let first = shape_with_details(None, None, &rotated_transform, None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"7\" name=\"First\"/>",
+            1,
+        );
+        let second = shape_with_details(None, None, &transform(100), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"8\" name=\"Second\"/>",
+            1,
+        );
+        let group = format!(
+            "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"10\" name=\"Group\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm rot=\"5400000\"><a:off x=\"1270000\" y=\"635000\"/><a:ext cx=\"2540000\" cy=\"1270000\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"200\" cy=\"100\"/></a:xfrm></p:grpSpPr>{first}{second}</p:grpSp>"
+        );
+        let slide = format!(
+            r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld>{}</p:cSld><p:timing><p:tnLst>
+            <p:anim from="100000" to="200000"><p:cBhvr><p:cTn id="1" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="10"/></p:tgtEl><p:attrNameLst><p:attrName>scale</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+            <p:animMotion origin="parent" path="M 0 0 L .1 .1 E"><p:cBhvr><p:cTn id="2" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="10"/></p:tgtEl></p:cBhvr></p:animMotion>
+            <p:animEffect transition="in" filter="wipe(right)"><p:cBhvr><p:cTn id="3" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="10"/></p:tgtEl></p:cBhvr></p:animEffect>
+            </p:tnLst></p:timing></p:sld>"#,
+            shape_tree(&group)
+        );
+        let fixture = Fixture::from_xml(&slide, &layout_xml(""), &master_xml(""));
+        let static_slide = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let resolved = fixture
+            .context()
+            .resolve_slide_at(
+                (720.0, 540.0),
+                crate::timeline::TimelinePosition {
+                    elapsed_ms: 500,
+                    click_count: 0,
+                },
+            )
+            .unwrap();
+        let first_before = resolved_shape_page_bounds(&static_slide.shapes[0]);
+        let second_before = resolved_shape_page_bounds(&static_slide.shapes[1]);
+        let group_center_x = 200.0;
+        let group_center_y = 100.0;
+
+        for (before, shape) in [first_before, second_before]
+            .into_iter()
+            .zip(&resolved.slide.shapes)
+        {
+            let after = resolved_shape_page_bounds(shape);
+            assert_close(after.width, before.width * 1.5);
+            assert_close(
+                after.x + after.width / 2.0,
+                36.0 + (before.x + before.width / 2.0 - group_center_x) * 1.5,
+            );
+            assert_close(
+                after.y + after.height / 2.0,
+                27.0 + (before.y + before.height / 2.0 - group_center_y) * 1.5,
+            );
+        }
+        let first_clip = resolved.shape_states[0].local_clip_paths((100.0, 100.0));
+        let [PathCommand::MoveTo(start), PathCommand::LineTo(next), ..] =
+            first_clip[0].commands.as_slice()
+        else {
+            panic!("group wipe should remain a polygon")
+        };
+        assert!(start.x != next.x && start.y != next.y);
+        assert_eq!(
+            resolved.shape_states[1]
+                .local_clip_paths((100.0, 100.0))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn parent_group_wipe_does_not_follow_descendant_or_nested_group_animation() {
+        let child = shape_with_details(None, None, &transform(50), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"7\" name=\"Animated child\"/>",
+            1,
+        );
+        let nested = format!(
+            "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"11\" name=\"Nested\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"200\" cy=\"100\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"200\" cy=\"100\"/></a:xfrm></p:grpSpPr>{child}</p:grpSp>"
+        );
+        let group = format!(
+            "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"10\" name=\"Parent\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm rot=\"2700000\"><a:off x=\"1270000\" y=\"635000\"/><a:ext cx=\"2540000\" cy=\"1270000\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"200\" cy=\"100\"/></a:xfrm></p:grpSpPr>{nested}</p:grpSp>"
+        );
+        let resolve = |descendant_timing: &str| {
+            let slide = format!(
+                r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld>{}</p:cSld><p:timing><p:tnLst>
+                <p:animEffect transition="in" filter="wipe(right)"><p:cBhvr><p:cTn id="1" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="10"/></p:tgtEl></p:cBhvr></p:animEffect>
+                {descendant_timing}</p:tnLst></p:timing></p:sld>"#,
+                shape_tree(&group)
+            );
+            Fixture::from_xml(&slide, &layout_xml(""), &master_xml(""))
+                .context()
+                .resolve_slide_at(
+                    (720.0, 540.0),
+                    crate::timeline::TimelinePosition {
+                        elapsed_ms: 500,
+                        click_count: 0,
+                    },
+                )
+                .unwrap()
+        };
+        let baseline = resolve("");
+        let animated = resolve(
+            r#"<p:animMotion origin="layout" path="M 0 0 L .2 .1 E"><p:cBhvr><p:cTn id="2" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cBhvr></p:animMotion>
+            <p:anim from="0" to="5400000"><p:cBhvr><p:cTn id="3" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl><p:attrNameLst><p:attrName>spin</p:attrName></p:attrNameLst></p:cBhvr></p:anim>"#,
+        );
+        let page_clip = |resolved: &crate::timeline::ResolvedTimelineSlide| {
+            let shape = &resolved.slide.shapes[0];
+            let transform = resolved_shape_page_transform(shape);
+            resolved.shape_states[0].local_clip_paths((shape.bounds.width, shape.bounds.height))[0]
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    PathCommand::MoveTo(point) | PathCommand::LineTo(point) => {
+                        Some(transform.apply(*point))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let baseline_clip = page_clip(&baseline);
+        let animated_clip = page_clip(&animated);
+
+        assert_ne!(
+            resolved_shape_page_transform(&baseline.slide.shapes[0]),
+            resolved_shape_page_transform(&animated.slide.shapes[0])
+        );
+        assert_eq!(baseline_clip.len(), animated_clip.len());
+        for (baseline, animated) in baseline_clip.into_iter().zip(animated_clip) {
+            assert_close(animated.x, baseline.x);
+            assert_close(animated.y, baseline.y);
+        }
     }
 
     #[test]

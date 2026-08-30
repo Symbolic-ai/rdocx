@@ -12,7 +12,8 @@ use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, non_visual_drawing_id,
-    root_attributes, self_contained_attributes, set_non_visual_drawing_name,
+    non_visual_drawing_name, root_attributes, self_contained_attributes,
+    set_non_visual_drawing_name,
 };
 use crate::picture::CT_Picture;
 
@@ -94,6 +95,7 @@ pub struct CT_GraphicFrame {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RawElementShell {
     non_visual_id: Option<u32>,
+    non_visual_name: Option<String>,
     drawing_properties_index: Option<usize>,
     attributes: RawAttributes,
     children: Vec<Vec<u8>>,
@@ -114,7 +116,8 @@ impl CT_GraphicFrame {
         table: CT_Table,
     ) -> Result<Self> {
         table.to_xml()?;
-        let name = quick_xml::escape::escape(name);
+        let non_visual_name = name.to_owned();
+        let escaped_name = quick_xml::escape::escape(name);
         Ok(Self {
             transform,
             graphic_data: CT_GraphicData {
@@ -126,10 +129,11 @@ impl CT_GraphicFrame {
             },
             non_visual_properties: RawElementShell {
                 non_visual_id: Some(id),
+                non_visual_name: Some(non_visual_name),
                 drawing_properties_index: Some(0),
                 attributes: Vec::new(),
                 children: vec![
-                    format!(r#"<p:cNvPr id="{id}" name="{name}"/>"#).into_bytes(),
+                    format!(r#"<p:cNvPr id="{id}" name="{escaped_name}"/>"#).into_bytes(),
                     b"<p:cNvGraphicFramePr/>".to_vec(),
                     b"<p:nvPr/>".to_vec(),
                 ],
@@ -163,7 +167,8 @@ impl CT_GraphicFrame {
         ));
         chart.push_attribute(("r:id", relationship_id));
         writer.write_event(Event::Empty(chart))?;
-        let name = quick_xml::escape::escape(name);
+        let non_visual_name = name.to_owned();
+        let escaped_name = quick_xml::escape::escape(name);
         Ok(Self {
             transform,
             graphic_data: CT_GraphicData {
@@ -175,10 +180,11 @@ impl CT_GraphicFrame {
             },
             non_visual_properties: RawElementShell {
                 non_visual_id: Some(id),
+                non_visual_name: Some(non_visual_name),
                 drawing_properties_index: Some(0),
                 attributes: Vec::new(),
                 children: vec![
-                    format!(r#"<p:cNvPr id="{id}" name="{name}"/>"#).into_bytes(),
+                    format!(r#"<p:cNvPr id="{id}" name="{escaped_name}"/>"#).into_bytes(),
                     b"<p:cNvGraphicFramePr/>".to_vec(),
                     b"<p:nvPr/>".to_vec(),
                 ],
@@ -193,6 +199,10 @@ impl CT_GraphicFrame {
 
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.non_visual_properties.non_visual_id
+    }
+
+    pub(crate) fn non_visual_name(&self) -> Option<&str> {
+        self.non_visual_properties.non_visual_name.as_deref()
     }
 
     /// Returns the namespace-resolved `c:chart@r:id` rendering projection.
@@ -211,7 +221,9 @@ impl CT_GraphicFrame {
                     .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?,
             )
             .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?;
-        set_non_visual_drawing_name(drawing_properties, name)
+        set_non_visual_drawing_name(drawing_properties, name)?;
+        self.non_visual_properties.non_visual_name = Some(name.to_owned());
+        Ok(())
     }
 
     /// Parses a complete `p:graphicFrame` with any PresentationML prefix.
@@ -737,6 +749,7 @@ impl RawElementShell {
                     let attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                     let mut children = Vec::new();
                     let mut non_visual_id = None;
+                    let mut non_visual_name = None;
                     let mut drawing_properties_index = None;
                     loop {
                         buffer.clear();
@@ -747,6 +760,9 @@ impl RawElementShell {
                                     .element_uri(child.name().as_ref())
                                     == Some(P_NS)
                                     && local_name(child.name().as_ref()) == b"cNvPr";
+                                if is_drawing_properties {
+                                    non_visual_name = non_visual_drawing_name(&child)?;
+                                }
                                 let raw = capture_element(&mut reader, &child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
@@ -760,6 +776,9 @@ impl RawElementShell {
                                     .element_uri(child.name().as_ref())
                                     == Some(P_NS)
                                     && local_name(child.name().as_ref()) == b"cNvPr";
+                                if is_drawing_properties {
+                                    non_visual_name = non_visual_drawing_name(&child)?;
+                                }
                                 let raw = capture_empty_element(&child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
@@ -772,6 +791,7 @@ impl RawElementShell {
                             {
                                 return Ok(Self {
                                     non_visual_id,
+                                    non_visual_name,
                                     drawing_properties_index,
                                     attributes,
                                     children,
@@ -793,6 +813,7 @@ impl RawElementShell {
                 Event::Empty(start) => {
                     return Ok(Self {
                         non_visual_id: None,
+                        non_visual_name: None,
                         drawing_properties_index: None,
                         attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         children: Vec::new(),

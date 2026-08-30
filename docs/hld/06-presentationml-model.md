@@ -565,9 +565,36 @@ This is the scope control for a format that is otherwise unbounded.
 **Parse only what is rendered or edited. Preserve everything else verbatim**
 through `oxml_core::raw_xml::capture_element`.
 
-Preserved as opaque bytes in v1: `p:timing`, `p:transition`, `p:custShowLst`,
-legacy comments, ink, `p:contentPart`, SmartArt `dgm:` payloads, OLE and
-ActiveX, and every `mc:AlternateContent` alternative.
+Preserved as opaque bytes in v1: `p:custShowLst`, legacy comments, ink,
+`p:contentPart`, SmartArt `dgm:` payloads, OLE and ActiveX.
+
+Slide, layout, and master roots expose optional typed `p:timing` and
+`p:transition` values. The timing projection covers parallel and sequence
+containers, common time nodes, previous, next, start, and end conditions,
+shape, slide, and time-node targets, paragraph builds, set and animate
+behaviours, effects, motion paths, and unsupported timing nodes. Transition
+values expose speed, Office 2010 duration, advance policy, effect parameters,
+and Office 2015 morph metadata. Expanded-name readers select supported
+`mc:AlternateContent` choices or their fallback. The complete captured subtree
+remains the serialization source, and supported mutations replace only their
+own attribute value bytes. Unsupported siblings, owner attributes, namespace
+bindings, and relationship-bearing content therefore remain byte-identical.
+
+Two narrow queries support the timeline resolver without adding a parallel XML
+model. `ShapeTreeChild::non_visual_name` returns the selected child's cached
+`p:cNvPr/@name`, including a selected chart graphic frame inside
+`mc:AlternateContent`. `CT_Timing::condition_has_explicit_target` reports
+whether one projected start or end condition carried any explicit target. The
+second query distinguishes an absent target from an explicitly unsupported
+target without changing the public `TimingCondition` fields. Both queries read
+the existing namespace-aware projection, and the captured subtree remains the
+serialization source.
+
+Readers reject duplicate or out-of-order modelled timing children. One narrow
+PowerPoint compatibility case accepts an attribute-free empty layout
+`p:transition` immediately before `p:hf`, keeps both values typed, and writes
+them in canonical `p:hf`, `p:transition` order. This is the producer shape in
+the pinned `ArtisticEffectSample.pptx` corpus deck.
 
 Modern Office 2021 comment authors, comments, threaded replies, and
 `p14:sectionLst` are typed only at the fields callers inspect or mutate. Their
@@ -577,10 +604,11 @@ Readers resolve expanded names. Writers use schema order and a safe fixed
 prefix, or fail before changing live state when a producer shadow cannot be
 preserved.
 
-An `mc:AlternateContent` model may inspect its selected fallback and an
-immediate chart choice. The full captured subtree remains opaque for
-serialisation and round-trips byte-identically. Malformed non-chart choices are
-not parsed merely because they contain a graphic-frame element.
+An `mc:AlternateContent` model may inspect its selected fallback, an immediate
+chart choice, or an immediate timing transition choice. The full captured
+subtree remains opaque for serialisation and round-trips byte-identically.
+Malformed choices are not parsed merely because they contain a modelled
+descendant.
 
 The gate on this is a full-corpus round-trip. Every modelled root parses,
 serialises, reparses, and compares structurally. The expected package replaces

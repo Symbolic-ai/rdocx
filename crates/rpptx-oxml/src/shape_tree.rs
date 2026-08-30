@@ -21,7 +21,8 @@ use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
-    non_visual_drawing_id, root_attributes, self_contained_attributes, set_non_visual_drawing_name,
+    non_visual_drawing_id, non_visual_drawing_name, root_attributes, self_contained_attributes,
+    set_non_visual_drawing_name,
 };
 use crate::picture::CT_Picture;
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
@@ -51,8 +52,25 @@ impl ShapeTreeChild {
             Self::GraphicFrame(frame) => frame.non_visual_id(),
             Self::GroupShape(group) => group.non_visual_id(),
             Self::Connector(connector) => connector.non_visual_id(),
-            Self::AlternateContent(_) => None,
+            Self::AlternateContent(alternate) => alternate
+                .chart_choice()
+                .and_then(CT_GraphicFrame::non_visual_id),
         }
+    }
+
+    /// Returns the decoded producer-facing non-visual shape name.
+    pub fn non_visual_name(&self) -> Option<String> {
+        match self {
+            Self::Shape(shape) => shape.non_visual_name(),
+            Self::Picture(picture) => picture.non_visual_name(),
+            Self::GraphicFrame(frame) => frame.non_visual_name(),
+            Self::GroupShape(group) => group.non_visual_name(),
+            Self::Connector(connector) => connector.non_visual_name(),
+            Self::AlternateContent(alternate) => alternate
+                .chart_choice()
+                .and_then(CT_GraphicFrame::non_visual_name),
+        }
+        .map(str::to_owned)
     }
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
@@ -598,6 +616,7 @@ struct ShapeRaw {
     non_visual_attributes: RawAttributes,
     non_visual_children: OrderedRawChildren,
     non_visual_drawing_properties: Vec<u8>,
+    non_visual_name: Option<String>,
     non_visual_shape_properties: Vec<u8>,
     application_properties_attributes: RawAttributes,
     application_properties_raw_children: OrderedRawChildren,
@@ -800,6 +819,7 @@ struct GroupProperties {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NonVisualGroupProperties {
     non_visual_id: Option<u32>,
+    non_visual_name: Option<String>,
     drawing_properties_index: Option<usize>,
     raw_attributes: RawAttributes,
     raw_children: Vec<Vec<u8>>,
@@ -882,6 +902,7 @@ impl CT_Shape {
                 non_visual_attributes: Vec::new(),
                 non_visual_children: OrderedRawChildren::default(),
                 non_visual_drawing_properties: format!(r#"<p:cNvPr id="{id}"/>"#).into_bytes(),
+                non_visual_name: None,
                 non_visual_shape_properties: if textbox {
                     br#"<p:cNvSpPr txBox="1"/>"#.to_vec()
                 } else {
@@ -915,6 +936,7 @@ impl CT_Shape {
                     r#"<p:cNvPr id="{id}" name="Placeholder {id}"/>"#
                 )
                 .into_bytes(),
+                non_visual_name: Some(format!("Placeholder {id}")),
                 non_visual_shape_properties: b"<p:cNvSpPr/>".to_vec(),
                 application_properties_attributes: Vec::new(),
                 application_properties_raw_children: OrderedRawChildren::default(),
@@ -928,9 +950,15 @@ impl CT_Shape {
         non_visual_drawing_id(&self.raw.non_visual_drawing_properties)
     }
 
+    pub(crate) fn non_visual_name(&self) -> Option<&str> {
+        self.raw.non_visual_name.as_deref()
+    }
+
     /// Changes the producer-facing non-visual shape name.
     pub fn set_name(&mut self, name: &str) -> Result<()> {
-        set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)
+        set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)?;
+        self.raw.non_visual_name = Some(name.to_owned());
+        Ok(())
     }
 
     /// Parses a complete `p:sp` with any prefix bound to PresentationML.
@@ -1039,6 +1067,7 @@ impl CT_Shape {
                 non_visual_attributes: non_visual.raw_attributes,
                 non_visual_children: non_visual.raw_children,
                 non_visual_drawing_properties: non_visual.non_visual_drawing_properties,
+                non_visual_name: non_visual.non_visual_name,
                 non_visual_shape_properties: non_visual.non_visual_shape_properties,
                 application_properties_attributes: non_visual.application_properties_attributes,
                 application_properties_raw_children: non_visual.application_properties_raw_children,
@@ -1139,6 +1168,7 @@ struct ParsedNonVisualShape {
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
     non_visual_drawing_properties: Vec<u8>,
+    non_visual_name: Option<String>,
     non_visual_shape_properties: Vec<u8>,
     application_properties_attributes: RawAttributes,
     application_properties_raw_children: OrderedRawChildren,
@@ -1230,6 +1260,7 @@ fn parse_non_visual_shape(
                 let namespaces = inherited.with_start(&start)?;
                 let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                 let mut drawing = None;
+                let mut drawing_name = None;
                 let mut shape = None;
                 let mut application = None;
                 let mut raw_children = OrderedRawChildren::default();
@@ -1241,13 +1272,20 @@ fn parse_non_visual_shape(
                             let child_namespaces = namespaces.with_start(&child)?;
                             let name = local_name(child.name().as_ref()).to_vec();
                             let uri = child_namespaces.element_uri(child.name().as_ref());
+                            let candidate_name = if uri == Some(P_NS) && name == b"cNvPr" {
+                                non_visual_drawing_name(&child)?
+                            } else {
+                                None
+                            };
                             let raw = capture_element(&mut reader, &child)?;
                             capture_non_visual_shape_child(
                                 &name,
                                 uri,
                                 raw,
+                                candidate_name,
                                 &child_namespaces,
                                 &mut drawing,
+                                &mut drawing_name,
                                 &mut shape,
                                 &mut application,
                                 &mut raw_children,
@@ -1258,13 +1296,20 @@ fn parse_non_visual_shape(
                             let child_namespaces = namespaces.with_start(&child)?;
                             let name = local_name(child.name().as_ref()).to_vec();
                             let uri = child_namespaces.element_uri(child.name().as_ref());
+                            let candidate_name = if uri == Some(P_NS) && name == b"cNvPr" {
+                                non_visual_drawing_name(&child)?
+                            } else {
+                                None
+                            };
                             let raw = capture_empty_element(&child)?;
                             capture_non_visual_shape_child(
                                 &name,
                                 uri,
                                 raw,
+                                candidate_name,
                                 &child_namespaces,
                                 &mut drawing,
+                                &mut drawing_name,
                                 &mut shape,
                                 &mut application,
                                 &mut raw_children,
@@ -1279,11 +1324,13 @@ fn parse_non_visual_shape(
                     }
                 }
                 let application = required(application, "p:nvPr")?;
+                let drawing = required(drawing, "p:cNvPr")?;
                 return Ok(ParsedNonVisualShape {
                     placeholder: application.placeholder,
                     raw_attributes,
                     raw_children,
-                    non_visual_drawing_properties: required(drawing, "p:cNvPr")?,
+                    non_visual_name: drawing_name,
+                    non_visual_drawing_properties: drawing,
                     non_visual_shape_properties: required(shape, "p:cNvSpPr")?,
                     application_properties_attributes: application.raw_attributes,
                     application_properties_raw_children: application.raw_children,
@@ -1306,8 +1353,10 @@ fn capture_non_visual_shape_child(
     name: &[u8],
     uri: Option<&str>,
     raw: Vec<u8>,
+    candidate_name: Option<String>,
     namespaces: &NamespaceBindings,
     drawing: &mut Option<Vec<u8>>,
+    drawing_name: &mut Option<String>,
     shape: &mut Option<Vec<u8>>,
     application: &mut Option<ApplicationProperties>,
     raw_children: &mut OrderedRawChildren,
@@ -1319,6 +1368,7 @@ fn capture_non_visual_shape_child(
     match (uri, name) {
         (Some(P_NS), b"cNvPr") if *boundary == 0 && drawing.is_none() => {
             *drawing = Some(raw);
+            *drawing_name = candidate_name;
             *boundary = 1;
         }
         (Some(P_NS), b"cNvSpPr") if *boundary == 1 && shape.is_none() => {
@@ -1345,6 +1395,7 @@ impl CT_ShapeTree {
         Self {
             non_visual_group_properties: NonVisualGroupProperties {
                 non_visual_id: Some(1),
+                non_visual_name: Some(String::new()),
                 drawing_properties_index: Some(0),
                 raw_attributes: Vec::new(),
                 raw_children: vec![
@@ -1433,6 +1484,7 @@ impl CT_GroupShape {
             children: Vec::new(),
             non_visual_group_properties: NonVisualGroupProperties {
                 non_visual_id: Some(id),
+                non_visual_name: None,
                 drawing_properties_index: Some(0),
                 raw_attributes: Vec::new(),
                 raw_children: vec![
@@ -1457,6 +1509,10 @@ impl CT_GroupShape {
 
     pub(crate) fn non_visual_id(&self) -> Option<u32> {
         self.non_visual_group_properties.non_visual_id
+    }
+
+    pub(crate) fn non_visual_name(&self) -> Option<&str> {
+        self.non_visual_group_properties.non_visual_name.as_deref()
     }
 
     /// Parses a complete recursive `p:grpSp` element.
@@ -1509,7 +1565,9 @@ impl CT_GroupShape {
                     .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?,
             )
             .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?;
-        set_non_visual_drawing_name(drawing_properties, name)
+        set_non_visual_drawing_name(drawing_properties, name)?;
+        self.non_visual_group_properties.non_visual_name = Some(name.to_owned());
+        Ok(())
     }
 
     /// Serialises a self-contained group-shape fragment with fixed prefixes.
@@ -1840,6 +1898,7 @@ impl NonVisualGroupProperties {
                     let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                     let mut raw_children = Vec::new();
                     let mut non_visual_id = None;
+                    let mut non_visual_name = None;
                     let mut drawing_properties_index = None;
                     loop {
                         buffer.clear();
@@ -1850,6 +1909,9 @@ impl NonVisualGroupProperties {
                                     .element_uri(child.name().as_ref())
                                     == Some(P_NS)
                                     && local_name(child.name().as_ref()) == b"cNvPr";
+                                if is_drawing_properties {
+                                    non_visual_name = non_visual_drawing_name(&child)?;
+                                }
                                 let raw = capture_element(&mut reader, &child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
@@ -1863,6 +1925,9 @@ impl NonVisualGroupProperties {
                                     .element_uri(child.name().as_ref())
                                     == Some(P_NS)
                                     && local_name(child.name().as_ref()) == b"cNvPr";
+                                if is_drawing_properties {
+                                    non_visual_name = non_visual_drawing_name(&child)?;
+                                }
                                 let raw = capture_empty_element(&child)?;
                                 if is_drawing_properties {
                                     non_visual_id = non_visual_drawing_id(&raw);
@@ -1873,6 +1938,7 @@ impl NonVisualGroupProperties {
                             Event::End(end) if local_name(end.name().as_ref()) == b"nvGrpSpPr" => {
                                 return Ok(Self {
                                     non_visual_id,
+                                    non_visual_name,
                                     drawing_properties_index,
                                     raw_attributes,
                                     raw_children,
@@ -1890,6 +1956,7 @@ impl NonVisualGroupProperties {
                 Event::Empty(start) => {
                     return Ok(Self {
                         non_visual_id: None,
+                        non_visual_name: None,
                         drawing_properties_index: None,
                         raw_attributes: root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?,
                         raw_children: Vec::new(),
@@ -2085,7 +2152,7 @@ mod style_tests {
     use oxml_drawing::style_ref::FontCollectionIndex;
     use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 
-    use super::{CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator};
+    use super::{CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
 
     const ALLOCATOR_TREE: &[u8] = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr><p:cNvPr id="1" name="Root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Root shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id="6" name="Nested picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><mc:AlternateContent><mc:Fallback><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="8" name="Fallback connector"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree>"#;
 
@@ -2146,6 +2213,41 @@ mod style_tests {
         assert_eq!(allocator.allocate(), 5);
         assert_eq!(allocator.allocate(), 7);
         assert_eq!(allocator.allocate(), 9);
+    }
+
+    #[test]
+    fn shape_tree_child_names_are_decoded_once_and_follow_mutation() {
+        let decoded = CT_Shape::from_xml(
+            br#"<q:sp xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main"><q:nvSpPr><q:cNvPr id="9" name="!!Hero &amp; Partner"/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr/></q:sp>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ShapeTreeChild::Shape(decoded).non_visual_name().as_deref(),
+            Some("!!Hero & Partner")
+        );
+
+        let mut tree = CT_ShapeTree::from_xml(ALLOCATOR_TREE).unwrap();
+        assert_eq!(
+            tree.children[0].non_visual_name().as_deref(),
+            Some("Root shape")
+        );
+        assert_eq!(tree.children[1].non_visual_name().as_deref(), Some("Group"));
+        let ShapeTreeChild::GroupShape(group) = &tree.children[1] else {
+            panic!("expected group")
+        };
+        assert_eq!(
+            group.children[0].non_visual_name().as_deref(),
+            Some("Nested picture")
+        );
+
+        let ShapeTreeChild::Shape(shape) = &mut tree.children[0] else {
+            panic!("expected shape")
+        };
+        shape.set_name("!!Hero & Partner").unwrap();
+        assert_eq!(
+            tree.children[0].non_visual_name().as_deref(),
+            Some("!!Hero & Partner")
+        );
     }
 
     #[test]

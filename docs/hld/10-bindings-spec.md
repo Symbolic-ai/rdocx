@@ -721,6 +721,53 @@ models. This is an additive semver change for the published pre-1.0
 flag. Unsupported modern comment XML and all legacy comment parts remain
 preserved, so consumers do not need a parallel raw authoring API.
 
+## Native PowerPoint timing model
+
+The published pre-1.0 `rpptx-oxml` crate exposes concrete timing and transition
+values through its `timing` module. `CT_Slide`, `CT_SlideLayout`, and
+`CT_SlideMaster` carry optional `CT_Timing` and `CT_SlideTransition` fields.
+Callers can inspect supported containers, conditions, targets, builds,
+behaviours, effect parameters, transition policy, and morph metadata. Bounded
+mutation methods change one common-node duration, transition speed, or existing
+morph option atomically while retained unsupported XML remains the
+serialization source.
+
+The low-level model also exposes exactly two additive queries used by the
+timeline resolver:
+
+```rust
+pub fn ShapeTreeChild::non_visual_name(&self) -> Option<String>;
+pub fn CT_Timing::condition_has_explicit_target(
+    &self,
+    node_id: u32,
+    end_condition: bool,
+    index: usize,
+) -> Option<bool>;
+```
+
+The published `rpptx-layout` crate adds `TimelinePosition`,
+`EvaluatedShapeState`, `EvaluatedTransition`, `EvaluatedFrameState`,
+`ResolvedShapeIdentity`, `ResolvedTimelineSlide`, and `evaluate_timeline`.
+`rpptx-render::timeline` lowers an evaluated slide and composes ordinary and
+morph transitions. The native facade adds one deterministic entry point:
+
+```rust
+pub fn Presentation::render_timeline_deterministic(
+    &self,
+    slide_index: usize,
+    position: TimelinePosition,
+    outgoing_slide_index: Option<usize>,
+) -> Result<DeterministicTimelineFrame>;
+```
+
+`DeterministicTimelineFrame` returns the composed `PageFrame`, the exact
+`EvaluatedFrameState` used for that page, and ordered diagnostics. Invalid
+slide indices and non-finite evaluated state fail closed. This remains an
+additive pre-1.0 native Rust API. It adds no Python method, WASM method, CLI
+option, production dependency, or feature flag. Existing static render methods
+do not enter the timeline path. Unsupported timing behaviours remain explicit
+raw nodes rather than acquiring a second authoring surface.
+
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a

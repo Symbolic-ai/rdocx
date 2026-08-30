@@ -10272,3 +10272,102 @@ verification passed, and all package archives remained below 10 MiB.
 `digital-signatures` absent from default, Python, WASM, and CLI graphs. Any new
 mutable presentation handle must participate in current-state signature
 invalidation without canonicalizing untouched signed producer bytes.
+
+### F-213, Animation and transition timing model
+
+**Sprint.** S60
+**Completed.** 2026-08-30
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** PresentationML slides, layouts, and masters now expose
+typed timing trees and slide transitions. The model covers parallel and
+sequence containers, conditions and targets, supported animation behaviors,
+set values, motion paths, build metadata, transition parameters, and morph
+metadata while retaining unsupported XML in its original raw slots.
+
+**Non-obvious choices.** Namespace-expanded parsing and capability-aware
+AlternateContent selection keep producer aliases and fallbacks correct.
+Supported mutations replace only the owning lexical range, leaving unsupported
+siblings and descendants byte-identical. A narrow read exception accepts the
+PowerPoint-produced empty layout transition marker immediately before `p:hf`,
+then writes the two typed children in schema order. Private slide-master parse
+staging boxes the large text-style value to keep nested producer groups within
+the default test stack without changing the public model.
+
+**Deviations from the design plan.** None. Nine microscope passes hardened
+schema-choice cardinality, direct-child boundaries, compatibility selection,
+lexical preservation, and valid XML character-data handling before the clean
+review.
+
+**Spec sections touched.** `docs/hld/06-presentationml-model.md`,
+`docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named corpus gate parsed, serialized, and reparsed all 50 pinned
+decks across 421 slides, 766 layouts, and 76 masters. It exercised 272 timing
+roots, 372 transitions, 732 typed nodes, 401 conditions, 25 builds, 82 set
+values, 186 effect parameters, 10 compatibility transitions, and 5 unsupported
+nodes. Full integrated verification passed the workspace, no-default, WASM,
+documentation, README, 22-package dry-run, archive-size, and supply-chain
+gates. The `rpptx-oxml` suite passed 148 tests and the `rpptx` suite passed 97
+tests with 7 ignored.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep timing evaluation outside `rpptx-oxml`.
+Preserve expanded-name parsing, direct-child schema choices, selected
+AlternateContent branches, and surgical raw-byte mutation when extending the
+typed subset.
+
+### F-214, Timeline evaluation and transition rendering
+
+**Sprint.** S60
+**Completed.** 2026-08-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The presentation layout layer now evaluates supported
+timing trees at explicit slide-local timestamps and click counts. An additive
+resolver path applies entrance, exit, emphasis, motion, group-target, and fill
+state before freezing each frame. The renderer composes cut, fade, wipe, push,
+zoom, and bounded explicit-name morph transitions through the existing page
+frame model. The native facade exposes deterministic timestamped rendering
+while every ordinary static entry point remains unchanged.
+
+**Non-obvious choices.** Shape targets remain keyed by PresentationML
+non-visual ids, and bounded morph pairs only explicit `!!` names with compatible
+resolved geometry. Group animation and clipping use shared page-space geometry
+so nested and descendant transforms cannot move a parent boundary. Fade and
+compatible morph use source-over composition with an opaque outgoing layer.
+Two narrowly approved OXML queries expose non-visual names and whether a timing
+condition had an explicit target without changing the completed F-213 value
+projection or reparsing XML in the layout crate.
+
+**Deviations from the design plan.** The fixed PowerPoint movie could not
+provide an observable zoom differential because the adjacent source slides
+were visually identical throughout the zoom interval. The external matrix
+therefore fails closed without a zoom row. Deterministic Rust regressions still
+cover both zoom directions. The reviewed nine-case oracle retains evaluator,
+fade, morph, and push evidence.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/06-presentationml-model.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named differential gate passed nine exact PowerPoint 16.104
+samples. Maximum geometry error was 0.96 point and minimum luminance SSIM was
+0.997866 against declared limits of 1 point and 0.99. The F-213 corpus gate
+reparsed all 50 pinned decks across 421 slides, 766 layouts, and 76 masters.
+The affected suites passed 151 `rpptx-oxml` tests, 119 `rpptx-layout` tests, 97
+`rpptx-render` tests, and 136 `rpptx` tests with 8 expected ignored tests. Full
+integrated verification passed the workspace, no-default, WASM, rustdoc,
+README, publish dry-run, archive-size, and supply-chain gates. The 50-deck
+static SSIM rider passed both corpus checks across 421 slides and recorded 25
+slides at SSIM 0.95 or higher, a 0.512539 median, and `target_met=false` as
+trend evidence rather than a quality claim.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the independent static path, explicit
+slide-local time and click convention, page-space group clipping, exact `!!`
+morph opt-in, and fail-closed external-oracle bindings. Do not claim external
+zoom parity until a source deck makes the effect observable.

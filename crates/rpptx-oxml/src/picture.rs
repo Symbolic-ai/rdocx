@@ -12,7 +12,8 @@ use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
-    root_attributes, self_contained_attributes, set_non_visual_drawing_name,
+    non_visual_drawing_name, root_attributes, self_contained_attributes,
+    set_non_visual_drawing_name,
 };
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
 
@@ -35,6 +36,7 @@ struct PictureRaw {
     non_visual_attributes: RawAttributes,
     non_visual_children: OrderedRawChildren,
     non_visual_drawing_properties: Vec<u8>,
+    non_visual_name: Option<String>,
     non_visual_picture_properties: Vec<u8>,
     application_properties_attributes: RawAttributes,
     application_properties_raw_children: OrderedRawChildren,
@@ -46,6 +48,7 @@ struct ParsedNonVisualPicture {
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
     non_visual_drawing_properties: Vec<u8>,
+    non_visual_name: Option<String>,
     non_visual_picture_properties: Vec<u8>,
     application_properties_attributes: RawAttributes,
     application_properties_raw_children: OrderedRawChildren,
@@ -75,9 +78,15 @@ impl CT_Picture {
         non_visual_drawing_id(&self.raw.non_visual_drawing_properties)
     }
 
+    pub(crate) fn non_visual_name(&self) -> Option<&str> {
+        self.raw.non_visual_name.as_deref()
+    }
+
     /// Changes the producer-facing non-visual picture name.
     pub fn set_name(&mut self, name: &str) -> Result<()> {
-        set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)
+        set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)?;
+        self.raw.non_visual_name = Some(name.to_owned());
+        Ok(())
     }
 
     /// Parses a complete `p:pic` with any prefix bound to PresentationML.
@@ -191,6 +200,7 @@ impl CT_Picture {
                 non_visual_attributes: non_visual.raw_attributes,
                 non_visual_children: non_visual.raw_children,
                 non_visual_drawing_properties: non_visual.non_visual_drawing_properties,
+                non_visual_name: non_visual.non_visual_name,
                 non_visual_picture_properties: non_visual.non_visual_picture_properties,
                 application_properties_attributes: non_visual.application_properties_attributes,
                 application_properties_raw_children: non_visual.application_properties_raw_children,
@@ -454,6 +464,7 @@ fn parse_non_visual_picture(
                 let namespaces = inherited.with_start(&start)?;
                 let raw_attributes = root_attributes(&start, FIXED_SHAPE_TREE_PREFIXES)?;
                 let mut drawing = None;
+                let mut drawing_name = None;
                 let mut picture = None;
                 let mut application = None;
                 let mut raw_children = OrderedRawChildren::default();
@@ -465,13 +476,20 @@ fn parse_non_visual_picture(
                             let child_namespaces = namespaces.with_start(&child)?;
                             let name = local_name(child.name().as_ref()).to_vec();
                             let uri = child_namespaces.element_uri(child.name().as_ref());
+                            let candidate_name = if uri == Some(P_NS) && name == b"cNvPr" {
+                                non_visual_drawing_name(&child)?
+                            } else {
+                                None
+                            };
                             let raw = capture_element(&mut reader, &child)?;
                             capture_non_visual_child(
                                 &name,
                                 uri,
                                 raw,
+                                candidate_name,
                                 &child_namespaces,
                                 &mut drawing,
+                                &mut drawing_name,
                                 &mut picture,
                                 &mut application,
                                 &mut raw_children,
@@ -482,13 +500,20 @@ fn parse_non_visual_picture(
                             let child_namespaces = namespaces.with_start(&child)?;
                             let name = local_name(child.name().as_ref()).to_vec();
                             let uri = child_namespaces.element_uri(child.name().as_ref());
+                            let candidate_name = if uri == Some(P_NS) && name == b"cNvPr" {
+                                non_visual_drawing_name(&child)?
+                            } else {
+                                None
+                            };
                             let raw = capture_empty_element(&child)?;
                             capture_non_visual_child(
                                 &name,
                                 uri,
                                 raw,
+                                candidate_name,
                                 &child_namespaces,
                                 &mut drawing,
+                                &mut drawing_name,
                                 &mut picture,
                                 &mut application,
                                 &mut raw_children,
@@ -503,11 +528,13 @@ fn parse_non_visual_picture(
                     }
                 }
                 let application = required(application, "p:nvPr")?;
+                let drawing = required(drawing, "p:cNvPr")?;
                 return Ok(ParsedNonVisualPicture {
                     placeholder: application.placeholder,
                     raw_attributes,
                     raw_children,
-                    non_visual_drawing_properties: required(drawing, "p:cNvPr")?,
+                    non_visual_name: drawing_name,
+                    non_visual_drawing_properties: drawing,
                     non_visual_picture_properties: required(picture, "p:cNvPicPr")?,
                     application_properties_attributes: application.raw_attributes,
                     application_properties_raw_children: application.raw_children,
@@ -530,8 +557,10 @@ fn capture_non_visual_child(
     name: &[u8],
     uri: Option<&str>,
     raw: Vec<u8>,
+    candidate_name: Option<String>,
     namespaces: &NamespaceBindings,
     drawing: &mut Option<Vec<u8>>,
+    drawing_name: &mut Option<String>,
     picture: &mut Option<Vec<u8>>,
     application: &mut Option<ApplicationProperties>,
     raw_children: &mut OrderedRawChildren,
@@ -543,6 +572,7 @@ fn capture_non_visual_child(
     match (uri, name) {
         (Some(P_NS), b"cNvPr") if *boundary == 0 && drawing.is_none() => {
             *drawing = Some(raw);
+            *drawing_name = candidate_name;
             *boundary = 1;
         }
         (Some(P_NS), b"cNvPicPr") if *boundary == 1 && picture.is_none() => {

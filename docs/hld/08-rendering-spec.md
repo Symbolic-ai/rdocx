@@ -912,6 +912,26 @@ per slide. Each row records the positive-extent source leaf count, resolved
 shape count, dropped count, diagnostics, and PNG path. A panic or missing page
 fails the driver.
 
+The additive timeline path resolves the same slide into a
+`ResolvedTimelineSlide`, which pairs each resolved shape with its stable source
+identity and carries the evaluated frame state. Evaluation accepts only finite
+public state. It applies supported entrance, exit, emphasis, and motion values
+in slide or target geometry as required by the source token. Group-target
+transforms and clips use one group coordinate space, including nested groups.
+Container endpoints constrain child state, and invalid targets, arithmetic,
+directions, or unsupported modes add diagnostics rather than executable
+fallbacks.
+
+`rpptx-render` lowers evaluated shapes through the same private page path used
+by static rendering. Cut, fade, wipe, push, and zoom compose complete
+`PageFrame` groups without changing backend contracts. Fade uses source-over
+composition with the opaque outgoing page. Directional wipes clip in the
+oriented transition space. Morph correlates explicit `!!` names across stable
+source identities, interpolates compatible geometry and extents, and
+crossfades unmatched content with diagnostics. The outgoing morph page and its
+evaluated state always use the same timestamp. Static entry points retain their
+original non-identity resolver and byte output.
+
 ## Word bookmark field pagination
 
 Word `REF` fields resolve the text of one uniquely correlated top-level

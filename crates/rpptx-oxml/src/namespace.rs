@@ -125,6 +125,13 @@ pub(crate) fn non_visual_drawing_id(xml: &[u8]) -> Option<u32> {
     }
 }
 
+pub(crate) fn non_visual_drawing_name(start: &BytesStart<'_>) -> Result<Option<String>, OxmlError> {
+    Ok(all_attributes(start)?
+        .into_iter()
+        .find(|(name, _)| name == "name")
+        .map(|(_, value)| value))
+}
+
 pub(crate) fn set_non_visual_drawing_name(xml: &mut Vec<u8>, name: &str) -> Result<(), OxmlError> {
     let mut reader = Reader::from_reader(xml.as_slice());
     let mut buffer = Vec::new();

@@ -11,13 +11,14 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
-    FIXED_MODEL_PREFIXES, NamespaceBindings, P_NS, R_NS, all_attributes, is_fixed_xmlns,
+    FIXED_MODEL_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes, is_fixed_xmlns,
     root_attributes,
 };
 
 const P188_NS: &str = "http://schemas.microsoft.com/office/powerpoint/2018/8/main";
 const COMMENT_EXTENSION_URI: &str = "{6950BFC3-D8DA-4A85-94F7-54DA5524770B}";
 use crate::shape_tree::CT_ShapeTree;
+use crate::timing::{CT_SlideTransition, CT_Timing};
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
@@ -197,6 +198,8 @@ impl CT_HeaderFooter {
 pub struct CT_Slide {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map_override: Option<CT_ColorMapOverride>,
+    pub transition: Option<CT_SlideTransition>,
+    pub timing: Option<CT_Timing>,
     pub show: Option<bool>,
     pub show_master_shapes: Option<bool>,
     raw_attributes: RawAttributes,
@@ -208,6 +211,8 @@ pub struct CT_Slide {
 pub struct CT_SlideLayout {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map_override: Option<CT_ColorMapOverride>,
+    pub timing: Option<CT_Timing>,
+    pub transition: Option<CT_SlideTransition>,
     pub show_master_shapes: Option<bool>,
     pub header_footer: Option<CT_HeaderFooter>,
     raw_attributes: RawAttributes,
@@ -219,6 +224,8 @@ pub struct CT_SlideLayout {
 pub struct CT_SlideMaster {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map: ColorMap,
+    pub transition: Option<CT_SlideTransition>,
+    pub timing: Option<CT_Timing>,
     pub text_styles: Option<CT_MasterTextStyles>,
     pub header_footer: Option<CT_HeaderFooter>,
     raw_attributes: RawAttributes,
@@ -286,13 +293,16 @@ struct ParsedRoot {
     common_slide_data: Option<CT_CommonSlideData>,
     color_map_override: Option<CT_ColorMapOverride>,
     color_map: Option<ParsedColorMap>,
-    text_styles: Option<CT_MasterTextStyles>,
+    text_styles: Option<Box<CT_MasterTextStyles>>,
     header_footer: Option<CT_HeaderFooter>,
+    transition: Option<CT_SlideTransition>,
+    timing: Option<CT_Timing>,
     show: Option<bool>,
     show_master_shapes: Option<bool>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
     boundary: usize,
+    empty_layout_transition_before_hf: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -320,6 +330,8 @@ impl CT_Slide {
                 mapping_children: OrderedRawChildren::default(),
                 raw_children: OrderedRawChildren::default(),
             }),
+            transition: None,
+            timing: None,
             show: None,
             show_master_shapes: None,
             raw_attributes: Vec::new(),
@@ -332,6 +344,8 @@ impl CT_Slide {
         Ok(Self {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map_override: parsed.color_map_override,
+            transition: parsed.transition,
+            timing: parsed.timing,
             show: parsed.show,
             show_master_shapes: parsed.show_master_shapes,
             raw_attributes: parsed.raw_attributes,
@@ -344,6 +358,8 @@ impl CT_Slide {
             RootKind::Slide,
             &self.common_slide_data,
             self.color_map_override.as_ref(),
+            self.transition.as_ref(),
+            self.timing.as_ref(),
             self.show,
             self.show_master_shapes,
             None,
@@ -685,6 +701,8 @@ impl CT_SlideLayout {
         Ok(Self {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map_override: parsed.color_map_override,
+            timing: parsed.timing,
+            transition: parsed.transition,
             show_master_shapes: parsed.show_master_shapes,
             header_footer: parsed.header_footer,
             raw_attributes: parsed.raw_attributes,
@@ -697,6 +715,8 @@ impl CT_SlideLayout {
             RootKind::Layout,
             &self.common_slide_data,
             self.color_map_override.as_ref(),
+            self.transition.as_ref(),
+            self.timing.as_ref(),
             None,
             self.show_master_shapes,
             self.header_footer.as_ref(),
@@ -713,7 +733,9 @@ impl CT_SlideMaster {
         Ok(Self {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map: color_map.value,
-            text_styles: parsed.text_styles,
+            transition: parsed.transition,
+            timing: parsed.timing,
+            text_styles: parsed.text_styles.map(|styles| *styles),
             header_footer: parsed.header_footer,
             raw_attributes: parsed.raw_attributes,
             color_map_attributes: color_map.raw_attributes,
@@ -741,9 +763,16 @@ impl CT_SlideMaster {
             &self.color_map_attributes,
             &self.color_map_children,
         )?;
-        for boundary in 2..=5 {
-            emit_raw(&mut writer, self.raw_children.at(boundary))?;
+        emit_raw(&mut writer, self.raw_children.at(2))?;
+        emit_raw(&mut writer, self.raw_children.at(3))?;
+        if let Some(transition) = &self.transition {
+            transition.write_xml(&mut writer)?;
         }
+        emit_raw(&mut writer, self.raw_children.at(4))?;
+        if let Some(timing) = &self.timing {
+            timing.write_xml(&mut writer)?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(5))?;
         if let Some(header_footer) = &self.header_footer {
             header_footer.write_xml(&mut writer)?;
         }
@@ -818,16 +847,28 @@ fn parse_root_children(
             Event::Start(child) => {
                 let namespaces = root_namespaces.with_start(&child)?;
                 let name = local_name(child.name().as_ref()).to_vec();
-                let is_p = namespaces.element_uri(child.name().as_ref()) == Some(P_NS);
+                let namespace_uri = namespaces.element_uri(child.name().as_ref());
                 let raw = capture_element(reader, &child)?;
-                parsed.capture_child(&name, is_p, &namespaces, raw, kind)?;
+                parsed.capture_child(&name, namespace_uri, false, &namespaces, raw, kind)?;
             }
             Event::Empty(child) => {
                 let namespaces = root_namespaces.with_start(&child)?;
                 let name = local_name(child.name().as_ref()).to_vec();
-                let is_p = namespaces.element_uri(child.name().as_ref()) == Some(P_NS);
+                let namespace_uri = namespaces.element_uri(child.name().as_ref());
+                let empty_layout_transition_marker = namespace_uri == Some(P_NS)
+                    && name == b"transition"
+                    && all_attributes(&child)?
+                        .iter()
+                        .all(|(name, _)| name == "xmlns" || name.starts_with("xmlns:"));
                 let raw = capture_empty_element(&child)?;
-                parsed.capture_child(&name, is_p, &namespaces, raw, kind)?;
+                parsed.capture_child(
+                    &name,
+                    namespace_uri,
+                    empty_layout_transition_marker,
+                    &namespaces,
+                    raw,
+                    kind,
+                )?;
             }
             Event::End(end) if local_name(end.name().as_ref()) == kind.local_name() => {
                 return Ok(parsed);
@@ -843,18 +884,23 @@ impl ParsedRoot {
     fn capture_child(
         &mut self,
         name: &[u8],
-        is_p: bool,
+        namespace_uri: Option<&str>,
+        empty_layout_transition_marker: bool,
         namespaces: &NamespaceBindings,
         raw: Vec<u8>,
         kind: RootKind,
     ) -> Result<()> {
+        let follows_empty_layout_transition = self.empty_layout_transition_before_hf;
+        self.empty_layout_transition_before_hf = false;
+        let is_p = namespace_uri == Some(P_NS);
+        let is_mc = namespace_uri == Some(MC_NS);
         if is_p && name == b"cSld" {
             namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
             if self.common_slide_data.is_some() {
                 return Err(duplicate("cSld"));
             }
+            self.advance_modelled_child("cSld", 0, 1)?;
             self.common_slide_data = Some(CT_CommonSlideData::from_fragment(&raw, namespaces)?);
-            self.boundary = self.boundary.max(1);
             return Ok(());
         }
         if is_p && name == b"clrMapOvr" && !matches!(kind, RootKind::Master) {
@@ -862,8 +908,8 @@ impl ParsedRoot {
             if self.color_map_override.is_some() {
                 return Err(duplicate("clrMapOvr"));
             }
+            self.advance_modelled_child("clrMapOvr", 1, 2)?;
             self.color_map_override = Some(CT_ColorMapOverride::from_fragment(&raw, namespaces)?);
-            self.boundary = self.boundary.max(2);
             return Ok(());
         }
         if is_p && name == b"clrMap" && matches!(kind, RootKind::Master) {
@@ -871,8 +917,8 @@ impl ParsedRoot {
             if self.color_map.is_some() {
                 return Err(duplicate("clrMap"));
             }
+            self.advance_modelled_child("clrMap", 1, 2)?;
             self.color_map = Some(parse_color_map(&raw, namespaces)?);
-            self.boundary = self.boundary.max(2);
             return Ok(());
         }
         if is_p && name == b"txStyles" && matches!(kind, RootKind::Master) {
@@ -880,8 +926,10 @@ impl ParsedRoot {
             if self.text_styles.is_some() {
                 return Err(duplicate("txStyles"));
             }
-            self.text_styles = Some(CT_MasterTextStyles::from_fragment(&raw, namespaces)?);
-            self.boundary = self.boundary.max(7);
+            self.advance_modelled_child("txStyles", 6, 7)?;
+            self.text_styles = Some(Box::new(CT_MasterTextStyles::from_fragment(
+                &raw, namespaces,
+            )?));
             return Ok(());
         }
         if is_p && name == b"hf" && matches!(kind, RootKind::Layout | RootKind::Master) {
@@ -889,12 +937,47 @@ impl ParsedRoot {
             if self.header_footer.is_some() {
                 return Err(duplicate("hf"));
             }
-            self.header_footer = Some(CT_HeaderFooter::from_fragment(&raw, namespaces)?);
-            self.boundary = self.boundary.max(match kind {
-                RootKind::Layout => 3,
-                RootKind::Master => 6,
+            let (before, after) = match kind {
+                RootKind::Layout => (2, 3),
+                RootKind::Master => (5, 6),
                 RootKind::Slide => unreachable!(),
-            });
+            };
+            if !matches!(kind, RootKind::Layout) || !follows_empty_layout_transition {
+                self.advance_modelled_child("hf", before, after)?;
+            }
+            self.header_footer = Some(CT_HeaderFooter::from_fragment(&raw, namespaces)?);
+            return Ok(());
+        }
+        if is_p && name == b"transition" {
+            let transition = CT_SlideTransition::from_fragment(&raw, namespaces)?;
+            self.capture_transition(transition, kind)?;
+            self.empty_layout_transition_before_hf =
+                matches!(kind, RootKind::Layout) && empty_layout_transition_marker;
+            return Ok(());
+        }
+        if is_mc
+            && name == b"AlternateContent"
+            && let Some(transition) = CT_SlideTransition::from_alternate_content(&raw, namespaces)?
+        {
+            self.capture_transition(transition, kind)?;
+            return Ok(());
+        }
+        if is_p && name == b"timing" {
+            if self.timing.is_some() {
+                return Err(duplicate("timing"));
+            }
+            let (before, after) = match kind {
+                RootKind::Slide => (3, 4),
+                RootKind::Layout => (3, 4),
+                RootKind::Master => (4, 5),
+            };
+            if self.boundary > before {
+                return Err(OxmlError::InvalidValue(
+                    "p:timing is out of schema order".to_owned(),
+                ));
+            }
+            self.timing = Some(CT_Timing::from_fragment(&raw, namespaces)?);
+            self.boundary = after;
             return Ok(());
         }
         let (at, after) = if is_p {
@@ -906,6 +989,35 @@ impl ParsedRoot {
         self.boundary = after;
         Ok(())
     }
+
+    fn capture_transition(&mut self, transition: CT_SlideTransition, kind: RootKind) -> Result<()> {
+        if self.transition.is_some() {
+            return Err(duplicate("transition"));
+        }
+        let (before, after) = match kind {
+            RootKind::Slide => (2, 3),
+            RootKind::Layout => (4, 5),
+            RootKind::Master => (3, 4),
+        };
+        if self.boundary > before {
+            return Err(OxmlError::InvalidValue(
+                "p:transition is out of schema order".to_owned(),
+            ));
+        }
+        self.transition = Some(transition);
+        self.boundary = after;
+        Ok(())
+    }
+
+    fn advance_modelled_child(&mut self, name: &str, before: usize, after: usize) -> Result<()> {
+        if self.boundary > before {
+            return Err(OxmlError::InvalidValue(format!(
+                "p:{name} is out of schema order"
+            )));
+        }
+        self.boundary = after;
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -913,6 +1025,8 @@ fn write_slide_like(
     kind: RootKind,
     common: &CT_CommonSlideData,
     color_override: Option<&CT_ColorMapOverride>,
+    transition: Option<&CT_SlideTransition>,
+    timing: Option<&CT_Timing>,
     show: Option<bool>,
     show_master_shapes: Option<bool>,
     header_footer: Option<&CT_HeaderFooter>,
@@ -929,18 +1043,32 @@ fn write_slide_like(
     }
     match kind {
         RootKind::Slide => {
-            for boundary in 2..=5 {
-                emit_raw(&mut writer, raw.at(boundary))?;
+            emit_raw(&mut writer, raw.at(2))?;
+            if let Some(transition) = transition {
+                transition.write_xml(&mut writer)?;
             }
+            emit_raw(&mut writer, raw.at(3))?;
+            if let Some(timing) = timing {
+                timing.write_xml(&mut writer)?;
+            }
+            emit_raw(&mut writer, raw.at(4))?;
+            emit_raw(&mut writer, raw.at(5))?;
         }
         RootKind::Layout => {
             emit_raw(&mut writer, raw.at(2))?;
             if let Some(header_footer) = header_footer {
                 header_footer.write_xml(&mut writer)?;
             }
-            for boundary in 3..=6 {
-                emit_raw(&mut writer, raw.at(boundary))?;
+            emit_raw(&mut writer, raw.at(3))?;
+            if let Some(timing) = timing {
+                timing.write_xml(&mut writer)?;
             }
+            emit_raw(&mut writer, raw.at(4))?;
+            if let Some(transition) = transition {
+                transition.write_xml(&mut writer)?;
+            }
+            emit_raw(&mut writer, raw.at(5))?;
+            emit_raw(&mut writer, raw.at(6))?;
         }
         RootKind::Master => unreachable!(),
     }
@@ -1970,4 +2098,17 @@ fn unexpected(element: &BytesStart<'_>) -> OxmlError {
 
 fn map_drawing_error(error: impl ToString) -> OxmlError {
     OxmlError::InvalidValue(error.to_string())
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::ParsedRoot;
+
+    #[test]
+    fn slide_root_parse_state_keeps_large_master_text_styles_off_stack() {
+        assert!(
+            std::mem::size_of::<ParsedRoot>() < 4 * 1024,
+            "slide root parse state must remain small enough for nested producer content"
+        );
+    }
 }
