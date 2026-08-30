@@ -348,6 +348,19 @@ and complete declared coverage from certificate-chain trust. They do not
 expand Python, WASM, or CLI surfaces and those dependency graphs remain
 unchanged.
 
+The native `Presentation` facade exposes the parallel default-off security
+surface. `open_encrypted`, `from_encrypted_bytes`, and the bounded bytes
+variant use the shared package reader. `save_encrypted` and
+`to_encrypted_bytes` use the shared fixed Agile profile, with sibling-file
+atomic publication for the path method. `verify_signatures` stages current
+typed presentation state before returning shared reports. Native `sign`
+accepts PKCS#8 private-key DER and X.509 certificate DER, then commits only a
+candidate whose signature is cryptographically valid and has complete declared
+coverage. Relevant mutation retains signature infrastructure for inspection
+but makes verification report it as invalid. These additive pre-1.0 APIs do
+not expand Python, WASM, or CLI surfaces, and their manifests select neither
+security feature.
+
 Native callers rebuilding one Word document from another can call
 `Document::transfer_reusable_layout_from`. The method moves the source's normal
 layout engine only when the complete private retained-work context matches. A
@@ -684,6 +697,29 @@ context stays in one internal projection used by numbering, style, body,
 table-cell, header, footer, footnote, and endnote readers, so `CT_PPr` does not
 expose a partially contextual parser. Established aliased and default
 WordprocessingML inputs remain accepted outside numbering.
+
+## Native PowerPoint collaboration and navigation
+
+The native pre-1.0 `rpptx::Presentation` facade exposes ordered modern comment
+authors, comments, threaded replies, sections, and mutable notes-master and
+handout-master header-footer settings. `CommentAuthor`, `Comment`,
+`CommentReply`, and `Section` are concrete values. Callers provide stable GUIDs
+and RFC 3339 timestamps, and mutation returns the ordinary facade `Result`
+without creating an allocator, clock, trait, generic, or builder.
+
+The additive methods are `comment_authors`, `add_comment_author`, `comments`,
+`add_comment`, `reply_to_comment`, `move_comment`, `move_reply`, `sections`,
+`set_sections`, `notes_header_footer_mut`, and `handout_header_footer_mut`.
+They remain native Rust only. Python, WASM, and CLI consumers gain no
+collaboration or navigation methods and continue to preserve these package
+parts through their existing `Presentation` owner.
+
+The low-level `rpptx-oxml` model adds the approved `comments` module and
+extends existing presentation, notes, slide, relationship, and content-type
+models. This is an additive semver change for the published pre-1.0
+`rpptx-oxml` and `rpptx` crates. It adds no production dependency or feature
+flag. Unsupported modern comment XML and all legacy comment parts remain
+preserved, so consumers do not need a parallel raw authoring API.
 
 ## Packaging
 

@@ -144,8 +144,10 @@ on CI runners as it always would have.
 |---|---|---|---|
 | `oxml-opc` | `agile-encryption` | off | Adds native read and fixed-profile write support for password-protected OOXML packages |
 | `rdocx` | `agile-encryption` | off | Forwards encrypted native document opens and saves to `oxml-opc` |
+| `rpptx` | `agile-encryption` | off | Forwards encrypted native presentation opens and saves to `oxml-opc` |
 | `oxml-opc` | `digital-signatures` | off | Adds OPC signature creation, verification, and coverage reports |
 | `rdocx` | `digital-signatures` | off | Forwards native signature creation and verification to `oxml-opc` |
+| `rpptx` | `digital-signatures` | off | Forwards native signature creation and current-state verification to `oxml-opc` |
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
@@ -164,9 +166,11 @@ not. Its generated `toPdf` method calls the normal `Document::to_pdf` facade,
 which therefore uses document-embedded and bundled fonts without host font
 discovery in that graph. Native `rpptx`, `rpptx-render`, and the presentation
 Python binding retain system fonts through the same explicit forwarding
-pattern. Bundled font bytes remain available in both modes. The Python, WASM,
-and CLI manifests do not opt in to `agile-encryption`.
-They also do not opt in to `digital-signatures`.
+pattern. Bundled font bytes remain available in both modes. The `rpptx`
+security features are native-only named-consumer edges to `oxml-opc`. The
+Python, WASM, and CLI manifests do not opt in to `agile-encryption` or
+`digital-signatures`, so their ordinary graphs exclude the added cryptographic
+dependencies.
 
 Raster encoding dependencies are intentionally narrow. `jpeg-encoder` and
 `tiff` are direct `oxml-pdf` dependencies with default features disabled,

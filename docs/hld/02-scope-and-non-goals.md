@@ -30,6 +30,9 @@ its cost is recorded in `00-vision.md`.
 | Slide masters and layouts, layout lookup by name | Read |
 | Core, app and custom properties | Shared with rdocx via `oxml-core` |
 | Notes slides | Read and write |
+| Notes-master and handout-master header and footer settings | Native Rust read and write |
+| Ordered presentation sections and slide membership | Native Rust read and write |
+| Modern comments, authors and threaded replies | Native Rust read and write. Legacy comments remain opaque |
 | Slide background, follow-master-background | |
 | Hidden slides | Skipped when rendering, preserved on save |
 
@@ -102,8 +105,7 @@ causes data loss, only reduced fidelity when rendering.
 | Gradient stop alpha | Stop colour composited, alpha dropped |
 | Justified text inside shapes | Treated as left-aligned |
 | Table cell text autofit | Not attempted |
-| Sections, `p14:sectionLst` | Preserved |
-| Comments, ink, `p:contentPart` | Preserved |
+| Legacy comments, ink, `p:contentPart` | Preserved |
 
 Every one of these records a diagnostic, surfaced by `rpptx inspect --json` and
 by the render API, so a user can tell approximation from fidelity.

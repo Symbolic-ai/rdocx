@@ -73,6 +73,7 @@ defended.
 | S56 | M18, X | 7 | 6 | 1 | 15 | 1 | Completed M18 with deterministic ODT writing, EPUB 3 export, searchable SVG pages, and hardened outcomes from PRs 47 through 52. The partial v0.10.0 attempt was archived and recovered by publishing the complete 15-package incubating 0.6.0 family before the complete seven-package stable 0.10.1 family. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and the sprint review clean on the authorized exact-HEAD pass 6 |
 | S57 | M20 | 3 | 3 | 0 | 10 | 1 | Established the pinned Word corpus, complete-union SSIM evidence, and thousand-page performance limits. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review clean on pass 1. M20 continues in S58 with shaping and incremental layout |
 | S58 | M20, X | 18 | 17 | 1 | 32 | 4 | Completed M20 with multilingual shaping, automatic hyphenation, bidirectional layout, and bounded incremental pagination. Published the shared 0.7.0 and 0.8.0 families and stable 0.11.1 recovery, then yanked the two incomplete 0.11.0 entries. Hardened Issues 53 and 54 plus PRs 55 through 58, and required the aggregate CI gate on the default branch. F-X060 records the archived partial 0.11.0 attempt. The full close gate passed with 49 of 49 hashes, the approved five-key feature-showcase delta, 22 package archives below 10 MiB, and final sprint review pass 26 clean |
+| S59 | M21 | 2 | 2 | 0 | 6 | 1 | Opened M21 with editable comments, replies, sections, notes and handout metadata, plus native password and signature operations with current-state invalidation. Pinned PowerPoint opened the encrypted candidate with the correct password and rejected a wrong password. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 3 clean. M21 continues in S60 with animation and transitions |
 
 ## Completed features
 
@@ -347,6 +348,8 @@ defended.
 | F-X069 | S58 | S | 1 | 1 | 2026-08-29 | Published and verified the complete seven-package rdocx 0.11.1 recovery family |
 | F-X070 | S58 | S | 1 | 1 | 2026-08-29 | Yanked exactly the two incomplete stable 0.11.0 registry entries after verified 0.11.1 recovery |
 | F-X031 | S58 | S | 1 | 1 | 2026-08-29 | Required the aggregate CI gate on the default branch with a narrow administrator bypass and two live pull request proofs |
+| F-217 | S59 | L | 4 | 1 | 2026-08-30 | Added relationship-safe modern comments, replies, sections, notes headers and footers, and handout settings |
+| F-221 | S59 | M | 2 | 1 | 2026-08-30 | Added default-off native presentation encryption and signatures with current-state invalidation |
 
 ## Velocity
 
@@ -420,6 +423,7 @@ five working days.
 | S56 | 6 | 1 | 30.00 |
 | S57 | 3 | 1 | 15.00 |
 | S58 | 17 | 4 | 21.25 |
+| S59 | 2 | 1 | 10.00 |
 
 ## Escalation record
 
@@ -481,3 +485,4 @@ was done about it. Empty is the expected state.
 | 2026-08-25 | Sprint estimate variance exceeded 30 percent | S56 | Record 1 actual day against 15 estimated. Isolated workers, established exporter and release workflows, and the v0.10.1 recovery allowed implementation, review, and publication work to overlap safely. The resulting 30.00 stories per week is not a sustainable forecast, so retain the dependency-defined future release checkpoints starting at S58 |
 | 2026-08-25 | Sprint estimate variance exceeded 30 percent | S57 | Record 1 actual day against 10 estimated. Isolated workers, established corpus and oracle infrastructure, and test-only reuse of existing render paths reduced delivery time while preserving the dependency-defined S58 shaping boundary. The resulting 15.00 stories per week is not a sustainable forecast, so retain the planned S58 scope |
 | 2026-08-29 | Sprint estimate variance exceeded 30 percent | S58 | Record 4 actual days against 32 estimated. Parallel isolated workers, staged release checkpoints, established corpus oracles, and contribution hardening allowed independent work to overlap safely. The resulting 21.25 stories per week is not a sustainable forecast, so retain dependency-defined future sprint boundaries |
+| 2026-08-30 | Sprint estimate variance exceeded 30 percent | S59 | Record 1 actual day against 6 estimated. Two isolated workers reused the established PresentationML preservation model and shared package-security implementation, while the bounded reviews concentrated interaction corrections into the same integrated facade. The resulting 10.00 stories per week is not a sustainable rate, so retain the dependency-defined S60 boundary |

@@ -2885,7 +2885,7 @@ fn notes_parts_read_any_prefix_write_fixed_prefixes_and_schema_order() {
         &[
             "<p:cSld",
             "<p:clrMap",
-            "<q:hf",
+            "<p:hf",
             "<p:notesStyle",
             "<q:extLst",
         ],
@@ -2910,7 +2910,7 @@ fn notes_master_without_notes_style_round_trips_with_extension_in_schema_order()
         let written = parsed.to_xml().unwrap();
         let mut expected = vec!["<p:cSld", "<p:clrMap"];
         if !header_footer.is_empty() {
-            expected.push("<q:hf");
+            expected.push("<p:hf");
         }
         expected.extend(["<x:between", "<q:extLst"]);
         assert_order(&written, &expected);
@@ -2953,6 +2953,75 @@ fn notes_parts_preserve_unmodelled_children_in_their_schema_slots() {
             "<p:clrMapOvr",
             producer_after,
         ],
+    );
+}
+
+#[test]
+fn notes_handout_and_header_footer_preserve_direct_raw_events_at_schema_boundaries() {
+    use rpptx_oxml::notes_parts::CT_HandoutMaster;
+
+    let color_map = r#"bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink""#;
+    let notes_before =
+        "notes-text<![CDATA[notes-cdata]]><!--notes-comment--><?notes keep?><!DOCTYPE notes-event>";
+    let notes_between = "between-text<![CDATA[between-cdata]]><!--between-comment--><?between keep?><!DOCTYPE between-event>";
+    let header_footer_events =
+        "hf-text<![CDATA[hf-cdata]]><!--hf-comment--><?hf keep?><!DOCTYPE hf-event>";
+    let notes_after =
+        "after-text<![CDATA[after-cdata]]><!--after-comment--><?after keep?><!DOCTYPE after-event>";
+    let notes_xml = format!(
+        r#"<q:notesMaster xmlns:q="{P_NS}" xmlns:x="urn:f217">{notes_before}<q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap {color_map}/>{notes_between}<q:hf hdr="1">{header_footer_events}<x:hf-child/></q:hf>{notes_after}</q:notesMaster>"#
+    );
+    let notes = CT_NotesMaster::from_xml(notes_xml.as_bytes()).unwrap();
+    let notes_written = notes.to_xml().unwrap();
+    for raw in [
+        notes_before,
+        notes_between,
+        header_footer_events,
+        notes_after,
+    ] {
+        assert!(
+            notes_written
+                .windows(raw.len())
+                .any(|window| window == raw.as_bytes()),
+            "missing {raw}: {}",
+            String::from_utf8_lossy(&notes_written)
+        );
+    }
+    assert_order(
+        &notes_written,
+        &[
+            notes_before,
+            "<p:cSld",
+            "<p:clrMap",
+            notes_between,
+            "<p:hf",
+            header_footer_events,
+            "<x:hf-child",
+            notes_after,
+        ],
+    );
+    assert_eq!(notes, CT_NotesMaster::from_xml(&notes_written).unwrap());
+
+    let handout_events = "handout-text<![CDATA[handout-cdata]]><!--handout-comment--><?handout keep?><!DOCTYPE handout-event>";
+    let handout_xml = format!(
+        r#"<q:handoutMaster xmlns:q="{P_NS}"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld>{handout_events}<q:clrMap {color_map}/><q:hf ftr="0"/></q:handoutMaster>"#
+    );
+    let handout = CT_HandoutMaster::from_xml(handout_xml.as_bytes()).unwrap();
+    let handout_written = handout.to_xml().unwrap();
+    assert!(
+        handout_written
+            .windows(handout_events.len())
+            .any(|window| window == handout_events.as_bytes()),
+        "{}",
+        String::from_utf8_lossy(&handout_written)
+    );
+    assert_order(
+        &handout_written,
+        &["<p:cSld", handout_events, "<p:clrMap", "<p:hf"],
+    );
+    assert_eq!(
+        handout,
+        CT_HandoutMaster::from_xml(&handout_written).unwrap()
     );
 }
 
@@ -3216,6 +3285,121 @@ fn comments_processing_instructions_and_attribute_syntax_are_preserved() {
 }
 
 #[test]
+fn self_closing_reply_list_preserves_fixed_prefix_shadow_attributes() {
+    use rpptx_oxml::comments::CommentList;
+
+    let xml = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/><q:replyLst xmlns:p188="urn:f217:producer" p188:flag='a&#x20;b'/></q:cm></q:cmLst>"#;
+    let comments = CommentList::from_xml(xml).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+
+    assert!(written.contains(&format!(
+        r#"<p188m:replyLst xmlns:p188m="{}""#,
+        "http://schemas.microsoft.com/office/powerpoint/2018/8/main"
+    )));
+    assert!(
+        written.contains(r#"xmlns:p188="urn:f217:producer""#),
+        "{written}"
+    );
+    assert!(written.contains(r#"p188:flag='a&#x20;b'"#), "{written}");
+    assert_eq!(comments, CommentList::from_xml(written.as_bytes()).unwrap());
+}
+
+#[test]
+fn unknown_anchor_source_subtrees_remain_byte_exact() {
+    use rpptx_oxml::comments::CommentList;
+
+    let empty = r#"<q:unknownAnchor xmlns:x='urn:f217:empty' x:flag='a&#x20;b'/>"#;
+    let nonempty = r#"<q:unknownAnchor xmlns:y="urn:f217:full" y:flag='c&#x20;d'><!--anchor-comment--><?anchor keep?><y:child value='e&#x20;f'/></q:unknownAnchor>"#;
+    let xml = format!(
+        r#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><q:cm id="{{22222222-2222-2222-2222-222222222222}}" authorId="{{11111111-1111-1111-1111-111111111111}}" created="2026-08-29T10:11:12Z">{empty}</q:cm><q:cm id="{{33333333-3333-3333-3333-333333333333}}" authorId="{{11111111-1111-1111-1111-111111111111}}" created="2026-08-29T10:12:13Z">{nonempty}</q:cm></q:cmLst>"#
+    );
+    let comments = CommentList::from_xml(xml.as_bytes()).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+
+    assert!(written.contains(empty), "{written}");
+    assert!(written.contains(nonempty), "{written}");
+    assert_eq!(comments, CommentList::from_xml(written.as_bytes()).unwrap());
+}
+
+#[test]
+fn materialized_comment_text_precedes_byte_preserved_extension_list() {
+    use rpptx_oxml::comments::CommentList;
+
+    let extension = r#"<p:extLst x:flag='a&#x20;b'><p:ext uri='comment-ext'><!--comment-extension--><x:payload value='c&#x20;d'/></p:ext></p:extLst>"#;
+    let xml = format!(
+        r#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:p="{P_NS}" xmlns:x="urn:f217"><q:cm id="{{22222222-2222-2222-2222-222222222222}}" authorId="{{11111111-1111-1111-1111-111111111111}}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/>{extension}</q:cm></q:cmLst>"#
+    );
+    let mut comments = CommentList::from_xml(xml.as_bytes()).unwrap();
+    comments.comments[0].set_text("materialized comment");
+
+    let written = comments.to_xml().unwrap();
+    assert!(
+        written
+            .windows(extension.len())
+            .any(|window| window == extension.as_bytes()),
+        "{}",
+        String::from_utf8_lossy(&written)
+    );
+    assert_order(&written, &["<q:unknownAnchor", "<p188:txBody", extension]);
+    let reopened = CommentList::from_xml(&written).unwrap();
+    assert_eq!(reopened.comments[0].text(), "materialized comment");
+    assert!(
+        reopened
+            .to_xml()
+            .unwrap()
+            .windows(extension.len())
+            .any(|window| window == extension.as_bytes())
+    );
+}
+
+#[test]
+fn materialized_reply_text_precedes_byte_preserved_extension_list() {
+    use rpptx_oxml::comments::{Comment, CommentList};
+
+    let extension = r#"<p:extLst x:flag='e&#x20;f'><p:ext uri='reply-ext'><!--reply-extension--><x:payload value='g&#x20;h'/></p:ext></p:extLst>"#;
+    let xml = format!(
+        r#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:p="{P_NS}" xmlns:x="urn:f217"><q:cm id="{{22222222-2222-2222-2222-222222222222}}" authorId="{{11111111-1111-1111-1111-111111111111}}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/><q:replyLst><q:reply id="{{33333333-3333-3333-3333-333333333333}}" authorId="{{11111111-1111-1111-1111-111111111111}}" created="2026-08-29T10:12:13Z">{extension}</q:reply></q:replyLst></q:cm></q:cmLst>"#
+    );
+    let mut comments = CommentList::from_xml(xml.as_bytes()).unwrap();
+    let mut reply = comments.comments[0].replies()[0].clone();
+    reply.set_text("materialized reply");
+    let mut comment = Comment::new(
+        "{22222222-2222-2222-2222-222222222222}",
+        "{11111111-1111-1111-1111-111111111111}",
+        "2026-08-29T10:11:12Z",
+        "host comment",
+    )
+    .unwrap();
+    comment.add_reply(reply).unwrap();
+    comments.comments[0] = comment;
+
+    let written = comments.to_xml().unwrap();
+    assert!(
+        written
+            .windows(extension.len())
+            .any(|window| window == extension.as_bytes()),
+        "{}",
+        String::from_utf8_lossy(&written)
+    );
+    assert_order(
+        &written,
+        &["<p188:reply", "<p188:txBody", extension, "</p188:reply>"],
+    );
+    let reopened = CommentList::from_xml(&written).unwrap();
+    assert_eq!(
+        reopened.comments[0].replies()[0].text(),
+        "materialized reply"
+    );
+    assert!(
+        reopened
+            .to_xml()
+            .unwrap()
+            .windows(extension.len())
+            .any(|window| window == extension.as_bytes())
+    );
+}
+
+#[test]
 fn malformed_preserved_xml_returns_an_error() {
     for raw in [
         br#"<x:payload xmlns:x="urn:producer">"#.as_slice(),
@@ -3382,4 +3566,716 @@ fn all_corpus_slide_layout_and_master_parts_reparse_after_visibility_typing() {
         counts.iter().all(|count| *count > 0),
         "part counts: {counts:?}"
     );
+}
+
+#[test]
+fn modern_comments_and_replies_preserve_order_and_unmodelled_xml() {
+    use rpptx_oxml::comments::{Comment, CommentAuthorList, CommentList, CommentReply};
+
+    assert!(
+        Comment::new(
+            "{22222222-2222-2222-2222-222222222222}",
+            "{11111111-1111-1111-1111-111111111111}",
+            "short",
+            "comment",
+        )
+        .is_err()
+    );
+    assert!(
+        CommentReply::new(
+            "{33333333-3333-3333-3333-333333333333}",
+            "{11111111-1111-1111-1111-111111111111}",
+            "2026-02-30T10:12:13+24:00",
+            "reply",
+        )
+        .is_err()
+    );
+
+    let authors = CommentAuthorList::from_xml(
+        br#"<c:authorLst xmlns:c="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:x="urn:f217"><x:before/><c:author id="{11111111-1111-1111-1111-111111111111}" name="Ada &amp; Co" initials="AC" userId="ada@example.test" providerId="test"><x:author-child marker="kept"/></c:author><x:after/></c:authorLst>"#,
+    )
+    .expect("parse aliased modern authors");
+    let author_xml = authors.to_xml().expect("write modern authors");
+    assert!(author_xml.starts_with(b"<p188:authorLst"));
+    assert!(
+        author_xml
+            .windows(b"<x:author-child marker=\"kept\"/>".len())
+            .any(|window| window == b"<x:author-child marker=\"kept\"/>")
+    );
+    assert_eq!(authors, CommentAuthorList::from_xml(&author_xml).unwrap());
+
+    let comments = CommentList::from_xml(
+        br#"<c:cmLst xmlns:c="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:f217"><x:before/><c:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z" x:flag="kept"><x:sldMkLst/><c:unknownAnchor/><x:after-anchor/><c:replyLst><x:before-reply/><c:reply id="{33333333-3333-3333-3333-333333333333}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:12:13+00:00"><c:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>reply</a:t></a:r></a:p></c:txBody></c:reply><x:after-reply/></c:replyLst><c:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>comment</a:t></a:r></a:p></c:txBody><x:after-text/></c:cm><x:after/></c:cmLst>"#,
+    )
+    .expect("parse aliased modern comments");
+    let comment_xml = comments.to_xml().expect("write modern comments");
+    let written = String::from_utf8(comment_xml.clone()).unwrap();
+    assert!(written.starts_with("<p188:cmLst"));
+    assert_order(
+        written.as_bytes(),
+        &[
+            "<x:sldMkLst",
+            "<c:unknownAnchor",
+            "<x:after-anchor",
+            "<p188:replyLst",
+            "<c:txBody",
+            "<x:after-text",
+        ],
+    );
+    assert!(written.contains("<x:before-reply/>"));
+    assert!(written.contains("<x:after-reply/>"));
+    assert_eq!(comments, CommentList::from_xml(&comment_xml).unwrap());
+}
+
+#[test]
+fn sections_notes_and_handout_settings_write_in_schema_order() {
+    use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster};
+
+    let presentation = CT_Presentation::from_xml(
+        br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst><p14:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><p14:sldIdLst><p14:sldId id="256"/></p14:sldIdLst><p:extLst><p:ext uri="raw"><x:kept xmlns:x="urn:f217"/></p:ext></p:extLst></p14:section></p14:sectionLst></p:ext></p:extLst></p:presentation>"#,
+    )
+    .expect("parse sections");
+    assert_eq!(presentation.sections().len(), 1);
+    assert_eq!(presentation.sections()[0].slide_ids, vec![256]);
+    let presentation_xml = presentation.to_xml().unwrap();
+    let written = String::from_utf8(presentation_xml.clone()).unwrap();
+    assert_order(
+        written.as_bytes(),
+        &["<p:sldIdLst", "<p:notesSz", "<p:extLst", "<p14:sectionLst"],
+    );
+    assert!(written.contains("<x:kept"));
+    assert_eq!(
+        presentation,
+        CT_Presentation::from_xml(&presentation_xml).unwrap()
+    );
+    let mut without_sections = presentation.clone();
+    without_sections.set_sections(Vec::new()).unwrap();
+    let without_sections = String::from_utf8(without_sections.to_xml().unwrap()).unwrap();
+    assert!(!without_sections.contains("p14:sectionLst"));
+    assert!(without_sections.contains("<p:extLst"));
+
+    let notes = CT_NotesMaster::from_xml(
+        br#"<q:notesMaster xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><x:before xmlns:x="urn:f217"/><q:hf sldNum="0" hdr="1" ftr="0" dt="1"><x:hf-child/></q:hf><x:after/></q:notesMaster>"#,
+    )
+    .expect("parse typed notes header footer");
+    assert_eq!(
+        notes.header_footer.as_ref().unwrap().slide_number,
+        Some(false)
+    );
+    let notes_xml = String::from_utf8(notes.to_xml().unwrap()).unwrap();
+    assert_order(
+        notes_xml.as_bytes(),
+        &["<p:clrMap", "<x:before", "<p:hf", "<x:after"],
+    );
+
+    let handout = CT_HandoutMaster::from_xml(
+        br#"<q:handoutMaster xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cSld><q:spTree><q:nvGrpSpPr/><q:grpSpPr/></q:spTree></q:cSld><q:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><q:hf hdr="0"/></q:handoutMaster>"#,
+    )
+    .expect("parse handout master");
+    assert_eq!(handout.header_footer.as_ref().unwrap().header, Some(false));
+    assert_eq!(
+        handout,
+        CT_HandoutMaster::from_xml(&handout.to_xml().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn sections_require_the_direct_p14_extension_contract() {
+    use rpptx_oxml::presentation::Section;
+
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:x="urn:f217"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="wrong"><p14:sectionLst><p14:section name="Wrong" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><p14:sldIdLst><p14:sldId id="256"/></p14:sldIdLst></p14:section></p14:sectionLst></p:ext><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><x:wrapper><p14:sectionLst><p14:section name="Nested" id="{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}"><p14:sldIdLst><p14:sldId id="256"/></p14:sldIdLst></p14:section></p14:sectionLst></x:wrapper></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    assert!(presentation.sections().is_empty());
+    presentation
+        .set_sections(vec![
+            Section::new("{CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC}", "Typed", vec![256]).unwrap(),
+        ])
+        .unwrap();
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(written.contains("name=\"Wrong\""));
+    assert!(written.contains("<x:wrapper><p14:sectionLst>"));
+    assert_eq!(written.matches("name=\"Typed\"").count(), 1);
+}
+
+#[test]
+fn sections_expand_empty_extension_lists_and_preserve_section_list_sidecars() {
+    use rpptx_oxml::presentation::Section;
+
+    let empty = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><q:extLst xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:x="urn:f217" x:keep='a&#x20;b'/></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(empty).unwrap();
+    presentation
+        .set_sections(vec![
+            Section::new("{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}", "One", vec![256]).unwrap(),
+        ])
+        .unwrap();
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"<q:extLst xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:x="urn:f217" x:keep='a&#x20;b'>"#));
+    assert_eq!(written.matches("<q:extLst").count(), 1);
+    CT_Presentation::from_xml(written.as_bytes()).unwrap();
+
+    let raw = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:x="urn:f217"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst x:flag='a&#x20;b'><!--before--><?sections keep?>direct<x:before/><p14:section name="Old" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><p14:sldIdLst><p14:sldId id="256"/></p14:sldIdLst></p14:section><x:after/><!--after--></p14:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(raw).unwrap();
+    let clean = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(clean.contains(
+        "<p14:sectionLst x:flag='a&#x20;b'><!--before--><?sections keep?>direct<x:before/>"
+    ));
+    presentation
+        .set_sections(vec![
+            Section::new("{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}", "New", vec![256]).unwrap(),
+        ])
+        .unwrap();
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(written.contains("<p14:sectionLst x:flag='a&#x20;b'>"));
+    for raw in [
+        "<!--before-->",
+        "<?sections keep?>",
+        "direct",
+        "<x:before/>",
+        "<x:after/>",
+        "<!--after-->",
+    ] {
+        assert!(written.contains(raw), "missing section sidecar {raw}");
+    }
+    assert!(written.contains("name=\"New\""));
+    assert!(!written.contains("name=\"Old\""), "{written}");
+    CT_Presentation::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn self_closing_slide_extension_list_is_reused_for_modern_comments() {
+    let xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr><q:extLst xmlns:q="{P_NS}" xmlns:x="urn:f217" x:keep='a&#x20;b'/></p:sld>"#
+    );
+    let mut slide = CT_Slide::from_xml(xml.as_bytes()).unwrap();
+    slide.ensure_modern_comment_relationship("rId9").unwrap();
+    let written = String::from_utf8(slide.to_xml().unwrap()).unwrap();
+    assert_eq!(written.matches("<q:extLst").count(), 1);
+    assert!(!written.contains("<p:extLst"));
+    assert!(written.contains(&format!(
+        r#"<q:extLst xmlns:q="{P_NS}" xmlns:x="urn:f217" x:keep='a&#x20;b'>"#
+    )));
+    assert!(written.contains("r:id=\"rId9\""));
+    CT_Slide::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn modern_comment_status_values_are_strict() {
+    use rpptx_oxml::comments::{
+        Comment, CommentAuthor, CommentAuthorList, CommentList, CommentReply,
+    };
+    const AUTHOR: &str = "{11111111-1111-1111-1111-111111111111}";
+    let invalid = format!(
+        r#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:cm id="{{22222222-2222-2222-2222-222222222222}}" authorId="{AUTHOR}" status="bogus" created="2026-08-29T10:11:12Z"><p188:unknownAnchor/></p188:cm></p188:cmLst>"#
+    );
+    assert!(CommentList::from_xml(invalid.as_bytes()).is_err());
+    let mut comment = Comment::new(
+        "{22222222-2222-2222-2222-222222222222}",
+        AUTHOR,
+        "2026-08-29T10:11:12Z",
+        "comment",
+    )
+    .unwrap();
+    comment.status = Some("bogus".to_owned());
+    let mut list = CommentList::new();
+    list.comments.push(comment);
+    assert!(list.to_xml().is_err());
+    let mut comment = Comment::new(
+        "{22222222-2222-2222-2222-222222222222}",
+        AUTHOR,
+        "2026-08-29T10:11:12Z",
+        "comment",
+    )
+    .unwrap();
+    let mut reply = CommentReply::new(
+        "{33333333-3333-3333-3333-333333333333}",
+        AUTHOR,
+        "2026-08-29T10:12:13Z",
+        "reply",
+    )
+    .unwrap();
+    reply.status = Some("bogus".to_owned());
+    comment.add_reply(reply).unwrap();
+    let mut list = CommentList::new();
+    list.comments.push(comment);
+    assert!(list.to_xml().is_err());
+
+    let mut authors = CommentAuthorList::new();
+    let mut author = CommentAuthor::new(AUTHOR, "Ada", None, "ada@example.test", "test").unwrap();
+    author.id = "bad".to_owned();
+    authors.authors.push(author);
+    assert!(authors.to_xml().is_err());
+    let mut comment = Comment::new(
+        "{22222222-2222-2222-2222-222222222222}",
+        AUTHOR,
+        "2026-08-29T10:11:12Z",
+        "comment",
+    )
+    .unwrap();
+    comment.id = "bad".to_owned();
+    let mut list = CommentList::new();
+    list.comments.push(comment);
+    assert!(list.to_xml().is_err());
+    let mut comment = Comment::new(
+        "{22222222-2222-2222-2222-222222222222}",
+        AUTHOR,
+        "2026-08-29T10:11:12Z",
+        "comment",
+    )
+    .unwrap();
+    comment.created = "bad".to_owned();
+    let mut list = CommentList::new();
+    list.comments.push(comment);
+    assert!(list.to_xml().is_err());
+    let mut comment = Comment::new(
+        "{22222222-2222-2222-2222-222222222222}",
+        AUTHOR,
+        "2026-08-29T10:11:12Z",
+        "comment",
+    )
+    .unwrap();
+    let mut reply = CommentReply::new(
+        "{33333333-3333-3333-3333-333333333333}",
+        AUTHOR,
+        "2026-08-29T10:12:13Z",
+        "reply",
+    )
+    .unwrap();
+    reply.created = "bad".to_owned();
+    comment.add_reply(reply).unwrap();
+    let mut list = CommentList::new();
+    list.comments.push(comment);
+    assert!(list.to_xml().is_err());
+}
+
+#[test]
+fn comment_sidecars_preserve_shadows_raw_nodes_and_attribute_lexemes() {
+    use rpptx_oxml::comments::{CommentAuthorList, CommentList};
+
+    let authors = br#"<q:authorLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><!--before--><?authors keep?>raw<q:author id="{11111111-1111-1111-1111-111111111111}" name="Ada" userId="ada@example.test" providerId="test" xmlns:p188="urn:producer" x:flag='a&#x20;b' xmlns:x="urn:f217"><!--inside--><?author keep?>shell<p188:producer xmlns:p188="urn:producer"/><a:producer xmlns:a="urn:drawing-producer"/></q:author><!--after--></q:authorLst>"#;
+    let authors = CommentAuthorList::from_xml(authors).unwrap();
+    let written = String::from_utf8(authors.to_xml().unwrap()).unwrap();
+    assert!(written.contains("<!--before--><?authors keep?>raw"));
+    assert!(written.contains("<!--inside--><?author keep?>shell"));
+    assert!(written.contains("x:flag='a&#x20;b'"));
+    assert!(written.contains("<p188:producer xmlns:p188=\"urn:producer\"/>"));
+    assert!(written.contains("<a:producer xmlns:a=\"urn:drawing-producer\"/>"));
+    assert_eq!(written.matches("xmlns:p188=\"urn:producer\"").count(), 1);
+    CommentAuthorList::from_xml(written.as_bytes()).unwrap();
+
+    let comments = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><!--before--><?comments keep?>raw<q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z" xmlns:p188="urn:producer" x:flag='a&#x20;b' xmlns:x="urn:f217"><q:unknownAnchor/><p188:producer xmlns:p188="urn:producer"/><q:replyLst><!--reply-list--><?reply-list keep?>text<q:reply id="{33333333-3333-3333-3333-333333333333}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:12:13Z" xmlns:p188="urn:producer"><!--reply--><?reply keep?>body<a:producer xmlns:a="urn:drawing-producer"/></q:reply></q:replyLst></q:cm><!--after--></q:cmLst>"#;
+    let comments = CommentList::from_xml(comments).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+    assert!(written.contains("<!--before--><?comments keep?>raw"));
+    assert!(written.contains("<!--reply-list--><?reply-list keep?>text"));
+    assert!(written.contains("<!--reply--><?reply keep?>body"));
+    assert!(written.contains("x:flag='a&#x20;b'"));
+    assert!(written.contains("<p188:producer xmlns:p188=\"urn:producer\"/>"));
+    assert!(written.contains("<a:producer xmlns:a=\"urn:drawing-producer\"/>"));
+    assert_eq!(written.matches("xmlns:p188=\"urn:producer\"").count(), 1);
+    CommentList::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn modelled_comment_shell_preserves_parent_owned_fixed_prefix_shadows() {
+    use rpptx_oxml::comments::CommentList;
+
+    let xml = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z" xmlns:p188="urn:producer" xmlns:a="urn:drawing-producer"><q:unknownAnchor/><p188:producer/><a:producer/></q:cm></q:cmLst>"#;
+    let comments = CommentList::from_xml(xml).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+    assert!(written.contains(
+        r#"<p188m:cm xmlns:p188m="http://schemas.microsoft.com/office/powerpoint/2018/8/main""#
+    ));
+    assert!(written.contains(r#"xmlns:p188="urn:producer" xmlns:a="urn:drawing-producer""#));
+    assert!(written.contains("<p188:producer/><a:producer/>"));
+    assert_eq!(comments, CommentList::from_xml(written.as_bytes()).unwrap());
+}
+
+#[test]
+fn typed_section_and_slide_id_sidecars_remain_lexically_exact_when_dirty() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:x="urn:f217"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="900" r:id="rId2"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst><p14:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" x:flag='a&#x20;b'><!--section--><?section keep?>section-text<![CDATA[section-cdata]]><p14:sldIdLst x:list='c&#x20;d'><!--list--><?list keep?>list-text<![CDATA[list-cdata]]><p14:sldId id="256" x:item='e&#x20;f'><!--item--><?item keep?>item-text<![CDATA[item-cdata]]><x:item/></p14:sldId><p14:sldId id="900"/></p14:sldIdLst></p14:section></p14:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation.remove_slide_from_sections(900);
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    for raw in [
+        "x:flag='a&#x20;b'",
+        "<!--section-->",
+        "<?section keep?>",
+        "section-text",
+        "<![CDATA[section-cdata]]>",
+        "x:list='c&#x20;d'",
+        "<!--list-->",
+        "<?list keep?>",
+        "list-text",
+        "<![CDATA[list-cdata]]>",
+        "x:item='e&#x20;f'",
+        "<!--item-->",
+        "<?item keep?>",
+        "item-text",
+        "<![CDATA[item-cdata]]>",
+        "<x:item/>",
+    ] {
+        assert!(
+            written.contains(raw),
+            "missing nested section sidecar {raw}"
+        );
+    }
+    assert!(!written.contains("<p14:sldId id=\"900\""));
+    CT_Presentation::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn dirty_alias_only_section_list_binds_generated_fixed_prefix_children() {
+    use rpptx_oxml::presentation::Section;
+
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><q:section name="Old" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><q:sldIdLst><q:sldId id="256"/></q:sldIdLst></q:section></q:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation
+        .set_sections(vec![
+            Section::new("{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}", "New", vec![256]).unwrap(),
+        ])
+        .unwrap();
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"<q:sectionLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><p14:section xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main""#));
+    let reparsed = CT_Presentation::from_xml(written.as_bytes()).unwrap();
+    assert_eq!(reparsed.sections()[0].name.as_deref(), Some("New"));
+}
+
+#[test]
+fn list_owned_comment_shadows_and_typed_drawing_children_keep_their_namespaces() {
+    use rpptx_oxml::comments::{CommentAuthorList, CommentList};
+
+    let list = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:p188="urn:list-producer"><p188:producer/><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z" xmlns:a="urn:drawing-producer" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:unknownAnchor/><a:producer/><q:txBody><d:bodyPr/><d:lstStyle/><d:p/></q:txBody></q:cm></q:cmLst>"#;
+    let comments = CommentList::from_xml(list).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"xmlns:p188="urn:list-producer"><p188:producer/>"#));
+    assert!(written.contains("xmlns:a=\"urn:drawing-producer\""));
+    assert!(written.contains(r#"<q:txBody><d:bodyPr/><d:lstStyle/><d:p/></q:txBody>"#));
+    CommentList::from_xml(written.as_bytes()).unwrap();
+
+    let authors = br#"<q:authorLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="urn:list-drawing"><a:producer/><q:author id="{11111111-1111-1111-1111-111111111111}" name="Ada" userId="ada@example.test" providerId="test"/></q:authorLst>"#;
+    let authors = CommentAuthorList::from_xml(authors).unwrap();
+    let written = String::from_utf8(authors.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"xmlns:a="urn:list-drawing"><a:producer/>"#));
+    CommentAuthorList::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn section_insertion_ignores_self_closing_descendants_and_alias_sections_clear_cleanly() {
+    use rpptx_oxml::presentation::Section;
+
+    let nonempty = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="producer"/></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(nonempty).unwrap();
+    presentation
+        .set_sections(vec![
+            Section::new("{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}", "One", vec![256]).unwrap(),
+        ])
+        .unwrap();
+    let written = presentation.to_xml().unwrap();
+    assert!(String::from_utf8_lossy(&written).contains("<p:ext uri=\"producer\"/>"));
+    CT_Presentation::from_xml(&written).unwrap();
+
+    let alias = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><q:section name="Old" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><q:sldIdLst><q:sldId id="256"/></q:sldIdLst></q:section></q:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(alias).unwrap();
+    presentation.set_sections(Vec::new()).unwrap();
+    let written = presentation.to_xml().unwrap();
+    assert!(!String::from_utf8_lossy(&written).contains("sectionLst"));
+    CT_Presentation::from_xml(&written).unwrap();
+}
+
+#[test]
+fn appended_author_stays_before_the_original_trailing_raw_sidecar() {
+    use rpptx_oxml::comments::{CommentAuthor, CommentAuthorList};
+
+    let xml = br#"<q:authorLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:x="urn:f217"><q:author id="{11111111-1111-1111-1111-111111111111}" name="Ada" userId="ada@example.test" providerId="test"/><x:tail/></q:authorLst>"#;
+    let mut authors = CommentAuthorList::from_xml(xml).unwrap();
+    authors.authors.push(
+        CommentAuthor::new(
+            "{22222222-2222-2222-2222-222222222222}",
+            "Grace",
+            None,
+            "grace@example.test",
+            "test",
+        )
+        .unwrap(),
+    );
+    let written = authors.to_xml().unwrap();
+    assert_order(&written, &["name=\"Ada\"", "name=\"Grace\"", "<x:tail/>"]);
+    CommentAuthorList::from_xml(&written).unwrap();
+}
+
+#[test]
+fn comment_fallback_shadows_and_inherited_reply_drawing_namespace_survive() {
+    use rpptx_oxml::comments::CommentList;
+
+    let xml = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:p188="urn:f217:primary" xmlns:p188m="urn:f217:fallback" xmlns:a="urn:f217:drawing" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><p188:primary/><p188m:fallback/><a:producer/><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/><q:replyLst><q:reply id="{33333333-3333-3333-3333-333333333333}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:12:13Z"><q:txBody><d:bodyPr/><d:lstStyle/><d:p/></q:txBody></q:reply></q:replyLst></q:cm></q:cmLst>"#;
+    let comments = CommentList::from_xml(xml).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"xmlns:p188="urn:f217:primary""#));
+    assert!(written.contains(r#"xmlns:p188m="urn:f217:fallback""#));
+    assert!(written.contains("<p188:primary/><p188m:fallback/><a:producer/>"));
+    assert!(
+        written.contains(r#"<q:txBody><d:bodyPr/><d:lstStyle/><d:p/></q:txBody>"#),
+        "{written}"
+    );
+    assert_eq!(comments, CommentList::from_xml(written.as_bytes()).unwrap());
+}
+
+#[test]
+fn dirty_sections_preserve_producer_owned_p14_shadows_on_typed_shells() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="900" r:id="rId2"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst><q:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" xmlns:p14="urn:f217:section"><p14:section-producer/><q:sldIdLst xmlns:p14="urn:f217:list"><p14:list-producer/><q:sldId id="256" xmlns:p14="urn:f217:item"><p14:item-producer/></q:sldId><q:sldId id="900"/></q:sldIdLst></q:section></q:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation.remove_slide_from_sections(900);
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert_eq!(written.matches("xmlns:p14=\"urn:f217:").count(), 3);
+    assert!(written.contains("<p14:section-producer/>"));
+    assert!(written.contains("<p14:list-producer/>"));
+    assert!(written.contains("<p14:item-producer/>"));
+    assert!(written.contains(&format!(
+        r#"<p14m:section xmlns:p14m="{}""#,
+        "http://schemas.microsoft.com/office/powerpoint/2010/main"
+    )));
+    CT_Presentation::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn section_slide_id_raw_boundaries_follow_original_slide_identities() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:x="urn:f217"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="900" r:id="rId2"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst><p14:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><p14:sldIdLst><p14:sldId id="256"/><x:between/><p14:sldId id="900"/></p14:sldIdLst></p14:section></p14:sectionLst></p:ext></p:extLst></p:presentation>"#;
+
+    let mut removed = CT_Presentation::from_xml(xml).unwrap();
+    removed.remove_slide_from_sections(256);
+    let written = String::from_utf8(removed.to_xml().unwrap()).unwrap();
+    let section_list = &written[written.rfind("<p14:sldIdLst").unwrap()..];
+    assert_order(section_list.as_bytes(), &["<x:between/>", "id=\"900\""]);
+    CT_Presentation::from_xml(written.as_bytes()).unwrap();
+
+    let mut reordered = CT_Presentation::from_xml(xml).unwrap();
+    let mut sections = reordered.sections().to_vec();
+    sections[0].slide_ids.swap(0, 1);
+    reordered.set_sections(sections).unwrap();
+    let written = String::from_utf8(reordered.to_xml().unwrap()).unwrap();
+    let section_list = &written[written.rfind("<p14:sldIdLst").unwrap()..];
+    assert_order(
+        section_list.as_bytes(),
+        &["<x:between/>", "id=\"900\"", "id=\"256\""],
+    );
+    CT_Presentation::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn dirty_section_rewrite_recognizes_inherited_alternate_child_aliases() {
+    use rpptx_oxml::presentation::Section;
+
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:s="http://schemas.microsoft.com/office/powerpoint/2010/main"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><s:section name="Old" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><s:sldIdLst><s:sldId id="256"/></s:sldIdLst></s:section></q:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut replaced = CT_Presentation::from_xml(xml).unwrap();
+    replaced
+        .set_sections(vec![
+            Section::new("{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}", "New", vec![256]).unwrap(),
+        ])
+        .unwrap();
+    let written = String::from_utf8(replaced.to_xml().unwrap()).unwrap();
+    assert!(!written.contains("name=\"Old\""));
+    assert_eq!(written.matches("name=\"New\"").count(), 1);
+    let reopened = CT_Presentation::from_xml(written.as_bytes()).unwrap();
+    assert_eq!(reopened.sections().len(), 1);
+    assert_eq!(reopened.sections()[0].name.as_deref(), Some("New"));
+
+    let mut cleared = CT_Presentation::from_xml(xml).unwrap();
+    cleared.set_sections(Vec::new()).unwrap();
+    let written = String::from_utf8(cleared.to_xml().unwrap()).unwrap();
+    assert!(!written.contains("sectionLst"));
+    assert!(
+        CT_Presentation::from_xml(written.as_bytes())
+            .unwrap()
+            .sections()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comment_serialization_rejects_when_every_model_prefix_is_producer_owned() {
+    use rpptx_oxml::comments::CommentList;
+
+    let xml = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:p188="urn:f217:p188" xmlns:p188m="urn:f217:p188m" xmlns:p188model="urn:f217:p188model"><p188:one/><p188m:two/><p188model:three/><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/></q:cm></q:cmLst>"#;
+    let comments = CommentList::from_xml(xml).unwrap();
+    assert_eq!(
+        comments.to_xml().unwrap_err().to_string(),
+        "invalid value: no unshadowed modern comment model prefix is available"
+    );
+}
+
+#[test]
+fn section_serialization_rejects_when_every_model_prefix_is_producer_owned() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="900" r:id="rId2"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst><q:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" xmlns:p14="urn:f217:p14" xmlns:p14m="urn:f217:p14m" xmlns:p14model="urn:f217:p14model"><p14:one/><p14m:two/><p14model:three/><q:sldIdLst><q:sldId id="256"/><q:sldId id="900"/></q:sldIdLst></q:section></q:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation.remove_slide_from_sections(900);
+    assert_eq!(
+        presentation.to_xml().unwrap_err().to_string(),
+        "invalid value: no unshadowed section model prefix is available"
+    );
+}
+
+#[test]
+fn inherited_p14_shadow_is_carried_into_each_typed_section_sidecar() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="900" r:id="rId2"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst xmlns:p14="urn:f217:ancestor"><q:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><p14:section-producer/><q:sldIdLst><p14:list-producer/><q:sldId id="256"><p14:item-producer/></q:sldId><q:sldId id="900"/></q:sldIdLst></q:section></q:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation.remove_slide_from_sections(900);
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert_eq!(
+        written.matches(r#"xmlns:p14="urn:f217:ancestor""#).count(),
+        4
+    );
+    assert!(written.contains("<p14:section-producer/>"));
+    assert!(written.contains("<p14:list-producer/>"));
+    assert!(written.contains("<p14:item-producer/>"));
+    assert_eq!(
+        CT_Presentation::from_xml(written.as_bytes())
+            .unwrap()
+            .sections()[0]
+            .slide_ids,
+        vec![256]
+    );
+}
+
+#[test]
+fn fixed_comment_prefix_bindings_used_only_by_shell_attributes_survive() {
+    use rpptx_oxml::comments::{CommentAuthorList, CommentList};
+
+    let authors = br#"<q:authorLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:p188="urn:f217:authors" p188:listFlag='a&#x20;b'><q:author id="{11111111-1111-1111-1111-111111111111}" name="Ada" userId="ada@example.test" providerId="test" p188:authorFlag='c&#x20;d'/></q:authorLst>"#;
+    let authors = CommentAuthorList::from_xml(authors).unwrap();
+    let written = String::from_utf8(authors.to_xml().unwrap()).unwrap();
+    assert!(written.contains("p188:listFlag='a&#x20;b'"));
+    assert!(written.contains("p188:authorFlag='c&#x20;d'"));
+    assert_eq!(
+        written.matches(r#"xmlns:p188="urn:f217:authors""#).count(),
+        2
+    );
+    assert_eq!(
+        authors,
+        CommentAuthorList::from_xml(written.as_bytes()).unwrap()
+    );
+
+    let comments = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:p188="urn:f217:comments" p188:listFlag='a&#x20;b'><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z" p188:commentFlag='c&#x20;d'><q:unknownAnchor/><q:replyLst p188:replyListFlag='e&#x20;f'><q:reply id="{33333333-3333-3333-3333-333333333333}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:12:13Z" p188:replyFlag='g&#x20;h'/></q:replyLst></q:cm></q:cmLst>"#;
+    let comments = CommentList::from_xml(comments).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+    for lexical in [
+        "p188:listFlag='a&#x20;b'",
+        "p188:commentFlag='c&#x20;d'",
+        "p188:replyListFlag='e&#x20;f'",
+        "p188:replyFlag='g&#x20;h'",
+    ] {
+        assert!(written.contains(lexical), "missing {lexical}: {written}");
+    }
+    assert_eq!(
+        written.matches(r#"xmlns:p188="urn:f217:comments""#).count(),
+        4
+    );
+    assert_eq!(comments, CommentList::from_xml(written.as_bytes()).unwrap());
+}
+
+#[test]
+fn fixed_section_prefix_bindings_used_only_by_shell_attributes_survive() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="900" r:id="rId2"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst xmlns:p14="urn:f217:section-attributes"><q:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" p14:sectionFlag='a&#x20;b'><q:sldIdLst p14:listFlag='c&#x20;d'><q:sldId id="256" p14:itemFlag='e&#x20;f'/><q:sldId id="900"/></q:sldIdLst></q:section></q:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation.remove_slide_from_sections(900);
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    for lexical in [
+        "p14:sectionFlag='a&#x20;b'",
+        "p14:listFlag='c&#x20;d'",
+        "p14:itemFlag='e&#x20;f'",
+    ] {
+        assert!(written.contains(lexical), "missing {lexical}: {written}");
+    }
+    assert_eq!(
+        written
+            .matches(r#"xmlns:p14="urn:f217:section-attributes""#)
+            .count(),
+        4
+    );
+    CT_Presentation::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn typed_comment_and_reply_text_body_root_sidecars_remain_lexically_exact() {
+    use rpptx_oxml::comments::CommentList;
+
+    let xml = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/><q:replyLst><q:reply id="{33333333-3333-3333-3333-333333333333}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:12:13Z"><q:txBody xmlns:y="urn:f217:reply" y:flag='c&#x20;d'><a:bodyPr/><a:lstStyle/><a:p/><y:tail/></q:txBody></q:reply></q:replyLst><q:txBody xmlns:x="urn:f217:comment" x:flag='a&#x20;b'><a:bodyPr/><a:lstStyle/><a:p/><x:tail/></q:txBody></q:cm></q:cmLst>"#;
+    let comments = CommentList::from_xml(xml).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+    assert!(written.contains(r#"xmlns:x="urn:f217:comment" x:flag='a&#x20;b'"#));
+    assert!(written.contains(r#"xmlns:y="urn:f217:reply" y:flag='c&#x20;d'"#));
+    assert!(written.contains("<x:tail/>"));
+    assert!(written.contains("<y:tail/>"));
+    assert_eq!(comments, CommentList::from_xml(written.as_bytes()).unwrap());
+}
+
+#[test]
+fn clearing_sections_with_direct_raw_payload_fails_without_mutation() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:x="urn:f217"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst x:flag='a&#x20;b'><!--keep--><?sections keep?><x:payload/><p14:section name="One" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><p14:sldIdLst><p14:sldId id="256"/></p14:sldIdLst></p14:section></p14:sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    let before = presentation.to_xml().unwrap();
+    assert_eq!(
+        presentation
+            .set_sections(Vec::new())
+            .unwrap_err()
+            .to_string(),
+        "invalid value: cannot clear sections while preserving direct section-list raw payload"
+    );
+    assert_eq!(presentation.sections().len(), 1);
+    assert_eq!(presentation.to_xml().unwrap(), before);
+    CT_Presentation::from_xml(&before).unwrap();
+}
+
+#[test]
+fn inherited_default_p14_section_namespace_supports_dirty_replacement() {
+    use rpptx_oxml::presentation::Section;
+
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="900" r:id="rId2"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}" xmlns="http://schemas.microsoft.com/office/powerpoint/2010/main"><sectionLst><section name="Old" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><sldIdLst><sldId id="256"/></sldIdLst></section></sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation
+        .set_sections(vec![
+            Section::new("{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}", "New", vec![900]).unwrap(),
+        ])
+        .unwrap();
+
+    let written = presentation.to_xml().unwrap();
+    let text = String::from_utf8(written.clone()).unwrap();
+    assert!(!text.contains("name=\"Old\""), "{text}");
+    assert_eq!(text.matches("name=\"New\"").count(), 1, "{text}");
+    let reopened = CT_Presentation::from_xml(&written).unwrap();
+    assert_eq!(reopened.sections().len(), 1);
+    assert_eq!(reopened.sections()[0].name.as_deref(), Some("New"));
+    assert_eq!(reopened.sections()[0].slide_ids, vec![900]);
+}
+
+#[test]
+fn inherited_default_p14_section_namespace_supports_clear() {
+    let xml = br#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:notesSz cx="1" cy="1"/><p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}" xmlns="http://schemas.microsoft.com/office/powerpoint/2010/main"><sectionLst><section name="Old" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"><sldIdLst><sldId id="256"/></sldIdLst></section></sectionLst></p:ext></p:extLst></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml).unwrap();
+    presentation.set_sections(Vec::new()).unwrap();
+
+    let written = presentation.to_xml().unwrap();
+    assert!(!String::from_utf8_lossy(&written).contains("sectionLst"));
+    let reopened = CT_Presentation::from_xml(&written).unwrap();
+    assert!(reopened.sections().is_empty());
+}
+
+#[test]
+fn unchanged_text_bodies_keep_inherited_a_raw_bytes_and_unsafe_rewrite_fails() {
+    use rpptx_oxml::comments::CommentList;
+
+    let xml = br#"<q:cmLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="urn:f217:producer" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><q:cm id="{22222222-2222-2222-2222-222222222222}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/><q:txBody><d:bodyPr/><d:lstStyle/><d:p/><a:producer/></q:txBody></q:cm><q:cm id="{33333333-3333-3333-3333-333333333333}" authorId="{11111111-1111-1111-1111-111111111111}" created="2026-08-29T10:12:13Z"><q:unknownAnchor/><q:txBody><d:bodyPr/><d:lstStyle/><d:p/><a:second/></q:txBody></q:cm></q:cmLst>"#;
+    let mut comments = CommentList::from_xml(xml).unwrap();
+    comments.move_comment(0, 1).unwrap();
+    let written = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+    assert!(written.contains("<q:txBody><d:bodyPr/><d:lstStyle/><d:p/><a:producer/></q:txBody>"));
+    assert!(written.contains("<q:txBody><d:bodyPr/><d:lstStyle/><d:p/><a:second/></q:txBody>"));
+    CommentList::from_xml(written.as_bytes()).unwrap();
+
+    let mut dirty = CommentList::from_xml(xml).unwrap();
+    dirty.comments[0].set_text("changed");
+    assert_eq!(
+        dirty.to_xml().unwrap_err().to_string(),
+        "invalid value: cannot rewrite comment text body with producer-owned a descendants"
+    );
+    assert!(CommentList::from_xml(xml).unwrap().to_xml().is_ok());
 }

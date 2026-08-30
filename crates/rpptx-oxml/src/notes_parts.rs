@@ -13,7 +13,8 @@ use crate::namespace::{FIXED_MODEL_PREFIXES, NamespaceBindings, P_NS, R_NS, root
 use crate::placeholder::PhType;
 use crate::shape_tree::ShapeTreeChild;
 use crate::slide_parts::{
-    CT_ColorMapOverride, CT_CommonSlideData, ParsedColorMap, parse_color_map, write_color_map,
+    CT_ColorMapOverride, CT_CommonSlideData, CT_HeaderFooter, ParsedColorMap, parse_color_map,
+    write_color_map,
 };
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
@@ -35,7 +36,21 @@ pub struct CT_NotesSlide {
 pub struct CT_NotesMaster {
     pub common_slide_data: CT_CommonSlideData,
     pub color_map: ColorMap,
+    pub header_footer: Option<CT_HeaderFooter>,
     pub notes_style: Option<CT_TextListStyle>,
+    raw_attributes: RawAttributes,
+    color_map_attributes: RawAttributes,
+    color_map_children: OrderedRawChildren,
+    raw_children: OrderedRawChildren,
+}
+
+/// A handout-master part with typed common slide data and header/footer settings.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CT_HandoutMaster {
+    pub common_slide_data: CT_CommonSlideData,
+    pub color_map: ColorMap,
+    pub header_footer: Option<CT_HeaderFooter>,
     raw_attributes: RawAttributes,
     color_map_attributes: RawAttributes,
     color_map_children: OrderedRawChildren,
@@ -46,6 +61,7 @@ pub struct CT_NotesMaster {
 enum RootKind {
     NotesSlide,
     NotesMaster,
+    HandoutMaster,
 }
 
 impl RootKind {
@@ -53,6 +69,7 @@ impl RootKind {
         match self {
             Self::NotesSlide => b"notes",
             Self::NotesMaster => b"notesMaster",
+            Self::HandoutMaster => b"handoutMaster",
         }
     }
 
@@ -60,6 +77,7 @@ impl RootKind {
         match self {
             Self::NotesSlide => "p:notes",
             Self::NotesMaster => "p:notesMaster",
+            Self::HandoutMaster => "p:handoutMaster",
         }
     }
 }
@@ -73,7 +91,7 @@ struct ParsedRoot {
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
     boundary: usize,
-    header_footer_seen: bool,
+    header_footer: Option<CT_HeaderFooter>,
     extension_list_seen: bool,
 }
 
@@ -121,6 +139,7 @@ impl CT_NotesMaster {
         Ok(Self {
             common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
             color_map: color_map.value,
+            header_footer: parsed.header_footer,
             notes_style: parsed.notes_style,
             raw_attributes: parsed.raw_attributes,
             color_map_attributes: color_map.raw_attributes,
@@ -144,6 +163,9 @@ impl CT_NotesMaster {
             &self.color_map_children,
         )?;
         emit_raw(&mut writer, self.raw_children.at(2))?;
+        if let Some(header_footer) = &self.header_footer {
+            header_footer.write_xml(&mut writer)?;
+        }
         emit_raw(&mut writer, self.raw_children.at(3))?;
         if let Some(notes_style) = &self.notes_style {
             notes_style
@@ -153,6 +175,47 @@ impl CT_NotesMaster {
         emit_raw(&mut writer, self.raw_children.at(4))?;
         emit_raw(&mut writer, self.raw_children.at(5))?;
         writer.write_event(Event::End(BytesEnd::new(RootKind::NotesMaster.tag())))?;
+        Ok(writer.into_inner())
+    }
+}
+
+impl CT_HandoutMaster {
+    /// Parses a complete handout-master part with any PresentationML prefix.
+    pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        let parsed = parse_root(xml, RootKind::HandoutMaster)?;
+        let color_map = required(parsed.color_map, "p:clrMap")?;
+        Ok(Self {
+            common_slide_data: required(parsed.common_slide_data, "p:cSld")?,
+            color_map: color_map.value,
+            header_footer: parsed.header_footer,
+            raw_attributes: parsed.raw_attributes,
+            color_map_attributes: color_map.raw_attributes,
+            color_map_children: color_map.raw_children,
+            raw_children: parsed.raw_children,
+        })
+    }
+
+    /// Serialises a handout-master part with fixed modelled prefixes.
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let mut writer = Writer::new(Vec::new());
+        write_root_start(&mut writer, RootKind::HandoutMaster, &self.raw_attributes)?;
+        emit_raw(&mut writer, self.raw_children.at(0))?;
+        self.common_slide_data.write_xml(&mut writer)?;
+        emit_raw(&mut writer, self.raw_children.at(1))?;
+        write_color_map(
+            &mut writer,
+            "p:clrMap",
+            &self.color_map,
+            &self.color_map_attributes,
+            &self.color_map_children,
+        )?;
+        emit_raw(&mut writer, self.raw_children.at(2))?;
+        if let Some(header_footer) = &self.header_footer {
+            header_footer.write_xml(&mut writer)?;
+        }
+        emit_raw(&mut writer, self.raw_children.at(3))?;
+        emit_raw(&mut writer, self.raw_children.at(4))?;
+        writer.write_event(Event::End(BytesEnd::new(RootKind::HandoutMaster.tag())))?;
         Ok(writer.into_inner())
     }
 }
@@ -221,6 +284,13 @@ fn parse_root_children(
             Event::End(end) if local_name(end.name().as_ref()) == kind.local_name() => {
                 return Ok(parsed);
             }
+            event @ (Event::Text(_)
+            | Event::CData(_)
+            | Event::Comment(_)
+            | Event::PI(_)
+            | Event::DocType(_)) => parsed
+                .raw_children
+                .push(parsed.boundary, capture_event(event)?),
             Event::Eof => return Err(OxmlError::MissingElement(format!("closing {}", kind.tag()))),
             _ => {}
         }
@@ -259,19 +329,19 @@ impl ParsedRoot {
                     Some(CT_ColorMapOverride::from_fragment(&raw, namespaces)?);
                 self.boundary = 2;
             }
-            (RootKind::NotesMaster, b"clrMap") => {
+            (RootKind::NotesMaster | RootKind::HandoutMaster, b"clrMap") => {
                 if self.boundary != 1 || self.color_map.is_some() {
                     return Err(out_of_order(kind, "p:clrMap"));
                 }
                 self.color_map = Some(parse_color_map(&raw, namespaces)?);
                 self.boundary = 2;
             }
-            (RootKind::NotesMaster, b"hf") => {
-                if self.boundary != 2 || self.header_footer_seen {
+            (RootKind::NotesMaster | RootKind::HandoutMaster, b"hf") => {
+                if self.boundary != 2 || self.header_footer.is_some() {
                     return Err(out_of_order(kind, "p:hf"));
                 }
-                self.raw_children.push(2, raw);
-                self.header_footer_seen = true;
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
+                self.header_footer = Some(CT_HeaderFooter::from_fragment(&raw, namespaces)?);
                 self.boundary = 3;
             }
             (RootKind::NotesMaster, b"notesStyle") => {
@@ -289,6 +359,7 @@ impl ParsedRoot {
                 let valid_boundary = match kind {
                     RootKind::NotesSlide => matches!(self.boundary, 1 | 2),
                     RootKind::NotesMaster => matches!(self.boundary, 2..=4),
+                    RootKind::HandoutMaster => matches!(self.boundary, 2 | 3),
                 };
                 if !valid_boundary || self.extension_list_seen {
                     return Err(out_of_order(kind, "p:extLst"));
@@ -296,6 +367,7 @@ impl ParsedRoot {
                 let at = match kind {
                     RootKind::NotesSlide => 2,
                     RootKind::NotesMaster => 4,
+                    RootKind::HandoutMaster => 3,
                 };
                 self.raw_children.push(at, raw);
                 self.extension_list_seen = true;
@@ -352,6 +424,12 @@ fn push_attributes(start: &mut BytesStart<'_>, attributes: &RawAttributes) {
     for (name, value) in attributes {
         start.push_attribute((name.as_str(), value.as_str()));
     }
+}
+
+fn capture_event(event: Event<'_>) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(event.into_owned())?;
+    Ok(writer.into_inner())
 }
 
 fn emit_raw<'a, W: Write>(

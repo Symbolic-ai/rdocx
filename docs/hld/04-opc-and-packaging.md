@@ -127,11 +127,13 @@ COMMENTS              // Word comments part
 
 // PresentationML
 SLIDE, SLIDE_LAYOUT, SLIDE_MASTER, NOTES_SLIDE, NOTES_MASTER,
-PRES_PROPS, VIEW_PROPS, TABLE_STYLES, HANDOUT_MASTER
+PRES_PROPS, VIEW_PROPS, TABLE_STYLES, HANDOUT_MASTER,
+POWERPOINT_COMMENTS, POWERPOINT_AUTHORS
 ```
 
 A `content_types` constants module is added alongside, so neither format crate
-hand-types the long MIME strings.
+hand-types the long MIME strings. It includes the modern PowerPoint comments
+and authors MIME types as well as the handout-master type.
 
 Both facades resolve core properties through the package-level
 `CORE_PROPERTIES` relationship and retain its normalized target. Immutable
@@ -227,6 +229,22 @@ state creates both relationships and both overrides together. Existing custom
 targets remain authoritative, and removal of the final API-owned thread removes
 only the parts, relationships, and overrides created by the typed model.
 
+Modern PowerPoint collaboration follows two independent relationship scopes.
+The presentation part owns at most one Microsoft authors relationship, and
+each commented slide owns one Microsoft comments relationship referenced by
+the slide's typed `p188:commentRel`. Existing internal targets are normalized
+and retained instead of being replaced with conventional names. External,
+missing, wrong-type, duplicate, or shared comment-part ownership fails before
+the live presentation changes.
+
+Creating the first author uses `/ppt/authors.xml` only when that path is free.
+Creating the first comment on a slide allocates a free positive
+`/ppt/comments/commentN.xml` suffix through `MediaNamer`. Both operations stage
+the part, relationship, content-type override, typed XML, and reopen before
+commit. A matching MIME type does not make an unlinked conventional part safe
+to overwrite. The notes-master and handout-master roots are likewise resolved
+from the presentation relationship graph without assuming their filenames.
+
 Content-control data binding follows the existing package graph rather than a
 conventional filename. The main document's custom XML relationship resolves an
 item part. That item's custom XML properties relationship resolves the
@@ -269,11 +287,13 @@ docx                      pptx
 /word/comments.xml        /ppt/media/imageN.ext
 /word/commentsExtended.xml /ppt/charts/chartN.xml
                           /ppt/embeddings/WorkbookN.xlsx
+                          /ppt/authors.xml
+                          /ppt/comments/commentN.xml
 ```
 
-Comment part creation uses the conventional names when free and scans numbered
-alternatives when either path is occupied. It never overwrites an unrelated
-part merely because the conventional comment path exists.
+Word comment part creation uses the conventional names when free and scans
+numbered alternatives when either path is occupied. It never overwrites an
+unrelated part merely because the conventional comment path exists.
 
 Word chart assembly follows the same independent suffix rule as PowerPoint.
 The document relationship targets `/word/charts/chartN.xml`, and that chart's

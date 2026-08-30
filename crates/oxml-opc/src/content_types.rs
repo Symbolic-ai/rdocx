@@ -39,6 +39,8 @@ pub const TABLE_STYLES: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml";
 pub const HANDOUT_MASTER: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.handoutMaster+xml";
+pub const POWERPOINT_COMMENTS: &str = "application/vnd.ms-powerpoint.comments+xml";
+pub const POWERPOINT_AUTHORS: &str = "application/vnd.ms-powerpoint.authors+xml";
 
 pub const WORKBOOK: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
