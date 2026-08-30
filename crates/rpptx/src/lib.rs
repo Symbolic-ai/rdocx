@@ -35,8 +35,13 @@ use oxml_layout::MediaId;
 #[cfg(feature = "render")]
 use oxml_layout::{Color, FontManager, LayoutResult, PageFrame, PositionedElement, Rect};
 use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
+pub use oxml_opc::PackageReadLimits;
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
+#[cfg(feature = "digital-signatures")]
+pub use oxml_opc::{
+    CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
+};
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 #[cfg(feature = "render")]
 use rpptx_layout::{
@@ -413,6 +418,92 @@ fn register_content_type(
     }
 }
 
+#[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+fn write_atomic_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
+    })?;
+    for attempt in 0..128_u8 {
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(file_name);
+        temporary_name.push(format!(".rpptx-{}-{attempt}.tmp", std::process::id()));
+        let temporary = parent.join(temporary_name);
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let result = result.and_then(|()| replace_file(&temporary, path));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate encrypted-save staging file",
+    ))
+}
+
+#[cfg(all(
+    feature = "agile-encryption",
+    not(target_arch = "wasm32"),
+    not(target_os = "windows")
+))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(all(
+    feature = "agile-encryption",
+    not(target_arch = "wasm32"),
+    target_os = "windows"
+))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both path buffers are NUL-terminated and remain alive for the call.
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 impl Presentation {
     /// Creates an empty 16:9 presentation from the bundled standard template.
     #[cfg(feature = "default-template")]
@@ -425,9 +516,36 @@ impl Presentation {
         Self::from_package(OpcPackage::open(path)?)
     }
 
+    /// Opens a password-protected Agile-encrypted presentation from a path.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn open_encrypted<P: AsRef<Path>>(path: P, password: &str) -> Result<Self> {
+        let file = std::fs::File::open(path).map_err(OpcError::from)?;
+        Self::from_package(OpcPackage::from_encrypted_reader(file, password)?)
+    }
+
     /// Opens a presentation from in-memory `.pptx` bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         Self::from_package(OpcPackage::from_reader(Cursor::new(bytes))?)
+    }
+
+    /// Opens a password-protected Agile-encrypted presentation from bytes.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn from_encrypted_bytes(bytes: &[u8], password: &str) -> Result<Self> {
+        Self::from_encrypted_bytes_with_limits(bytes, password, PackageReadLimits::UNBOUNDED)
+    }
+
+    /// Opens an Agile-encrypted presentation with bounded archive expansion.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn from_encrypted_bytes_with_limits(
+        bytes: &[u8],
+        password: &str,
+        limits: PackageReadLimits,
+    ) -> Result<Self> {
+        Self::from_package(OpcPackage::from_encrypted_reader_with_limits(
+            Cursor::new(bytes),
+            password,
+            limits,
+        )?)
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
@@ -540,6 +658,48 @@ impl Presentation {
         Ok(output.into_inner())
     }
 
+    /// Serialises the current presentation through the fixed Agile write profile.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
+        let package = self.staged_package()?;
+        let mut output = Vec::new();
+        package.write_encrypted_to(&mut output, password)?;
+        Ok(output)
+    }
+
+    /// Verifies signatures against the current staged presentation package.
+    ///
+    /// Cryptographic validity authenticates the embedded certificate's key. It
+    /// does not establish certificate-chain trust, which remains caller policy.
+    #[cfg(feature = "digital-signatures")]
+    pub fn verify_signatures(&self) -> Result<Vec<SignatureReport>> {
+        Ok(self.staged_package()?.verify_signatures()?)
+    }
+
+    /// Signs the current staged presentation with the strict RSA-SHA256 profile.
+    ///
+    /// The private key must be PKCS#8 DER and the certificate must be X.509 DER.
+    /// The live package changes only after the shared signer verifies the cloned
+    /// candidate with complete coverage. Certificate-chain trust remains caller
+    /// policy.
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    pub fn sign(
+        &mut self,
+        private_key_pkcs8_der: &[u8],
+        certificate_der: &[u8],
+    ) -> Result<SignatureReport> {
+        let mut candidate = self.staged_package()?;
+        let report = candidate.sign(private_key_pkcs8_der, certificate_der)?;
+        if !report.cryptographically_valid || !report.coverage_complete {
+            return Err(OpcError::SignatureCreationFailed(
+                "staged presentation signature did not verify with complete coverage".to_owned(),
+            )
+            .into());
+        }
+        self.package = candidate;
+        Ok(report)
+    }
+
     /// Resolves and lays out the current presentation with deterministic fonts.
     #[cfg(feature = "render")]
     pub fn render_deterministic(&self) -> Result<(RenderInput, LayoutResult)> {
@@ -607,15 +767,23 @@ impl Presentation {
                 package.package_rels.add(rel_types::CORE_PROPERTIES, target);
             }
         }
-        package.set_part(
-            &self.presentation_part,
-            self.presentation
-                .to_xml()
-                .map_err(|error| Error::MalformedPart {
-                    part_name: self.presentation_part.clone(),
-                    message: error.to_string(),
-                })?,
-        );
+        let presentation_changed = self
+            .package
+            .get_part(&self.presentation_part)
+            .and_then(|xml| CT_Presentation::from_xml(xml).ok())
+            .as_ref()
+            != Some(&self.presentation);
+        if presentation_changed {
+            package.set_part(
+                &self.presentation_part,
+                self.presentation
+                    .to_xml()
+                    .map_err(|error| Error::MalformedPart {
+                        part_name: self.presentation_part.clone(),
+                        message: error.to_string(),
+                    })?,
+            );
+        }
         if let Some(part_name) = self
             .comment_authors_part
             .as_ref()
@@ -663,24 +831,40 @@ impl Presentation {
             );
         }
         for record in &self.slides {
-            package.set_part(
-                &record.part_name,
-                record
-                    .slide
-                    .to_xml()
-                    .map_err(|error| Error::MalformedPart {
-                        part_name: record.part_name.clone(),
-                        message: error.to_string(),
-                    })?,
-            );
-            if let Some(notes) = &record.notes {
+            let slide_changed = self
+                .package
+                .get_part(&record.part_name)
+                .and_then(|xml| CT_Slide::from_xml(xml).ok())
+                .as_ref()
+                != Some(&record.slide);
+            if slide_changed {
                 package.set_part(
-                    &notes.part_name,
-                    notes.notes.to_xml().map_err(|error| Error::MalformedPart {
-                        part_name: notes.part_name.clone(),
-                        message: error.to_string(),
-                    })?,
+                    &record.part_name,
+                    record
+                        .slide
+                        .to_xml()
+                        .map_err(|error| Error::MalformedPart {
+                            part_name: record.part_name.clone(),
+                            message: error.to_string(),
+                        })?,
                 );
+            }
+            if let Some(notes) = &record.notes {
+                let notes_changed = self
+                    .package
+                    .get_part(&notes.part_name)
+                    .and_then(|xml| CT_NotesSlide::from_xml(xml).ok())
+                    .as_ref()
+                    != Some(&notes.notes);
+                if notes_changed {
+                    package.set_part(
+                        &notes.part_name,
+                        notes.notes.to_xml().map_err(|error| Error::MalformedPart {
+                            part_name: notes.part_name.clone(),
+                            message: error.to_string(),
+                        })?,
+                    );
+                }
             }
             if let Some(comments) = record.comments.as_ref().filter(|comments| comments.dirty) {
                 package.set_part(
@@ -709,6 +893,14 @@ impl Presentation {
             self.validate()
         );
         std::fs::write(path, self.to_bytes()?).map_err(OpcError::from)?;
+        Ok(())
+    }
+
+    /// Saves a password-protected presentation through an atomic path publication.
+    #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
+    pub fn save_encrypted<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<()> {
+        let bytes = self.to_encrypted_bytes(password)?;
+        write_atomic_file(path.as_ref(), &bytes).map_err(OpcError::from)?;
         Ok(())
     }
 

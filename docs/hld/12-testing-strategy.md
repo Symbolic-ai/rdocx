@@ -971,6 +971,21 @@ The external gate opens one produced document in pinned Microsoft Word 16.104,
 records correct-password success and wrong-password rejection, and treats both
 outcomes as mandatory manual evidence.
 
+The presentation security gate stays in the existing `rpptx` integration
+binary and builds every package and certificate fixture from source. Encrypted
+round trips check the correct and wrong passwords, bounded reads, unrelated
+parts, relationships, content types, raw PresentationML subtrees, empty
+password rejection, and atomic destination failure. Signature tests cover
+complete trusted-certificate fixture coverage, untouched producer-shaped bytes,
+failed signing without live-state mutation, and invalidation after nested
+slide, shape, text, core-property, and package-graph mutations. Feature
+isolation checks the ordinary facade and the Python, WASM, and CLI manifests.
+The ignored external gate binds its generated artifact to SHA-256
+`a0d33171c63ec084231daeef3b35718f5a2d709a5c92c9c0e2017ccaf9fa52d6`.
+Pinned Microsoft PowerPoint 16.104 build 16.104.25121423 opened that artifact
+with the correct password and rejected a wrong password. Both observations are
+required, and no binary fixture enters the repository.
+
 **`oxml-core`**
 - New unit round-trips: `Centipoints::from_pt(18.0).0 == 1800`,
   `Angle::from_degrees(90.0).0 == 5_400_000`,

@@ -62,6 +62,16 @@ targets. Missing parts, missing or wrong relationship ids, external slide
 targets, duplicate notes-slide links, and malformed typed roots return a
 concrete facade error.
 
+With the default-off `agile-encryption` feature, the native facade opens
+encrypted paths and byte slices with default or caller-supplied
+`PackageReadLimits`. It writes encrypted bytes through the shared fixed Agile
+profile and publishes encrypted paths through a sibling temporary file and
+atomic replacement. With the default-off `digital-signatures` feature, the
+native facade exposes package signature reports, verifies a staged view of the
+current presentation, and signs PKCS#8 private-key DER with X.509 certificate
+DER. Signing commits only a candidate that verifies as cryptographically valid
+with complete declared coverage.
+
 The presentation and slide property surface is concrete and borrowed:
 
 ```rust
@@ -578,6 +588,13 @@ each modelled root with those exact canonical serialised bytes. After save and
 reopen, every rewritten root must match its expected bytes, while every
 unmodelled part must match its original bytes. Content types, relationships,
 part names, and part counts must remain structurally unchanged.
+
+Security staging serialises a modelled part only when its retained typed value
+has changed. An untouched producer-shaped presentation therefore keeps the
+exact signed part bytes, including lexical choices and namespace prefixes.
+Relevant typed mutation stages new bytes without deleting retained signature
+parts, so verification reports the preserved signature evidence as invalid for
+the current presentation.
 
 ## Relationship remapping
 

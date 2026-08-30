@@ -19,7 +19,9 @@ tag-name = "rpptx-v{{version}}"
 
 [features]
 default = ["default-template", "render", "system-fonts"]
+agile-encryption = ["oxml-opc/agile-encryption"]
 default-template = []
+digital-signatures = ["oxml-opc/digital-signatures"]
 render = ["dep:miniz_oxide", "dep:oxml-pdf", "dep:rpptx-layout", "dep:rpptx-render"]
 system-fonts = ["oxml-layout/system-fonts", "rpptx-render?/system-fonts"]
 

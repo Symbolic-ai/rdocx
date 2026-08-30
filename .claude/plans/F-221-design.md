@@ -1,6 +1,6 @@
 # F-221, Presentation encryption and signatures
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S59
 **Size**: M
 **Depends on**: F-169, F-170, F-171, F-172
@@ -125,12 +125,12 @@ serialization and rendering must remain byte-identical.
 
 ## Implementation checklist
 
-- [ ] Add the two default-off feature forwards and public type re-exports.
-- [ ] Add encrypted constructors and atomic encrypted output methods.
-- [ ] Add current-state verification and atomic signing.
-- [ ] Preserve signature parts for inspection while reporting them invalid after mutation.
-- [ ] Add source-built encryption, trusted-certificate, mutation, feature-isolation, and PowerPoint tests to the existing integration binary.
-- [ ] Run scoped all-feature and no-default `rpptx` checks plus every routed rider.
+- [x] Add the two default-off feature forwards and public type re-exports.
+- [x] Add encrypted constructors and atomic encrypted output methods.
+- [x] Add current-state verification and atomic signing.
+- [x] Preserve signature parts for inspection while reporting them invalid after mutation.
+- [x] Add source-built encryption, trusted-certificate, mutation, feature-isolation, and PowerPoint tests to the existing integration binary.
+- [x] Run scoped all-feature and no-default `rpptx` checks plus every routed rider.
 
 ## Open questions
 

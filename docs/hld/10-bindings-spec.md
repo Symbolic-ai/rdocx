@@ -348,6 +348,19 @@ and complete declared coverage from certificate-chain trust. They do not
 expand Python, WASM, or CLI surfaces and those dependency graphs remain
 unchanged.
 
+The native `Presentation` facade exposes the parallel default-off security
+surface. `open_encrypted`, `from_encrypted_bytes`, and the bounded bytes
+variant use the shared package reader. `save_encrypted` and
+`to_encrypted_bytes` use the shared fixed Agile profile, with sibling-file
+atomic publication for the path method. `verify_signatures` stages current
+typed presentation state before returning shared reports. Native `sign`
+accepts PKCS#8 private-key DER and X.509 certificate DER, then commits only a
+candidate whose signature is cryptographically valid and has complete declared
+coverage. Relevant mutation retains signature infrastructure for inspection
+but makes verification report it as invalid. These additive pre-1.0 APIs do
+not expand Python, WASM, or CLI surfaces, and their manifests select neither
+security feature.
+
 Native callers rebuilding one Word document from another can call
 `Document::transfer_reusable_layout_from`. The method moves the source's normal
 layout engine only when the complete private retained-work context matches. A

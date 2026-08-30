@@ -52,6 +52,10 @@ const KEYNOTE_BUILD: &str = "7043.0.93";
 const LIBREOFFICE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const F116_CANDIDATE_PATH: &str = "/private/tmp/rdocx-f116-m11-write-api.pptx";
 const F124_CANDIDATE_PATH: &str = "/private/tmp/rdocx-f124-add-chart.pptx";
+const F221_CANDIDATE_PATH: &str = "/private/tmp/rdocx-f221-agile-powerpoint.pptx";
+const F221_POWERPOINT_PASSWORD: &str = "F-221 PowerPoint oracle";
+const F221_ARTIFACT_SHA256: &str =
+    "a0d33171c63ec084231daeef3b35718f5a2d709a5c92c9c0e2017ccaf9fa52d6";
 const F124_ARTIFACT_SHA256: &str =
     "e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00";
 const F116_ARTIFACT_SHA256: &str =
@@ -69,6 +73,229 @@ const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 09",
 ];
 static F116_TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "digital-signatures")]
+const F221_PRIVATE_KEY_PKCS8_BASE64: &str = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCXVziWlLINGRFmqL/FTgWy1/o2zEkmQOHt23YQZDm7PiiBjq+ib85OF6UH9nH9VTr3rE4njpTj0TgzbTaY0ftxQqQg+sdSLZu6+FGAo+erEQAEoa9HZ6ys/9cuFbeYLUVVSQ33wtdq+VMDWMZqXxXd53QX9aqxBg1cBY4XAHgqWQ50X3AQ/IBhMTpZ0Wte3wGZeC+i1NQ45Ws9HwpwTgjg1mX3BTUaPtZW801SBOC2b3ug1jGJXO/fGigdzDwGcJKAXt/NZwa+PIhKv8GyebstGwCEu/detSmaODbMs7cYb4liJK2NLCY99Y7BLO4xMNg2hwploUwAdu+RgEf5U8LvAgMBAAECggEAEg5S7wxAjfV+sPvTHWwom+TOsnj/BTRagDFdzajXhnJtDMAETmH+gCysAN4zTWE8zs3c6TVGqEOO6/vMtsDeue2UfWbOHwzX9p+nwaxMeIlnsiXELsW8wUso1hO7Osmz6u/zXar+XoHumIif65L6neX+YNlriwFI2MDE6hOhQpP8eqA+u8DX1g2Oq0AhpPX6g5ABC422GjB6Z/NsXnwrFb4SpUy7aQNCHjDBQsetc2uE9hStvGvfwg4qvQl4NtL2k2udU/wOO66jvLBMbsF6Blz5vpljGpDuYJk/9sTTmzH+cJNob8nlOWwXVwNrAPMHe0l4RK8+DUqWvdEqkxZBoQKBgQDLOmt9DPX80aY4QucFNOGjjqH+Gk+6jEI6LrKfXiCswCiziWhoVCSKkQSi4k2Ol0NEKfcKy5jUYxglwjLDF/MBqz0rCKX/XjZ/hO8f8DlQFeZdLxvsFVH/lUl98JIifrrpMnO9za/0SfcMsy3CCglz8ho9+LUch8fQx4mTX3MCfwKBgQC+o5VqOZIJJXuYq6nWdjj5BPWKC8kdNq+t2Z5FnlsDuwNmSzCJI8juUPyId3pI0fiSbmdTfp8z4OrV46FrkFJ/oY8JJ5X3s2sfvviSVgvgZ/G+wJ4fQpN9yRg4Dp/RCgT7xrqxXtLTpjl7X0RrKri2uxyhh7AU/9mEuviwmTInkQKBgBed8l/V4cA/nNFs9Ovl+VLIgIrHA/zpz8hzJM7gYWux6Qj0Lu3w2U5BDAjhw6GOcoK5XbwjbN9BpMy+hKenYNYQ0Erv9lp22F55VFCh2gc0hFDP6K7Gy4CoGKJKErFviMkQ0+J6xLfe4JbZO7gQ8ohG2kXZYTKvlMjuZ055CSSBAoGAdTgOgl9dzSPwCGLdLlJJG80R0U0H31+lzAb4S6RgID4YjAiFkn2fafIAJUUZurbo2djqzasY5wRQQS4TLhlysKm9Uoq1qrX2k3GQVCJ2cQhY28qCL4R3PiutKaLMX/OCNvHuD2vXxG38AEEGx8JgC3On2iadfXwH2pZAng3EihECgYEAn9DRQhgazqs35kZgEwqkpBKovhd32pDRkA6XEoNHB1uTbHTAMuo53SOZbS1bjGB2B2fKwvxMkAFgKAkEhVqOIXXzgxmn8cv4C40QZbrC8Mjrfax6wbNmAGfmKawxxJtRrx3EoAB2ti9D7JaQxgZiIxdvrv4bd/8Ejd7d8P1as7c=";
+
+#[cfg(feature = "digital-signatures")]
+const F221_CERTIFICATE_DER_BASE64: &str = "MIIDdDCCAlygAwIBAgIUFuFlT5/whakB7xH7oRLpOMWRK6swDQYJKoZIhvcNAQELBQAwQzEaMBgGA1UEAwwRRi0xNzIgVGVzdCBTaWduZXIxGDAWBgNVBAoMD1RlbnNvcmJlZSBUZXN0czELMAkGA1UEBhMCR0IwHhcNMjYwODIyMjIyOTQ4WhcNMzYwODE5MjIyOTQ4WjBDMRowGAYDVQQDDBFGLTE3MiBUZXN0IFNpZ25lcjEYMBYGA1UECgwPVGVuc29yYmVlIFRlc3RzMQswCQYDVQQGEwJHQjCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAJdXOJaUsg0ZEWaov8VOBbLX+jbMSSZA4e3bdhBkObs+KIGOr6Jvzk4XpQf2cf1VOvesTieOlOPRODNtNpjR+3FCpCD6x1Itm7r4UYCj56sRAAShr0dnrKz/1y4Vt5gtRVVJDffC12r5UwNYxmpfFd3ndBf1qrEGDVwFjhcAeCpZDnRfcBD8gGExOlnRa17fAZl4L6LU1Djlaz0fCnBOCODWZfcFNRo+1lbzTVIE4LZve6DWMYlc798aKB3MPAZwkoBe381nBr48iEq/wbJ5uy0bAIS79161KZo4NsyztxhviWIkrY0sJj31jsEs7jEw2DaHCmWhTAB275GAR/lTwu8CAwEAAaNgMF4wHQYDVR0OBBYEFN+iqzK8SA1T4nFG9QkuPzX2343DMB8GA1UdIwQYMBaAFN+iqzK8SA1T4nFG9QkuPzX2343DMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUAA4IBAQBqjXqb8Wm/QzMHl7jLk42TJCwpTBW86nK/KuQb6XLfjEQ3hy4nSchLGZHlb5yladTu7KFp2DIDHRRVMDaxSUWd0bVcwus3D8JCjuydeLsOiGlQTtrDMp0eEBR3NU//047vDLRodwv7q0cE+r9d6z8bXprXBKqKrQrVweaZP6eNxb7Cz6aALENNDrSd5sGy1CfOC5hZzBzFcyQUp+bBmc5XL5MzO3sm5yQebCfqiwBiBwkNEGkjfOIxU0O+LxHjOzXrU2zLbOcn5WvPl+UkD/OzD5NjobsZk4wUtGqSe4+KGgb1VxK8JSnJOBqnUyPc/4KNl8JQROopBKTUxENfWyKM";
+
+#[cfg(feature = "digital-signatures")]
+fn f221_signing_material() -> (Vec<u8>, Vec<u8>) {
+    (
+        decode_base64_fixture(F221_PRIVATE_KEY_PKCS8_BASE64),
+        decode_base64_fixture(F221_CERTIFICATE_DER_BASE64),
+    )
+}
+
+#[cfg(feature = "agile-encryption")]
+#[test]
+fn encrypted_presentation_round_trips_with_password_and_preserves_package() {
+    let source = fixture_bytes();
+    let presentation = Presentation::from_bytes(&source).expect("open source presentation");
+    let encrypted = presentation
+        .to_encrypted_bytes("correct horse battery staple")
+        .expect("encrypt presentation");
+    assert!(Presentation::from_encrypted_bytes(&encrypted, "wrong password").is_err());
+    assert!(
+        Presentation::from_encrypted_bytes_with_limits(
+            &encrypted,
+            "correct horse battery staple",
+            rpptx::PackageReadLimits {
+                max_entries: 1,
+                max_part_uncompressed_bytes: u64::MAX,
+                max_total_uncompressed_bytes: u64::MAX,
+            },
+        )
+        .is_err()
+    );
+    let reopened = Presentation::from_encrypted_bytes(&encrypted, "correct horse battery staple")
+        .expect("decrypt presentation");
+    assert_eq!(
+        reopened.to_bytes().unwrap(),
+        presentation.to_bytes().unwrap()
+    );
+
+    let path = f116_temp_path("f221-encrypted-round-trip", "pptx");
+    presentation
+        .save_encrypted(&path, "correct horse battery staple")
+        .expect("save encrypted presentation");
+    let reopened_from_path =
+        Presentation::open_encrypted(&path, "correct horse battery staple").unwrap();
+    assert_eq!(
+        reopened_from_path.to_bytes().unwrap(),
+        presentation.to_bytes().unwrap()
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[cfg(feature = "agile-encryption")]
+#[test]
+#[ignore = "requires pinned Microsoft PowerPoint and recorded password observations"]
+fn powerpoint_opens_the_written_agile_presentation() {
+    assert_powerpoint_build();
+    let path = Path::new(F221_CANDIDATE_PATH);
+    if !path.exists() {
+        Presentation::from_bytes(&fixture_bytes())
+            .unwrap()
+            .save_encrypted(path, F221_POWERPOINT_PASSWORD)
+            .unwrap();
+    }
+    let artifact_sha256 = sha256(path);
+    eprintln!("F-221 PowerPoint candidate: {F221_CANDIDATE_PATH}, SHA-256 {artifact_sha256}");
+    assert_eq!(artifact_sha256, F221_ARTIFACT_SHA256);
+    assert_eq!(
+        std::env::var("RPPTX_F221_POWERPOINT_OBSERVATIONS").as_deref(),
+        Ok("correct-password-opened;wrong-password-rejected"),
+        "record both pinned PowerPoint password observations for {artifact_sha256}"
+    );
+}
+
+#[cfg(feature = "agile-encryption")]
+#[test]
+fn failed_encrypted_save_leaves_destination_and_presentation_unchanged() {
+    let presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let before = presentation.to_bytes().unwrap();
+
+    let password_failure = f116_temp_path("f221-empty-password", "pptx");
+    fs::write(&password_failure, b"sentinel destination").unwrap();
+    assert!(presentation.save_encrypted(&password_failure, "").is_err());
+    assert_eq!(
+        fs::read(&password_failure).unwrap(),
+        b"sentinel destination"
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    fs::remove_file(password_failure).unwrap();
+
+    let destination = f116_temp_path("f221-encrypted-directory", "pptx");
+    fs::create_dir(&destination).unwrap();
+    assert!(
+        presentation
+            .save_encrypted(&destination, "password")
+            .is_err()
+    );
+    assert!(destination.is_dir());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    fs::remove_dir(destination).unwrap();
+}
+
+#[cfg(feature = "digital-signatures")]
+#[test]
+fn signed_presentation_reopens_with_complete_fixture_coverage() {
+    let (private_key, certificate) = f221_signing_material();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let before_failed_sign = presentation.to_bytes().unwrap();
+    assert!(presentation.sign(b"not-pkcs8", &certificate).is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), before_failed_sign);
+    let report = presentation.sign(&private_key, &certificate).unwrap();
+    assert!(report.cryptographically_valid);
+    assert!(report.coverage_complete);
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    let reports = reopened.verify_signatures().unwrap();
+    assert_eq!(reports.len(), 1);
+    assert!(reports[0].cryptographically_valid);
+    assert!(reports[0].coverage_complete);
+}
+
+#[cfg(feature = "digital-signatures")]
+#[test]
+fn untouched_producer_shaped_presentation_keeps_its_signature_valid() {
+    let (private_key, certificate) = f221_signing_material();
+    let mut package = open_opc(&fixture_bytes(), "producer-shaped signed presentation");
+    let presentation_xml = String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec())
+        .unwrap()
+        .replace("xmlns:p=", "xmlns:producer=")
+        .replace("<p:", "<producer:")
+        .replace("</p:", "</producer:");
+    package.set_part(PRESENTATION_PART, presentation_xml.into_bytes());
+    let report = package.sign(&private_key, &certificate).unwrap();
+    assert!(report.cryptographically_valid);
+    assert!(report.coverage_complete);
+    let mut signed_bytes = Cursor::new(Vec::new());
+    package.write_to(&mut signed_bytes).unwrap();
+
+    let presentation = Presentation::from_bytes(&signed_bytes.into_inner()).unwrap();
+    let reports = presentation.verify_signatures().unwrap();
+    assert_eq!(reports.len(), 1);
+    assert!(reports[0].cryptographically_valid);
+    assert!(reports[0].coverage_complete);
+}
+
+#[cfg(feature = "digital-signatures")]
+#[test]
+fn mutating_a_signed_presentation_never_reports_the_stale_signature_as_valid() {
+    let (private_key, certificate) = f221_signing_material();
+
+    let signed = || {
+        let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+        presentation.sign(&private_key, &certificate).unwrap();
+        presentation
+    };
+    let assert_retained_but_invalid = |presentation: &Presentation| {
+        let reports = presentation.verify_signatures().unwrap();
+        assert_eq!(reports.len(), 1, "retained signature remains inspectable");
+        assert!(!reports[0].cryptographically_valid);
+    };
+
+    let mut slide_changed = signed();
+    slide_changed.slide_mut(0).unwrap().set_hidden(true);
+    assert_retained_but_invalid(&slide_changed);
+
+    let mut shape_changed = signed();
+    shape_changed
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_name("changed after signing")
+        .unwrap();
+    assert_retained_but_invalid(&shape_changed);
+
+    let mut text_changed = signed();
+    text_changed
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .text_frame()
+        .unwrap()
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_text("changed after signing");
+    assert_retained_but_invalid(&text_changed);
+
+    let mut property_changed = signed();
+    property_changed.core_properties_mut().title = Some("changed after signing".to_owned());
+    assert_retained_but_invalid(&property_changed);
+
+    let mut graph_changed = signed();
+    graph_changed.duplicate_slide(0).unwrap();
+    assert_retained_but_invalid(&graph_changed);
+}
+
+#[test]
+fn presentation_security_features_are_default_off_and_binding_manifests_do_not_enable_them() {
+    let manifest = include_str!("../Cargo.toml");
+    assert!(manifest.contains("agile-encryption = [\"oxml-opc/agile-encryption\"]"));
+    assert!(manifest.contains("digital-signatures = [\"oxml-opc/digital-signatures\"]"));
+    let default = manifest
+        .lines()
+        .find(|line| line.starts_with("default ="))
+        .expect("rpptx default feature declaration");
+    assert!(!default.contains("agile-encryption"));
+    assert!(!default.contains("digital-signatures"));
+    for binding in [
+        include_str!("../../rpptx-py/Cargo.toml"),
+        include_str!("../../rpptx-wasm/Cargo.toml"),
+        include_str!("../../rpptx-cli/Cargo.toml"),
+    ] {
+        assert!(!binding.contains("agile-encryption"));
+        assert!(!binding.contains("digital-signatures"));
+    }
+}
 
 fn f124_chart_data() -> ChartData {
     ChartData {
