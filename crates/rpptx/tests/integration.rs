@@ -276,6 +276,103 @@ fn mutating_a_signed_presentation_never_reports_the_stale_signature_as_valid() {
     assert_retained_but_invalid(&graph_changed);
 }
 
+#[cfg(feature = "digital-signatures")]
+#[test]
+fn collaboration_mutations_never_report_the_retained_signature_as_valid() {
+    use rpptx::{Comment, CommentAuthor, CommentReply, Section};
+
+    let (private_key, certificate) = f221_signing_material();
+    let fresh = || open_package(collaboration_fixture_package()).unwrap();
+    let signed = |mut presentation: Presentation| {
+        let report = presentation.sign(&private_key, &certificate).unwrap();
+        assert!(report.cryptographically_valid);
+        assert!(report.coverage_complete);
+        presentation
+    };
+    let assert_retained_but_invalid = |label: &str, presentation: &Presentation| {
+        let reports = presentation.verify_signatures().unwrap();
+        assert_eq!(reports.len(), 1, "{label}: retained signature report");
+        assert!(
+            reports.iter().all(|report| !report.cryptographically_valid),
+            "{label}: no retained signature remains valid"
+        );
+    };
+    let author = || {
+        CommentAuthor::new(
+            "{11111111-1111-1111-1111-111111111111}",
+            "Ada",
+            Some("A"),
+            "ada@example.test",
+            "test",
+        )
+        .unwrap()
+    };
+    let comment = || {
+        Comment::new(
+            "{22222222-2222-2222-2222-222222222222}",
+            "{11111111-1111-1111-1111-111111111111}",
+            "2026-08-29T10:11:12Z",
+            "first",
+        )
+        .unwrap()
+    };
+    let reply = || {
+        CommentReply::new(
+            "{33333333-3333-3333-3333-333333333333}",
+            "{11111111-1111-1111-1111-111111111111}",
+            "2026-08-29T10:12:13Z",
+            "reply",
+        )
+        .unwrap()
+    };
+
+    let mut author_changed = signed(fresh());
+    author_changed.add_comment_author(author()).unwrap();
+    assert_retained_but_invalid("comment author", &author_changed);
+
+    let mut comment_changed = fresh();
+    comment_changed.add_comment_author(author()).unwrap();
+    let mut comment_changed = signed(comment_changed);
+    comment_changed.add_comment(0, comment()).unwrap();
+    assert_retained_but_invalid("comment", &comment_changed);
+
+    let mut reply_changed = fresh();
+    reply_changed.add_comment_author(author()).unwrap();
+    reply_changed.add_comment(0, comment()).unwrap();
+    let mut reply_changed = signed(reply_changed);
+    reply_changed
+        .reply_to_comment(0, "{22222222-2222-2222-2222-222222222222}", reply())
+        .unwrap();
+    assert_retained_but_invalid("comment reply", &reply_changed);
+
+    let mut sections_changed = signed(fresh());
+    sections_changed
+        .set_sections(vec![
+            Section::new(
+                "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}",
+                "Opening",
+                vec![900, 256],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+    assert_retained_but_invalid("sections", &sections_changed);
+
+    let mut notes_master_changed = signed(fresh());
+    notes_master_changed
+        .notes_header_footer_mut()
+        .unwrap()
+        .footer = Some(false);
+    assert_retained_but_invalid("notes master header and footer", &notes_master_changed);
+
+    let mut handout_master_changed = signed(fresh());
+    handout_master_changed
+        .handout_header_footer_mut()
+        .unwrap()
+        .header = Some(false);
+    assert_retained_but_invalid("handout master header and footer", &handout_master_changed);
+}
+
 #[test]
 fn presentation_security_features_are_default_off_and_binding_manifests_do_not_enable_them() {
     let manifest = include_str!("../Cargo.toml");
@@ -5821,11 +5918,7 @@ fn fixture_bytes() -> Vec<u8> {
     package_bytes(fixture_package())
 }
 
-#[test]
-fn modern_comments_replies_sections_and_handout_settings_survive_ordered_mutation_save_and_reopen()
-{
-    use rpptx::{Comment, CommentAuthor, CommentReply, Section};
-
+fn collaboration_fixture_package() -> OpcPackage {
     let mut package = fixture_package();
     package.set_part(
         "/custom/notes/master.xml",
@@ -5847,8 +5940,16 @@ fn modern_comments_replies_sections_and_handout_settings_survive_ordered_mutatio
     package
         .get_or_create_part_rels(PRESENTATION_PART)
         .add(rel_types::HANDOUT_MASTER, "handouts/master.xml");
+    package
+}
 
-    let mut presentation = open_package(package).expect("open collaboration fixture");
+#[test]
+fn modern_comments_replies_sections_and_handout_settings_survive_ordered_mutation_save_and_reopen()
+{
+    use rpptx::{Comment, CommentAuthor, CommentReply, Section};
+
+    let mut presentation =
+        open_package(collaboration_fixture_package()).expect("open collaboration fixture");
     presentation
         .add_comment_author(
             CommentAuthor::new(
