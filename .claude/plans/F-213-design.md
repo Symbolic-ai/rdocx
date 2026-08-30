@@ -1,6 +1,6 @@
 # F-213, Animation and transition timing model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S60
 **Size**: L
 **Depends on**: none
@@ -157,19 +157,19 @@ remain byte-identical.
 
 ## Implementation checklist
 
-- [ ] Add the approved timing module and concrete duration, condition, target,
+- [x] Add the approved timing module and concrete duration, condition, target,
   container, build, set, animate, effect, motion, transition, and morph values.
-- [ ] Parse supported timing elements by expanded name and retain unsupported
+- [x] Parse supported timing elements by expanded name and retain unsupported
   XML in ordered schema slots.
-- [ ] Serialize typed timing and transition values with fixed prefixes and
+- [x] Serialize typed timing and transition values with fixed prefixes and
   schema-valid child order.
-- [ ] Expose optional typed timing and transition fields on slide, layout, and
+- [x] Expose optional typed timing and transition fields on slide, layout, and
   master roots.
-- [ ] Add safe mutation paths that retain unsupported siblings and
+- [x] Add safe mutation paths that retain unsupported siblings and
   relationship attributes.
-- [ ] Add source-built round-trip, mutation, malformed-input, and package tests
+- [x] Add source-built round-trip, mutation, malformed-input, and package tests
   to the existing integration binaries.
-- [ ] Run focused `rpptx-oxml` and `rpptx` checks plus every routed rider.
+- [x] Run focused `rpptx-oxml` and `rpptx` checks plus every routed rider.
 
 ## Open questions
 

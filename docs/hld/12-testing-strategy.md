@@ -60,6 +60,19 @@ comment parts, occupied conventional paths, and unserializable staged changes
 without mutating the opened package. All fixtures remain source-built in the
 two existing integration binaries.
 
+The Presentation timing round-trip gate is
+`the_corpus_timeline_preserves_every_unsupported_sibling`. It walks every
+slide, layout, and master in the 50-deck corpus. The gate requires nonzero
+coverage for timing roots, transitions, typed nodes, conditions, builds, set
+values, transition parameters, compatibility-wrapped transitions, and
+unsupported timing nodes. It serializes and reparses each model, compares the
+typed projection, and inventories unsupported node bytes before and after.
+Source-built regressions cover namespace aliases, compatibility choice and
+fallback selection, singleton and schema order rejection, lexical owner-tag
+preservation, atomic mutation, morph metadata, and the narrow PowerPoint empty
+layout-transition compatibility shape. A parse-state size guard and the full
+`rpptx` corpus package test keep the default test-thread stack sufficient.
+
 The ordered-body integration gate opens an in-code package through the public
 Word facade and compares the exact direct sequence of paragraphs, a table, a
 body content control, preserved producer XML, and a final paragraph. It also
@@ -693,7 +706,11 @@ Four gates run against it:
    content types, relationships, part names, part counts, and every part byte
    against that expectation. The gate requires nonzero corpus coverage for all
    seven root types.
-4. **Opens without repair** (M8 and M11): every saved deck opened manually in
+4. **Timing model round-trip**: every slide, layout, and master timing or
+   transition subtree projects the supported model while unsupported siblings
+   retain exact bytes. Coverage counters must remain nonzero for every bounded
+   timing category, including compatibility transitions and raw nodes.
+5. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,

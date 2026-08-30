@@ -4,6 +4,44 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[test]
+fn slide_transitions_and_morph_metadata_survive_mutation_save_and_reopen() {
+    use rpptx_oxml::slide_parts::CT_Slide;
+    use rpptx_oxml::timing::{TransitionEffect, TransitionSpeed};
+
+    let slide_xml = format!(
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:mc="{MC_NS}" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:f213" mc:Ignorable="p14 p159"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree></p:cSld><x:before/><mc:AlternateContent x:wrapper='A&#x20;B'><mc:Choice Requires="p159"><p:transition x:owner='C&#x20;D' spd='slow' p14:dur="725" advClick="1" advTm="4000"><x:morph option="foreign"/><p159:morph r:id='rId&#x37;' option='byObject'><x:keep/></p159:morph></p:transition></mc:Choice><mc:Fallback><p:transition spd="slow"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent><p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite"/></p:par></p:tnLst></p:timing><x:after/></p:sld>"#
+    );
+    let mut slide = CT_Slide::from_xml(slide_xml.as_bytes()).unwrap();
+    let transition = slide.transition.as_mut().unwrap();
+    assert_eq!(transition.effect, Some(TransitionEffect::Morph));
+    assert_eq!(transition.duration_ms, Some(725));
+    transition.set_speed(TransitionSpeed::Fast).unwrap();
+    transition.set_morph_option("byWord").unwrap();
+    let expected_slide = slide.to_xml().unwrap();
+
+    let mut package = fixture_package();
+    package.set_part(SLIDE_ONE_PART, expected_slide.clone());
+    let reopened_package = OpcPackage::from_reader(Cursor::new(package_bytes(package))).unwrap();
+    let reopened = CT_Slide::from_xml(reopened_package.get_part(SLIDE_ONE_PART).unwrap()).unwrap();
+    let transition = reopened.transition.unwrap();
+    assert_eq!(transition.speed, Some(TransitionSpeed::Fast));
+    assert_eq!(transition.effect, Some(TransitionEffect::Morph));
+    assert_eq!(transition.duration_ms, Some(725));
+    assert_eq!(transition.morph.unwrap().option.as_deref(), Some("byWord"));
+    let written = String::from_utf8(expected_slide).unwrap();
+    assert!(written.contains(r#"<x:morph option="foreign"/>"#));
+    assert!(written.contains("<mc:AlternateContent x:wrapper='A&#x20;B'>"));
+    assert!(written.contains("<p:transition x:owner='C&#x20;D' spd='fast'"));
+    assert!(written.contains("<p159:morph r:id='rId&#x37;' option='byWord'>"));
+    assert!(written.contains(
+        r#"<mc:Fallback><p:transition spd="slow"><p:fade/></p:transition></mc:Fallback>"#
+    ));
+    assert!(written.contains("<x:keep/>"));
+    assert!(written.contains("<x:before/>"));
+    assert!(written.contains("<x:after/>"));
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_chart::{AxisData, CT_ChartSpace};

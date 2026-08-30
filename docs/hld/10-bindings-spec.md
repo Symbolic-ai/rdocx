@@ -721,6 +721,22 @@ models. This is an additive semver change for the published pre-1.0
 flag. Unsupported modern comment XML and all legacy comment parts remain
 preserved, so consumers do not need a parallel raw authoring API.
 
+## Native PowerPoint timing model
+
+The published pre-1.0 `rpptx-oxml` crate exposes concrete timing and transition
+values through its `timing` module. `CT_Slide`, `CT_SlideLayout`, and
+`CT_SlideMaster` carry optional `CT_Timing` and `CT_SlideTransition` fields.
+Callers can inspect supported containers, conditions, targets, builds,
+behaviours, effect parameters, transition policy, and morph metadata. Bounded
+mutation methods change one common-node duration, transition speed, or existing
+morph option atomically while retained unsupported XML remains the
+serialization source.
+
+This is an additive pre-1.0 native Rust API. It adds no facade execution API,
+Python method, WASM method, CLI option, production dependency, or feature flag.
+Unsupported timing behaviours remain explicit raw nodes rather than acquiring
+a second authoring surface.
+
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
