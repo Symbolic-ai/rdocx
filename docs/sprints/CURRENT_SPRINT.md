@@ -29,7 +29,7 @@ timelines at explicit timestamps without changing ordinary static rendering.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-213 | Animation and transition timing model | L | done | - |
-| F-214 | Timeline evaluation and transition rendering | L | pending | - |
+| F-214 | Timeline evaluation and transition rendering | L | in-progress | codex |
 
 ## Sequencing note
 
