@@ -652,7 +652,12 @@ impl Presentation {
             "invalid presentation at byte save boundary: {:?}",
             self.validate()
         );
-        let package = self.staged_package()?;
+        let preserve_signed_parts = self
+            .package
+            .package_rels
+            .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+            .is_some();
+        let package = self.staged_package(preserve_signed_parts)?;
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         Ok(output.into_inner())
@@ -661,7 +666,7 @@ impl Presentation {
     /// Serialises the current presentation through the fixed Agile write profile.
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
-        let package = self.staged_package()?;
+        let package = self.staged_package(true)?;
         let mut output = Vec::new();
         package.write_encrypted_to(&mut output, password)?;
         Ok(output)
@@ -673,7 +678,7 @@ impl Presentation {
     /// does not establish certificate-chain trust, which remains caller policy.
     #[cfg(feature = "digital-signatures")]
     pub fn verify_signatures(&self) -> Result<Vec<SignatureReport>> {
-        Ok(self.staged_package()?.verify_signatures()?)
+        Ok(self.staged_package(true)?.verify_signatures()?)
     }
 
     /// Signs the current staged presentation with the strict RSA-SHA256 profile.
@@ -688,7 +693,7 @@ impl Presentation {
         private_key_pkcs8_der: &[u8],
         certificate_der: &[u8],
     ) -> Result<SignatureReport> {
-        let mut candidate = self.staged_package()?;
+        let mut candidate = self.staged_package(true)?;
         let report = candidate.sign(private_key_pkcs8_der, certificate_der)?;
         if !report.cryptographically_valid || !report.coverage_complete {
             return Err(OpcError::SignatureCreationFailed(
@@ -703,7 +708,7 @@ impl Presentation {
     /// Resolves and lays out the current presentation with deterministic fonts.
     #[cfg(feature = "render")]
     pub fn render_deterministic(&self) -> Result<(RenderInput, LayoutResult)> {
-        assemble_render_input(&self.staged_package()?)
+        assemble_render_input(&self.staged_package(false)?)
     }
 
     /// Renders the current presentation to a complete deterministic PDF.
@@ -723,7 +728,7 @@ impl Presentation {
         )?)
     }
 
-    fn staged_package(&self) -> Result<OpcPackage> {
+    fn staged_package(&self, preserve_unchanged_modelled_parts: bool) -> Result<OpcPackage> {
         if self.core_properties_dirty
             && self
                 .package
@@ -773,7 +778,7 @@ impl Presentation {
             .and_then(|xml| CT_Presentation::from_xml(xml).ok())
             .as_ref()
             != Some(&self.presentation);
-        if presentation_changed {
+        if !preserve_unchanged_modelled_parts || presentation_changed {
             package.set_part(
                 &self.presentation_part,
                 self.presentation
@@ -837,7 +842,7 @@ impl Presentation {
                 .and_then(|xml| CT_Slide::from_xml(xml).ok())
                 .as_ref()
                 != Some(&record.slide);
-            if slide_changed {
+            if !preserve_unchanged_modelled_parts || slide_changed {
                 package.set_part(
                     &record.part_name,
                     record
@@ -856,7 +861,7 @@ impl Presentation {
                     .and_then(|xml| CT_NotesSlide::from_xml(xml).ok())
                     .as_ref()
                     != Some(&notes.notes);
-                if notes_changed {
+                if !preserve_unchanged_modelled_parts || notes_changed {
                     package.set_part(
                         &notes.part_name,
                         notes.notes.to_xml().map_err(|error| Error::MalformedPart {
@@ -911,7 +916,7 @@ impl Presentation {
             "invalid presentation at slideshow save boundary: {:?}",
             self.validate()
         );
-        let mut package = self.staged_package()?;
+        let mut package = self.staged_package(false)?;
         package
             .content_types
             .add_override(&self.presentation_part, content_types::SLIDESHOW);
@@ -1497,7 +1502,7 @@ impl Presentation {
     }
 
     fn commit_candidate(&mut self, staged: Self) -> Result<()> {
-        let package = staged.staged_package()?;
+        let package = staged.staged_package(false)?;
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         let reopened = Self::from_bytes(output.get_ref())?;

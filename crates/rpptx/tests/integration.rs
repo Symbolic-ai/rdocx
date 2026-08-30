@@ -297,6 +297,36 @@ fn presentation_security_features_are_default_off_and_binding_manifests_do_not_e
     }
 }
 
+#[test]
+fn ordinary_save_still_canonicalizes_untouched_modelled_notes_parts() {
+    let mut package = fixture_package();
+    let source_notes = String::from_utf8(notes_xml()).unwrap();
+    let producer_notes = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n{}",
+        source_notes.replace(
+            &format!(r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{A_NS}">"#),
+            &format!(r#"<p:notes xmlns:a="{A_NS}" xmlns:p="{P_NS}">"#),
+        )
+    )
+    .into_bytes();
+    let canonical_notes = CT_NotesSlide::from_xml(&producer_notes)
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    assert_ne!(producer_notes, canonical_notes);
+    package.set_part(NOTES_PART, producer_notes);
+
+    let saved = Presentation::from_bytes(&package_bytes(package))
+        .unwrap()
+        .to_bytes()
+        .unwrap();
+    let saved_package = open_opc(&saved, "ordinary canonical notes save");
+    assert_eq!(
+        saved_package.get_part(NOTES_PART),
+        Some(canonical_notes.as_slice())
+    );
+}
+
 fn f124_chart_data() -> ChartData {
     ChartData {
         categories: vec!["North".to_owned(), "South".to_owned(), "West".to_owned()],
