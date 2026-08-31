@@ -410,8 +410,9 @@ pub struct CT_TblPr {
     pub change: Option<CT_Revision>,
     /// Malformed table property changes retained verbatim.
     pub revision_xml: Vec<Vec<u8>>,
-    /// Other table properties retained verbatim.
-    pub extra_xml: Vec<Vec<u8>>,
+    /// Unmodelled property children retained at their schema insertion slots.
+    #[doc(hidden)]
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 /// `w:tblLook` — which parts of a table style's conditional formatting apply.
@@ -543,6 +544,7 @@ impl CT_TblPr {
     ) -> Result<Self> {
         let mut pr = CT_TblPr::default();
         let mut change_raw_index = 0usize;
+        let mut boundary = 0usize;
         let mut buf = Vec::new();
 
         loop {
@@ -550,6 +552,7 @@ impl CT_TblPr {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let (at, next) = tbl_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
                     if is_word_element(name.as_ref(), b"tblStyle", &prefixes) {
                         pr.style_id = get_word_val_attr(e, &prefixes)?;
                     } else if is_word_element(name.as_ref(), b"tblW", &prefixes) {
@@ -594,15 +597,20 @@ impl CT_TblPr {
                                 owner_bindings,
                             )?);
                     } else {
-                        pr.extra_xml.push(crate::text::raw_with_external_bindings(
-                            &capture_empty_element(e)?,
-                            owner_bindings,
-                        )?);
+                        pr.extra_xml.push((
+                            at,
+                            crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                     }
+                    boundary = next;
                 }
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let (at, next) = tbl_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
                     if is_word_element(name.as_ref(), b"tblBorders", &prefixes) {
                         pr.borders =
                             Some(CT_TblBorders::from_xml_with_prefixes(reader, &prefixes)?);
@@ -630,11 +638,15 @@ impl CT_TblPr {
                                 owner_bindings,
                             )?);
                     } else {
-                        pr.extra_xml.push(crate::text::raw_with_external_bindings(
-                            &capture_element(reader, e)?,
-                            owner_bindings,
-                        )?);
+                        pr.extra_xml.push((
+                            at,
+                            crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                     }
+                    boundary = next;
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblPr") => {
                     break;
@@ -652,63 +664,103 @@ impl CT_TblPr {
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         writer.write_event(Event::Start(BytesStart::new("w:tblPr")))?;
 
+        write_extras_at(writer, &self.extra_xml, 0)?;
         if let Some(ref style_id) = self.style_id {
             let mut e = BytesStart::new("w:tblStyle");
             e.push_attribute(("w:val", style_id.as_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
+        for boundary in 1..=6 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
         if let Some(ref width) = self.width {
             width.write_xml(writer, "w:tblW")?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 7)?;
         if let Some(jc) = self.jc {
             let mut e = BytesStart::new("w:jc");
             e.push_attribute(("w:val", jc.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 8)?;
+        write_extras_at(writer, &self.extra_xml, 9)?;
         if let Some(ref indent) = self.indent {
             indent.write_xml(writer, "w:tblInd")?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 10)?;
         if let Some(ref borders) = self.borders
             && !borders.is_empty()
         {
             borders.to_xml(writer, "w:tblBorders")?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 11)?;
         if let Some(ref shd) = self.shading {
             shd.write_xml(writer, "w:shd")?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 12)?;
         if let Some(ref layout) = self.layout {
             let mut e = BytesStart::new("w:tblLayout");
             e.push_attribute(("w:type", layout.as_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 13)?;
         if let Some(ref cell_margin) = self.cell_margin {
             cell_margin.to_xml(writer)?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 14)?;
         if let Some(ref look) = self.look {
             look.to_xml(writer)?;
         }
 
+        for boundary in 15..=18 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
         for raw in &self.revision_xml {
             writer.get_mut().write_all(raw)?;
         }
         if let Some(change) = &self.change {
             change.write_xml(writer)?;
         }
-        for raw in &self.extra_xml {
-            writer.get_mut().write_all(raw)?;
-        }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblPr")))?;
         Ok(())
     }
+}
+
+fn tbl_pr_raw_boundary(name: &[u8], current: usize, word_prefixes: &[String]) -> (usize, usize) {
+    let schema_children = [
+        b"tblStyle".as_slice(),
+        b"tblpPr".as_slice(),
+        b"tblOverlap".as_slice(),
+        b"bidiVisual".as_slice(),
+        b"tblStyleRowBandSize".as_slice(),
+        b"tblStyleColBandSize".as_slice(),
+        b"tblW".as_slice(),
+        b"jc".as_slice(),
+        b"tblCellSpacing".as_slice(),
+        b"tblInd".as_slice(),
+        b"tblBorders".as_slice(),
+        b"shd".as_slice(),
+        b"tblLayout".as_slice(),
+        b"tblCellMar".as_slice(),
+        b"tblLook".as_slice(),
+        b"tblCaption".as_slice(),
+        b"tblDescription".as_slice(),
+        b"tblPrChange".as_slice(),
+    ];
+
+    schema_children
+        .iter()
+        .position(|child| is_word_element(name, child, word_prefixes))
+        .map_or((current, current), |index| (index, index + 1))
 }
 
 // ---- Table grid ----
@@ -2929,6 +2981,48 @@ mod tests {
                 .extra_xml
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn unmodelled_table_properties_keep_schema_slots_before_change() {
+        let table = parse_table(
+            r#"<w:tblPr>
+                 <w:tblOverlap w:val="never"/>
+                 <w:tblW w:w="5000" w:type="dxa"/>
+                 <ext:between xmlns:ext="urn:producer"/>
+                 <w:jc w:val="center"/>
+                 <w:tblCaption w:val="caption"/>
+                 <w:tblPrChange/>
+               </w:tblPr>
+               <w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>"#,
+        );
+
+        let properties = table.properties.as_ref().expect("table properties parse");
+        assert_eq!(
+            properties.extra_xml,
+            vec![
+                (2, br#"<w:tblOverlap w:val="never"/>"#.to_vec()),
+                (7, br#"<ext:between xmlns:ext="urn:producer"/>"#.to_vec(),),
+                (15, br#"<w:tblCaption w:val="caption"/>"#.to_vec()),
+            ]
+        );
+
+        let xml = table_to_xml(&table);
+        let overlap = xml.find("<w:tblOverlap").expect("overlap writes");
+        let width = xml.find("<w:tblW").expect("width writes");
+        let extension = xml.find("<ext:between").expect("extension writes");
+        let alignment = xml.find("<w:jc").expect("alignment writes");
+        let caption = xml.find("<w:tblCaption").expect("caption writes");
+        let change = xml.find("<w:tblPrChange").expect("change writes");
+
+        assert!(
+            overlap < width
+                && width < extension
+                && extension < alignment
+                && alignment < caption
+                && caption < change,
+            "{xml}"
         );
     }
 

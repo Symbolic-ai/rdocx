@@ -1027,7 +1027,7 @@ mod tests {
             cell_margin: Some(CT_TblCellMar::default()),
             indent: Some(CT_TblWidth::dxa(100)),
             look: Some(CT_TblLook::default()),
-            extra_xml: vec![b"<w:bidiVisual/>".to_vec()],
+            extra_xml: vec![(3, b"<w:bidiVisual/>".to_vec())],
             ..Default::default()
         });
 
