@@ -10425,3 +10425,60 @@ and keep shared relationship records until all retained XML references are
 gone. F-216 should consume the shape-id identity, picture-owned trim, timing
 trigger context, poster relationship, and format-neutral diagnostics directly
 rather than build a second media model.
+
+### F-216, Media poster and playback rendering
+
+**Sprint.** S61
+**Completed.** 2026-08-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The presentation timeline now evaluates synchronized audio
+and video playback state beside one deterministic page result. Valid local PNG
+and JPEG posters continue through the existing resolved-image path. Missing,
+linked, malformed, or unsupported posters can become deterministic labelled
+Audio or Video groups, remain as poster policy output, or fail explicitly.
+Audio and video payload bytes never enter renderer image admission and no codec
+decoder was added.
+
+**Non-obvious choices.** Playback commands fold in source order against the
+existing timestamp and click convention. Stopped seek positions survive an
+offset-free play, finite non-loop media stops at its exact end, and unknown
+loop duration remains monotonic with a diagnostic rather than inventing a
+wrap. Poster fallback diagnostics use private source-scoped slide, layout, or
+master identity, while the existing static and timeline facade methods retain
+their exact diagnostic text and behavior.
+
+**Deviations from the design plan.** The approved fallback policy was added as
+an explicit parameter to `render_media_timeline_deterministic`. This narrow
+signature correction gives every policy variant a present consumer and lets
+F-227 pass its selected export policy directly. No new file, module,
+dependency, trait, generic, feature flag, renderer variant, or codec path was
+added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named
+`static_poster_output_and_timestamped_playback_state_match_source_built_oracle_fixtures`
+gate passed at 150 dpi with deterministic fonts. The exact Audio fallback RGBA
+hash is
+`79e8da66b2cedf6a8b37b1eb723d4e278e22076aff5cdcff0616e0e7f2decec5`,
+and the Video fallback hash is
+`bca557835b53eb1ac671297c1d641c4f2e335fa51aa5515651ca95cc104e6917`.
+Normalized playback rows cover automatic and click triggers, seek, trim,
+volume, finite and unknown-duration loops, pause, resume, stop, linked media,
+opaque codecs, and exact boundaries. Regressions prove source-scoped fallback
+identity and byte-for-byte compatibility for the legacy static and timeline
+entry points. Full integrated verification and patched publication dry runs
+passed. The `rpptx-layout` and `rpptx` archives were 76,325 and 165,887 bytes,
+both below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-227 should consume
+`DeterministicMediaTimelineFrame`, `EvaluatedMediaState`, and
+`MediaFallbackPolicy` directly. Preserve the single shared assembly, the
+source-scoped diagnostic identity, deterministic font mode, fixed 150 dpi
+goldens, and the unchanged legacy facade paths.
