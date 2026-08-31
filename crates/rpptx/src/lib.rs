@@ -80,6 +80,8 @@ use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
 pub use rpptx_oxml::timing::MediaPlaybackTrigger;
 use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
 #[cfg(feature = "render")]
+use rpptx_oxml::timing::{TimingNode, TimingTarget};
+#[cfg(feature = "render")]
 use rpptx_render::timeline::{
     compose_morph_transition, compose_transition, layout_timeline_slide_deterministic,
 };
@@ -2268,94 +2270,7 @@ impl Presentation {
                 index: slide_index,
                 slide_count: self.slides.len(),
             })?;
-        let relationships = self
-            .package
-            .get_part_rels(&record.part_name)
-            .cloned()
-            .unwrap_or_default();
-        record
-            .slide
-            .common_slide_data
-            .shape_tree
-            .children
-            .iter()
-            .filter_map(|child| match child {
-                ShapeTreeChild::Picture(picture) => picture
-                    .media
-                    .as_ref()
-                    .zip(child.non_visual_id())
-                    .map(|(media, shape_id)| (picture, media, shape_id)),
-                _ => None,
-            })
-            .map(|(picture, media, shape_id)| {
-                let relationship_id = media.source.relationship_id();
-                let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
-                    Error::MissingRelationship {
-                        source_part: record.part_name.clone(),
-                        relationship_id: relationship_id.to_owned(),
-                    }
-                })?;
-                if relationship.rel_type != rel_types::POWERPOINT_MEDIA
-                    && relationship.rel_type != media_relationship_type(media.kind)
-                {
-                    return Err(Error::WrongRelationshipType {
-                        source_part: record.part_name.clone(),
-                        relationship_id: relationship_id.to_owned(),
-                        expected: rel_types::POWERPOINT_MEDIA,
-                        actual: relationship.rel_type.clone(),
-                    });
-                }
-                let source = if relationship_is_external(relationship) {
-                    MediaLocation::Linked {
-                        target: relationship.target.clone(),
-                    }
-                } else {
-                    let part_name =
-                        OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
-                    required_part(&self.package, &part_name)?;
-                    let content_type = self
-                        .package
-                        .content_types
-                        .content_type_for(&part_name)
-                        .ok_or_else(|| {
-                            invalid_media_mutation(
-                                "inspect media",
-                                format!("package part {part_name} has no content type"),
-                            )
-                        })?
-                        .to_owned();
-                    MediaLocation::Embedded {
-                        part_name,
-                        content_type,
-                    }
-                };
-                let (settings, mut diagnostics) =
-                    media_playback_settings(picture, record.slide.timing.as_ref(), shape_id);
-                let content_type = match &source {
-                    MediaLocation::Embedded { content_type, .. } => Some(content_type.as_str()),
-                    MediaLocation::Linked { .. } => None,
-                };
-                if let Some(content_type) = content_type
-                    && !is_known_media_content_type(content_type)
-                {
-                    diagnostics.push(MediaDiagnostic::UnsupportedContentType {
-                        content_type: content_type.to_owned(),
-                    });
-                }
-                if media.poster_relationship_id.is_none() {
-                    diagnostics.push(MediaDiagnostic::MissingPoster);
-                }
-                Ok(MediaInfo {
-                    slide_index,
-                    shape_id,
-                    kind: media.kind,
-                    source,
-                    poster_relationship_id: media.poster_relationship_id.clone(),
-                    settings,
-                    diagnostics,
-                })
-            })
-            .collect()
+        media_infos_for_slide(&self.package, slide_index, &record.part_name, &record.slide)
     }
 
     /// Adds one media picture, poster, relationship scope, and timing node atomically.
@@ -2834,6 +2749,98 @@ fn slide_relationship_ids(slide: &CT_Slide) -> Result<HashSet<String>> {
     relationship_ids(&xml)
         .map(|ids| ids.into_iter().collect())
         .map_err(|error| invalid_media_mutation("inspect media references", error.to_string()))
+}
+
+fn media_infos_for_slide(
+    package: &OpcPackage,
+    slide_index: usize,
+    slide_part: &str,
+    slide: &CT_Slide,
+) -> Result<Vec<MediaInfo>> {
+    let relationships = package
+        .get_part_rels(slide_part)
+        .cloned()
+        .unwrap_or_default();
+    slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            ShapeTreeChild::Picture(picture) => picture
+                .media
+                .as_ref()
+                .zip(child.non_visual_id())
+                .map(|(media, shape_id)| (picture, media, shape_id)),
+            _ => None,
+        })
+        .map(|(picture, media, shape_id)| {
+            let relationship_id = media.source.relationship_id();
+            let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
+                Error::MissingRelationship {
+                    source_part: slide_part.to_owned(),
+                    relationship_id: relationship_id.to_owned(),
+                }
+            })?;
+            if relationship.rel_type != rel_types::POWERPOINT_MEDIA
+                && relationship.rel_type != media_relationship_type(media.kind)
+            {
+                return Err(Error::WrongRelationshipType {
+                    source_part: slide_part.to_owned(),
+                    relationship_id: relationship_id.to_owned(),
+                    expected: rel_types::POWERPOINT_MEDIA,
+                    actual: relationship.rel_type.clone(),
+                });
+            }
+            let source = if relationship_is_external(relationship) {
+                MediaLocation::Linked {
+                    target: relationship.target.clone(),
+                }
+            } else {
+                let part_name = OpcPackage::resolve_rel_target(slide_part, &relationship.target);
+                required_part(package, &part_name)?;
+                let content_type = package
+                    .content_types
+                    .content_type_for(&part_name)
+                    .ok_or_else(|| {
+                        invalid_media_mutation(
+                            "inspect media",
+                            format!("package part {part_name} has no content type"),
+                        )
+                    })?
+                    .to_owned();
+                MediaLocation::Embedded {
+                    part_name,
+                    content_type,
+                }
+            };
+            let (settings, mut diagnostics) =
+                media_playback_settings(picture, slide.timing.as_ref(), shape_id);
+            let content_type = match &source {
+                MediaLocation::Embedded { content_type, .. } => Some(content_type.as_str()),
+                MediaLocation::Linked { .. } => None,
+            };
+            if let Some(content_type) = content_type
+                && !is_known_media_content_type(content_type)
+            {
+                diagnostics.push(MediaDiagnostic::UnsupportedContentType {
+                    content_type: content_type.to_owned(),
+                });
+            }
+            if media.poster_relationship_id.is_none() {
+                diagnostics.push(MediaDiagnostic::MissingPoster);
+            }
+            Ok(MediaInfo {
+                slide_index,
+                shape_id,
+                kind: media.kind,
+                source,
+                poster_relationship_id: media.poster_relationship_id.clone(),
+                settings,
+                diagnostics,
+            })
+        })
+        .collect()
 }
 
 fn media_playback_settings(
@@ -5425,18 +5432,34 @@ fn assemble_render_input_inner(
                     request.position,
                 )
                 .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+            let mut same_slide_outgoing = None;
             if let Some(policy) = request.fallback_policy {
                 apply_media_fallback_policy(&mut timeline, &slide, policy, &mut font_manager)?;
+                if is_outgoing {
+                    same_slide_outgoing = Some(timeline.clone());
+                }
+                let media_infos = media_infos_for_slide(package, slide_index, &slide_part, &slide)?;
                 let (states, diagnostics) = evaluate_slide_media(&slide, request.position);
+                let consumed_shape_ids = states
+                    .iter()
+                    .map(|state| state.shape_id)
+                    .collect::<HashSet<_>>();
                 incoming_media = states;
-                incoming_media_diagnostics = diagnostics;
-                timeline.state.diagnostics.retain(|diagnostic| {
-                    diagnostic.message != "media timing is retained for synchronized playback"
-                });
+                incoming_media_diagnostics = package_media_diagnostics(&media_infos);
+                incoming_media_diagnostics.extend(diagnostics);
+                suppress_consumed_media_timing_diagnostics(
+                    &mut timeline.state.diagnostics,
+                    slide.timing.as_ref(),
+                    &consumed_shape_ids,
+                );
             }
             let resolved = timeline.slide.clone();
             incoming_directions = Some(directions.clone());
             incoming = Some(timeline);
+            if let Some(timeline) = same_slide_outgoing {
+                outgoing = Some(timeline);
+                outgoing_directions = Some(directions.clone());
+            }
             (resolved, directions)
         } else if is_outgoing {
             let (mut timeline, directions) = context
@@ -5454,9 +5477,6 @@ fn assemble_render_input_inner(
                 .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
             if let Some(policy) = timeline_request.and_then(|request| request.fallback_policy) {
                 apply_media_fallback_policy(&mut timeline, &slide, policy, &mut font_manager)?;
-                timeline.state.diagnostics.retain(|diagnostic| {
-                    diagnostic.message != "media timing is retained for synchronized playback"
-                });
             }
             let resolved = timeline.slide.clone();
             outgoing_directions = Some(directions.clone());
@@ -5473,7 +5493,7 @@ fn assemble_render_input_inner(
                 )
                 .map_err(|error| render_failure(format!("{slide_part}: {error}")))?
         };
-        if is_outgoing && is_incoming {
+        if is_outgoing && is_incoming && outgoing.is_none() {
             outgoing = incoming.clone();
             outgoing_directions = incoming_directions.clone();
         }
@@ -5539,6 +5559,92 @@ fn evaluate_slide_media(
         diagnostics.append(&mut media_diagnostics);
     }
     (states, diagnostics)
+}
+
+#[cfg(feature = "render")]
+fn package_media_diagnostics(media_infos: &[MediaInfo]) -> Vec<oxml_layout::Diagnostic> {
+    media_infos
+        .iter()
+        .flat_map(|media| {
+            media
+                .diagnostics
+                .iter()
+                .map(move |diagnostic| oxml_layout::Diagnostic {
+                    message: match diagnostic {
+                        MediaDiagnostic::UnsupportedContentType { content_type } => format!(
+                            "media shape {} has unsupported content type `{content_type}`",
+                            media.shape_id
+                        ),
+                        MediaDiagnostic::MissingPlaybackTiming => {
+                            format!("media shape {} has no playback timing", media.shape_id)
+                        }
+                        MediaDiagnostic::UnsupportedPlaybackCommand { command } => format!(
+                            "media shape {} has unsupported playback command `{command}`",
+                            media.shape_id
+                        ),
+                        MediaDiagnostic::MissingPoster => {
+                            format!("media shape {} has no poster relationship", media.shape_id)
+                        }
+                    },
+                })
+        })
+        .collect()
+}
+
+#[cfg(feature = "render")]
+fn suppress_consumed_media_timing_diagnostics(
+    diagnostics: &mut Vec<oxml_layout::Diagnostic>,
+    timing: Option<&CT_Timing>,
+    consumed_shape_ids: &HashSet<u32>,
+) {
+    const RETAINED_MEDIA_TIMING: &str = "media timing is retained for synchronized playback";
+
+    let mut suppressions = Vec::new();
+    if let Some(timing) = timing {
+        collect_media_timing_suppressions(timing.nodes(), consumed_shape_ids, &mut suppressions);
+    }
+    let mut marker_index = 0;
+    diagnostics.retain(|diagnostic| {
+        if diagnostic.message != RETAINED_MEDIA_TIMING {
+            return true;
+        }
+        let suppress = suppressions.get(marker_index).copied().unwrap_or(false);
+        marker_index += 1;
+        !suppress
+    });
+}
+
+#[cfg(feature = "render")]
+fn collect_media_timing_suppressions(
+    nodes: &[TimingNode],
+    consumed_shape_ids: &HashSet<u32>,
+    suppressions: &mut Vec<bool>,
+) {
+    for node in nodes {
+        match node {
+            TimingNode::Audio(media) | TimingNode::Video(media) => suppressions.push(
+                matches!(media.common.target, TimingTarget::Shape(shape_id) if consumed_shape_ids.contains(&shape_id)),
+            ),
+            TimingNode::MediaCommand(command) => suppressions.push(
+                matches!(command.target, TimingTarget::Shape(shape_id) if consumed_shape_ids.contains(&shape_id)),
+            ),
+            TimingNode::Parallel(container) => collect_media_timing_suppressions(
+                &container.common.children,
+                consumed_shape_ids,
+                suppressions,
+            ),
+            TimingNode::Sequence(sequence) => collect_media_timing_suppressions(
+                &sequence.common.children,
+                consumed_shape_ids,
+                suppressions,
+            ),
+            TimingNode::Set(_)
+            | TimingNode::Animate(_)
+            | TimingNode::Effect(_)
+            | TimingNode::Motion(_)
+            | TimingNode::Unsupported(_) => {}
+        }
+    }
 }
 
 #[cfg(feature = "render")]

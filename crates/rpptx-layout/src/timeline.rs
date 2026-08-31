@@ -249,10 +249,11 @@ pub fn evaluate_timeline(
         ..EvaluatedFrameState::default()
     };
     if let Some(timing) = timing {
+        let click_schedule = ClickSchedule::new(timing);
         let mut context = EvaluationContext {
             timing,
             position,
-            click_ordinal: 0,
+            click_schedule: &click_schedule,
             state: &mut state,
         };
         evaluate_nodes(
@@ -319,7 +320,7 @@ pub fn evaluate_media_playback(
 
     let mut events = Vec::new();
     if let Some(timing) = timing {
-        let mut click_ordinal = 0;
+        let click_schedule = ClickSchedule::new(timing);
         collect_media_events(
             timing,
             timing.nodes(),
@@ -328,7 +329,7 @@ pub fn evaluate_media_playback(
             Scheduling::Parallel,
             shape_id,
             position,
-            &mut click_ordinal,
+            &click_schedule,
             &mut events,
             &mut diagnostics,
         );
@@ -430,7 +431,7 @@ fn collect_media_events<'a>(
     scheduling: Scheduling,
     shape_id: u32,
     position: TimelinePosition,
-    click_ordinal: &mut u32,
+    click_schedule: &ClickSchedule,
     events: &mut Vec<ScheduledMediaEvent<'a>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> u64 {
@@ -457,7 +458,7 @@ fn collect_media_events<'a>(
             suggested,
             shape_id,
             position,
-            click_ordinal,
+            click_schedule,
             diagnose,
             diagnostics,
         );
@@ -475,7 +476,7 @@ fn collect_media_events<'a>(
                 Scheduling::Parallel,
                 shape_id,
                 position,
-                click_ordinal,
+                click_schedule,
                 events,
                 diagnostics,
             )
@@ -488,7 +489,7 @@ fn collect_media_events<'a>(
                 Scheduling::Sequence,
                 shape_id,
                 position,
-                click_ordinal,
+                click_schedule,
                 events,
                 diagnostics,
             )
@@ -550,23 +551,12 @@ fn scheduled_media_start(
     suggested: u64,
     shape_id: u32,
     position: TimelinePosition,
-    click_ordinal: &mut u32,
+    click_schedule: &ClickSchedule,
     diagnose: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> u64 {
     let click_effect = matches!(common.node_type, Some(TimingNodeType::ClickEffect));
-    let has_click_condition = common.start_conditions.iter().any(|condition| {
-        matches!(
-            condition.event,
-            Some(TimingEvent::OnClick | TimingEvent::OnNext)
-        )
-    });
-    let click_available = if click_effect || has_click_condition {
-        *click_ordinal = click_ordinal.saturating_add(1);
-        position.click_count >= *click_ordinal
-    } else {
-        false
-    };
+    let click_available = click_schedule.is_available(common, position.click_count);
     if click_effect && !click_available {
         return u64::MAX;
     }
@@ -672,10 +662,62 @@ enum Scheduling {
     Sequence,
 }
 
+#[derive(Default)]
+struct ClickSchedule {
+    ordinals: HashMap<*const CommonTimeNode, u32>,
+}
+
+impl ClickSchedule {
+    fn new(timing: &CT_Timing) -> Self {
+        let mut schedule = Self::default();
+        let mut ordinal = 0;
+        collect_click_schedule(timing.nodes(), &mut ordinal, &mut schedule.ordinals);
+        schedule
+    }
+
+    fn is_available(&self, common: &CommonTimeNode, click_count: u32) -> bool {
+        self.ordinals
+            .get(&std::ptr::from_ref(common))
+            .is_some_and(|ordinal| click_count >= *ordinal)
+    }
+}
+
+fn collect_click_schedule(
+    nodes: &[TimingNode],
+    ordinal: &mut u32,
+    ordinals: &mut HashMap<*const CommonTimeNode, u32>,
+) {
+    for node in nodes {
+        if matches!(node, TimingNode::Audio(_) | TimingNode::Video(_)) {
+            continue;
+        }
+        let Some(common) = media_schedule_common(node) else {
+            continue;
+        };
+        if common_uses_click(common) {
+            *ordinal = ordinal.saturating_add(1);
+            ordinals.insert(std::ptr::from_ref(common), *ordinal);
+        }
+        if matches!(node, TimingNode::Parallel(_) | TimingNode::Sequence(_)) {
+            collect_click_schedule(&common.children, ordinal, ordinals);
+        }
+    }
+}
+
+fn common_uses_click(common: &CommonTimeNode) -> bool {
+    matches!(common.node_type, Some(TimingNodeType::ClickEffect))
+        || common.start_conditions.iter().any(|condition| {
+            matches!(
+                condition.event,
+                Some(TimingEvent::OnClick | TimingEvent::OnNext)
+            )
+        })
+}
+
 struct EvaluationContext<'a> {
     timing: &'a CT_Timing,
     position: TimelinePosition,
-    click_ordinal: u32,
+    click_schedule: &'a ClickSchedule,
     state: &'a mut EvaluatedFrameState,
 }
 
@@ -746,18 +788,9 @@ fn scheduled_start(
     context: &mut EvaluationContext<'_>,
 ) -> u64 {
     let click_effect = matches!(common.node_type, Some(TimingNodeType::ClickEffect));
-    let has_click_condition = common.start_conditions.iter().any(|condition| {
-        matches!(
-            condition.event,
-            Some(TimingEvent::OnClick | TimingEvent::OnNext)
-        )
-    });
-    let click_available = if click_effect || has_click_condition {
-        context.click_ordinal = context.click_ordinal.saturating_add(1);
-        context.position.click_count >= context.click_ordinal
-    } else {
-        false
-    };
+    let click_available = context
+        .click_schedule
+        .is_available(common, context.position.click_count);
     if click_effect && !click_available {
         return u64::MAX;
     }
@@ -1601,7 +1634,7 @@ mod tests {
             <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="3" dur="1" nodeType="clickEffect"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
         );
         let at = |click_count| {
-            evaluate_media_playback(
+            let media = evaluate_media_playback(
                 Some(&timing),
                 7,
                 None,
@@ -1611,21 +1644,60 @@ mod tests {
                     click_count,
                 },
             )
-            .0
+            .0;
+            let page = evaluate_timeline(
+                Some(&timing),
+                None,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count,
+                },
+            )
+            .unwrap();
+            let visible = page.shapes.get(&8).is_none_or(|shape| shape.visible);
+            (visible, media.phase)
         };
 
-        assert_eq!(at(1).phase, MediaPlaybackPhase::Stopped);
-        assert_eq!(at(2).phase, MediaPlaybackPhase::Playing);
-        let shape = evaluate_timeline(
-            Some(&timing),
-            None,
-            TimelinePosition {
-                elapsed_ms: 0,
-                click_count: 2,
-            },
-        )
-        .unwrap();
-        assert!(!shape.shapes[&8].visible);
+        assert_eq!(at(0), (true, MediaPlaybackPhase::Stopped));
+        assert_eq!(at(1), (false, MediaPlaybackPhase::Stopped));
+        assert_eq!(at(2), (false, MediaPlaybackPhase::Playing));
+    }
+
+    #[test]
+    fn media_click_before_shape_click_consumes_the_first_shared_click_ordinal() {
+        let timing = timing(
+            r#"<p:audio><p:cMediaNode vol="100000"><p:cTn id="1" dur="indefinite"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cMediaNode></p:audio>
+            <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="2" dur="1" nodeType="clickEffect"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:set><p:cBhvr><p:cTn id="3" dur="1" nodeType="clickEffect"/><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>"#,
+        );
+        let at = |click_count| {
+            let media = evaluate_media_playback(
+                Some(&timing),
+                7,
+                None,
+                None,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count,
+                },
+            )
+            .0;
+            let page = evaluate_timeline(
+                Some(&timing),
+                None,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count,
+                },
+            )
+            .unwrap();
+            let visible = page.shapes.get(&8).is_none_or(|shape| shape.visible);
+            (visible, media.phase)
+        };
+
+        assert_eq!(at(0), (true, MediaPlaybackPhase::Stopped));
+        assert_eq!(at(1), (true, MediaPlaybackPhase::Playing));
+        assert_eq!(at(2), (false, MediaPlaybackPhase::Playing));
     }
 
     #[test]

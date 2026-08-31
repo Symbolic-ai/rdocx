@@ -8368,6 +8368,90 @@ fn unsupported_codecs_keep_the_poster_without_attempting_to_decode_the_payload()
         .unwrap();
     assert_eq!(payload, b"\0\0\0\x18ftypisom-f216-video");
     assert_eq!(page_image_count(&rendered.frame.page), 1);
+    assert_eq!(
+        rendered
+            .frame
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<_>>(),
+        vec![format!(
+            "media shape {} has unsupported content type `video/x-f216-opaque`",
+            media.shape_id
+        )]
+    );
+}
+
+#[test]
+fn orphan_incoming_media_commands_keep_their_retained_timing_diagnostic() {
+    let presentation = media_render_fixture(MediaKind::Audio, "audio/mpeg");
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "orphan incoming media command",
+    );
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    let slide = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let orphan_command = r#"<p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="999" dur="1"/><p:tgtEl><p:spTgt spid="999999"/></p:tgtEl></p:cBhvr></p:cmd>"#;
+    let slide = slide.replacen("</p:tnLst>", &format!("{orphan_command}</p:tnLst>"), 1);
+    package.set_part(&slide_part, slide.into_bytes());
+
+    let rendered = Presentation::from_bytes(&package_bytes(package))
+        .unwrap()
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+
+    assert_eq!(rendered.media.len(), 1);
+    assert_eq!(
+        rendered
+            .frame
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.message == "media timing is retained for synchronized playback"
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn outgoing_media_timing_diagnostics_remain_when_only_incoming_state_is_returned() {
+    let mut presentation = media_render_fixture(MediaKind::Video, "video/mp4");
+    presentation.add_slide(0).unwrap();
+
+    let rendered = presentation
+        .render_media_timeline_deterministic(
+            1,
+            TimelinePosition::default(),
+            Some(0),
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+
+    assert!(rendered.media.is_empty());
+    assert_eq!(
+        rendered
+            .frame
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.message == "media timing is retained for synchronized playback"
+            })
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -8873,6 +8957,78 @@ fn static_poster_output_and_timestamped_playback_state_match_source_built_oracle
             "79e8da66b2cedf6a8b37b1eb723d4e278e22076aff5cdcff0616e0e7f2decec5",
             "bca557835b53eb1ac671297c1d641c4f2e335fa51aa5515651ca95cc104e6917",
         ]
+    );
+
+    let opaque = media_render_fixture(MediaKind::Video, "video/x-f216-opaque");
+    let opaque_frame = opaque
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    assert_eq!(
+        opaque_frame
+            .frame
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["media shape 4 has unsupported content type `video/x-f216-opaque`"]
+    );
+
+    let mut unknown_duration = Presentation::new().unwrap();
+    unknown_duration.add_slide(0).unwrap();
+    unknown_duration
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"ID3f216-unknown-duration-loop",
+                filename: "unknown.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &valid_one_pixel_png(),
+                filename: "poster.png",
+            },
+            Emu(914_400),
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(1_828_800),
+            MediaPlaybackSettings {
+                volume: 50_000,
+                looped: true,
+                trigger: rpptx::MediaPlaybackTrigger::Automatic,
+                ..MediaPlaybackSettings::default()
+            },
+        )
+        .unwrap();
+    let unknown_frame = unknown_duration
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 500,
+                click_count: 0,
+            },
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    let unknown_state = &unknown_frame.media[0];
+    let unknown_row = format!(
+        "shape={} phase={:?} position={} volume={:.2} loop={} diagnostic={}",
+        unknown_state.shape_id,
+        unknown_state.phase,
+        unknown_state.source_position_ms,
+        unknown_state.volume,
+        unknown_state.looping,
+        unknown_frame.frame.diagnostics[0].message,
+    );
+    assert_eq!(
+        unknown_row,
+        "shape=4 phase=Playing position=500 volume=0.50 loop=true diagnostic=looping media shape 4 has no finite positive playback interval"
     );
 
     let playback = media_playback_golden_fixture();
