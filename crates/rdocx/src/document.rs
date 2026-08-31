@@ -3742,18 +3742,20 @@ impl Document {
     /// concrete paragraph.
     pub fn effective_paragraph_properties(&self, paragraph: &ParagraphRef<'_>) -> CT_PPr {
         let direct = paragraph.inner.properties.as_ref();
-        let mut effective = style::resolve_paragraph_properties(
-            direct.and_then(|properties| properties.style_id.as_deref()),
-            &self.styles,
-        );
+        let style_id = direct.and_then(|properties| properties.style_id.as_deref());
+        let mut effective = style::resolve_paragraph_properties(style_id, &self.styles);
+
+        effective.num_id = direct
+            .and_then(|properties| properties.num_id)
+            .or(effective.num_id);
+        effective.num_ilvl = direct
+            .and_then(|properties| properties.num_ilvl)
+            .or(effective.num_ilvl);
 
         if let Some(num_id) = effective.num_id {
-            effective.num_ilvl = effective.num_ilvl.or_else(|| {
-                self.numbering_level_for_style(
-                    num_id,
-                    direct.and_then(|properties| properties.style_id.as_deref()),
-                )
-            });
+            effective.num_ilvl = effective
+                .num_ilvl
+                .or_else(|| self.numbering_level_for_style(num_id, style_id));
         }
 
         if let Some((num_id, level)) = effective.num_id.zip(effective.num_ilvl)
@@ -11146,6 +11148,55 @@ mod tests {
                 .expect("numbering level")
                 .has_marker_presentation
         );
+    }
+
+    #[test]
+    fn effective_paragraph_properties_use_the_final_numbering_identity() {
+        let mut doc = Document::new();
+        let inherited_num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let direct_num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0].ppr = Some(CT_PPr {
+            keep_next: Some(true),
+            ..Default::default()
+        });
+        doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0].ppr = Some(CT_PPr {
+            keep_lines: Some(true),
+            ..Default::default()
+        });
+        doc.add_style(
+            StyleBuilder::paragraph("InheritedList", "Inherited List").paragraph_properties(
+                CT_PPr {
+                    num_id: Some(inherited_num_id),
+                    num_ilvl: Some(0),
+                    ..Default::default()
+                },
+            ),
+        );
+
+        doc.add_paragraph("direct").numbering(direct_num_id, 0);
+        doc.add_paragraph("override")
+            .style("InheritedList")
+            .numbering(direct_num_id, 0);
+        doc.add_paragraph("disabled")
+            .style("InheritedList")
+            .numbering(0, 0);
+
+        let direct =
+            doc.effective_paragraph_properties(&doc.paragraph(0).expect("direct paragraph"));
+        assert_eq!(direct.num_id, Some(direct_num_id));
+        assert_eq!(direct.keep_lines, Some(true));
+
+        let overridden =
+            doc.effective_paragraph_properties(&doc.paragraph(1).expect("overridden paragraph"));
+        assert_eq!(overridden.num_id, Some(direct_num_id));
+        assert_eq!(overridden.keep_next, None);
+        assert_eq!(overridden.keep_lines, Some(true));
+
+        let disabled =
+            doc.effective_paragraph_properties(&doc.paragraph(2).expect("disabled paragraph"));
+        assert_eq!(disabled.num_id, Some(0));
+        assert_eq!(disabled.keep_next, None);
+        assert_eq!(disabled.keep_lines, None);
     }
 
     #[test]
