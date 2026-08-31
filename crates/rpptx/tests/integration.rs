@@ -138,7 +138,7 @@ fn animated_export_samples_transitions_clicks_and_media_fallbacks_in_order() {
 }
 
 #[test]
-fn animated_export_keeps_mixed_font_ids_and_dynamic_media_labels_coherent() {
+fn public_facade_keeps_mixed_font_ids_and_dynamic_media_labels_coherent() {
     use rpptx::{AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition};
 
     let (mut presentation, _, _) = animation_test_presentation();

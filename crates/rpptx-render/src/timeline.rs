@@ -34,7 +34,12 @@ pub fn layout_timeline_slide_deterministic(
     layout_timeline_slide_with_font_manager(input, index, timeline, text_directions, &mut fonts)
 }
 
-/// Lower one evaluated slide while retaining the caller-owned deterministic font identity.
+/// Internal facade hook for `rpptx` prepared timeline rendering.
+///
+/// `fonts` must be the same manager that resolved and shaped `timeline`,
+/// including any dynamic fallback labels. Rasterization must use the font data
+/// retained by that manager so every [`oxml_layout::FontId`] remains coherent.
+#[doc(hidden)]
 pub fn layout_timeline_slide_with_font_manager(
     input: &RenderInput,
     index: usize,

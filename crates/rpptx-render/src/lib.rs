@@ -251,7 +251,13 @@ pub fn layout_presentation_with_font_manager_and_text_directions(
     )
 }
 
-/// Lowers every slide while retaining the caller-owned deterministic font identity.
+/// Internal facade hook for `rpptx` prepared rendering.
+///
+/// `font_manager` must be the same instance that assigned every
+/// [`oxml_layout::FontId`]
+/// stored in `input`. Rasterization must use the font data retained by that
+/// manager so each identifier resolves to the face that shaped it.
+#[doc(hidden)]
 pub fn layout_presentation_with_font_manager_and_text_directions_mut(
     input: &RenderInput,
     font_manager: &mut FontManager,
