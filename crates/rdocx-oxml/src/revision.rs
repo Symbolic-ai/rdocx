@@ -11,6 +11,8 @@ use crate::raw_xml::capture_empty_element;
 use crate::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CellContent};
 use crate::text::{CT_P, CT_R, hyperlink_revision_index};
 
+const MAX_REVISION_NESTING_DEPTH: usize = 64;
+
 /// The modeled tracked-change element kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevisionKind {
@@ -67,6 +69,7 @@ impl CT_Revision {
         word_prefixes: &[String],
         require_author: bool,
     ) -> crate::Result<Self> {
+        validate_revision_nesting_depth(&raw_xml, word_prefixes)?;
         let mut reader = Reader::from_reader(raw_xml.as_slice());
         reader.config_mut().trim_text(false);
         let mut buffer = Vec::new();
@@ -194,6 +197,55 @@ impl CT_Revision {
     ) -> crate::Result<()> {
         crate::text::write_raw_with_word_override(writer, &self.raw_xml, foreign_word_namespace)
     }
+}
+
+fn validate_revision_nesting_depth(raw_xml: &[u8], word_prefixes: &[String]) -> crate::Result<()> {
+    let mut reader = Reader::from_reader(raw_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![(word_prefixes.to_vec(), false)];
+    let mut revision_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let inherited = &scopes.last().expect("root namespace scope").0;
+                let prefixes = word_prefixes_at(&start, inherited)?;
+                let is_revision = revision_kind(start.name().as_ref(), &prefixes).is_some();
+                if is_revision {
+                    revision_depth += 1;
+                    if revision_depth > MAX_REVISION_NESTING_DEPTH {
+                        return Err(crate::OxmlError::InvalidValue(
+                            "revision nesting depth exceeds reader limit".to_owned(),
+                        ));
+                    }
+                }
+                scopes.push((prefixes, is_revision));
+            }
+            Event::Empty(start) => {
+                let inherited = &scopes.last().expect("root namespace scope").0;
+                let prefixes = word_prefixes_at(&start, inherited)?;
+                if revision_kind(start.name().as_ref(), &prefixes).is_some()
+                    && revision_depth + 1 > MAX_REVISION_NESTING_DEPTH
+                {
+                    return Err(crate::OxmlError::InvalidValue(
+                        "revision nesting depth exceeds reader limit".to_owned(),
+                    ));
+                }
+            }
+            Event::End(_) => {
+                let (_, was_revision) = scopes.pop().expect("balanced namespace scope");
+                if was_revision {
+                    revision_depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    Ok(())
 }
 
 impl CT_Document {
@@ -687,6 +739,33 @@ mod tests {
     use super::*;
     use crate::namespace::W_NS;
     use crate::text::RunContent;
+
+    fn nested_insertions(depth: usize) -> Vec<u8> {
+        let mut xml = format!(r#"<w:ins xmlns:w="{W_NS}" w:id="0" w:author="Ada">"#);
+        for id in 1..depth {
+            xml.push_str(&format!(r#"<w:ins w:id="{id}" w:author="Ada">"#));
+        }
+        xml.push_str("<w:r><w:t>visible</w:t></w:r>");
+        for _ in 0..depth {
+            xml.push_str("</w:ins>");
+        }
+        xml.into_bytes()
+    }
+
+    #[test]
+    fn revision_nesting_depth_is_bounded_before_recursive_projection() {
+        let prefixes = ["w".to_owned()];
+        assert!(
+            validate_revision_nesting_depth(
+                &nested_insertions(MAX_REVISION_NESTING_DEPTH),
+                &prefixes,
+            )
+            .is_ok()
+        );
+        let too_deep = nested_insertions(MAX_REVISION_NESTING_DEPTH + 1);
+        assert!(validate_revision_nesting_depth(&too_deep, &prefixes).is_err());
+        assert!(CT_Revision::from_raw(too_deep, &prefixes).is_none());
+    }
 
     #[test]
     fn revision_attributes_are_prefix_tolerant_and_namespace_checked() {
