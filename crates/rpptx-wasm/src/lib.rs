@@ -471,9 +471,25 @@ mod tests {
             facade_manifest
                 .contains("default = [\"default-template\", \"render\", \"system-fonts\"]")
         );
-        assert!(facade_manifest.contains(
-            "render = [\"dep:miniz_oxide\", \"dep:oxml-pdf\", \"dep:rpptx-layout\", \"dep:rpptx-render\"]"
-        ));
+        for dependency in [
+            "dep:gif",
+            "dep:jpeg-encoder",
+            "dep:miniz_oxide",
+            "dep:oxml-pdf",
+            "dep:rpptx-layout",
+            "dep:rpptx-render",
+            "dep:tiny-skia",
+        ] {
+            assert!(facade_manifest.contains(&format!("\"{dependency}\"")));
+        }
+        for dependency in [
+            "gif = { workspace = true, optional = true }",
+            "jpeg-encoder = { workspace = true, optional = true, features = [\"std\"] }",
+            "tiny-skia = { workspace = true, optional = true }",
+        ] {
+            assert!(facade_manifest.contains(dependency));
+            assert!(!wasm_manifest.contains(dependency));
+        }
         assert!(wasm_manifest.contains("default = []"));
         assert!(wasm_manifest.contains("render = [\"rpptx/render\"]"));
         assert!(wasm_manifest.contains(
