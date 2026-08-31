@@ -2448,6 +2448,7 @@ fn render_drawing_projection(drawing: &CT_Drawing) -> CT_Drawing {
         extent_cx,
         extent_cy,
         embed_id: embed_id.to_owned(),
+        link_id: None,
         chart_rel_id: chart_rel_id.cloned(),
         description: description.cloned(),
         name: None,

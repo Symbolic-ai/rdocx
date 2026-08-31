@@ -19,6 +19,26 @@ pub enum BreakKind {
     Column,
 }
 
+/// Semantic kind of drawing exposed by the reader facade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingKind {
+    /// A DrawingML picture with an image relationship.
+    Image,
+    /// An anchored DrawingML shape.
+    Shape,
+    /// Any other drawing construct.
+    Other,
+}
+
+/// How an image relationship obtains its content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingRelationshipKind {
+    /// The drawing refers to an image part within the package.
+    Embedded,
+    /// The drawing refers to an external image relationship.
+    Linked,
+}
+
 /// An immutable drawing embedded in a run.
 #[derive(Debug, Clone, Copy)]
 pub struct DrawingRef<'a> {
@@ -26,6 +46,22 @@ pub struct DrawingRef<'a> {
 }
 
 impl DrawingRef<'_> {
+    /// Semantic content kind.
+    pub fn kind(&self) -> DrawingKind {
+        if self.relationship_id().is_some() {
+            DrawingKind::Image
+        } else if self
+            .inner
+            .anchor
+            .as_ref()
+            .is_some_and(|anchor| anchor.shape.is_some())
+        {
+            DrawingKind::Shape
+        } else {
+            DrawingKind::Other
+        }
+    }
+
     /// Whether this drawing is inline with the surrounding text.
     pub fn is_inline(&self) -> bool {
         self.inner.inline.is_some()
@@ -36,19 +72,45 @@ impl DrawingRef<'_> {
         self.inner.anchor.is_some()
     }
 
-    /// The relationship ID for the drawing's embedded image, when present.
+    /// The relationship ID for the drawing's embedded or linked image, when present.
     pub fn relationship_id(&self) -> Option<&str> {
         self.inner
             .inline
             .as_ref()
-            .map(|inline| inline.embed_id.as_str())
+            .and_then(|inline| {
+                (!inline.embed_id.is_empty())
+                    .then_some(inline.embed_id.as_str())
+                    .or(inline.link_id.as_deref())
+            })
+            .or_else(|| {
+                self.inner.anchor.as_ref().and_then(|anchor| {
+                    (!anchor.embed_id.is_empty())
+                        .then_some(anchor.embed_id.as_str())
+                        .or(anchor.link_id.as_deref())
+                })
+            })
+    }
+
+    /// Whether the image relationship is embedded in the package or linked.
+    pub fn relationship_kind(&self) -> Option<DrawingRelationshipKind> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| inline.embed_id.is_empty() && inline.link_id.is_some())
             .or_else(|| {
                 self.inner
                     .anchor
                     .as_ref()
-                    .map(|anchor| anchor.embed_id.as_str())
+                    .map(|anchor| anchor.embed_id.is_empty() && anchor.link_id.is_some())
             })
-            .filter(|id| !id.is_empty())
+            .filter(|_| self.relationship_id().is_some())
+            .map(|linked| {
+                if linked {
+                    DrawingRelationshipKind::Linked
+                } else {
+                    DrawingRelationshipKind::Embedded
+                }
+            })
     }
 
     /// The drawing description, commonly used as image alternative text.
@@ -835,6 +897,45 @@ mod tests {
             panic!("expected paragraph");
         };
         paragraph.runs.remove(0)
+    }
+
+    #[test]
+    fn drawing_reader_classifies_image_relationships_and_shapes() {
+        let linked_run = run_with_inner_xml(concat!(
+            r#"<w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:inline><wp:extent cx="10" cy="20"/><a:blip r:link="rId7"/></wp:inline></w:drawing>"#,
+        ));
+        let linked_run = RunRef { inner: &linked_run };
+        let linked_items = linked_run.items().collect::<Vec<_>>();
+        let [RunItemRef::Drawing(linked)] = linked_items.as_slice() else {
+            panic!("expected one linked drawing");
+        };
+        assert_eq!(linked.kind(), DrawingKind::Image);
+        assert_eq!(linked.relationship_id(), Some("rId7"));
+        assert_eq!(
+            linked.relationship_kind(),
+            Some(DrawingRelationshipKind::Linked)
+        );
+
+        let embedded = CT_Drawing::inline(rdocx_oxml::drawing::CT_Inline::new("rId8", 10, 20));
+        let embedded = DrawingRef { inner: &embedded };
+        assert_eq!(embedded.kind(), DrawingKind::Image);
+        assert_eq!(
+            embedded.relationship_kind(),
+            Some(DrawingRelationshipKind::Embedded)
+        );
+
+        let mut anchor = rdocx_oxml::drawing::CT_Anchor::background("", 10, 20);
+        anchor.shape = Some(rdocx_oxml::drawing::CT_Shape::default());
+        let shape = CT_Drawing::anchor(anchor);
+        assert_eq!(DrawingRef { inner: &shape }.kind(), DrawingKind::Shape);
+
+        let chart = CT_Drawing::inline(rdocx_oxml::drawing::CT_Inline::new_chart("rId9", 10, 20));
+        let chart = DrawingRef { inner: &chart };
+        assert_eq!(chart.kind(), DrawingKind::Other);
+        assert_eq!(chart.relationship_kind(), None);
     }
 
     #[test]
