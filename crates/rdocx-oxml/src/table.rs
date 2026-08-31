@@ -965,10 +965,14 @@ impl CT_TrPr {
                         if let Some(val) = get_val_attr(e)? {
                             pr.jc = ST_Jc::from_str(&val).ok();
                         }
-                    } else if matches_local_name(name.as_ref(), b"gridBefore") {
-                        pr.grid_before = get_val_attr(e)?.map(|value| value.parse()).transpose()?;
-                    } else if matches_local_name(name.as_ref(), b"gridAfter") {
-                        pr.grid_after = get_val_attr(e)?.map(|value| value.parse()).transpose()?;
+                    } else if is_word_element(name.as_ref(), b"gridBefore", &prefixes) {
+                        pr.grid_before = get_word_val_attr(e, &prefixes)?
+                            .map(|value| value.parse())
+                            .transpose()?;
+                    } else if is_word_element(name.as_ref(), b"gridAfter", &prefixes) {
+                        pr.grid_after = get_word_val_attr(e, &prefixes)?
+                            .map(|value| value.parse())
+                            .transpose()?;
                     } else if matches_local_name(name.as_ref(), b"cnfStyle") {
                         pr.cnf_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"cantSplit") {
@@ -2939,6 +2943,28 @@ mod tests {
         assert_eq!(tr_pr.header, Some(true));
         assert_eq!(tr_pr.grid_before, Some(1));
         assert_eq!(tr_pr.grid_after, Some(2));
+    }
+
+    #[test]
+    fn row_grid_offsets_require_the_word_namespace() {
+        let word_namespace = crate::namespace::W_NS;
+        let table = parse_table(&format!(
+            r#"<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+               <w:tr>
+                 <w:trPr>
+                   <ext:gridBefore xmlns:ext="urn:producer" ext:val="7"/>
+                   <q:gridAfter xmlns:q="{word_namespace}" q:val="2"/>
+                 </w:trPr>
+                 <w:tc><w:p/></w:tc>
+               </w:tr>"#,
+        ));
+
+        let properties = table.rows[0].properties.as_ref().unwrap();
+        assert_eq!(properties.grid_before, None);
+        assert_eq!(properties.grid_after, Some(2));
+        assert!(properties.extra_xml.iter().any(|(_, raw)| {
+            raw == br#"<ext:gridBefore xmlns:ext="urn:producer" ext:val="7"/>"#
+        }));
     }
 
     #[test]
