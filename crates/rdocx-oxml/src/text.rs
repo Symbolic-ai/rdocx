@@ -818,7 +818,9 @@ impl CT_R {
                         }));
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"drawing", &prefixes) {
-                        content.push(RunContent::Drawing(CT_Drawing::from_xml(reader)?));
+                        content.push(RunContent::Drawing(CT_Drawing::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
                         let id = required_word_i32_attribute(e, b"id", &prefixes)?;
