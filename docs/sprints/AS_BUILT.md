@@ -10371,3 +10371,57 @@ trend evidence rather than a quality claim.
 slide-local time and click convention, page-space group clipping, exact `!!`
 morph opt-in, and fail-closed external-oracle bindings. Do not claim external
 zoom parity until a source deck makes the effect observable.
+
+### F-215, Audio and video package model
+
+**Sprint.** S61
+**Completed.** 2026-08-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Presentation pictures and timing trees now expose typed
+embedded and linked audio and video attachments, poster ownership, playback
+settings, triggers, and commands while retaining unmodelled XML. The native
+facade can inspect, add, replace, extract, and remove media atomically. Package
+mutation preserves exact external targets, opaque unsupported payloads,
+content types, relationship ownership, shared parts, timing siblings, and
+schema child order.
+
+**Non-obvious choices.** The picture shape id is the stable public identity.
+Trim remains owned by the Office 2010 picture media extension rather than the
+timing node. Relationship replacement is structurally scoped to the direct
+standard attachment and exact Office media extension, while removal prunes a
+candidate part only after no package relationship reaches it. Format-neutral
+MIME and container signature checks live in the dependency-free `oxml-media`
+leaf.
+
+**Deviations from the design plan.** Two concrete raw-XML and ownership helpers
+were added to the existing picture and shape-tree types. The misleading timing
+trim arguments and permanently empty timing trim fields were removed before
+integration, leaving the Office media extension as the single truthful owner.
+No new module, file, dependency, trait, generic, or feature flag was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named
+`embedded_audio_and_video_corpus_media_round_trip_without_duplication` gate
+passed against the pinned `EmbeddedAudio.pptx` and `EmbeddedVideo.pptx` decks
+with exact payload, relationship, content type, poster, settings, and retained
+metadata assertions. Source-built regressions cover embedded and linked
+lifecycle operations, atomic failure, shared relationship and part ownership,
+unsupported codecs, namespace aliases and shadows, schema order, raw timing
+boundaries, duplicate-slide id remapping, and independent transition and
+timing-effect parameter coverage across all 50 decks. Full integrated
+verification, dependency checks, WASM, documentation, supply-chain checks, and
+22 package dry runs passed. Every package archive remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep media payloads opaque to the package model.
+Preserve the exact structural ownership paths for picture and timing mutation,
+and keep shared relationship records until all retained XML references are
+gone. F-216 should consume the shape-id identity, picture-owned trim, timing
+trigger context, poster relationship, and format-neutral diagnostics directly
+rather than build a second media model.

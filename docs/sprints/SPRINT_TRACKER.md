@@ -353,6 +353,7 @@ defended.
 | F-221 | S59 | M | 2 | 1 | 2026-08-30 | Added default-off native presentation encryption and signatures with current-state invalidation |
 | F-213 | S60 | L | 4 | 1 | 2026-08-30 | Added typed, schema-ordered animation timing and transitions with lossless unsupported XML preservation |
 | F-214 | S60 | L | 4 | 1 | 2026-08-31 | Added deterministic timeline evaluation, transition rendering, and bounded morph composition without changing static output |
+| F-215 | S61 | L | 4 | 1 | 2026-08-31 | Added relationship-safe embedded and linked audio and video inspection, atomic mutation, extraction, and exact package preservation |
 
 ## Velocity
 

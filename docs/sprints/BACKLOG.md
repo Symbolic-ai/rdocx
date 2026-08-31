@@ -411,7 +411,7 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-213 | Animation and transition timing model       | S60 | L | done |
 | F-214 | Timeline evaluation and transition rendering | S60 | L | done |
-| F-215 | Audio and video package model                | S61 | L | in-progress |
+| F-215 | Audio and video package model                | S61 | L | done |
 | F-216 | Media poster and playback rendering          | S61 | M | pending |
 | F-217 | Presentation collaboration and navigation model | S59 | L | done |
 | F-218 | Embedded object and macro inventory          | S62 | L | pending |
