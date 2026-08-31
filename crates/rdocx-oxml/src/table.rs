@@ -924,8 +924,8 @@ pub struct CT_TrPr {
     pub revision_markers: Vec<CT_Revision>,
     /// Malformed row markers retained verbatim.
     pub revision_xml: Vec<Vec<u8>>,
-    /// Other row properties retained verbatim.
-    pub extra_xml: Vec<Vec<u8>>,
+    /// Other row properties retained at their schema insertion slots.
+    pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
 
 #[allow(non_snake_case)]
@@ -939,6 +939,7 @@ impl CT_TrPr {
         word_prefixes: &[String],
     ) -> Result<Self> {
         let mut pr = CT_TrPr::default();
+        let mut boundary = 0usize;
         let mut buf = Vec::new();
 
         loop {
@@ -946,6 +947,7 @@ impl CT_TrPr {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let (at, next) = tr_pr_raw_boundary(name.as_ref(), boundary, &prefixes);
                     if matches_local_name(name.as_ref(), b"trHeight") {
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -985,11 +987,13 @@ impl CT_TrPr {
                     {
                         pr.revision_xml.push(capture_empty_element(e)?);
                     } else {
-                        pr.extra_xml.push(capture_empty_element(e)?);
+                        pr.extra_xml.push((at, capture_empty_element(e)?));
                     }
+                    boundary = next;
                 }
                 Ok(Event::Start(ref e)) => {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let (at, next) = tr_pr_raw_boundary(e.name().as_ref(), boundary, &prefixes);
                     if is_word_element(e.name().as_ref(), b"ins", &prefixes)
                         || is_word_element(e.name().as_ref(), b"del", &prefixes)
                     {
@@ -1004,8 +1008,9 @@ impl CT_TrPr {
                     {
                         pr.revision_xml.push(capture_element(reader, e)?);
                     } else {
-                        pr.extra_xml.push(capture_element(reader, e)?);
+                        pr.extra_xml.push((at, capture_element(reader, e)?));
                     }
+                    boundary = next;
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"trPr") => {
                     break;
@@ -1027,6 +1032,7 @@ impl CT_TrPr {
 
         writer.write_event(Event::Start(BytesStart::new("w:trPr")))?;
 
+        write_extras_at(writer, &self.extra_xml, 0)?;
         // cnfStyle comes first in the schema sequence for both trPr and tcPr.
         if let Some(ref cnf) = self.cnf_style {
             let mut e = BytesStart::new("w:cnfStyle");
@@ -1034,6 +1040,9 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        for boundary in 1..=2 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
         if let Some(grid_before) = self.grid_before {
             let mut buffer = itoa::Buffer::new();
             let mut e = BytesStart::new("w:gridBefore");
@@ -1041,6 +1050,7 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 3)?;
         if let Some(grid_after) = self.grid_after {
             let mut buffer = itoa::Buffer::new();
             let mut e = BytesStart::new("w:gridAfter");
@@ -1048,12 +1058,16 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        for boundary in 4..=6 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
         if let Some(ref cant_split) = self.cant_split
             && *cant_split
         {
             writer.write_event(Event::Empty(BytesStart::new("w:cantSplit")))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 7)?;
         if let Some(height) = self.height {
             let mut buf = itoa::Buffer::new();
             let mut e = BytesStart::new("w:trHeight");
@@ -1064,24 +1078,31 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        write_extras_at(writer, &self.extra_xml, 8)?;
         if let Some(true) = self.header {
             writer.write_event(Event::Empty(BytesStart::new("w:tblHeader")))?;
         }
 
+        for boundary in 9..=10 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
         if let Some(jc) = self.jc {
             let mut e = BytesStart::new("w:jc");
             e.push_attribute(("w:val", jc.to_str()));
             writer.write_event(Event::Empty(e))?;
         }
 
+        for boundary in 11..=13 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
+        }
         for revision in &self.revision_markers {
             revision.write_xml(writer)?;
         }
         for raw in &self.revision_xml {
             writer.get_mut().write_all(raw)?;
         }
-        for raw in &self.extra_xml {
-            writer.get_mut().write_all(raw)?;
+        for boundary in 14..=15 {
+            write_extras_at(writer, &self.extra_xml, boundary)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:trPr")))?;
@@ -1100,6 +1121,31 @@ impl CT_TrPr {
             && self.revision_xml.is_empty()
             && self.extra_xml.is_empty()
     }
+}
+
+fn tr_pr_raw_boundary(name: &[u8], current: usize, word_prefixes: &[String]) -> (usize, usize) {
+    let schema_children = [
+        b"cnfStyle".as_slice(),
+        b"divId".as_slice(),
+        b"gridBefore".as_slice(),
+        b"gridAfter".as_slice(),
+        b"wBefore".as_slice(),
+        b"wAfter".as_slice(),
+        b"cantSplit".as_slice(),
+        b"trHeight".as_slice(),
+        b"tblHeader".as_slice(),
+        b"tblCellSpacing".as_slice(),
+        b"jc".as_slice(),
+        b"hidden".as_slice(),
+        b"ins".as_slice(),
+        b"del".as_slice(),
+        b"trPrChange".as_slice(),
+    ];
+
+    schema_children
+        .iter()
+        .position(|child| is_word_element(name, child, word_prefixes))
+        .map_or((current, current), |index| (index, index + 1))
 }
 
 // ---- Cell properties ----
@@ -2924,6 +2970,44 @@ mod tests {
         let positions = children.map(|child| xml.find(child).expect("row property writes"));
 
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
+    }
+
+    #[test]
+    fn retained_row_properties_write_at_schema_boundaries() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+               <w:tr>
+                 <w:trPr>
+                   <w:gridBefore w:val="1"/>
+                   <w:tblCellSpacing w:w="120" w:type="dxa"/>
+                   <w:jc w:val="center"/>
+                   <w:ins w:id="1" w:author="Ada"/>
+                   <w:trPrChange w:id="2" w:author="Ada"/>
+                 </w:trPr>
+                 <w:tc><w:p/></w:tc>
+               </w:tr>"#,
+        );
+
+        let properties = table.rows[0].properties.as_ref().unwrap();
+        assert_eq!(
+            properties.extra_xml,
+            vec![
+                (9, br#"<w:tblCellSpacing w:w="120" w:type="dxa"/>"#.to_vec()),
+                (14, br#"<w:trPrChange w:id="2" w:author="Ada"/>"#.to_vec()),
+            ]
+        );
+
+        let xml = table_to_xml(&table);
+        let grid = xml.find("<w:gridBefore").unwrap();
+        let spacing = xml.find("<w:tblCellSpacing").unwrap();
+        let alignment = xml.find("<w:jc").unwrap();
+        let insertion = xml.find("<w:ins").unwrap();
+        let change = xml.find("<w:trPrChange").unwrap();
+
+        assert!(
+            grid < spacing && spacing < alignment && alignment < insertion && insertion < change,
+            "{xml}"
+        );
     }
 
     #[test]
