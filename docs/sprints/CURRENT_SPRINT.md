@@ -36,7 +36,7 @@ rendering while preserving unsupported algorithms and payloads.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-218 | Embedded object and macro inventory | L | pending | - |
-| F-219 | SmartArt typed model | L | pending | - |
+| F-219 | SmartArt typed model | L | in-progress | codex |
 | F-220 | SmartArt layout and rendering | L | pending | - |
 
 ## Sequencing note
