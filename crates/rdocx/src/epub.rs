@@ -2471,6 +2471,7 @@ fn render_table_projection(table: &CT_Tbl) -> CT_Tbl {
             .rows
             .iter()
             .map(|row| CT_Row {
+                table_property_exception: None,
                 properties: None,
                 cells: row
                     .cells
