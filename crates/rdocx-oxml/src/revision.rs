@@ -45,6 +45,7 @@ pub struct CT_Revision {
     timestamp: Option<String>,
     raw_xml: Vec<u8>,
     content: RevisionContent,
+    content_paragraph: Option<Box<CT_P>>,
     nested_revisions: Vec<(usize, CT_Revision)>,
 }
 
@@ -94,6 +95,7 @@ impl CT_Revision {
                         timestamp,
                         raw_xml,
                         content: RevisionContent::Marker,
+                        content_paragraph: None,
                         nested_revisions: Vec::new(),
                     });
                 }
@@ -107,7 +109,18 @@ impl CT_Revision {
             buffer.clear();
         };
         let (kind, id, author, timestamp) = kind;
-        let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
+        let (content, content_paragraph, nested_revisions) = if kind == RevisionKind::Insertion {
+            let paragraph = parse_insertion_content(&raw_xml, &prefixes)?;
+            let content = if paragraph.runs.is_empty() {
+                RevisionContent::Marker
+            } else {
+                RevisionContent::Runs(paragraph.runs.clone())
+            };
+            (content, Some(Box::new(paragraph)), Vec::new())
+        } else {
+            let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
+            (content, None, nested_revisions)
+        };
         Ok(Self {
             kind,
             id,
@@ -115,6 +128,7 @@ impl CT_Revision {
             timestamp,
             raw_xml,
             content,
+            content_paragraph,
             nested_revisions,
         })
     }
@@ -137,6 +151,12 @@ impl CT_Revision {
 
     pub fn content(&self) -> &RevisionContent {
         &self.content
+    }
+
+    /// Return the paragraph projection for an insertion, when it has inline wrappers.
+    #[doc(hidden)]
+    pub fn content_paragraph(&self) -> Option<&CT_P> {
+        self.content_paragraph.as_deref()
     }
 
     /// Return nested revision wrappers at their direct-run boundaries.
@@ -370,6 +390,10 @@ fn collect_control<'a>(control: &'a CT_Sdt, revisions: &mut Vec<&'a CT_Revision>
 
 fn collect_revision<'a>(revision: &'a CT_Revision, revisions: &mut Vec<&'a CT_Revision>) {
     revisions.push(revision);
+    if let Some(paragraph) = revision.content_paragraph() {
+        collect_paragraph(paragraph, revisions);
+        return;
+    }
     if let RevisionContent::Runs(runs) = revision.content() {
         for boundary in 0..=runs.len() {
             for (_, nested) in revision
@@ -387,6 +411,41 @@ fn collect_revision<'a>(revision: &'a CT_Revision, revisions: &mut Vec<&'a CT_Re
         for (_, nested) in &revision.nested_revisions {
             collect_revision(nested, revisions);
         }
+    }
+}
+
+fn parse_insertion_content(raw_xml: &[u8], word_prefixes: &[String]) -> crate::Result<CT_P> {
+    let mut reader = Reader::from_reader(raw_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let content_start = loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(_) => break reader.buffer_position() as usize,
+            Event::Eof => {
+                return Err(crate::OxmlError::MissingElement(
+                    "insertion element".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let content_end = raw_xml
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, byte)| (*byte == b'<').then_some(index))
+        .ok_or_else(|| crate::OxmlError::MissingElement("insertion close tag".to_owned()))?;
+    let mut paragraph_xml = Vec::from(b"<w:p>".as_slice());
+    paragraph_xml.extend_from_slice(&raw_xml[content_start..content_end]);
+    paragraph_xml.extend_from_slice(b"</w:p>");
+    let mut paragraph_reader = Reader::from_reader(paragraph_xml.as_slice());
+    let mut paragraph_buffer = Vec::new();
+    match paragraph_reader.read_event_into(&mut paragraph_buffer)? {
+        Event::Start(_) => CT_P::from_xml_with_prefixes(&mut paragraph_reader, word_prefixes),
+        _ => Err(crate::OxmlError::MissingElement(
+            "insertion content".to_owned(),
+        )),
     }
 }
 
@@ -715,6 +774,22 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![30]
         );
+    }
+
+    #[test]
+    fn insertion_content_retains_inline_paragraph_structure() {
+        let raw = format!(
+            r#"<w:ins xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" w:id="7" w:author="Ada"><w:r><w:t>before</w:t></w:r><w:hyperlink r:id="rId9"><w:r><w:t>linked</w:t></w:r></w:hyperlink></w:ins>"#
+        )
+        .into_bytes();
+        let revision = CT_Revision::from_raw(raw, &["w".to_owned()]).expect("insertion parses");
+        let paragraph = revision
+            .content_paragraph()
+            .expect("insertion exposes paragraph content");
+
+        assert_eq!(paragraph.text(), "beforelinked");
+        assert_eq!(paragraph.hyperlinks.len(), 1);
+        assert_eq!(paragraph.hyperlinks[0].rel_id.as_deref(), Some("rId9"));
     }
 
     #[test]
