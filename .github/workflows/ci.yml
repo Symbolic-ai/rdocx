@@ -190,6 +190,11 @@ jobs:
         run: >-
           cargo test --workspace --all-features
           --exclude rdocx-py --exclude rpptx-py
+      - name: Run deterministic animation golden
+        run: >-
+          cargo test --locked -p rpptx --test integration
+          animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest
+          -- --exact
       - name: Run golden-PNG gate
         run: python3 scripts/golden_png_harness.py --check
 
@@ -405,6 +410,11 @@ jobs:
           python3 scripts/install_pinned_poppler.py
       - name: Fetch pinned presentation corpus
         run: python3 scripts/fetch_pptx_corpus.py
+      - name: Run deterministic animation golden
+        run: >-
+          cargo test --locked -p rpptx --test integration
+          animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest
+          -- --exact
       - name: Run all-slide SSIM trend and completeness gate
         run: >-
           python3 scripts/pptx_ssim_harness.py --check

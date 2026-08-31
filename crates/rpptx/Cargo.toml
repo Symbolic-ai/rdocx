@@ -22,7 +22,15 @@ default = ["default-template", "render", "system-fonts"]
 agile-encryption = ["oxml-opc/agile-encryption"]
 default-template = []
 digital-signatures = ["oxml-opc/digital-signatures"]
-render = ["dep:miniz_oxide", "dep:oxml-pdf", "dep:rpptx-layout", "dep:rpptx-render"]
+render = [
+    "dep:gif",
+    "dep:jpeg-encoder",
+    "dep:miniz_oxide",
+    "dep:oxml-pdf",
+    "dep:rpptx-layout",
+    "dep:rpptx-render",
+    "dep:tiny-skia",
+]
 system-fonts = ["oxml-layout/system-fonts", "rpptx-render?/system-fonts"]
 
 [dependencies]
@@ -33,12 +41,15 @@ oxml-media.workspace = true
 oxml-opc.workspace = true
 oxml-pdf = { workspace = true, optional = true }
 oxml-sml.workspace = true
+gif = { workspace = true, optional = true }
+jpeg-encoder = { workspace = true, optional = true, features = ["std"] }
 miniz_oxide = { workspace = true, optional = true }
 oxml-chart.workspace = true
 rpptx-layout = { workspace = true, optional = true }
 rpptx-oxml.workspace = true
 rpptx-render = { workspace = true, default-features = false, optional = true }
 thiserror.workspace = true
+tiny-skia = { workspace = true, optional = true }
 
 [dev-dependencies]
 miniz_oxide.workspace = true

@@ -10371,3 +10371,170 @@ trend evidence rather than a quality claim.
 slide-local time and click convention, page-space group clipping, exact `!!`
 morph opt-in, and fail-closed external-oracle bindings. Do not claim external
 zoom parity until a source deck makes the effect observable.
+
+### F-215, Audio and video package model
+
+**Sprint.** S61
+**Completed.** 2026-08-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Presentation pictures and timing trees now expose typed
+embedded and linked audio and video attachments, poster ownership, playback
+settings, triggers, and commands while retaining unmodelled XML. The native
+facade can inspect, add, replace, extract, and remove media atomically. Package
+mutation preserves exact external targets, opaque unsupported payloads,
+content types, relationship ownership, shared parts, timing siblings, and
+schema child order.
+
+**Non-obvious choices.** The picture shape id is the stable public identity.
+Trim remains owned by the Office 2010 picture media extension rather than the
+timing node. Relationship replacement is structurally scoped to the direct
+standard attachment and exact Office media extension, while removal prunes a
+candidate part only after no package relationship reaches it. Format-neutral
+MIME and container signature checks live in the dependency-free `oxml-media`
+leaf.
+
+**Deviations from the design plan.** Two concrete raw-XML and ownership helpers
+were added to the existing picture and shape-tree types. The misleading timing
+trim arguments and permanently empty timing trim fields were removed before
+integration, leaving the Office media extension as the single truthful owner.
+No new module, file, dependency, trait, generic, or feature flag was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named
+`embedded_audio_and_video_corpus_media_round_trip_without_duplication` gate
+passed against the pinned `EmbeddedAudio.pptx` and `EmbeddedVideo.pptx` decks
+with exact payload, relationship, content type, poster, settings, and retained
+metadata assertions. Source-built regressions cover embedded and linked
+lifecycle operations, atomic failure, shared relationship and part ownership,
+unsupported codecs, namespace aliases and shadows, schema order, raw timing
+boundaries, duplicate-slide id remapping, and independent transition and
+timing-effect parameter coverage across all 50 decks. Full integrated
+verification, dependency checks, WASM, documentation, supply-chain checks, and
+22 package dry runs passed. Every package archive remained below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep media payloads opaque to the package model.
+Preserve the exact structural ownership paths for picture and timing mutation,
+and keep shared relationship records until all retained XML references are
+gone. F-216 should consume the shape-id identity, picture-owned trim, timing
+trigger context, poster relationship, and format-neutral diagnostics directly
+rather than build a second media model.
+
+### F-216, Media poster and playback rendering
+
+**Sprint.** S61
+**Completed.** 2026-08-31
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The presentation timeline now evaluates synchronized audio
+and video playback state beside one deterministic page result. Valid local PNG
+and JPEG posters continue through the existing resolved-image path. Missing,
+linked, malformed, or unsupported posters can become deterministic labelled
+Audio or Video groups, remain as poster policy output, or fail explicitly.
+Audio and video payload bytes never enter renderer image admission and no codec
+decoder was added.
+
+**Non-obvious choices.** Playback commands fold in source order against the
+existing timestamp and click convention. Stopped seek positions survive an
+offset-free play, finite non-loop media stops at its exact end, and unknown
+loop duration remains monotonic with a diagnostic rather than inventing a
+wrap. Poster fallback diagnostics use private source-scoped slide, layout, or
+master identity, while the existing static and timeline facade methods retain
+their exact diagnostic text and behavior.
+
+**Deviations from the design plan.** The approved fallback policy was added as
+an explicit parameter to `render_media_timeline_deterministic`. This narrow
+signature correction gives every policy variant a present consumer and lets
+F-227 pass its selected export policy directly. No new file, module,
+dependency, trait, generic, feature flag, renderer variant, or codec path was
+added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named
+`static_poster_output_and_timestamped_playback_state_match_source_built_oracle_fixtures`
+gate passed at 150 dpi with deterministic fonts. The exact Audio fallback RGBA
+hash is
+`79e8da66b2cedf6a8b37b1eb723d4e278e22076aff5cdcff0616e0e7f2decec5`,
+and the Video fallback hash is
+`bca557835b53eb1ac671297c1d641c4f2e335fa51aa5515651ca95cc104e6917`.
+Normalized playback rows cover automatic and click triggers, seek, trim,
+volume, finite and unknown-duration loops, pause, resume, stop, linked media,
+opaque codecs, and exact boundaries. Regressions prove source-scoped fallback
+identity and byte-for-byte compatibility for the legacy static and timeline
+entry points. Full integrated verification and patched publication dry runs
+passed. The `rpptx-layout` and `rpptx` archives were 76,325 and 165,887 bytes,
+both below 10 MiB.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-227 should consume
+`DeterministicMediaTimelineFrame`, `EvaluatedMediaState`, and
+`MediaFallbackPolicy` directly. Preserve the single shared assembly, the
+source-scoped diagnostic identity, deterministic font mode, fixed 150 dpi
+goldens, and the unchanged legacy facade paths.
+
+### F-227, Animated GIF and video export
+
+**Sprint.** S61
+**Completed.** 2026-08-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native presentation facade now exports bounded
+deterministic animated GIF and Motion JPEG AVI bytes from explicit slide
+segments. Each segment carries its own timeline position, click count, and
+transition source, while one media fallback policy applies to the export. GIF
+export preserves cumulative
+centisecond timing and explicit loop behavior. AVI export writes an MJPEG
+stream with exact RIFF headers, frame chunks, indexes, duration, dimensions,
+and diagnostics.
+
+**Non-obvious choices.** One prepared package, resolver, media, layout, and
+font context is reused for the whole export. Each timestamp resolves and
+renders one frame, feeds it directly to a capped encoder, and drops it before
+the next sample. GIF and JPEG writes fail at the configured byte cap. AVI
+patches sizes in one seekable capped buffer and retains only bounded index
+metadata. No subprocess or external codec runtime is used.
+
+**Deviations from the design plan.** None. The approved private
+`crates/rpptx/src/animation.rs` module contains the concrete exporter. The
+workspace adds `gif` 0.14.2 and enables the existing `jpeg-encoder` standard
+library writer at the `rpptx` facade edge. No new crate, trait, generic,
+feature flag, integration binary, or binary fixture was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named
+`animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest`
+gate passed unchanged on macOS and Linux arm64 with Rust 1.97.1. Its six
+timestamps, decoded GIF frame hashes, loop count, dimensions, ordered
+diagnostics, and GIF container hash `1682901777930996407` match the reviewed
+manifest. The AVI gate independently parses every RIFF and LIST boundary,
+header, stream rate, frame chunk, index entry, JPEG payload, decoded frame,
+duration, dimension, and ordered diagnostic. Its exact container hash is
+`6525351511319371367`. Negative mutations cover every encoded and decoded AVI
+identity plus diagnostic contents and order. Regressions prove real
+two-slide fade, click-triggered shape and media state, bounded 50-frame
+streaming, immediate output-cap rejection, and quality sensitivity. Full
+integrated verification passed all changed crates, the workspace, no-default,
+WASM, rustdoc, README, dependency, corpus, supply-chain, and 22-package dry-run
+gates. Every archive remained below 10 MiB, with `rpptx` at 180,361 bytes.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve explicit segment ownership, exact
+integer timestamp sampling, cumulative GIF delays, one-frame resolution, and
+the native bounded encoder path. Treat the macOS and Linux manifest as one
+identity contract. Platform-specific container, payload, decoded-pixel, or
+diagnostic constants are not acceptable.

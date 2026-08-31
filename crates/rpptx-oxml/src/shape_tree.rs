@@ -226,12 +226,22 @@ fn collect_shape_id_occurrence(
     let uri = scope.element_uri(element_name.as_ref());
     let defines_shape = uri == Some(P_NS) && name == b"cNvPr";
     let connector_endpoint = uri == Some(A_NS) && matches!(name, b"stCxn" | b"endCxn");
-    if !defines_shape && !connector_endpoint {
+    let presentation_shape_reference = uri == Some(P_NS)
+        && matches!(
+            name,
+            b"spTgt" | b"inkTgt" | b"bldP" | b"bldDgm" | b"bldGraphic" | b"bldOleChart"
+        );
+    if !defines_shape && !connector_endpoint && !presentation_shape_reference {
         return Ok(());
     }
     for attribute in element.attributes() {
         let attribute = attribute?;
-        if attribute.key.as_ref() != b"id" {
+        let expected_attribute = if presentation_shape_reference {
+            b"spid".as_slice()
+        } else {
+            b"id".as_slice()
+        };
+        if attribute.key.as_ref() != expected_attribute {
             continue;
         }
         let Ok(id) = attribute
@@ -1429,6 +1439,27 @@ impl CT_ShapeTree {
             .expect("shape-tree child was appended")
     }
 
+    /// Removes one immediate child identified by `p:cNvPr/@id`.
+    pub fn remove_child_by_id(&mut self, id: u32) -> Result<Option<ShapeTreeChild>> {
+        let Some(index) = self
+            .children
+            .iter()
+            .position(|child| child.non_visual_id() == Some(id))
+        else {
+            return Ok(None);
+        };
+        let removed = self.children[index].clone();
+        let xml = self.to_xml()?;
+        let range = direct_shape_child_range(&xml, id)?.ok_or_else(|| {
+            OxmlError::InvalidValue(format!("shape id {id} disappeared during removal"))
+        })?;
+        let mut rewritten = Vec::with_capacity(xml.len() - range.len());
+        rewritten.extend_from_slice(&xml[..range.start]);
+        rewritten.extend_from_slice(&xml[range.end..]);
+        *self = Self::from_xml(&rewritten)?;
+        Ok(Some(removed))
+    }
+
     /// Parses a complete `p:spTree` with any prefix bound to PresentationML.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_fragment(xml, &[])
@@ -1469,6 +1500,55 @@ impl CT_ShapeTree {
             true,
         )
     }
+}
+
+fn direct_shape_child_range(xml: &[u8], id: u32) -> Result<Option<Range<usize>>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                root = Some(NamespaceBindings::default().with_start(&start)?);
+            }
+            Event::Start(child) => {
+                let namespaces = root.as_ref().expect("shape-tree root").with_start(&child)?;
+                let name = local_name(child.name().as_ref()).to_vec();
+                let uri = namespaces.element_uri(child.name().as_ref());
+                let start = shape_start_tag_range(xml, reader.buffer_position() as usize)?.start;
+                let raw = capture_element(&mut reader, &child)?;
+                let range = start..reader.buffer_position() as usize;
+                if parse_shape_tree_child(&name, uri, &raw, &namespaces)?
+                    .is_some_and(|child| child.non_visual_id() == Some(id))
+                {
+                    return Ok(Some(range));
+                }
+            }
+            Event::Empty(child) => {
+                let namespaces = root.as_ref().expect("shape-tree root").with_start(&child)?;
+                let name = local_name(child.name().as_ref()).to_vec();
+                let uri = namespaces.element_uri(child.name().as_ref());
+                let range = shape_start_tag_range(xml, reader.buffer_position() as usize)?;
+                let raw = capture_empty_element(&child)?;
+                if parse_shape_tree_child(&name, uri, &raw, &namespaces)?
+                    .is_some_and(|child| child.non_visual_id() == Some(id))
+                {
+                    return Ok(Some(range));
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn shape_start_tag_range(xml: &[u8], end: usize) -> Result<Range<usize>> {
+    let start = xml[..end]
+        .iter()
+        .rposition(|byte| *byte == b'<')
+        .ok_or_else(|| OxmlError::InvalidValue("shape child start tag is missing".to_owned()))?;
+    Ok(start..end)
 }
 
 impl Default for CT_ShapeTree {

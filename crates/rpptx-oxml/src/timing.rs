@@ -161,6 +161,56 @@ pub struct TimingMotionPath {
     pub origin: Option<String>,
 }
 
+/// Whether retained media stays visible after playback stops.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaDisplayPolicy {
+    HideWhenStopped,
+    ShowWhenStopped,
+}
+
+/// The supported authored playback trigger subset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaPlaybackTrigger {
+    Automatic,
+    OnClick,
+    InClickSequence,
+}
+
+/// A supported media command carried by `p:cmd`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaCommandKind {
+    Play { from_ms: Option<u64> },
+    Pause,
+    Stop,
+    Seek { position_ms: u64 },
+    Other(String),
+}
+
+/// The typed common-media-node projection shared by audio and video.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommonMediaNode {
+    pub common: CommonTimeNode,
+    pub target: TimingTarget,
+    pub volume: Option<u32>,
+    pub looped: bool,
+    pub display: Option<MediaDisplayPolicy>,
+}
+
+/// A typed `p:audio` or `p:video` timing node.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimingMedia {
+    pub common: CommonMediaNode,
+    pub full_screen: Option<bool>,
+}
+
+/// A typed `p:cmd` targeting a media shape.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimingMediaCommand {
+    pub common: CommonTimeNode,
+    pub target: TimingTarget,
+    pub command: MediaCommandKind,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TimingUnsupported {
     pub local_name: String,
@@ -181,6 +231,9 @@ pub enum TimingNode {
     Animate(TimingAnimate),
     Effect(TimingEffect),
     Motion(TimingMotionPath),
+    Audio(TimingMedia),
+    Video(TimingMedia),
+    MediaCommand(TimingMediaCommand),
     Unsupported(TimingUnsupported),
 }
 
@@ -274,6 +327,59 @@ impl CT_Timing {
         &self.builds
     }
 
+    /// Returns the first typed audio or video node targeting `shape_id`.
+    pub fn media_for_shape(&self, shape_id: u32) -> Option<&TimingMedia> {
+        find_media_in_nodes(&self.nodes, shape_id)
+    }
+
+    /// Returns typed media commands targeting `shape_id` in timing order.
+    pub fn media_commands_for_shape(&self, shape_id: u32) -> Vec<&TimingMediaCommand> {
+        let mut commands = Vec::new();
+        collect_media_commands(&self.nodes, shape_id, &mut commands);
+        commands
+    }
+
+    /// Classifies the first media command using its complete timing ancestry.
+    pub fn media_playback_trigger_for_shape(&self, shape_id: u32) -> Option<MediaPlaybackTrigger> {
+        find_media_trigger(&self.nodes, shape_id, TriggerContext::default())
+    }
+
+    /// Appends one retained media node and its initial play command.
+    pub fn add_media(
+        &mut self,
+        video: bool,
+        shape_id: u32,
+        volume: u32,
+        looped: bool,
+        show_when_stopped: bool,
+        trigger: MediaPlaybackTrigger,
+    ) -> Result<()> {
+        validate_media_volume(volume)?;
+        let inherited = NamespaceBindings::from_entries(&self.inherited_namespaces);
+        let ids = next_timing_ids(&self.raw_xml, &inherited, 2)?;
+        let media_xml =
+            authored_media_xml(video, shape_id, ids[0], volume, looped, show_when_stopped);
+        let command_xml = authored_media_command_xml(shape_id, ids[1], trigger);
+        let inserted = format!("{media_xml}{command_xml}");
+        let raw = append_to_timing_list(&self.raw_xml, &inherited, inserted.as_bytes())?;
+        *self = Self::from_fragment(&raw, &inherited)?;
+        Ok(())
+    }
+
+    /// Removes typed audio, video, and command nodes owned by `shape_id`.
+    pub fn remove_media(&mut self, shape_id: u32) -> Result<()> {
+        let inherited = NamespaceBindings::from_entries(&self.inherited_namespaces);
+        let mut ranges = Vec::new();
+        collect_owned_media_ranges(&self.raw_xml, &inherited, 0, shape_id, &mut ranges)?;
+        ranges.sort_unstable_by_key(|range| range.start);
+        let mut raw = self.raw_xml.clone();
+        for range in ranges.into_iter().rev() {
+            raw.drain(range);
+        }
+        *self = Self::from_fragment(&raw, &inherited)?;
+        Ok(())
+    }
+
     /// Returns whether one parsed common-node condition contains a target element.
     pub fn condition_has_explicit_target(
         &self,
@@ -302,6 +408,731 @@ impl CT_Timing {
     pub(crate) fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         writer.get_mut().write_all(&self.raw_xml)?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct TriggerContext {
+    explicit_click: bool,
+    click_sequence: bool,
+}
+
+fn find_media_trigger(
+    nodes: &[TimingNode],
+    shape_id: u32,
+    inherited: TriggerContext,
+) -> Option<MediaPlaybackTrigger> {
+    for node in nodes {
+        let mut context = inherited;
+        if let Some(common) = timing_node_common(node) {
+            context.explicit_click |= common.start_conditions.iter().any(|condition| {
+                matches!(
+                    condition.event,
+                    Some(TimingEvent::OnClick | TimingEvent::OnNext)
+                )
+            });
+            context.click_sequence |= matches!(common.node_type, Some(TimingNodeType::ClickEffect));
+        }
+        if let TimingNode::MediaCommand(command) = node
+            && command.target == TimingTarget::Shape(shape_id)
+        {
+            return Some(if context.explicit_click {
+                MediaPlaybackTrigger::OnClick
+            } else if context.click_sequence {
+                MediaPlaybackTrigger::InClickSequence
+            } else {
+                MediaPlaybackTrigger::Automatic
+            });
+        }
+        if let Some(common) = timing_node_common(node)
+            && let Some(trigger) = find_media_trigger(&common.children, shape_id, context)
+        {
+            return Some(trigger);
+        }
+    }
+    None
+}
+
+fn find_media_in_nodes(nodes: &[TimingNode], shape_id: u32) -> Option<&TimingMedia> {
+    for node in nodes {
+        match node {
+            TimingNode::Audio(media) | TimingNode::Video(media)
+                if media.common.target == TimingTarget::Shape(shape_id) =>
+            {
+                return Some(media);
+            }
+            _ => {}
+        }
+        if let Some(common) = timing_node_common(node)
+            && let Some(media) = find_media_in_nodes(&common.children, shape_id)
+        {
+            return Some(media);
+        }
+    }
+    None
+}
+
+fn collect_media_commands<'a>(
+    nodes: &'a [TimingNode],
+    shape_id: u32,
+    commands: &mut Vec<&'a TimingMediaCommand>,
+) {
+    for node in nodes {
+        if let TimingNode::MediaCommand(command) = node
+            && command.target == TimingTarget::Shape(shape_id)
+        {
+            commands.push(command);
+        }
+        if let Some(common) = timing_node_common(node) {
+            collect_media_commands(&common.children, shape_id, commands);
+        }
+    }
+}
+
+fn timing_node_common(node: &TimingNode) -> Option<&CommonTimeNode> {
+    match node {
+        TimingNode::Parallel(node) => Some(&node.common),
+        TimingNode::Sequence(node) => Some(&node.common),
+        TimingNode::Set(node) => Some(&node.common),
+        TimingNode::Animate(node) => Some(&node.common),
+        TimingNode::Effect(node) => Some(&node.common),
+        TimingNode::Motion(node) => Some(&node.common),
+        TimingNode::Audio(node) | TimingNode::Video(node) => Some(&node.common.common),
+        TimingNode::MediaCommand(node) => Some(&node.common),
+        TimingNode::Unsupported(_) => None,
+    }
+}
+
+fn validate_media_volume(volume: u32) -> Result<()> {
+    if volume > 100_000 {
+        return Err(OxmlError::InvalidValue(
+            "media volume must be between 0 and 100000".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn next_timing_ids(xml: &[u8], inherited: &NamespaceBindings, count: usize) -> Result<Vec<u32>> {
+    let mut maximum = 0u32;
+    collect_schema_timing_ids(xml, inherited, &mut maximum)?;
+    (1..=count)
+        .map(|offset| {
+            maximum
+                .checked_add(offset as u32)
+                .ok_or_else(|| OxmlError::InvalidValue("timing ids are exhausted".to_owned()))
+        })
+        .collect()
+}
+
+fn collect_schema_timing_ids(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    maximum: &mut u32,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing id root");
+                let scope = parent.with_start(&child)?;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"tnLst"
+                {
+                    collect_schema_node_list_ids(&raw, parent, maximum)?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_schema_node_list_ids(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    maximum: &mut u32,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing node list id root");
+                let scope = parent.with_start(&child)?;
+                let local = local_name(child.name().as_ref()).to_vec();
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && is_schema_timing_node(&local)
+                {
+                    collect_schema_node_ids(&raw, parent, &local, maximum)?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn is_schema_timing_node(local: &[u8]) -> bool {
+    matches!(
+        local,
+        b"par"
+            | b"seq"
+            | b"excl"
+            | b"anim"
+            | b"animClr"
+            | b"animEffect"
+            | b"animMotion"
+            | b"animRot"
+            | b"animScale"
+            | b"cmd"
+            | b"set"
+            | b"audio"
+            | b"video"
+    )
+}
+
+fn collect_schema_node_ids(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    node_local: &[u8],
+    maximum: &mut u32,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing node id root");
+                let scope = parent.with_start(&child)?;
+                let child_name = child.name();
+                let local = local_name(child_name.as_ref());
+                let direct_common =
+                    matches!(node_local, b"par" | b"seq" | b"excl") && local == b"cTn";
+                let behavior_common = matches!(
+                    node_local,
+                    b"anim"
+                        | b"animClr"
+                        | b"animEffect"
+                        | b"animMotion"
+                        | b"animRot"
+                        | b"animScale"
+                        | b"cmd"
+                        | b"set"
+                ) && local == b"cBhvr";
+                let media_common =
+                    matches!(node_local, b"audio" | b"video") && local == b"cMediaNode";
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) != Some(P_NS) {
+                    buffer.clear();
+                    continue;
+                }
+                if direct_common {
+                    collect_schema_common_time_node_ids(&raw, parent, maximum)?;
+                } else if behavior_common || media_common {
+                    collect_schema_common_owner_ids(&raw, parent, maximum)?;
+                }
+            }
+            Event::Empty(child) => {
+                let parent = root.as_ref().expect("timing node id root");
+                let scope = parent.with_start(&child)?;
+                let child_name = child.name();
+                let local = local_name(child_name.as_ref());
+                if matches!(node_local, b"par" | b"seq" | b"excl")
+                    && local == b"cTn"
+                    && scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                {
+                    collect_schema_common_time_node_ids(
+                        &capture_empty_element(&child)?,
+                        parent,
+                        maximum,
+                    )?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_schema_common_owner_ids(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    maximum: &mut u32,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing common owner id root");
+                let scope = parent.with_start(&child)?;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cTn"
+                {
+                    collect_schema_common_time_node_ids(&raw, parent, maximum)?;
+                }
+            }
+            Event::Empty(child) => {
+                let parent = root.as_ref().expect("timing common owner id root");
+                let scope = parent.with_start(&child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cTn"
+                {
+                    collect_schema_common_time_node_ids(
+                        &capture_empty_element(&child)?,
+                        parent,
+                        maximum,
+                    )?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_schema_common_time_node_ids(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    maximum: &mut u32,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                if let Some(id) = attribute(&all_attributes(&start)?, "id")
+                    .and_then(|value| value.parse::<u32>().ok())
+                {
+                    *maximum = (*maximum).max(id);
+                }
+                root = Some(inherited.with_start(&start)?);
+            }
+            Event::Empty(start) if root.is_none() => {
+                if let Some(id) = attribute(&all_attributes(&start)?, "id")
+                    .and_then(|value| value.parse::<u32>().ok())
+                {
+                    *maximum = (*maximum).max(id);
+                }
+                return Ok(());
+            }
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("common time node id root");
+                let scope = parent.with_start(&child)?;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && matches!(
+                        local_name(child.name().as_ref()),
+                        b"childTnLst" | b"subTnLst"
+                    )
+                {
+                    collect_schema_node_list_ids(&raw, parent, maximum)?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authored_media_xml(
+    video: bool,
+    shape_id: u32,
+    node_id: u32,
+    volume: u32,
+    looped: bool,
+    show_when_stopped: bool,
+) -> String {
+    let tag = if video { "video" } else { "audio" };
+    let repeat = if looped {
+        " repeatCount=\"indefinite\""
+    } else {
+        ""
+    };
+    let show = if show_when_stopped { "1" } else { "0" };
+    format!(
+        r#"<p:{tag} xmlns:p="{P_NS}"><p:cMediaNode vol="{volume}" showWhenStopped="{show}"><p:cTn id="{node_id}" dur="indefinite"{repeat}/><p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl></p:cMediaNode></p:{tag}>"#
+    )
+}
+
+fn authored_media_command_xml(
+    shape_id: u32,
+    node_id: u32,
+    trigger: MediaPlaybackTrigger,
+) -> String {
+    let (node_type, condition) = match trigger {
+        MediaPlaybackTrigger::Automatic => ("", r#"<p:cond delay="0"/>"#),
+        MediaPlaybackTrigger::OnClick => (
+            r#" nodeType="clickEffect""#,
+            r#"<p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="SHAPE"/></p:tgtEl></p:cond>"#,
+        ),
+        MediaPlaybackTrigger::InClickSequence => {
+            (r#" nodeType="clickEffect""#, r#"<p:cond delay="0"/>"#)
+        }
+    };
+    let condition = condition.replace("SHAPE", &shape_id.to_string());
+    format!(
+        r#"<p:cmd xmlns:p="{P_NS}" type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="{node_id}" dur="1" fill="hold"{node_type}><p:stCondLst>{condition}</p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl></p:cBhvr></p:cmd>"#
+    )
+}
+
+fn append_to_timing_list(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    inserted: &[u8],
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    let mut later_child_start = None;
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                let scope = inherited.with_start(&start)?;
+                validate_element(&start, &scope, b"timing")?;
+                root = Some(scope);
+            }
+            Event::Empty(start) if root.is_none() => {
+                let scope = inherited.with_start(&start)?;
+                validate_element(&start, &scope, b"timing")?;
+                let range = start_tag_range(xml, reader.buffer_position() as usize)?;
+                let list = authored_timing_list(inserted);
+                return expand_empty_element(xml, range, start.name().as_ref(), list.as_bytes());
+            }
+            Event::Start(child) => {
+                let scope = root.as_ref().expect("timing root").with_start(&child)?;
+                let range_start = start_tag_range(xml, reader.buffer_position() as usize)?.start;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"tnLst"
+                {
+                    let closing = root_closing_tag_start(&raw)?;
+                    return insert_bytes(xml, range_start + closing, inserted);
+                }
+                if later_child_start.is_none()
+                    && scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && matches!(local_name(child.name().as_ref()), b"bldLst" | b"extLst")
+                {
+                    later_child_start = Some(range_start);
+                }
+            }
+            Event::Empty(child) => {
+                let scope = root.as_ref().expect("timing root").with_start(&child)?;
+                let range = event_start..reader.buffer_position() as usize;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"tnLst"
+                {
+                    return expand_empty_element(xml, range, child.name().as_ref(), inserted);
+                }
+                if later_child_start.is_none()
+                    && scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && matches!(local_name(child.name().as_ref()), b"bldLst" | b"extLst")
+                {
+                    later_child_start = Some(range.start);
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"timing" => {
+                let insertion = later_child_start.unwrap_or(event_start);
+                let list = authored_timing_list(inserted);
+                return insert_bytes(xml, insertion, list.as_bytes());
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("closing p:timing".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn root_closing_tag_start(xml: &[u8]) -> Result<usize> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    OxmlError::InvalidValue("timing list has an unmatched end tag".to_owned())
+                })?;
+                if depth == 0 {
+                    return Ok(event_start);
+                }
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement("closing p:tnLst".to_owned()));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn authored_timing_list(inserted: &[u8]) -> String {
+    format!(
+        r#"<p:tnLst xmlns:p="{P_NS}">{}</p:tnLst>"#,
+        String::from_utf8_lossy(inserted)
+    )
+}
+
+fn insert_bytes(xml: &[u8], at: usize, inserted: &[u8]) -> Result<Vec<u8>> {
+    if at > xml.len() {
+        return Err(OxmlError::InvalidValue(
+            "timing insertion point is outside the source".to_owned(),
+        ));
+    }
+    let mut output = Vec::with_capacity(xml.len() + inserted.len());
+    output.extend_from_slice(&xml[..at]);
+    output.extend_from_slice(inserted);
+    output.extend_from_slice(&xml[at..]);
+    Ok(output)
+}
+
+fn expand_empty_element(
+    xml: &[u8],
+    range: std::ops::Range<usize>,
+    qualified_name: &[u8],
+    inserted: &[u8],
+) -> Result<Vec<u8>> {
+    let slash = xml[range.clone()]
+        .iter()
+        .rposition(|byte| *byte == b'/')
+        .map(|offset| range.start + offset)
+        .ok_or_else(|| OxmlError::InvalidValue("empty timing element lacks slash".to_owned()))?;
+    let mut output = Vec::with_capacity(xml.len() + inserted.len() + qualified_name.len() + 2);
+    output.extend_from_slice(&xml[..slash]);
+    output.push(b'>');
+    output.extend_from_slice(inserted);
+    output.extend_from_slice(b"</");
+    output.extend_from_slice(qualified_name);
+    output.push(b'>');
+    output.extend_from_slice(&xml[range.end..]);
+    Ok(output)
+}
+
+fn collect_owned_media_ranges(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    base: usize,
+    shape_id: u32,
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing traversal root");
+                let scope = parent.with_start(&child)?;
+                let start = start_tag_range(xml, reader.buffer_position() as usize)?.start;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"tnLst"
+                {
+                    collect_owned_media_node_list(&raw, parent, base + start, shape_id, ranges)?;
+                }
+            }
+            Event::Empty(_) => {}
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_owned_media_node_list(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    base: usize,
+    shape_id: u32,
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing node list root");
+                let scope = parent.with_start(&child)?;
+                let start = start_tag_range(xml, reader.buffer_position() as usize)?.start;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) != Some(P_NS) {
+                    buffer.clear();
+                    continue;
+                }
+                let node = parse_timing_node(&raw, parent, &scope)?;
+                let owned = match &node {
+                    TimingNode::Audio(media) | TimingNode::Video(media) => {
+                        media.common.target == TimingTarget::Shape(shape_id)
+                    }
+                    TimingNode::MediaCommand(command) => {
+                        command.target == TimingTarget::Shape(shape_id)
+                    }
+                    _ => false,
+                };
+                if owned {
+                    ranges.push(base + start..base + reader.buffer_position() as usize);
+                } else if !matches!(node, TimingNode::Unsupported(_)) {
+                    collect_owned_media_node_children(
+                        &raw,
+                        parent,
+                        base + start,
+                        shape_id,
+                        ranges,
+                    )?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_owned_media_node_children(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    base: usize,
+    shape_id: u32,
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    let mut root_local = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                root_local = local_name(start.name().as_ref()).to_vec();
+                root = Some(inherited.with_start(&start)?);
+            }
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing node root");
+                let scope = parent.with_start(&child)?;
+                let child_name = child.name();
+                let local = local_name(child_name.as_ref());
+                let direct_common =
+                    matches!(root_local.as_slice(), b"par" | b"seq") && local == b"cTn";
+                let behavior_common = matches!(
+                    root_local.as_slice(),
+                    b"set" | b"anim" | b"animEffect" | b"animMotion" | b"cmd"
+                ) && local == b"cBhvr";
+                let media_common =
+                    matches!(root_local.as_slice(), b"audio" | b"video") && local == b"cMediaNode";
+                let start = start_tag_range(xml, reader.buffer_position() as usize)?.start;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) != Some(P_NS) {
+                    buffer.clear();
+                    continue;
+                }
+                if direct_common {
+                    collect_owned_media_common_time_node(
+                        &raw,
+                        parent,
+                        base + start,
+                        shape_id,
+                        ranges,
+                    )?;
+                } else if behavior_common || media_common {
+                    collect_owned_media_common_owner(&raw, parent, base + start, shape_id, ranges)?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_owned_media_common_owner(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    base: usize,
+    shape_id: u32,
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("timing common owner root");
+                let scope = parent.with_start(&child)?;
+                let start = start_tag_range(xml, reader.buffer_position() as usize)?.start;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cTn"
+                {
+                    collect_owned_media_common_time_node(
+                        &raw,
+                        parent,
+                        base + start,
+                        shape_id,
+                        ranges,
+                    )?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn collect_owned_media_common_time_node(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    base: usize,
+    shape_id: u32,
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) -> Result<()> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
+            Event::Start(child) => {
+                let parent = root.as_ref().expect("common time node root");
+                let scope = parent.with_start(&child)?;
+                let start = start_tag_range(xml, reader.buffer_position() as usize)?.start;
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"childTnLst"
+                {
+                    collect_owned_media_node_list(&raw, parent, base + start, shape_id, ranges)?;
+                }
+            }
+            Event::End(_) | Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 
@@ -685,6 +1516,13 @@ fn parse_timing_node(
                             origin: attribute(&attrs, "origin").map(str::to_owned),
                         }))
                     }
+                    b"audio" => Ok(TimingNode::Audio(parse_media(xml, inherited, false)?)),
+                    b"video" => Ok(TimingNode::Video(parse_media(xml, inherited, true)?)),
+                    b"cmd" => match parse_media_command(xml, inherited) {
+                        Ok(command) => Ok(TimingNode::MediaCommand(command)),
+                        Err(OxmlError::MissingElement(_)) => Ok(unsupported(local, xml)),
+                        Err(error) => Err(error),
+                    },
                     _ => Ok(unsupported(local, xml)),
                 };
             }
@@ -693,6 +1531,234 @@ fn parse_timing_node(
         }
         buffer.clear();
     }
+}
+
+fn parse_media(xml: &[u8], inherited: &NamespaceBindings, video: bool) -> Result<TimingMedia> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    let mut full_screen = None;
+    let mut common = None;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                let attributes = all_attributes(&start)?;
+                full_screen = parse_optional_bool(attribute(&attributes, "fullScrn"), "fullScrn")?;
+                root = Some(inherited.with_start(&start)?);
+            }
+            Event::Start(child) => {
+                let scope = root.as_ref().expect("media root").with_start(&child)?;
+                let is_common = scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cMediaNode";
+                let raw = capture_element(&mut reader, &child)?;
+                if is_common {
+                    set_once(
+                        &mut common,
+                        parse_common_media_node(&raw, root.as_ref().expect("media root"))?,
+                        "cMediaNode",
+                    )?;
+                }
+            }
+            Event::Empty(_) if root.is_none() => {
+                return Err(OxmlError::MissingElement("p:cMediaNode".to_owned()));
+            }
+            Event::Empty(child) => {
+                let scope = root.as_ref().expect("media root").with_start(&child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cMediaNode"
+                {
+                    return Err(OxmlError::MissingElement("p:cTn".to_owned()));
+                }
+            }
+            Event::End(end)
+                if local_name(end.name().as_ref()) == if video { b"video" } else { b"audio" } =>
+            {
+                return Ok(TimingMedia {
+                    common: common
+                        .ok_or_else(|| OxmlError::MissingElement("p:cMediaNode".to_owned()))?,
+                    full_screen,
+                });
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("closing media node".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_common_media_node(xml: &[u8], inherited: &NamespaceBindings) -> Result<CommonMediaNode> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut root = None;
+    let mut attributes = Vec::new();
+    let mut common = None;
+    let mut common_attributes = None;
+    let mut target = None;
+    let mut boundary = 0u8;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) if root.is_none() => {
+                attributes = all_attributes(&start)?;
+                root = Some(inherited.with_start(&start)?);
+            }
+            Event::Start(child) => {
+                let scope = root
+                    .as_ref()
+                    .expect("common media root")
+                    .with_start(&child)?;
+                let local = local_name(child.name().as_ref()).to_vec();
+                let raw = capture_element(&mut reader, &child)?;
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
+                    let rank = match local.as_slice() {
+                        b"cTn" => 1,
+                        b"tgtEl" => 2,
+                        _ => 0,
+                    };
+                    if rank != 0 && rank < boundary {
+                        return Err(out_of_order(&String::from_utf8_lossy(&local)));
+                    }
+                    boundary = boundary.max(rank);
+                    match local.as_slice() {
+                        b"cTn" => {
+                            let parsed = parse_common_time_node(
+                                &raw,
+                                root.as_ref().expect("common media root"),
+                            )?;
+                            set_once(&mut common, parsed, "cTn")?;
+                            common_attributes = Some(all_attributes(&child)?);
+                        }
+                        b"tgtEl" => set_once(
+                            &mut target,
+                            parse_target(&raw, root.as_ref().expect("common media root"))?,
+                            "tgtEl",
+                        )?,
+                        _ => {}
+                    }
+                }
+            }
+            Event::Empty(child) => {
+                let scope = root
+                    .as_ref()
+                    .expect("common media root")
+                    .with_start(&child)?;
+                let child_name = child.name();
+                let local = local_name(child_name.as_ref());
+                if scope.element_uri(child.name().as_ref()) == Some(P_NS) && local == b"cTn" {
+                    let parsed = parse_common_time_node(
+                        &capture_empty_element(&child)?,
+                        root.as_ref().expect("common media root"),
+                    )?;
+                    set_once(&mut common, parsed, "cTn")?;
+                    common_attributes = Some(all_attributes(&child)?);
+                    boundary = 1;
+                } else if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local == b"tgtEl"
+                {
+                    set_once(&mut target, TimingTarget::Unsupported, "tgtEl")?;
+                    boundary = 2;
+                }
+            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"cMediaNode" => {
+                let common = common.ok_or_else(|| OxmlError::MissingElement("p:cTn".to_owned()))?;
+                let common_attributes = common_attributes
+                    .ok_or_else(|| OxmlError::MissingElement("p:cTn".to_owned()))?;
+                let volume = parse_optional_u32(attribute(&attributes, "vol"), "vol")?;
+                if volume.is_some_and(|volume| volume > 100_000) {
+                    return Err(OxmlError::InvalidValue(
+                        "media volume must be between 0 and 100000".to_owned(),
+                    ));
+                }
+                let show_when_stopped = parse_optional_bool(
+                    attribute(&attributes, "showWhenStopped"),
+                    "showWhenStopped",
+                )?;
+                let looped = attribute(&common_attributes, "repeatCount")
+                    .is_some_and(|value| value == "indefinite");
+                let display = show_when_stopped
+                    .or(parse_optional_bool(
+                        attribute(&common_attributes, "display"),
+                        "display",
+                    )?)
+                    .map(|show| {
+                        if show {
+                            MediaDisplayPolicy::ShowWhenStopped
+                        } else {
+                            MediaDisplayPolicy::HideWhenStopped
+                        }
+                    });
+                return Ok(CommonMediaNode {
+                    common,
+                    target: target.unwrap_or(TimingTarget::Unsupported),
+                    volume,
+                    looped,
+                    display,
+                });
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement("closing p:cMediaNode".to_owned()));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_media_command(xml: &[u8], inherited: &NamespaceBindings) -> Result<TimingMediaCommand> {
+    let behavior = parse_behavior(xml, inherited)?;
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) | Event::Empty(start) => {
+                let attributes = all_attributes(&start)?;
+                let lexical = attribute(&attributes, "cmd").unwrap_or_default();
+                return Ok(TimingMediaCommand {
+                    common: behavior.common,
+                    target: behavior.target,
+                    command: parse_media_command_kind(lexical)?,
+                });
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("p:cmd".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn parse_media_command_kind(value: &str) -> Result<MediaCommandKind> {
+    match value {
+        "play" => Ok(MediaCommandKind::Play { from_ms: None }),
+        "pause" | "togglePause" => Ok(MediaCommandKind::Pause),
+        "stop" => Ok(MediaCommandKind::Stop),
+        _ if value.starts_with("playFrom(") && value.ends_with(')') => {
+            let value = &value[9..value.len() - 1];
+            Ok(parse_media_seconds(value)
+                .map(|from_ms| MediaCommandKind::Play {
+                    from_ms: Some(from_ms),
+                })
+                .unwrap_or_else(|_| MediaCommandKind::Other(format!("playFrom({value})"))))
+        }
+        _ if value.starts_with("seek(") && value.ends_with(')') => {
+            let value = &value[5..value.len() - 1];
+            Ok(parse_media_seconds(value)
+                .map(|position_ms| MediaCommandKind::Seek { position_ms })
+                .unwrap_or_else(|_| MediaCommandKind::Other(format!("seek({value})"))))
+        }
+        _ => Ok(MediaCommandKind::Other(value.to_owned())),
+    }
+}
+
+fn parse_media_seconds(value: &str) -> Result<u64> {
+    let seconds = value
+        .parse::<f64>()
+        .map_err(|_| OxmlError::InvalidValue(format!("invalid media command offset {value}")))?;
+    let milliseconds = seconds * 1_000.0;
+    if !milliseconds.is_finite() || milliseconds < 0.0 || milliseconds > u64::MAX as f64 {
+        return Err(OxmlError::InvalidValue(format!(
+            "media command offset is out of range: {value}"
+        )));
+    }
+    Ok(milliseconds.round() as u64)
 }
 
 struct ParsedBehavior {
@@ -729,6 +1795,9 @@ fn parse_behavior(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedBeh
                 } else if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
                     passed_behavior_slot = true;
                 }
+            }
+            Event::Empty(_) if root.is_none() => {
+                return Err(OxmlError::MissingElement("p:cBhvr".to_owned()));
             }
             Event::Empty(child) => {
                 let scope = root.as_ref().expect("root").with_start(&child)?;

@@ -23,6 +23,8 @@ use oxml_drawing::shape_props::CT_ShapeProperties;
 #[cfg(feature = "render")]
 use oxml_drawing::table::CT_TableStyleList;
 use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
+#[cfg(feature = "render")]
+use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextRun};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
@@ -33,8 +35,13 @@ use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
 #[cfg(feature = "render")]
-use oxml_layout::{Color, FontManager, LayoutResult, PageFrame, PositionedElement, Rect};
-use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
+use oxml_layout::{
+    Color, FontManager, GlyphRun, GroupElement, LayoutResult, PageFrame, Path as LayoutPath, Point,
+    PositionedElement, Rect, Transform,
+};
+use oxml_media::{
+    ImageFormat, MediaNamer, audio_video_signature_matches, is_safe_content_type, probe, resolve,
+};
 pub use oxml_opc::PackageReadLimits;
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
@@ -44,20 +51,24 @@ pub use oxml_opc::{
 };
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 #[cfg(feature = "render")]
-use rpptx_layout::timeline::ResolvedTimelineSlide;
+pub use rpptx_layout::timeline::{
+    EvaluatedFrameState, EvaluatedMediaState, MediaPlaybackPhase, TimelinePosition,
+};
 #[cfg(feature = "render")]
-pub use rpptx_layout::timeline::{EvaluatedFrameState, TimelinePosition};
+use rpptx_layout::timeline::{ResolvedTimelineSlide, evaluate_media_playback};
 #[cfg(feature = "render")]
 use rpptx_layout::{
-    ChartResource, FlattenedItem, ResolveCtx, ResolvedSlideTextDirections, ScopedChartResources,
-    ScopedHyperlinkTargets, ScopedMediaIds,
+    ChartResource, FlattenedItem, FlattenedSource, ResolveCtx, ResolvedContent,
+    ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
+use rpptx_oxml::namespace::P_NS;
 use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
-use rpptx_oxml::picture::CT_Picture;
+pub use rpptx_oxml::picture::MediaKind;
+use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, PictureMedia};
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 pub use rpptx_oxml::presentation::Section;
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
@@ -68,15 +79,27 @@ use rpptx_oxml::shape_tree::{
 use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout};
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
+pub use rpptx_oxml::timing::MediaPlaybackTrigger;
+use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
+#[cfg(feature = "render")]
+use rpptx_oxml::timing::{TimingNode, TimingTarget};
 #[cfg(feature = "render")]
 use rpptx_render::timeline::{
-    compose_morph_transition, compose_transition, layout_timeline_slide_deterministic,
+    compose_morph_transition, compose_transition, layout_timeline_slide_with_font_manager,
 };
 #[cfg(feature = "render")]
 use rpptx_render::{
-    MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions,
+    MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions_mut,
 };
 use thiserror::Error;
+
+#[cfg(feature = "render")]
+mod animation;
+#[cfg(feature = "render")]
+pub use animation::{
+    AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition,
+    DeterministicAnimation, GifLoopBehavior,
+};
 
 #[cfg(feature = "default-template")]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
@@ -90,11 +113,110 @@ pub struct DeterministicTimelineFrame {
     pub state: EvaluatedFrameState,
     pub diagnostics: Vec<oxml_layout::Diagnostic>,
 }
+
+/// How the media-aware renderer handles a media picture's poster.
+#[cfg(feature = "render")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaFallbackPolicy {
+    PosterFrame,
+    DeterministicPlaceholder,
+    Fail,
+}
+
+/// One deterministic page and its synchronized media playback state.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug)]
+pub struct DeterministicMediaTimelineFrame {
+    pub frame: DeterministicTimelineFrame,
+    pub media: Vec<EvaluatedMediaState>,
+}
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// One inspected media source resolved through the slide relationship scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaLocation {
+    Embedded {
+        part_name: String,
+        content_type: String,
+    },
+    Linked {
+        target: String,
+    },
+}
+
+/// Caller bytes and package metadata for one embedded media payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EmbeddedMediaInput<'a> {
+    pub bytes: &'a [u8],
+    pub filename: &'a str,
+    pub content_type: &'a str,
+}
+
+/// A new embedded or external media source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaSourceInput<'a> {
+    Embedded(EmbeddedMediaInput<'a>),
+    Linked {
+        target: &'a str,
+        content_type: &'a str,
+    },
+}
+
+/// Required poster bytes for a newly authored media picture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaPoster<'a> {
+    pub bytes: &'a [u8],
+    pub filename: &'a str,
+}
+
+/// The supported media playback settings retained by inspection and mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaPlaybackSettings {
+    pub trim_start_ms: Option<u64>,
+    pub trim_end_ms: Option<u64>,
+    pub volume: u32,
+    pub looped: bool,
+    pub show_when_stopped: bool,
+    pub trigger: MediaPlaybackTrigger,
+}
+
+impl Default for MediaPlaybackSettings {
+    fn default() -> Self {
+        Self {
+            trim_start_ms: None,
+            trim_end_ms: None,
+            volume: 100_000,
+            looped: false,
+            show_when_stopped: false,
+            trigger: MediaPlaybackTrigger::OnClick,
+        }
+    }
+}
+
+/// A non-fatal limitation discovered while inspecting media.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaDiagnostic {
+    UnsupportedContentType { content_type: String },
+    MissingPlaybackTiming,
+    UnsupportedPlaybackCommand { command: String },
+    MissingPoster,
+}
+
+/// One media picture and its package-resolved playback state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaInfo {
+    pub slide_index: usize,
+    pub shape_id: u32,
+    pub kind: MediaKind,
+    pub source: MediaLocation,
+    pub poster_relationship_id: Option<String>,
+    pub settings: MediaPlaybackSettings,
+    pub diagnostics: Vec<MediaDiagnostic>,
+}
 
 /// An error opening, resolving, or serialising a presentation package.
 #[derive(Debug, Error)]
@@ -206,6 +328,12 @@ pub enum Error {
 
     #[error("{operation} failed: {message}")]
     InvalidChartMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidMediaMutation {
         operation: &'static str,
         message: String,
     },
@@ -330,6 +458,7 @@ struct MediaEntry {
 struct MediaStore {
     by_id: HashMap<MediaId, Vec<MediaEntry>>,
     namer: MediaNamer,
+    media_namer: MediaNamer,
 }
 
 impl MediaStore {
@@ -337,6 +466,11 @@ impl MediaStore {
         let namer = MediaNamer::scan(
             "/ppt/media",
             "image",
+            package.parts.keys().map(String::as_str),
+        );
+        let media_namer = MediaNamer::scan(
+            "/ppt/media",
+            "media",
             package.parts.keys().map(String::as_str),
         );
         let mut by_id: HashMap<MediaId, Vec<MediaEntry>> = HashMap::new();
@@ -368,7 +502,11 @@ impl MediaStore {
                     newly_inserted: false,
                 });
         }
-        Self { by_id, namer }
+        Self {
+            by_id,
+            namer,
+            media_namer,
+        }
     }
 
     fn insert(&mut self, package: &mut OpcPackage, bytes: &[u8], filename: &str) -> String {
@@ -395,6 +533,36 @@ impl MediaStore {
         let extension = format.extension();
         let content_type = format.content_type();
         let part_name = self.namer.next_part_name(extension);
+        package.set_part(&part_name, bytes.to_vec());
+        register_content_type(package, &part_name, extension, content_type);
+        self.by_id.entry(media_id).or_default().push(MediaEntry {
+            part_name: part_name.clone(),
+            bytes: bytes.to_vec(),
+            extension: extension.to_owned(),
+            content_type: content_type.to_owned(),
+            newly_inserted: true,
+        });
+        part_name
+    }
+
+    fn insert_explicit(
+        &mut self,
+        package: &mut OpcPackage,
+        bytes: &[u8],
+        extension: &str,
+        content_type: &str,
+    ) -> String {
+        let media_id = MediaId::from_bytes(bytes);
+        if let Some(existing) = self.by_id.get(&media_id).and_then(|bucket| {
+            bucket.iter().find(|entry| {
+                entry.bytes == bytes
+                    && entry.extension == extension
+                    && entry.content_type == content_type
+            })
+        }) {
+            return existing.part_name.clone();
+        }
+        let part_name = self.media_namer.next_part_name(extension);
         package.set_part(&part_name, bytes.to_vec());
         register_content_type(package, &part_name, extension, content_type);
         self.by_id.entry(media_id).or_default().push(MediaEntry {
@@ -739,74 +907,49 @@ impl Presentation {
         position: TimelinePosition,
         outgoing_slide_index: Option<usize>,
     ) -> Result<DeterministicTimelineFrame> {
-        let assembly = assemble_render_input_inner(
-            &self.staged_package(false)?,
-            Some(TimelineRequest {
+        self.render_timeline_deterministic_inner(slide_index, position, outgoing_slide_index, None)
+            .map(|(frame, _)| frame)
+    }
+
+    /// Evaluates one deterministic page and synchronized media playback state.
+    #[cfg(feature = "render")]
+    pub fn render_media_timeline_deterministic(
+        &self,
+        slide_index: usize,
+        position: TimelinePosition,
+        outgoing_slide_index: Option<usize>,
+        fallback_policy: MediaFallbackPolicy,
+    ) -> Result<DeterministicMediaTimelineFrame> {
+        let (frame, media) = self.render_timeline_deterministic_inner(
+            slide_index,
+            position,
+            outgoing_slide_index,
+            Some(fallback_policy),
+        )?;
+        Ok(DeterministicMediaTimelineFrame { frame, media })
+    }
+
+    #[cfg(feature = "render")]
+    fn render_timeline_deterministic_inner(
+        &self,
+        slide_index: usize,
+        position: TimelinePosition,
+        outgoing_slide_index: Option<usize>,
+        fallback_policy: Option<MediaFallbackPolicy>,
+    ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
+        let package = self.staged_package(false)?;
+        let mut assembly = prepare_render_context(&package, fallback_policy.is_some())?;
+        render_prepared_timeline_request(
+            &mut assembly,
+            TimelineRequest {
                 slide_index,
                 outgoing_slide_index,
                 position,
-            }),
-        )?;
-        let incoming = assembly
-            .incoming
-            .as_ref()
-            .ok_or_else(|| render_failure(format!("slide index {slide_index} is out of bounds")))?;
-        if let Some(index) = outgoing_slide_index
-            && assembly.outgoing.is_none()
-        {
-            return Err(Error::UnknownSlideIndex {
-                index,
-                slide_count: self.slides.len(),
-            });
-        }
-        let incoming_page = layout_timeline_slide_deterministic(
-            &assembly.input,
-            slide_index,
-            incoming,
-            assembly.incoming_directions.as_ref(),
+                fallback_policy,
+            },
+            self.slides.len(),
+            false,
         )
-        .map_err(|error| render_failure(error.to_string()))?;
-        let outgoing_page = match (outgoing_slide_index, assembly.outgoing.as_ref()) {
-            (Some(index), Some(outgoing)) => Some(
-                layout_timeline_slide_deterministic(
-                    &assembly.input,
-                    index,
-                    outgoing,
-                    assembly.outgoing_directions.as_ref(),
-                )
-                .map_err(|error| render_failure(error.to_string()))?,
-            ),
-            _ => None,
-        };
-        let outgoing_page = outgoing_page.as_ref();
-        let transition = incoming.state.transition.as_ref();
-        let composed = if transition.is_some_and(|transition| {
-            matches!(
-                transition.effect,
-                rpptx_oxml::timing::TransitionEffect::Morph
-            )
-        }) {
-            match (outgoing_page, assembly.outgoing.as_ref(), transition) {
-                (Some(page), Some(outgoing), Some(transition)) => {
-                    compose_morph_transition(incoming_page, incoming, page, outgoing, transition)
-                }
-                _ => compose_transition(incoming_page, outgoing_page, transition),
-            }
-        } else {
-            compose_transition(incoming_page, outgoing_page, transition)
-        };
-        let mut diagnostics = incoming.slide.diagnostics.clone();
-        diagnostics.extend(incoming.state.diagnostics.clone());
-        if let Some(outgoing) = assembly.outgoing.as_ref() {
-            diagnostics.extend(outgoing.slide.diagnostics.clone());
-            diagnostics.extend(outgoing.state.diagnostics.clone());
-        }
-        diagnostics.extend(composed.diagnostics);
-        Ok(DeterministicTimelineFrame {
-            page: composed.page,
-            state: incoming.state.clone(),
-            diagnostics,
-        })
     }
 
     /// Renders the current presentation to a complete deterministic PDF.
@@ -827,6 +970,8 @@ impl Presentation {
     }
 
     fn staged_package(&self, preserve_unchanged_modelled_parts: bool) -> Result<OpcPackage> {
+        #[cfg(all(feature = "render", test))]
+        STAGED_PACKAGE_COUNT.with(|count| count.set(count.get() + 1));
         if self.core_properties_dirty
             && self
                 .package
@@ -2068,6 +2213,326 @@ impl Presentation {
         ))
     }
 
+    /// Inspects the media pictures on one slide in z-order.
+    pub fn media(&self, slide_index: usize) -> Result<Vec<MediaInfo>> {
+        let record = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        media_infos_for_slide(&self.package, slide_index, &record.part_name, &record.slide)
+    }
+
+    /// Adds one media picture, poster, relationship scope, and timing node atomically.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_media(
+        &mut self,
+        slide_index: usize,
+        kind: MediaKind,
+        source: MediaSourceInput<'_>,
+        poster: MediaPoster<'_>,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+        settings: MediaPlaybackSettings,
+    ) -> Result<ShapeRef<'_>> {
+        self.require_slide_index(slide_index)?;
+        validate_media_settings(settings)?;
+        validate_media_source(source)?;
+        if ImageFormat::sniff(poster.bytes).is_none() {
+            return Err(invalid_media_mutation(
+                "add media",
+                format!("poster {} has unsupported image bytes", poster.filename),
+            ));
+        }
+        if width.0 <= 0 || height.0 <= 0 {
+            return Err(invalid_media_mutation(
+                "add media",
+                "media width and height must be positive",
+            ));
+        }
+
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let shape_id = ShapeIdAllocator::scan(
+            &staged.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree,
+        )
+        .allocate();
+        let poster_part =
+            staged
+                .media_store
+                .insert(&mut staged.package, poster.bytes, poster.filename);
+        let mut relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let poster_relationship_id = relationships.add(
+            rel_types::IMAGE,
+            &relative_part_target(&slide_part, &poster_part),
+        );
+        let (standard_relationship_id, microsoft_relationship_id, picture_source) =
+            add_media_relationships(
+                &mut staged.package,
+                &mut staged.media_store,
+                &slide_part,
+                &mut relationships,
+                kind,
+                source,
+                true,
+            )?;
+        let microsoft_relationship_id = microsoft_relationship_id
+            .expect("new media pictures always include the Office media relationship");
+        let picture = CT_Picture::new_media(
+            shape_id,
+            &format!("{} {shape_id}", media_kind_name(kind)),
+            kind,
+            match picture_source {
+                PictureMediaSource::Embedded { .. } => PictureMediaSource::Embedded {
+                    relationship_id: standard_relationship_id,
+                },
+                PictureMediaSource::Linked { .. } => PictureMediaSource::Linked {
+                    relationship_id: standard_relationship_id,
+                },
+            },
+            &microsoft_relationship_id,
+            &poster_relationship_id,
+            settings.trim_start_ms,
+            settings.trim_end_ms,
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_media_mutation("add media", error.to_string()))?;
+        staged.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .append_child(ShapeTreeChild::Picture(picture));
+        let timing = staged.slides[slide_index]
+            .slide
+            .timing
+            .get_or_insert_with(|| {
+                CT_Timing::from_xml(
+                    format!(r#"<p:timing xmlns:p="{P_NS}"><p:tnLst/></p:timing>"#).as_bytes(),
+                )
+                .expect("canonical media timing shell")
+            });
+        timing
+            .add_media(
+                kind == MediaKind::Video,
+                shape_id,
+                settings.volume,
+                settings.looped,
+                settings.show_when_stopped,
+                settings.trigger,
+            )
+            .map_err(|error| invalid_media_mutation("add media", error.to_string()))?;
+        staged.package.part_rels.insert(slide_part, relationships);
+        self.commit_candidate(staged)?;
+        self.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find(|child| child.non_visual_id() == Some(shape_id))
+            .map(shape_ref)
+            .ok_or_else(|| invalid_media_mutation("add media", "authored picture was not retained"))
+    }
+
+    /// Replaces one media source while preserving its shape, poster, and timing.
+    pub fn replace_media(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        source: MediaSourceInput<'_>,
+    ) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        validate_media_source(source)?;
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let picture = media_picture_shape(&staged.slides[slide_index].slide, shape_id)?;
+        let media = picture.media.as_ref().expect("media picture").clone();
+        let standard_relationship_id = picture.standard_media_relationship_id().map(str::to_owned);
+        let has_office_media = !picture.office_media_relationship_ids().is_empty();
+        let mut old_relationship_ids = picture.office_media_relationship_ids().to_vec();
+        if !old_relationship_ids
+            .iter()
+            .any(|id| id == media.source.relationship_id())
+        {
+            old_relationship_ids.push(media.source.relationship_id().to_owned());
+        }
+        if let Some(standard_relationship_id) = &standard_relationship_id
+            && !old_relationship_ids.contains(standard_relationship_id)
+        {
+            old_relationship_ids.push(standard_relationship_id.clone());
+        }
+        let mut relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let old_relationships = old_relationship_ids
+            .iter()
+            .map(|relationship_id| {
+                relationships
+                    .get_by_id(relationship_id)
+                    .cloned()
+                    .ok_or_else(|| Error::MissingRelationship {
+                        source_part: slide_part.clone(),
+                        relationship_id: relationship_id.clone(),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let (standard_id, microsoft_id, picture_source) = add_media_relationships(
+            &mut staged.package,
+            &mut staged.media_store,
+            &slide_part,
+            &mut relationships,
+            media.kind,
+            source,
+            has_office_media,
+        )?;
+        let source_id = microsoft_id.unwrap_or_else(|| standard_id.clone());
+        let replacement_source = match picture_source {
+            PictureMediaSource::Embedded { .. } => PictureMediaSource::Embedded {
+                relationship_id: source_id,
+            },
+            PictureMediaSource::Linked { .. } => PictureMediaSource::Linked {
+                relationship_id: source_id,
+            },
+        };
+        let target_picture = staged.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter_mut()
+            .find(|child| child.non_visual_id() == Some(shape_id))
+            .and_then(|child| match child {
+                ShapeTreeChild::Picture(picture) => Some(picture),
+                _ => None,
+            })
+            .ok_or_else(|| invalid_media_mutation("replace media", "media picture is missing"))?;
+        target_picture
+            .replace_media_relationship_ids(&standard_id, replacement_source)
+            .map_err(|error| invalid_media_mutation("replace media", error.to_string()))?;
+        let referenced = slide_relationship_ids(&staged.slides[slide_index].slide)?;
+        let mut candidates = HashSet::new();
+        relationships.items.retain(|relationship| {
+            let Some(old) = old_relationships
+                .iter()
+                .find(|old| old.id == relationship.id)
+            else {
+                return true;
+            };
+            if referenced.contains(&old.id) {
+                return true;
+            }
+            if !relationship_is_external(old) {
+                candidates.insert(OpcPackage::resolve_rel_target(&slide_part, &old.target));
+            }
+            false
+        });
+        staged.package.part_rels.insert(slide_part, relationships);
+        prune_unreachable_media(&mut staged.package, &candidates);
+        staged.media_store = MediaStore::scan(&staged.package);
+        self.commit_candidate(staged)
+    }
+
+    /// Extracts embedded media bytes, or returns `None` for linked media.
+    pub fn extract_media(&self, slide_index: usize, shape_id: u32) -> Result<Option<Vec<u8>>> {
+        let record = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let media = media_picture(&record.slide, shape_id)?;
+        let relationship_id = media.source.relationship_id();
+        let relationship = self
+            .package
+            .get_part_rels(&record.part_name)
+            .and_then(|relationships| relationships.get_by_id(relationship_id))
+            .ok_or_else(|| Error::MissingRelationship {
+                source_part: record.part_name.clone(),
+                relationship_id: relationship_id.to_owned(),
+            })?;
+        if relationship_is_external(relationship) {
+            return Ok(None);
+        }
+        let part_name = OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+        Ok(Some(required_part(&self.package, &part_name)?.to_vec()))
+    }
+
+    /// Removes one media picture and only its relationship-owned package candidates.
+    pub fn remove_media(&mut self, slide_index: usize, shape_id: u32) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let picture = media_picture_shape(&staged.slides[slide_index].slide, shape_id)?;
+        let media = picture.media.as_ref().expect("media picture").clone();
+        let standard_relationship_id = picture.standard_media_relationship_id().map(str::to_owned);
+        let office_relationship_ids = picture.office_media_relationship_ids().to_vec();
+        let mut relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let mut owned_ids = office_relationship_ids.into_iter().collect::<HashSet<_>>();
+        owned_ids.insert(media.source.relationship_id().to_owned());
+        if let Some(standard_relationship_id) = standard_relationship_id {
+            owned_ids.insert(standard_relationship_id);
+        }
+        if let Some(poster_relationship_id) = media.poster_relationship_id {
+            owned_ids.insert(poster_relationship_id);
+        }
+        for relationship_id in &owned_ids {
+            relationships
+                .get_by_id(relationship_id)
+                .ok_or_else(|| Error::MissingRelationship {
+                    source_part: slide_part.clone(),
+                    relationship_id: relationship_id.clone(),
+                })?;
+        }
+        staged.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .remove_child_by_id(shape_id)
+            .map_err(|error| invalid_media_mutation("remove media", error.to_string()))?
+            .ok_or_else(|| invalid_media_mutation("remove media", "media picture is missing"))?;
+        if let Some(timing) = &mut staged.slides[slide_index].slide.timing {
+            timing
+                .remove_media(shape_id)
+                .map_err(|error| invalid_media_mutation("remove media", error.to_string()))?;
+        }
+        let referenced = slide_relationship_ids(&staged.slides[slide_index].slide)?;
+        let mut candidates = HashSet::new();
+        relationships.items.retain(|relationship| {
+            if !owned_ids.contains(&relationship.id) || referenced.contains(&relationship.id) {
+                return true;
+            }
+            if !relationship_is_external(relationship) {
+                candidates.insert(OpcPackage::resolve_rel_target(
+                    &slide_part,
+                    &relationship.target,
+                ));
+            }
+            false
+        });
+        staged.package.part_rels.insert(slide_part, relationships);
+        prune_unreachable_media(&mut staged.package, &candidates);
+        staged.media_store = MediaStore::scan(&staged.package);
+        self.commit_candidate(staged)
+    }
+
     /// Appends an editable relationship-backed chart to one slide.
     #[allow(clippy::too_many_arguments)]
     pub fn add_chart(
@@ -2136,6 +2601,177 @@ impl Presentation {
     }
 }
 
+#[cfg(feature = "render")]
+fn render_prepared_timeline_request(
+    assembly: &mut PreparedRenderAssembly,
+    request: TimelineRequest,
+    slide_count: usize,
+    reuse_prepared_fonts: bool,
+) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
+    #[cfg(test)]
+    let _retention = ActiveResolvedSample::enter();
+    let incoming_source =
+        assembly
+            .slides
+            .get(request.slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: request.slide_index,
+                slide_count,
+            })?;
+    let mut legacy_font_manager;
+    let font_manager = if reuse_prepared_fonts {
+        &mut assembly.font_manager
+    } else {
+        legacy_font_manager = FontManager::new_deterministic()
+            .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+        legacy_font_manager.load_additional_fonts(&assembly.input.fonts);
+        &mut legacy_font_manager
+    };
+    let mut incoming_context = ResolveCtx::new(
+        &incoming_source.theme,
+        render_effective_color_map(
+            &incoming_source.master,
+            &incoming_source.layout,
+            &incoming_source.slide,
+        ),
+        &incoming_source.master,
+        &incoming_source.layout,
+        &incoming_source.slide,
+        &assembly.default_text_style,
+    );
+    if let Some(styles) = assembly.table_styles.as_ref() {
+        incoming_context = incoming_context.with_table_styles(styles);
+    }
+    if request.fallback_policy.is_some() {
+        incoming_context = incoming_context.with_media_poster_diagnostic_identity();
+    }
+    let (mut incoming, incoming_directions) = incoming_context
+        .resolve_slide_with_chart_resources_and_text_directions_at(
+            assembly.size,
+            &incoming_source.media,
+            &incoming_source.hyperlinks,
+            &incoming_source.charts,
+            font_manager,
+            request.position,
+        )
+        .map_err(|error| render_failure(format!("{}: {error}", incoming_source.slide_part)))?;
+    let mut incoming_media = Vec::new();
+    let mut incoming_media_diagnostics = Vec::new();
+    if let Some(policy) = request.fallback_policy {
+        apply_media_fallback_policy(&mut incoming, &incoming_source.slide, policy, font_manager)?;
+        let (states, diagnostics) = evaluate_slide_media(&incoming_source.slide, request.position);
+        let consumed_shape_ids = states
+            .iter()
+            .map(|state| state.shape_id)
+            .collect::<HashSet<_>>();
+        incoming_media = states;
+        incoming_media_diagnostics = incoming_source.media_diagnostics.clone();
+        incoming_media_diagnostics.extend(diagnostics);
+        suppress_consumed_media_timing_diagnostics(
+            &mut incoming.state.diagnostics,
+            incoming_source.slide.timing.as_ref(),
+            &consumed_shape_ids,
+        );
+    }
+    let (outgoing, outgoing_directions) = match request.outgoing_slide_index {
+        None => (None, None),
+        Some(index) if index == request.slide_index => {
+            (Some(incoming.clone()), Some(incoming_directions.clone()))
+        }
+        Some(index) => {
+            let source = assembly
+                .slides
+                .get(index)
+                .ok_or(Error::UnknownSlideIndex { index, slide_count })?;
+            let mut context = ResolveCtx::new(
+                &source.theme,
+                render_effective_color_map(&source.master, &source.layout, &source.slide),
+                &source.master,
+                &source.layout,
+                &source.slide,
+                &assembly.default_text_style,
+            );
+            if let Some(styles) = assembly.table_styles.as_ref() {
+                context = context.with_table_styles(styles);
+            }
+            if request.fallback_policy.is_some() {
+                context = context.with_media_poster_diagnostic_identity();
+            }
+            let (mut timeline, directions) = context
+                .resolve_slide_with_chart_resources_and_text_directions_at(
+                    assembly.size,
+                    &source.media,
+                    &source.hyperlinks,
+                    &source.charts,
+                    font_manager,
+                    TimelinePosition {
+                        elapsed_ms: u64::MAX,
+                        click_count: u32::MAX,
+                    },
+                )
+                .map_err(|error| render_failure(format!("{}: {error}", source.slide_part)))?;
+            if let Some(policy) = request.fallback_policy {
+                apply_media_fallback_policy(&mut timeline, &source.slide, policy, font_manager)?;
+            }
+            (Some(timeline), Some(directions))
+        }
+    };
+    let incoming_page = layout_timeline_slide_with_font_manager(
+        &assembly.input,
+        request.slide_index,
+        &incoming,
+        Some(&incoming_directions),
+        font_manager,
+    )
+    .map_err(|error| render_failure(error.to_string()))?;
+    let outgoing_page = match (request.outgoing_slide_index, outgoing.as_ref()) {
+        (Some(index), Some(outgoing)) => Some(
+            layout_timeline_slide_with_font_manager(
+                &assembly.input,
+                index,
+                outgoing,
+                outgoing_directions.as_ref(),
+                font_manager,
+            )
+            .map_err(|error| render_failure(error.to_string()))?,
+        ),
+        _ => None,
+    };
+    let outgoing_page = outgoing_page.as_ref();
+    let transition = incoming.state.transition.as_ref();
+    let composed = if transition.is_some_and(|transition| {
+        matches!(
+            transition.effect,
+            rpptx_oxml::timing::TransitionEffect::Morph
+        )
+    }) {
+        match (outgoing_page, outgoing.as_ref(), transition) {
+            (Some(page), Some(outgoing), Some(transition)) => {
+                compose_morph_transition(incoming_page, &incoming, page, outgoing, transition)
+            }
+            _ => compose_transition(incoming_page, outgoing_page, transition),
+        }
+    } else {
+        compose_transition(incoming_page, outgoing_page, transition)
+    };
+    let mut diagnostics = incoming.slide.diagnostics.clone();
+    diagnostics.extend(incoming.state.diagnostics.clone());
+    if let Some(outgoing) = outgoing.as_ref() {
+        diagnostics.extend(outgoing.slide.diagnostics.clone());
+        diagnostics.extend(outgoing.state.diagnostics.clone());
+    }
+    diagnostics.extend(incoming_media_diagnostics);
+    diagnostics.extend(composed.diagnostics);
+    Ok((
+        DeterministicTimelineFrame {
+            page: composed.page,
+            state: incoming.state.clone(),
+            diagnostics,
+        },
+        incoming_media,
+    ))
+}
+
 fn validate_chart_extents(width: Emu, height: Emu) -> Result<()> {
     if width.0 <= 0 || height.0 <= 0 {
         return Err(invalid_chart_mutation(
@@ -2174,6 +2810,306 @@ fn invalid_chart_mutation(operation: &'static str, message: impl Into<String>) -
     Error::InvalidChartMutation {
         operation,
         message: message.into(),
+    }
+}
+
+fn invalid_media_mutation(operation: &'static str, message: impl Into<String>) -> Error {
+    Error::InvalidMediaMutation {
+        operation,
+        message: message.into(),
+    }
+}
+
+fn media_kind_name(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Audio => "Audio",
+        MediaKind::Video => "Video",
+    }
+}
+
+fn media_relationship_type(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Audio => rel_types::AUDIO,
+        MediaKind::Video => rel_types::VIDEO,
+    }
+}
+
+fn media_picture(slide: &CT_Slide, shape_id: u32) -> Result<&PictureMedia> {
+    media_picture_shape(slide, shape_id)?
+        .media
+        .as_ref()
+        .ok_or_else(|| {
+            invalid_media_mutation(
+                "inspect media",
+                format!("shape id {shape_id} is not a media picture"),
+            )
+        })
+}
+
+fn media_picture_shape(slide: &CT_Slide, shape_id: u32) -> Result<&CT_Picture> {
+    slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_id() == Some(shape_id))
+        .and_then(|child| match child {
+            ShapeTreeChild::Picture(picture) if picture.media.is_some() => Some(picture),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            invalid_media_mutation(
+                "inspect media",
+                format!("shape id {shape_id} is not a media picture"),
+            )
+        })
+}
+
+fn slide_relationship_ids(slide: &CT_Slide) -> Result<HashSet<String>> {
+    let xml = slide
+        .to_xml()
+        .map_err(|error| invalid_media_mutation("inspect media references", error.to_string()))?;
+    relationship_ids(&xml)
+        .map(|ids| ids.into_iter().collect())
+        .map_err(|error| invalid_media_mutation("inspect media references", error.to_string()))
+}
+
+fn media_infos_for_slide(
+    package: &OpcPackage,
+    slide_index: usize,
+    slide_part: &str,
+    slide: &CT_Slide,
+) -> Result<Vec<MediaInfo>> {
+    let relationships = package
+        .get_part_rels(slide_part)
+        .cloned()
+        .unwrap_or_default();
+    slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            ShapeTreeChild::Picture(picture) => picture
+                .media
+                .as_ref()
+                .zip(child.non_visual_id())
+                .map(|(media, shape_id)| (picture, media, shape_id)),
+            _ => None,
+        })
+        .map(|(picture, media, shape_id)| {
+            let relationship_id = media.source.relationship_id();
+            let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
+                Error::MissingRelationship {
+                    source_part: slide_part.to_owned(),
+                    relationship_id: relationship_id.to_owned(),
+                }
+            })?;
+            if relationship.rel_type != rel_types::POWERPOINT_MEDIA
+                && relationship.rel_type != media_relationship_type(media.kind)
+            {
+                return Err(Error::WrongRelationshipType {
+                    source_part: slide_part.to_owned(),
+                    relationship_id: relationship_id.to_owned(),
+                    expected: rel_types::POWERPOINT_MEDIA,
+                    actual: relationship.rel_type.clone(),
+                });
+            }
+            let source = if relationship_is_external(relationship) {
+                MediaLocation::Linked {
+                    target: relationship.target.clone(),
+                }
+            } else {
+                let part_name = OpcPackage::resolve_rel_target(slide_part, &relationship.target);
+                required_part(package, &part_name)?;
+                let content_type = package
+                    .content_types
+                    .content_type_for(&part_name)
+                    .ok_or_else(|| {
+                        invalid_media_mutation(
+                            "inspect media",
+                            format!("package part {part_name} has no content type"),
+                        )
+                    })?
+                    .to_owned();
+                MediaLocation::Embedded {
+                    part_name,
+                    content_type,
+                }
+            };
+            let (settings, mut diagnostics) =
+                media_playback_settings(picture, slide.timing.as_ref(), shape_id);
+            let content_type = match &source {
+                MediaLocation::Embedded { content_type, .. } => Some(content_type.as_str()),
+                MediaLocation::Linked { .. } => None,
+            };
+            if let Some(content_type) = content_type
+                && !is_known_media_content_type(content_type)
+            {
+                diagnostics.push(MediaDiagnostic::UnsupportedContentType {
+                    content_type: content_type.to_owned(),
+                });
+            }
+            if media.poster_relationship_id.is_none() {
+                diagnostics.push(MediaDiagnostic::MissingPoster);
+            }
+            Ok(MediaInfo {
+                slide_index,
+                shape_id,
+                kind: media.kind,
+                source,
+                poster_relationship_id: media.poster_relationship_id.clone(),
+                settings,
+                diagnostics,
+            })
+        })
+        .collect()
+}
+
+fn media_playback_settings(
+    picture: &CT_Picture,
+    timing: Option<&CT_Timing>,
+    shape_id: u32,
+) -> (MediaPlaybackSettings, Vec<MediaDiagnostic>) {
+    let mut settings = MediaPlaybackSettings::default();
+    (settings.trim_start_ms, settings.trim_end_ms) = picture.media_trim_bounds();
+    let mut diagnostics = Vec::new();
+    let Some(timing) = timing else {
+        diagnostics.push(MediaDiagnostic::MissingPlaybackTiming);
+        return (settings, diagnostics);
+    };
+    if let Some(media) = timing.media_for_shape(shape_id) {
+        settings.volume = media.common.volume.unwrap_or(100_000);
+        settings.looped = media.common.looped;
+        settings.show_when_stopped = matches!(
+            media.common.display,
+            Some(MediaDisplayPolicy::ShowWhenStopped)
+        );
+    } else {
+        diagnostics.push(MediaDiagnostic::MissingPlaybackTiming);
+    }
+    if let Some(trigger) = timing.media_playback_trigger_for_shape(shape_id) {
+        settings.trigger = trigger;
+    }
+    if let Some(command) = timing.media_commands_for_shape(shape_id).first()
+        && let MediaCommandKind::Other(command) = &command.command
+    {
+        diagnostics.push(MediaDiagnostic::UnsupportedPlaybackCommand {
+            command: command.clone(),
+        });
+    }
+    (settings, diagnostics)
+}
+
+fn validate_media_settings(settings: MediaPlaybackSettings) -> Result<()> {
+    if settings.volume > 100_000 {
+        return Err(invalid_media_mutation(
+            "configure media",
+            "volume must be between 0 and 100000",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_media_source(source: MediaSourceInput<'_>) -> Result<()> {
+    let (bytes, filename, target, content_type) = match source {
+        MediaSourceInput::Embedded(input) => (
+            Some(input.bytes),
+            Some(input.filename),
+            None,
+            input.content_type,
+        ),
+        MediaSourceInput::Linked {
+            target,
+            content_type,
+        } => (None, None, Some(target), content_type),
+    };
+    if !is_safe_content_type(content_type) {
+        return Err(invalid_media_mutation(
+            "configure media",
+            "content type must be an explicit MIME value",
+        ));
+    }
+    if let Some(target) = target
+        && (target.is_empty() || target.bytes().any(|byte| byte.is_ascii_control()))
+    {
+        return Err(invalid_media_mutation(
+            "configure media",
+            "linked target must be non-empty and contain no control characters",
+        ));
+    }
+    if let (Some(bytes), Some(filename)) = (bytes, filename) {
+        safe_media_extension(filename)?;
+        if audio_video_signature_matches(bytes, content_type) == Some(false) {
+            return Err(invalid_media_mutation(
+                "configure media",
+                format!("{filename} bytes do not match {content_type}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn safe_media_extension(filename: &str) -> Result<String> {
+    let extension = filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= 16
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+        .ok_or_else(|| {
+            invalid_media_mutation(
+                "configure media",
+                format!("{filename} requires a safe filename extension"),
+            )
+        })?;
+    Ok(extension.to_ascii_lowercase())
+}
+
+fn is_known_media_content_type(content_type: &str) -> bool {
+    audio_video_signature_matches(&[], content_type).is_some()
+}
+
+fn add_media_relationships(
+    package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    slide_part: &str,
+    relationships: &mut Relationships,
+    kind: MediaKind,
+    source: MediaSourceInput<'_>,
+    include_office_media: bool,
+) -> Result<(String, Option<String>, PictureMediaSource)> {
+    match source {
+        MediaSourceInput::Embedded(input) => {
+            let extension = safe_media_extension(input.filename)?;
+            let media_part =
+                media_store.insert_explicit(package, input.bytes, &extension, input.content_type);
+            let target = relative_part_target(slide_part, &media_part);
+            let standard = relationships.add(media_relationship_type(kind), &target);
+            let microsoft = include_office_media
+                .then(|| relationships.add(rel_types::POWERPOINT_MEDIA, &target));
+            Ok((
+                standard.clone(),
+                microsoft,
+                PictureMediaSource::Embedded {
+                    relationship_id: standard,
+                },
+            ))
+        }
+        MediaSourceInput::Linked { target, .. } => {
+            let standard = relationships.add_external(media_relationship_type(kind), target);
+            let microsoft = include_office_media
+                .then(|| relationships.add_external(rel_types::POWERPOINT_MEDIA, target));
+            Ok((
+                standard.clone(),
+                microsoft,
+                PictureMediaSource::Linked {
+                    relationship_id: standard,
+                },
+            ))
+        }
     }
 }
 
@@ -4474,7 +5410,7 @@ fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &
 
 #[cfg(feature = "render")]
 fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutResult)> {
-    let assembly = assemble_render_input_inner(package, None)?;
+    let assembly = prepare_render_context(package, false)?;
     Ok((assembly.input, assembly.layout))
 }
 
@@ -4484,23 +5420,113 @@ struct TimelineRequest {
     slide_index: usize,
     outgoing_slide_index: Option<usize>,
     position: TimelinePosition,
+    fallback_policy: Option<MediaFallbackPolicy>,
 }
 
 #[cfg(feature = "render")]
-struct RenderAssembly {
+struct PreparedSlideAssembly {
+    slide_part: String,
+    slide: CT_Slide,
+    layout: CT_SlideLayout,
+    master: CT_SlideMaster,
+    theme: CT_OfficeStyleSheet,
+    media: ScopedMediaIds,
+    hyperlinks: ScopedHyperlinkTargets,
+    charts: ScopedChartResources,
+    media_diagnostics: Vec<oxml_layout::Diagnostic>,
+}
+
+#[cfg(feature = "render")]
+struct PreparedRenderAssembly {
     input: RenderInput,
     layout: LayoutResult,
-    incoming: Option<ResolvedTimelineSlide>,
-    incoming_directions: Option<ResolvedSlideTextDirections>,
-    outgoing: Option<ResolvedTimelineSlide>,
-    outgoing_directions: Option<ResolvedSlideTextDirections>,
+    font_manager: FontManager,
+    slides: Vec<PreparedSlideAssembly>,
+    size: (f64, f64),
+    default_text_style: CT_TextListStyle,
+    table_styles: Option<CT_TableStyleList>,
+}
+
+#[cfg(all(feature = "render", test))]
+std::thread_local! {
+    static STAGED_PACKAGE_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_RENDER_ASSEMBLY_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_MEDIA_ASSEMBLY_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_LAYOUT_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_FONT_MANAGER_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(all(feature = "render", test))]
+fn animation_preparation_counts() -> (usize, usize, usize, usize, usize) {
+    (
+        STAGED_PACKAGE_COUNT.get(),
+        PREPARED_RENDER_ASSEMBLY_COUNT.get(),
+        PREPARED_MEDIA_ASSEMBLY_COUNT.get(),
+        PREPARED_LAYOUT_COUNT.get(),
+        PREPARED_FONT_MANAGER_COUNT.get(),
+    )
+}
+
+#[cfg(all(feature = "render", test))]
+std::thread_local! {
+    static ACTIVE_RESOLVED_SAMPLE_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static MAX_RESOLVED_SAMPLE_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(all(feature = "render", test))]
+struct ActiveResolvedSample;
+
+#[cfg(all(feature = "render", test))]
+impl ActiveResolvedSample {
+    fn enter() -> Self {
+        ACTIVE_RESOLVED_SAMPLE_COUNT.with(|active| {
+            let current = active.get() + 1;
+            active.set(current);
+            MAX_RESOLVED_SAMPLE_COUNT.with(|maximum| maximum.set(maximum.get().max(current)));
+        });
+        Self
+    }
+}
+
+#[cfg(all(feature = "render", test))]
+impl Drop for ActiveResolvedSample {
+    fn drop(&mut self) {
+        ACTIVE_RESOLVED_SAMPLE_COUNT.with(|active| active.set(active.get() - 1));
+    }
+}
+
+#[cfg(all(feature = "render", test))]
+fn reset_resolved_sample_retention_count() {
+    ACTIVE_RESOLVED_SAMPLE_COUNT.set(0);
+    MAX_RESOLVED_SAMPLE_COUNT.set(0);
+}
+
+#[cfg(all(feature = "render", test))]
+fn max_resolved_sample_retention_count() -> usize {
+    MAX_RESOLVED_SAMPLE_COUNT.get()
 }
 
 #[cfg(feature = "render")]
-fn assemble_render_input_inner(
+fn prepare_render_context(
     package: &OpcPackage,
-    timeline_request: Option<TimelineRequest>,
-) -> Result<RenderAssembly> {
+    collect_media_diagnostics: bool,
+) -> Result<PreparedRenderAssembly> {
+    #[cfg(test)]
+    PREPARED_RENDER_ASSEMBLY_COUNT.with(|count| count.set(count.get() + 1));
     let presentation_part = package
         .main_document_part()
         .ok_or(Error::MissingMainDocument)?;
@@ -4522,14 +5548,15 @@ fn assemble_render_input_inner(
         .ok_or_else(|| render_failure("presentation relationships are missing"))?;
 
     let mut media = HashMap::new();
+    #[cfg(test)]
+    PREPARED_MEDIA_ASSEMBLY_COUNT.with(|count| count.set(count.get() + 1));
+    #[cfg(test)]
+    PREPARED_FONT_MANAGER_COUNT.with(|count| count.set(count.get() + 1));
     let mut font_manager = FontManager::new_deterministic()
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
-    let mut incoming = None;
-    let mut incoming_directions = None;
-    let mut outgoing = None;
-    let mut outgoing_directions = None;
+    let mut prepared_slides = Vec::with_capacity(presentation.slide_ids.len());
     for (slide_index, slide_id) in presentation.slide_ids.iter().enumerate() {
         let slide_relationship = presentation_relationships
             .get_by_id(&slide_id.relationship_id)
@@ -4592,60 +5619,22 @@ fn assemble_render_input_inner(
             [&slide_part, &layout_part, &master_part],
             &mut media,
         )?;
-        let is_incoming =
-            timeline_request.is_some_and(|request| request.slide_index == slide_index);
-        let is_outgoing = timeline_request
-            .and_then(|request| request.outgoing_slide_index)
-            .is_some_and(|index| index == slide_index);
-        let (resolved, slide_text_directions) = if is_incoming {
-            let request = timeline_request.expect("incoming request exists");
-            let (timeline, directions) = context
-                .resolve_slide_with_chart_resources_and_text_directions_at(
-                    size,
-                    &slide_media,
-                    &slide_hyperlinks,
-                    &slide_charts,
-                    &mut font_manager,
-                    request.position,
-                )
-                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
-            let resolved = timeline.slide.clone();
-            incoming_directions = Some(directions.clone());
-            incoming = Some(timeline);
-            (resolved, directions)
-        } else if is_outgoing {
-            let (timeline, directions) = context
-                .resolve_slide_with_chart_resources_and_text_directions_at(
-                    size,
-                    &slide_media,
-                    &slide_hyperlinks,
-                    &slide_charts,
-                    &mut font_manager,
-                    TimelinePosition {
-                        elapsed_ms: u64::MAX,
-                        click_count: u32::MAX,
-                    },
-                )
-                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
-            let resolved = timeline.slide.clone();
-            outgoing_directions = Some(directions.clone());
-            outgoing = Some(timeline);
-            (resolved, directions)
+        let (resolved, slide_text_directions) = context
+            .resolve_slide_with_chart_resources_and_text_directions(
+                size,
+                &slide_media,
+                &slide_hyperlinks,
+                &slide_charts,
+                &mut font_manager,
+            )
+            .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+
+        let prepared_media_diagnostics = if collect_media_diagnostics {
+            let media_infos = media_infos_for_slide(package, slide_index, &slide_part, &slide)?;
+            package_media_diagnostics(&media_infos)
         } else {
-            context
-                .resolve_slide_with_chart_resources_and_text_directions(
-                    size,
-                    &slide_media,
-                    &slide_hyperlinks,
-                    &slide_charts,
-                    &mut font_manager,
-                )
-                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?
+            Vec::new()
         };
-        if is_outgoing && is_incoming {
-            outgoing = incoming.clone();
-            outgoing_directions = incoming_directions.clone();
-        }
         if source_count != resolved.shapes.len() {
             return Err(render_failure(format!(
                 "{slide_part}: dropped bounded source shape, source {source_count}, resolved {}",
@@ -4654,6 +5643,17 @@ fn assemble_render_input_inner(
         }
         resolved_slides.push(resolved);
         text_directions.push(slide_text_directions);
+        prepared_slides.push(PreparedSlideAssembly {
+            slide_part,
+            slide,
+            layout,
+            master,
+            theme,
+            media: slide_media,
+            hyperlinks: slide_hyperlinks,
+            charts: slide_charts,
+            media_diagnostics: prepared_media_diagnostics,
+        });
     }
 
     let input = RenderInput {
@@ -4662,9 +5662,11 @@ fn assemble_render_input_inner(
         fonts: Vec::new(),
         metadata: None,
     };
-    let layout = layout_presentation_with_font_manager_and_text_directions(
+    #[cfg(test)]
+    PREPARED_LAYOUT_COUNT.with(|count| count.set(count.get() + 1));
+    let layout = layout_presentation_with_font_manager_and_text_directions_mut(
         &input,
-        font_manager,
+        &mut font_manager,
         &text_directions,
     )
     .map_err(|error| render_failure(error.to_string()))?;
@@ -4675,13 +5677,276 @@ fn assemble_render_input_inner(
             input.slides.len()
         )));
     }
-    Ok(RenderAssembly {
+    Ok(PreparedRenderAssembly {
         input,
         layout,
-        incoming,
-        incoming_directions,
-        outgoing,
-        outgoing_directions,
+        font_manager,
+        slides: prepared_slides,
+        size,
+        default_text_style,
+        table_styles,
+    })
+}
+
+#[cfg(feature = "render")]
+fn evaluate_slide_media(
+    slide: &CT_Slide,
+    position: TimelinePosition,
+) -> (Vec<EvaluatedMediaState>, Vec<oxml_layout::Diagnostic>) {
+    let mut specs = Vec::new();
+    collect_slide_media_specs(&slide.common_slide_data.shape_tree.children, &mut specs);
+    let mut states = Vec::with_capacity(specs.len());
+    let mut diagnostics = Vec::new();
+    for (shape_id, _, trim_start_ms, trim_end_ms) in specs {
+        let (state, mut media_diagnostics) = evaluate_media_playback(
+            slide.timing.as_ref(),
+            shape_id,
+            trim_start_ms,
+            trim_end_ms,
+            position,
+        );
+        states.push(state);
+        diagnostics.append(&mut media_diagnostics);
+    }
+    (states, diagnostics)
+}
+
+#[cfg(feature = "render")]
+fn package_media_diagnostics(media_infos: &[MediaInfo]) -> Vec<oxml_layout::Diagnostic> {
+    media_infos
+        .iter()
+        .flat_map(|media| {
+            media
+                .diagnostics
+                .iter()
+                .map(move |diagnostic| oxml_layout::Diagnostic {
+                    message: match diagnostic {
+                        MediaDiagnostic::UnsupportedContentType { content_type } => format!(
+                            "media shape {} has unsupported content type `{content_type}`",
+                            media.shape_id
+                        ),
+                        MediaDiagnostic::MissingPlaybackTiming => {
+                            format!("media shape {} has no playback timing", media.shape_id)
+                        }
+                        MediaDiagnostic::UnsupportedPlaybackCommand { command } => format!(
+                            "media shape {} has unsupported playback command `{command}`",
+                            media.shape_id
+                        ),
+                        MediaDiagnostic::MissingPoster => {
+                            format!("media shape {} has no poster relationship", media.shape_id)
+                        }
+                    },
+                })
+        })
+        .collect()
+}
+
+#[cfg(feature = "render")]
+fn suppress_consumed_media_timing_diagnostics(
+    diagnostics: &mut Vec<oxml_layout::Diagnostic>,
+    timing: Option<&CT_Timing>,
+    consumed_shape_ids: &HashSet<u32>,
+) {
+    const RETAINED_MEDIA_TIMING: &str = "media timing is retained for synchronized playback";
+
+    let mut suppressions = Vec::new();
+    if let Some(timing) = timing {
+        collect_media_timing_suppressions(timing.nodes(), consumed_shape_ids, &mut suppressions);
+    }
+    let mut marker_index = 0;
+    diagnostics.retain(|diagnostic| {
+        if diagnostic.message != RETAINED_MEDIA_TIMING {
+            return true;
+        }
+        let suppress = suppressions.get(marker_index).copied().unwrap_or(false);
+        marker_index += 1;
+        !suppress
+    });
+}
+
+#[cfg(feature = "render")]
+fn collect_media_timing_suppressions(
+    nodes: &[TimingNode],
+    consumed_shape_ids: &HashSet<u32>,
+    suppressions: &mut Vec<bool>,
+) {
+    for node in nodes {
+        match node {
+            TimingNode::Audio(media) | TimingNode::Video(media) => suppressions.push(
+                matches!(media.common.target, TimingTarget::Shape(shape_id) if consumed_shape_ids.contains(&shape_id)),
+            ),
+            TimingNode::MediaCommand(command) => suppressions.push(
+                matches!(command.target, TimingTarget::Shape(shape_id) if consumed_shape_ids.contains(&shape_id)),
+            ),
+            TimingNode::Parallel(container) => collect_media_timing_suppressions(
+                &container.common.children,
+                consumed_shape_ids,
+                suppressions,
+            ),
+            TimingNode::Sequence(sequence) => collect_media_timing_suppressions(
+                &sequence.common.children,
+                consumed_shape_ids,
+                suppressions,
+            ),
+            TimingNode::Set(_)
+            | TimingNode::Animate(_)
+            | TimingNode::Effect(_)
+            | TimingNode::Motion(_)
+            | TimingNode::Unsupported(_) => {}
+        }
+    }
+}
+
+#[cfg(feature = "render")]
+fn collect_slide_media_specs(
+    children: &[ShapeTreeChild],
+    specs: &mut Vec<(u32, MediaKind, Option<u64>, Option<u64>)>,
+) {
+    for child in children {
+        match child {
+            ShapeTreeChild::Picture(picture) => {
+                if let Some(media) = picture.media.as_ref()
+                    && let Some(shape_id) = child.non_visual_id()
+                {
+                    let (trim_start_ms, trim_end_ms) = picture.media_trim_bounds();
+                    specs.push((shape_id, media.kind, trim_start_ms, trim_end_ms));
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                collect_slide_media_specs(&group.children, specs);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(feature = "render")]
+fn apply_media_fallback_policy(
+    timeline: &mut ResolvedTimelineSlide,
+    slide: &CT_Slide,
+    policy: MediaFallbackPolicy,
+    fonts: &mut FontManager,
+) -> Result<()> {
+    let mut specs = Vec::new();
+    collect_slide_media_specs(&slide.common_slide_data.shape_tree.children, &mut specs);
+    let kinds = specs
+        .into_iter()
+        .map(|(shape_id, kind, _, _)| (shape_id, kind))
+        .collect::<HashMap<_, _>>();
+    for (shape, identity) in timeline.slide.shapes.iter_mut().zip(&timeline.identities) {
+        if identity.source != FlattenedSource::Slide {
+            continue;
+        }
+        let Some(shape_id) = identity.shape_id else {
+            continue;
+        };
+        let Some(kind) = kinds.get(&shape_id).copied() else {
+            continue;
+        };
+        let poster_resolved = matches!(shape.content, ResolvedContent::Image(_));
+        if poster_resolved && policy != MediaFallbackPolicy::DeterministicPlaceholder {
+            continue;
+        }
+        if policy == MediaFallbackPolicy::Fail {
+            return Err(render_failure(format!(
+                "media shape {shape_id} has no renderer-compatible poster"
+            )));
+        }
+        let label = match kind {
+            MediaKind::Audio => "Audio",
+            MediaKind::Video => "Video",
+        };
+        shape.content = ResolvedContent::Group(render_media_placeholder(
+            label,
+            shape.bounds.width,
+            shape.bounds.height,
+            fonts,
+        )?);
+        shape.unsupported = Some("media poster");
+        let fallback_message =
+            format!("media shape {shape_id} rendered as deterministic {label} placeholder");
+        let poster_diagnostic_prefix =
+            format!("unresolved slide media poster for shape {shape_id}:");
+        if let Some(diagnostic) = timeline
+            .slide
+            .diagnostics
+            .iter_mut()
+            .find(|diagnostic| diagnostic.message.starts_with(&poster_diagnostic_prefix))
+        {
+            diagnostic.message = fallback_message;
+        } else {
+            timeline.slide.diagnostics.push(oxml_layout::Diagnostic {
+                message: fallback_message,
+            });
+        }
+    }
+    restore_media_poster_diagnostic_messages(&mut timeline.slide.diagnostics);
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn restore_media_poster_diagnostic_messages(diagnostics: &mut [oxml_layout::Diagnostic]) {
+    for diagnostic in diagnostics {
+        let Some(message) = legacy_media_poster_diagnostic_message(&diagnostic.message) else {
+            continue;
+        };
+        diagnostic.message = message.to_owned();
+    }
+}
+
+#[cfg(feature = "render")]
+fn legacy_media_poster_diagnostic_message(message: &str) -> Option<&str> {
+    ["slide", "layout", "master"]
+        .into_iter()
+        .find_map(|source| {
+            let identity =
+                message.strip_prefix(&format!("unresolved {source} media poster for shape "))?;
+            let (shape_id, legacy) = identity.split_once(": ")?;
+            (!shape_id.is_empty() && shape_id.chars().all(|character| character.is_ascii_digit()))
+                .then_some(legacy)
+        })
+}
+
+#[cfg(feature = "render")]
+fn render_media_placeholder(
+    label: &str,
+    width: f64,
+    height: f64,
+    fonts: &mut FontManager,
+) -> Result<GroupElement> {
+    let font_id = fonts
+        .resolve_font_for_text(Some("Carlito"), false, false, label)
+        .map_err(|error| render_failure(format!("media fallback font: {error}")))?;
+    let shaped = fonts
+        .shape_text(font_id, label, 9.0)
+        .map_err(|error| render_failure(format!("media fallback shaping: {error}")))?;
+    Ok(GroupElement {
+        transform: Transform::IDENTITY,
+        clip: Some(LayoutPath::rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        })),
+        opacity: 1.0,
+        effects: Vec::new(),
+        children: vec![PositionedElement::Text(GlyphRun {
+            origin: Point {
+                x: 4.0,
+                y: (height / 2.0).max(9.0),
+            },
+            font_id,
+            font_size: 9.0,
+            glyph_ids: shaped.glyph_ids,
+            advances: shaped.advances,
+            text: label.to_owned(),
+            source: None,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            note: None,
+        })],
     })
 }
 

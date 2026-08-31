@@ -34,6 +34,12 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
     pub const IMAGE: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+    pub const AUDIO: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio";
+    pub const VIDEO: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video";
+    pub const POWERPOINT_MEDIA: &str =
+        "http://schemas.microsoft.com/office/2007/relationships/media";
     pub const SETTINGS: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings";
     pub const FONT_TABLE: &str =

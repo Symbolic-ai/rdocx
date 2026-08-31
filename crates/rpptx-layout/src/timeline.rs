@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 use oxml_layout::{Diagnostic, Path, PathCommand, Point, Rect, Transform};
 use rpptx_oxml::timing::{
-    CT_SlideTransition, CT_Timing, CommonTimeNode, TimingAnimate, TimingCondition, TimingContainer,
-    TimingDuration, TimingEffect, TimingEvent, TimingFill, TimingMotionPath, TimingNode,
-    TimingNodeType, TimingSequence, TimingSet, TimingTarget, TransitionEffect, TransitionParameter,
-    TransitionSpeed,
+    CT_SlideTransition, CT_Timing, CommonTimeNode, MediaCommandKind, TimingAnimate,
+    TimingCondition, TimingContainer, TimingDuration, TimingEffect, TimingEvent, TimingFill,
+    TimingMotionPath, TimingNode, TimingNodeType, TimingSequence, TimingSet, TimingTarget,
+    TransitionEffect, TransitionParameter, TransitionSpeed,
 };
 
 use crate::{FlattenedSource, ResolveError, ResolvedSlide};
@@ -17,6 +17,24 @@ use crate::{FlattenedSource, ResolveError, ResolvedSlide};
 pub struct TimelinePosition {
     pub elapsed_ms: u64,
     pub click_count: u32,
+}
+
+/// Evaluated playback phase for one media shape.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaPlaybackPhase {
+    Stopped,
+    Playing,
+    Paused,
+}
+
+/// Evaluated playback state for one stable media shape id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvaluatedMediaState {
+    pub shape_id: u32,
+    pub phase: MediaPlaybackPhase,
+    pub source_position_ms: u64,
+    pub volume: f32,
+    pub looping: bool,
 }
 
 /// Evaluated renderer state for one shape target.
@@ -231,10 +249,11 @@ pub fn evaluate_timeline(
         ..EvaluatedFrameState::default()
     };
     if let Some(timing) = timing {
+        let click_schedule = ClickSchedule::new(timing);
         let mut context = EvaluationContext {
             timing,
             position,
-            click_ordinal: 0,
+            click_schedule: &click_schedule,
             state: &mut state,
         };
         evaluate_nodes(
@@ -259,16 +278,446 @@ pub fn evaluate_timeline(
     Ok(state)
 }
 
+/// Evaluate one media shape against the shared slide-local time and click input.
+///
+/// The returned diagnostics are scoped to this media object. Payload bytes are
+/// not inspected or decoded.
+pub fn evaluate_media_playback(
+    timing: Option<&CT_Timing>,
+    shape_id: u32,
+    trim_start_ms: Option<u64>,
+    trim_end_ms: Option<u64>,
+    position: TimelinePosition,
+) -> (EvaluatedMediaState, Vec<Diagnostic>) {
+    let trim_start = trim_start_ms.unwrap_or(0);
+    let mut diagnostics = Vec::new();
+    let mut volume = 1.0;
+    let mut looping = false;
+    let mut known_duration = None;
+    if let Some(media) = timing.and_then(|timing| timing.media_for_shape(shape_id)) {
+        volume = media.common.volume.unwrap_or(100_000).min(100_000) as f32 / 100_000.0;
+        looping = media.common.looped;
+        if let TimingDuration::Finite(duration) = media.common.common.duration {
+            known_duration = Some(duration);
+        }
+    }
+    let trim_end = trim_end_ms.or(known_duration);
+    let interval_end = trim_end.filter(|end| *end > trim_start);
+    if trim_end.is_some() && interval_end.is_none() {
+        diagnostics.push(Diagnostic {
+            message: format!(
+                "media shape {shape_id} has a trim end that is not after its trim start"
+            ),
+        });
+    }
+    if looping && interval_end.is_none() {
+        diagnostics.push(Diagnostic {
+            message: format!(
+                "looping media shape {shape_id} has no finite positive playback interval"
+            ),
+        });
+    }
+
+    let mut events = Vec::new();
+    if let Some(timing) = timing {
+        let click_schedule = ClickSchedule::new(timing);
+        collect_media_events(
+            timing,
+            timing.nodes(),
+            0,
+            u64::MAX,
+            Scheduling::Parallel,
+            shape_id,
+            position,
+            &click_schedule,
+            &mut events,
+            &mut diagnostics,
+        );
+    }
+    events.sort_by_key(|event| (event.start_ms, event.source_order));
+
+    let mut phase = MediaPlaybackPhase::Stopped;
+    let mut source_position_ms = trim_start;
+    let mut seeked_while_stopped = false;
+    let mut anchor_ms = 0;
+    for event in events
+        .into_iter()
+        .filter(|event| event.start_ms <= position.elapsed_ms)
+    {
+        let completed = advance_media_position(
+            &mut source_position_ms,
+            &mut phase,
+            anchor_ms,
+            event.start_ms,
+            trim_start,
+            interval_end,
+            looping,
+            shape_id,
+            &mut diagnostics,
+        );
+        if completed {
+            seeked_while_stopped = false;
+        }
+        anchor_ms = event.start_ms;
+        match event.command {
+            MediaCommandKind::Play { from_ms } => {
+                if let Some(from_ms) = from_ms {
+                    source_position_ms =
+                        clamp_media_position(*from_ms, trim_start, interval_end, looping);
+                } else if matches!(phase, MediaPlaybackPhase::Stopped) && !seeked_while_stopped {
+                    source_position_ms = trim_start;
+                }
+                phase = MediaPlaybackPhase::Playing;
+                seeked_while_stopped = false;
+            }
+            MediaCommandKind::Pause => {
+                if matches!(phase, MediaPlaybackPhase::Playing) {
+                    phase = MediaPlaybackPhase::Paused;
+                }
+            }
+            MediaCommandKind::Stop => {
+                phase = MediaPlaybackPhase::Stopped;
+                source_position_ms = trim_start;
+                seeked_while_stopped = false;
+            }
+            MediaCommandKind::Seek { position_ms } => {
+                source_position_ms =
+                    clamp_media_position(*position_ms, trim_start, interval_end, looping);
+                seeked_while_stopped = matches!(phase, MediaPlaybackPhase::Stopped);
+            }
+            MediaCommandKind::Other(command) => diagnostics.push(Diagnostic {
+                message: format!(
+                    "unsupported media command `{command}` for media shape {shape_id}"
+                ),
+            }),
+        }
+    }
+    advance_media_position(
+        &mut source_position_ms,
+        &mut phase,
+        anchor_ms,
+        position.elapsed_ms,
+        trim_start,
+        interval_end,
+        looping,
+        shape_id,
+        &mut diagnostics,
+    );
+    (
+        EvaluatedMediaState {
+            shape_id,
+            phase,
+            source_position_ms,
+            volume,
+            looping,
+        },
+        diagnostics,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ScheduledMediaEvent<'a> {
+    start_ms: u64,
+    source_order: usize,
+    command: &'a MediaCommandKind,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_media_events<'a>(
+    timing: &'a CT_Timing,
+    nodes: &'a [TimingNode],
+    parent_start: u64,
+    parent_end: u64,
+    scheduling: Scheduling,
+    shape_id: u32,
+    position: TimelinePosition,
+    click_schedule: &ClickSchedule,
+    events: &mut Vec<ScheduledMediaEvent<'a>>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> u64 {
+    let mut cursor = parent_start;
+    let mut previous = None;
+    let mut latest_end = parent_start;
+    for node in nodes {
+        let Some(common) = media_schedule_common(node) else {
+            continue;
+        };
+        if matches!(node, TimingNode::Audio(_) | TimingNode::Video(_)) {
+            continue;
+        }
+        let suggested = match (scheduling, common.node_type.as_ref(), previous) {
+            (Scheduling::Sequence, Some(TimingNodeType::WithEffect), Some((start, _))) => start,
+            (Scheduling::Sequence, Some(TimingNodeType::AfterEffect), Some((_, end))) => end,
+            (Scheduling::Sequence, _, _) => cursor,
+            (Scheduling::Parallel, _, _) => parent_start,
+        };
+        let diagnose = timing_node_contains_media_command(node, shape_id);
+        let start = scheduled_media_start(
+            timing,
+            common,
+            suggested,
+            shape_id,
+            position,
+            click_schedule,
+            diagnose,
+            diagnostics,
+        );
+        let natural_end = match common.duration {
+            TimingDuration::Finite(duration) => start.saturating_add(duration),
+            TimingDuration::Indefinite => u64::MAX,
+        }
+        .min(parent_end);
+        let end = match node {
+            TimingNode::Parallel(container) => collect_media_events(
+                timing,
+                &container.common.children,
+                start,
+                natural_end,
+                Scheduling::Parallel,
+                shape_id,
+                position,
+                click_schedule,
+                events,
+                diagnostics,
+            )
+            .min(natural_end),
+            TimingNode::Sequence(sequence) => collect_media_events(
+                timing,
+                &sequence.common.children,
+                start,
+                natural_end,
+                Scheduling::Sequence,
+                shape_id,
+                position,
+                click_schedule,
+                events,
+                diagnostics,
+            )
+            .min(natural_end),
+            TimingNode::MediaCommand(command)
+                if command.target == TimingTarget::Shape(shape_id) && start != u64::MAX =>
+            {
+                events.push(ScheduledMediaEvent {
+                    start_ms: start,
+                    source_order: events.len(),
+                    command: &command.command,
+                });
+                natural_end
+            }
+            _ => natural_end,
+        };
+        previous = Some((start, end));
+        latest_end = latest_end.max(end);
+        if matches!(scheduling, Scheduling::Sequence)
+            && !matches!(common.node_type, Some(TimingNodeType::WithEffect))
+        {
+            cursor = end;
+        }
+    }
+    latest_end.min(parent_end)
+}
+
+fn media_schedule_common(node: &TimingNode) -> Option<&CommonTimeNode> {
+    match node {
+        TimingNode::Parallel(node) => Some(&node.common),
+        TimingNode::Sequence(node) => Some(&node.common),
+        TimingNode::Set(node) => Some(&node.common),
+        TimingNode::Animate(node) => Some(&node.common),
+        TimingNode::Effect(node) => Some(&node.common),
+        TimingNode::Motion(node) => Some(&node.common),
+        TimingNode::Audio(node) | TimingNode::Video(node) => Some(&node.common.common),
+        TimingNode::MediaCommand(node) => Some(&node.common),
+        TimingNode::Unsupported(_) => None,
+    }
+}
+
+fn timing_node_contains_media_command(node: &TimingNode, shape_id: u32) -> bool {
+    if matches!(node, TimingNode::MediaCommand(command) if command.target == TimingTarget::Shape(shape_id))
+    {
+        return true;
+    }
+    media_schedule_common(node).is_some_and(|common| {
+        common
+            .children
+            .iter()
+            .any(|child| timing_node_contains_media_command(child, shape_id))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scheduled_media_start(
+    timing: &CT_Timing,
+    common: &CommonTimeNode,
+    suggested: u64,
+    shape_id: u32,
+    position: TimelinePosition,
+    click_schedule: &ClickSchedule,
+    diagnose: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> u64 {
+    let click_effect = matches!(common.node_type, Some(TimingNodeType::ClickEffect));
+    let click_available = click_schedule.is_available(common, position.click_count);
+    if click_effect && !click_available {
+        return u64::MAX;
+    }
+    if common.start_conditions.is_empty() {
+        return suggested;
+    }
+    let start = common
+        .start_conditions
+        .iter()
+        .enumerate()
+        .filter(|(_, condition)| {
+            !matches!(
+                condition.event,
+                Some(TimingEvent::OnClick | TimingEvent::OnNext)
+            ) || click_available
+        })
+        .filter_map(|(index, condition)| {
+            let supported_event = matches!(
+                condition.event,
+                None | Some(TimingEvent::OnBegin)
+                    | Some(TimingEvent::OnClick)
+                    | Some(TimingEvent::OnNext)
+            );
+            let supported_target = matches!(condition.target, TimingTarget::Slide)
+                || matches!(condition.target, TimingTarget::Shape(id) if id == shape_id)
+                || matches!(condition.target, TimingTarget::Unsupported)
+                    && timing.condition_has_explicit_target(common.id, false, index) == Some(false);
+            if !supported_event || !supported_target {
+                if diagnose {
+                    diagnostics.push(Diagnostic {
+                        message: format!("unsupported playback trigger for media shape {shape_id}"),
+                    });
+                }
+                return None;
+            }
+            match condition.delay {
+                TimingDuration::Finite(delay) => suggested.checked_add(delay).or_else(|| {
+                    if diagnose {
+                        diagnostics.push(Diagnostic {
+                            message: format!(
+                                "playback trigger overflow for media shape {shape_id}"
+                            ),
+                        });
+                    }
+                    None
+                }),
+                TimingDuration::Indefinite => None,
+            }
+        })
+        .min();
+    start.unwrap_or(u64::MAX)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_media_position(
+    source_position_ms: &mut u64,
+    phase: &mut MediaPlaybackPhase,
+    anchor_ms: u64,
+    target_ms: u64,
+    trim_start: u64,
+    interval_end: Option<u64>,
+    looping: bool,
+    shape_id: u32,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    if !matches!(phase, MediaPlaybackPhase::Playing) || target_ms < anchor_ms {
+        return false;
+    }
+    let delta = target_ms - anchor_ms;
+    let advanced = source_position_ms.checked_add(delta).unwrap_or_else(|| {
+        diagnostics.push(Diagnostic {
+            message: format!("media position overflow clamped for media shape {shape_id}"),
+        });
+        u64::MAX
+    });
+    *source_position_ms = clamp_media_position(advanced, trim_start, interval_end, looping);
+    if !looping && interval_end.is_some_and(|end| advanced >= end) {
+        *phase = MediaPlaybackPhase::Stopped;
+        return true;
+    }
+    false
+}
+
+fn clamp_media_position(
+    position: u64,
+    trim_start: u64,
+    interval_end: Option<u64>,
+    looping: bool,
+) -> u64 {
+    let position = position.max(trim_start);
+    let Some(end) = interval_end else {
+        return position;
+    };
+    if looping && position >= end {
+        return trim_start + (position - trim_start) % (end - trim_start);
+    }
+    position.min(end)
+}
+
 #[derive(Clone, Copy)]
 enum Scheduling {
     Parallel,
     Sequence,
 }
 
+#[derive(Default)]
+struct ClickSchedule {
+    ordinals: HashMap<*const CommonTimeNode, u32>,
+}
+
+impl ClickSchedule {
+    fn new(timing: &CT_Timing) -> Self {
+        let mut schedule = Self::default();
+        let mut ordinal = 0;
+        collect_click_schedule(timing.nodes(), &mut ordinal, &mut schedule.ordinals);
+        schedule
+    }
+
+    fn is_available(&self, common: &CommonTimeNode, click_count: u32) -> bool {
+        self.ordinals
+            .get(&std::ptr::from_ref(common))
+            .is_some_and(|ordinal| click_count >= *ordinal)
+    }
+}
+
+fn collect_click_schedule(
+    nodes: &[TimingNode],
+    ordinal: &mut u32,
+    ordinals: &mut HashMap<*const CommonTimeNode, u32>,
+) {
+    for node in nodes {
+        if matches!(node, TimingNode::Audio(_) | TimingNode::Video(_)) {
+            continue;
+        }
+        let Some(common) = media_schedule_common(node) else {
+            continue;
+        };
+        if common_uses_click(common) {
+            *ordinal = ordinal.saturating_add(1);
+            ordinals.insert(std::ptr::from_ref(common), *ordinal);
+        }
+        if matches!(node, TimingNode::Parallel(_) | TimingNode::Sequence(_)) {
+            collect_click_schedule(&common.children, ordinal, ordinals);
+        }
+    }
+}
+
+fn common_uses_click(common: &CommonTimeNode) -> bool {
+    matches!(common.node_type, Some(TimingNodeType::ClickEffect))
+        || common.start_conditions.iter().any(|condition| {
+            matches!(
+                condition.event,
+                Some(TimingEvent::OnClick | TimingEvent::OnNext)
+            )
+        })
+}
+
 struct EvaluationContext<'a> {
     timing: &'a CT_Timing,
     position: TimelinePosition,
-    click_ordinal: u32,
+    click_schedule: &'a ClickSchedule,
     state: &'a mut EvaluatedFrameState,
 }
 
@@ -286,6 +735,15 @@ fn evaluate_nodes(
         if let TimingNode::Unsupported(node) = node {
             context.state.diagnostics.push(Diagnostic {
                 message: format!("unsupported timing node {}", node.local_name),
+            });
+            continue;
+        }
+        if matches!(
+            node,
+            TimingNode::Audio(_) | TimingNode::Video(_) | TimingNode::MediaCommand(_)
+        ) {
+            context.state.diagnostics.push(Diagnostic {
+                message: "media timing is retained for synchronized playback".to_owned(),
             });
             continue;
         }
@@ -317,6 +775,9 @@ fn common(node: &TimingNode) -> &CommonTimeNode {
         TimingNode::Animate(node) => &node.common,
         TimingNode::Effect(node) => &node.common,
         TimingNode::Motion(node) => &node.common,
+        TimingNode::Audio(_) | TimingNode::Video(_) | TimingNode::MediaCommand(_) => {
+            unreachable!("media nodes are diagnosed by the caller")
+        }
         TimingNode::Unsupported(_) => unreachable!("unsupported nodes are diagnosed by the caller"),
     }
 }
@@ -327,18 +788,9 @@ fn scheduled_start(
     context: &mut EvaluationContext<'_>,
 ) -> u64 {
     let click_effect = matches!(common.node_type, Some(TimingNodeType::ClickEffect));
-    let has_click_condition = common.start_conditions.iter().any(|condition| {
-        matches!(
-            condition.event,
-            Some(TimingEvent::OnClick | TimingEvent::OnNext)
-        )
-    });
-    let click_available = if click_effect || has_click_condition {
-        context.click_ordinal = context.click_ordinal.saturating_add(1);
-        context.position.click_count >= context.click_ordinal
-    } else {
-        false
-    };
+    let click_available = context
+        .click_schedule
+        .is_available(common, context.position.click_count);
     if click_effect && !click_available {
         return u64::MAX;
     }
@@ -460,6 +912,7 @@ fn evaluate_node(
             }
             end
         }
+        TimingNode::Audio(_) | TimingNode::Video(_) | TimingNode::MediaCommand(_) => start,
         TimingNode::Unsupported(_) => start,
     }
 }
@@ -1038,7 +1491,7 @@ fn evaluate_transition(
 
 #[cfg(test)]
 mod tests {
-    use super::{TimelinePosition, evaluate_timeline};
+    use super::{MediaPlaybackPhase, TimelinePosition, evaluate_media_playback, evaluate_timeline};
     use oxml_layout::Point;
     use rpptx_oxml::timing::CT_Timing;
 
@@ -1050,6 +1503,262 @@ mod tests {
                 .as_bytes(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn media_playback_state_clamps_trim_volume_and_exact_boundaries() {
+        let timing = timing(
+            r#"<p:video><p:cMediaNode vol="25000"><p:cTn id="1" dur="1000" repeatCount="indefinite"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cMediaNode></p:video>
+            <p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="2" dur="1"><p:stCondLst><p:cond delay="100"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:cmd type="call" cmd="pause"><p:cBhvr><p:cTn id="3" dur="1"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:cmd type="call" cmd="playFrom(0.2)"><p:cBhvr><p:cTn id="4" dur="1"><p:stCondLst><p:cond delay="400"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:cmd type="call" cmd="stop"><p:cBhvr><p:cTn id="5" dur="1"><p:stCondLst><p:cond delay="700"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
+        );
+        let at = |elapsed_ms| {
+            evaluate_media_playback(
+                Some(&timing),
+                7,
+                Some(50),
+                Some(250),
+                TimelinePosition {
+                    elapsed_ms,
+                    click_count: 0,
+                },
+            )
+        };
+
+        assert_eq!(at(99).0.phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(at(100).0.source_position_ms, 50);
+        assert_eq!(at(300).0.phase, MediaPlaybackPhase::Paused);
+        assert_eq!(at(300).0.source_position_ms, 50);
+        assert_eq!(at(400).0.source_position_ms, 200);
+        assert_eq!(at(450).0.source_position_ms, 50);
+        assert_eq!(at(700).0.phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(at(700).0.source_position_ms, 50);
+        assert_eq!(at(450).0.volume, 0.25);
+        assert!(at(450).0.looping);
+        assert!(at(450).1.is_empty());
+    }
+
+    #[test]
+    fn seek_while_stopped_is_preserved_by_a_following_offset_free_play() {
+        let timing = timing(
+            r#"<p:cmd type="call" cmd="seek(0.2)"><p:cBhvr><p:cTn id="1" dur="1"><p:stCondLst><p:cond delay="100"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="2" dur="1"><p:stCondLst><p:cond delay="200"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:cmd type="call" cmd="stop"><p:cBhvr><p:cTn id="3" dur="1"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="4" dur="1"><p:stCondLst><p:cond delay="400"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
+        );
+        let at = |elapsed_ms| {
+            evaluate_media_playback(
+                Some(&timing),
+                7,
+                Some(50),
+                Some(500),
+                TimelinePosition {
+                    elapsed_ms,
+                    click_count: 0,
+                },
+            )
+            .0
+        };
+
+        assert_eq!(at(99).source_position_ms, 50);
+        assert_eq!(at(100).source_position_ms, 200);
+        assert_eq!(at(200).phase, MediaPlaybackPhase::Playing);
+        assert_eq!(at(200).source_position_ms, 200);
+        assert_eq!(at(250).source_position_ms, 250);
+        assert_eq!(at(300).phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(at(300).source_position_ms, 50);
+        assert_eq!(at(400).phase, MediaPlaybackPhase::Playing);
+        assert_eq!(at(400).source_position_ms, 50);
+        assert_eq!(at(450).source_position_ms, 100);
+    }
+
+    #[test]
+    fn finite_non_looping_playback_stops_at_exact_end_boundaries() {
+        let trimmed = timing(
+            r#"<p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="1" dur="1"><p:stCondLst><p:cond delay="100"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
+        );
+        let trimmed_at = |elapsed_ms| {
+            evaluate_media_playback(
+                Some(&trimmed),
+                7,
+                Some(50),
+                Some(250),
+                TimelinePosition {
+                    elapsed_ms,
+                    click_count: 0,
+                },
+            )
+            .0
+        };
+
+        assert_eq!(trimmed_at(299).phase, MediaPlaybackPhase::Playing);
+        assert_eq!(trimmed_at(299).source_position_ms, 249);
+        assert_eq!(trimmed_at(300).phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(trimmed_at(300).source_position_ms, 250);
+        assert_eq!(trimmed_at(301).phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(trimmed_at(301).source_position_ms, 250);
+
+        let known_duration = timing(
+            r#"<p:video><p:cMediaNode vol="100000"><p:cTn id="1" dur="250"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cMediaNode></p:video>
+            <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="2" dur="1"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
+        );
+        let duration_at = |elapsed_ms| {
+            evaluate_media_playback(
+                Some(&known_duration),
+                7,
+                None,
+                None,
+                TimelinePosition {
+                    elapsed_ms,
+                    click_count: 0,
+                },
+            )
+            .0
+        };
+
+        assert_eq!(duration_at(249).phase, MediaPlaybackPhase::Playing);
+        assert_eq!(duration_at(249).source_position_ms, 249);
+        assert_eq!(duration_at(250).phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(duration_at(250).source_position_ms, 250);
+        assert_eq!(duration_at(251).phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(duration_at(251).source_position_ms, 250);
+    }
+
+    #[test]
+    fn click_triggered_media_uses_the_existing_timeline_click_count() {
+        let timing = timing(
+            r#"<p:set><p:cBhvr><p:cTn id="1" dur="1" nodeType="clickEffect"/><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>
+            <p:audio><p:cMediaNode vol="100000"><p:cTn id="2" dur="indefinite"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cMediaNode></p:audio>
+            <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="3" dur="1" nodeType="clickEffect"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
+        );
+        let at = |click_count| {
+            let media = evaluate_media_playback(
+                Some(&timing),
+                7,
+                None,
+                None,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count,
+                },
+            )
+            .0;
+            let page = evaluate_timeline(
+                Some(&timing),
+                None,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count,
+                },
+            )
+            .unwrap();
+            let visible = page.shapes.get(&8).is_none_or(|shape| shape.visible);
+            (visible, media.phase)
+        };
+
+        assert_eq!(at(0), (true, MediaPlaybackPhase::Stopped));
+        assert_eq!(at(1), (false, MediaPlaybackPhase::Stopped));
+        assert_eq!(at(2), (false, MediaPlaybackPhase::Playing));
+    }
+
+    #[test]
+    fn media_click_before_shape_click_consumes_the_first_shared_click_ordinal() {
+        let timing = timing(
+            r#"<p:audio><p:cMediaNode vol="100000"><p:cTn id="1" dur="indefinite"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cMediaNode></p:audio>
+            <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="2" dur="1" nodeType="clickEffect"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>
+            <p:set><p:cBhvr><p:cTn id="3" dur="1" nodeType="clickEffect"/><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>"#,
+        );
+        let at = |click_count| {
+            let media = evaluate_media_playback(
+                Some(&timing),
+                7,
+                None,
+                None,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count,
+                },
+            )
+            .0;
+            let page = evaluate_timeline(
+                Some(&timing),
+                None,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count,
+                },
+            )
+            .unwrap();
+            let visible = page.shapes.get(&8).is_none_or(|shape| shape.visible);
+            (visible, media.phase)
+        };
+
+        assert_eq!(at(0), (true, MediaPlaybackPhase::Stopped));
+        assert_eq!(at(1), (true, MediaPlaybackPhase::Playing));
+        assert_eq!(at(2), (false, MediaPlaybackPhase::Playing));
+    }
+
+    #[test]
+    fn looping_without_a_known_duration_is_diagnostic_and_does_not_wrap() {
+        let timing = timing(
+            r#"<p:audio><p:cMediaNode vol="50000"><p:cTn id="1" dur="indefinite" repeatCount="indefinite"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cMediaNode></p:audio>
+            <p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="2" dur="1"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
+        );
+        let (state, diagnostics) = evaluate_media_playback(
+            Some(&timing),
+            7,
+            None,
+            None,
+            TimelinePosition {
+                elapsed_ms: 500,
+                click_count: 0,
+            },
+        );
+
+        assert_eq!(state.phase, MediaPlaybackPhase::Playing);
+        assert_eq!(state.source_position_ms, 500);
+        assert!(state.looping);
+        assert_eq!(state.volume, 0.5);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("no finite positive playback interval")
+        );
+    }
+
+    #[test]
+    fn unsupported_media_triggers_diagnose_only_the_target_media_object() {
+        let timing = timing(
+            r#"<p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="1" dur="1"><p:stCondLst><p:cond evt="onPrev" delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:cmd>"#,
+        );
+        let (target, diagnostics) = evaluate_media_playback(
+            Some(&timing),
+            7,
+            None,
+            None,
+            TimelinePosition {
+                elapsed_ms: 500,
+                click_count: 1,
+            },
+        );
+        let (_, unrelated_diagnostics) = evaluate_media_playback(
+            Some(&timing),
+            8,
+            None,
+            None,
+            TimelinePosition {
+                elapsed_ms: 500,
+                click_count: 1,
+            },
+        );
+
+        assert_eq!(target.phase, MediaPlaybackPhase::Stopped);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("media shape 7"));
+        assert!(unrelated_diagnostics.is_empty());
     }
 
     #[test]

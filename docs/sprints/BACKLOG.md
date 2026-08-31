@@ -36,10 +36,10 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
-| M21, Presentation depth                        | 15 | 4 | 0 | 11 |
+| M21, Presentation depth                        | 15 | 5 | 0 | 10 |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
 | X, Cross-cutting (opportunistic)            | 73 | 65 | 3 | 2  |
-| **Total** | **320** | **265** | **6** | **46** |
+| **Total** | **320** | **266** | **6** | **45** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -411,8 +411,8 @@ regenerated, never hand-edited.
 |------|-------|--------|------|--------|
 | F-213 | Animation and transition timing model       | S60 | L | done |
 | F-214 | Timeline evaluation and transition rendering | S60 | L | done |
-| F-215 | Audio and video package model                | S61 | L | pending |
-| F-216 | Media poster and playback rendering          | S61 | M | pending |
+| F-215 | Audio and video package model                | S61 | L | done |
+| F-216 | Media poster and playback rendering          | S61 | M | done |
 | F-217 | Presentation collaboration and navigation model | S59 | L | done |
 | F-218 | Embedded object and macro inventory          | S62 | L | pending |
 | F-219 | SmartArt typed model                         | S62 | L | pending |
@@ -423,7 +423,7 @@ regenerated, never hand-edited.
 | F-224 | HTML slide content import                    | S64 | L | pending |
 | F-225 | PDF page content import                      | S64 | L | pending |
 | F-226 | Notes and handout export                     | S63 | M | pending |
-| F-227 | Animated GIF and video export                | S61 | L | pending |
+| F-227 | Animated GIF and video export                | S61 | L | done |
 <!-- AUTOGEN:backlog-M21 END -->
 
 ### M22, Word depth

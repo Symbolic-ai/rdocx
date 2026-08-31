@@ -932,6 +932,47 @@ crossfades unmatched content with diagnostics. The outgoing morph page and its
 evaluated state always use the same timestamp. Static entry points retain their
 original non-identity resolver and byte output.
 
+The media-aware timeline entry point shares this one assembly and returns the
+ordinary deterministic timeline frame with ordered `EvaluatedMediaState`
+values. Playback folding is source ordered and checked. It covers play, pause,
+stop, seek, click and automatic triggers, trim bounds, normalized volume, and
+finite looping. Non-looping playback becomes stopped at the exact finite end.
+Looping without a known positive interval stays diagnostic.
+
+A valid audio or video poster lowers through the existing image path. Explicit
+fallback policy can retain that poster, replace it with a deterministic
+`Audio` or `Video` group shaped with bundled fonts, or fail closed. Only poster
+PNG or JPEG bytes enter `RenderInput.media`. Audio and video payload bytes do
+not enter renderer media, and no page, PDF, or raster backend decodes a media
+codec. The existing static and timeline entry points retain their exact page
+and diagnostic behavior.
+
+The deterministic animation path accepts explicit slide segments with positive
+durations, fixed click counts, and optional outgoing slide indices. A segment
+produces `ceil(duration_ms * frame_rate / 1000)` samples. Sample `n` uses
+`floor(n * 1000 / frame_rate)` as its slide-local timestamp, so it never crosses
+the declared segment duration. Output timestamps add the checked preceding
+segment durations. Frame rate, dimensions, per-frame pixels, frame count, total
+sampled pixels, estimated output, slide indices, JPEG quality, and all
+arithmetic are validated before the affected render or allocation boundary.
+
+One deterministic package, resolver, font, chart, picture, and media assembly
+is retained for the complete export. Each sample evaluates and lowers on demand
+through the media-aware timeline path. Its ordered timing, media, package, and
+composition diagnostics are appended before the frame is released. At most one
+resolved frame is retained. The page is rasterized at the exact requested pixel
+dimensions and composited to opaque RGBA over its page background before the
+next stage.
+
+Animated GIF receives that opaque frame directly. Its cumulative integer
+centisecond distribution prevents long-run duration drift, and its loop field
+distinguishes one play, infinite playback, and an explicit positive total play
+count. Motion JPEG AVI encodes the opaque RGB frame directly into one capped,
+seekable RIFF buffer. The writer patches header sizes in place, retains only one
+bounded 16-byte index record per frame, and appends `idx1` after `movi`. Every
+codec write is capped before growth. Neither format invokes a subprocess or a
+system codec.
+
 ## Word bookmark field pagination
 
 Word `REF` fields resolve the text of one uniquely correlated top-level
@@ -1089,6 +1130,15 @@ the scope of the slide, layout, or master that
 supplied `p:bg`. Theme-referenced picture fills are rejected
 precisely until a theme media scope exists. They never fall back to a same-named
 identifier in another scope.
+
+Audio and video package relationships remain upstream of `RenderInput`.
+Media-aware assembly reads their typed playback settings and timing commands,
+but only a separately resolved poster relationship can contribute `MediaData`.
+The combined facade result therefore synchronizes page and playback state
+without adding a positioned audio or video element or a codec dependency.
+Animation export reuses that prepared assembly and encodes only its opaque page
+pixels. It does not admit audio or video payloads to `RenderInput` or to either
+output encoder.
 
 The same assembly step constructs `ScopedChartResources`. Each internal chart
 relationship resolves against its producing part, parses the target as

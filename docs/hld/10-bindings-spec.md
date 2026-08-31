@@ -721,6 +721,66 @@ models. This is an additive semver change for the published pre-1.0
 flag. Unsupported modern comment XML and all legacy comment parts remain
 preserved, so consumers do not need a parallel raw authoring API.
 
+## Native PowerPoint media model
+
+The published pre-1.0 `rpptx` facade exposes concrete native Rust media values:
+`MediaInfo`, `MediaLocation`, `EmbeddedMediaInput`, `MediaSourceInput`,
+`MediaPoster`, `MediaPlaybackSettings`, `MediaPlaybackTrigger`, and
+`MediaDiagnostic`. `MediaKind` is the concrete audio or video discriminator.
+The facade methods are:
+
+```rust
+pub fn Presentation::media(&self, slide_index: usize) -> Result<Vec<MediaInfo>>;
+pub fn Presentation::add_media(
+    &mut self,
+    slide_index: usize,
+    kind: MediaKind,
+    source: MediaSourceInput<'_>,
+    poster: MediaPoster<'_>,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+    settings: MediaPlaybackSettings,
+) -> Result<ShapeRef<'_>>;
+pub fn Presentation::replace_media(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+    source: MediaSourceInput<'_>,
+) -> Result<()>;
+pub fn Presentation::extract_media(
+    &self,
+    slide_index: usize,
+    shape_id: u32,
+) -> Result<Option<Vec<u8>>>;
+pub fn Presentation::remove_media(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+) -> Result<()>;
+```
+
+Embedded sources require bytes, a safe filename, and an explicit safe content
+type. Linked sources retain their exact external target and are never fetched.
+Add requires a validated poster image. Mutations preserve raw XML, schema
+order, relationship ownership, shared payloads, shape identity, geometry, and
+failure atomicity. Unknown safe media types remain opaque, extractable, and
+diagnostic.
+
+The published pre-1.0 `rpptx-oxml` picture and timing modules expose concrete
+media projections. Trim start and end belong to the Office picture extension.
+`CommonMediaNode` does not carry trim fields, and `CT_Timing::add_media` accepts
+only timing-owned volume, loop, display, trigger, and target values. The
+published pre-1.0 `oxml-opc` crate adds audio, video, and Microsoft media
+relationship constants. The dependency-free `oxml-media` crate adds safe MIME
+and container-signature classification plus non-image media naming.
+
+These are additive pre-1.0 native Rust APIs. The timing signature and common
+media value exclude trim because the Office picture extension owns it. No
+Python method, WASM method, CLI option, production dependency, feature flag, or
+decoder surface exists.
+
 ## Native PowerPoint timing model
 
 The published pre-1.0 `rpptx-oxml` crate exposes concrete timing and transition
@@ -767,6 +827,53 @@ additive pre-1.0 native Rust API. It adds no Python method, WASM method, CLI
 option, production dependency, or feature flag. Existing static render methods
 do not enter the timeline path. Unsupported timing behaviours remain explicit
 raw nodes rather than acquiring a second authoring surface.
+
+The published pre-1.0 `rpptx-layout` crate also exposes
+`MediaPlaybackPhase` and `EvaluatedMediaState`. The published pre-1.0 `rpptx`
+facade adds `MediaFallbackPolicy`, `DeterministicMediaTimelineFrame`, and one
+media-aware deterministic entry point:
+
+```rust
+pub fn Presentation::render_media_timeline_deterministic(
+    &self,
+    slide_index: usize,
+    position: TimelinePosition,
+    outgoing_slide_index: Option<usize>,
+    fallback_policy: MediaFallbackPolicy,
+) -> Result<DeterministicMediaTimelineFrame>;
+```
+
+The nested result retains the existing `DeterministicTimelineFrame` and adds
+ordered playback states with stable shape id, phase, source position,
+normalized volume, and loop status. `PosterFrame`,
+`DeterministicPlaceholder`, and `Fail` make every approved poster policy
+callable. This is additive pre-1.0 native Rust surface. It adds no Python,
+WASM, or CLI method, feature flag, production dependency, generic, trait, or
+codec decoder. Existing static and timeline entry points retain their exact
+diagnostic strings and results.
+
+The published pre-1.0 `rpptx` facade also exposes the concrete native animation
+values `AnimationTransition`, `GifLoopBehavior`, `AnimationFormat`,
+`AnimationSegment`, `AnimationExportOptions`, and `DeterministicAnimation`.
+The entry point is:
+
+```rust
+pub fn Presentation::export_animation_deterministic(
+    &self,
+    segments: &[AnimationSegment],
+    options: AnimationExportOptions,
+) -> Result<DeterministicAnimation>;
+```
+
+Segments declare slide index, positive duration, fixed click count, and either
+no transition source or an explicit outgoing slide. Options declare bounded
+frame rate and pixel dimensions, animated GIF loop behavior or Motion JPEG AVI
+quality, and the existing `MediaFallbackPolicy`. The result carries the encoded
+bytes, exact output timestamps, and ordered diagnostics. The facade uses one
+prepared media-aware timeline assembly for the complete export and writes one
+opaque frame at a time through capped pure-Rust encoders. This additive native
+surface adds no Python, WASM, CLI, trait, generic, builder, wrapper, feature
+flag, system codec, subprocess, or binary asset.
 
 ## Packaging
 

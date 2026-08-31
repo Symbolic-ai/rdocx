@@ -65,13 +65,60 @@ The Presentation timing round-trip gate is
 slide, layout, and master in the 50-deck corpus. The gate requires nonzero
 coverage for timing roots, transitions, typed nodes, conditions, builds, set
 values, transition parameters, compatibility-wrapped transitions, and
-unsupported timing nodes. It serializes and reparses each model, compares the
-typed projection, and inventories unsupported node bytes before and after.
+effect parameters. It serializes and reparses each model, compares the typed
+projection, and inventories any unsupported node bytes before and after. A
+category that becomes fully typed does not require a synthetic raw node.
 Source-built regressions cover namespace aliases, compatibility choice and
 fallback selection, singleton and schema order rejection, lexical owner-tag
 preservation, atomic mutation, morph metadata, and the narrow PowerPoint empty
 layout-transition compatibility shape. A parse-state size guard and the full
 `rpptx` corpus package test keep the default test-thread stack sufficient.
+
+The Presentation media package round-trip gate is
+`embedded_audio_and_video_corpus_media_round_trip_without_duplication`. It
+opens the configured `EmbeddedAudio.pptx` and `EmbeddedVideo.pptx` corpus
+decks, inspects their audio and video sources, extracts exact embedded bytes,
+saves and reopens, and requires stable relationship types, targets, content
+types, poster ownership, playback settings, unsupported metadata, and package
+part counts. The gate requires the external corpus in completion verification.
+Source-built cases in the existing `rpptx-oxml` and `rpptx` integration
+binaries cover embedded and linked add, replacement, extraction, removal,
+failure atomicity, relationship ownership, shared and orphan payloads, raw XML,
+namespace shadows, schema position, timing IDs, command fallbacks, duplication,
+and same-presentation duplicate-slide shape-reference remapping. Tests assert
+independent expected package facts rather than comparing only pre-mutation and
+post-mutation views.
+
+The deterministic media timeline golden gate is
+`static_poster_output_and_timestamped_playback_state_match_source_built_oracle_fixtures`.
+It builds poster, audio, video, link, codec, trigger, trim, volume, loop,
+pause, seek, stop, and unknown-duration cases in the existing `rpptx`
+integration binary. A valid poster and independent labelled Audio and Video
+fallbacks use deterministic fonts at literal 150 dpi and pin exact decoded
+RGBA SHA-256 values. Normalized timestamp rows pin the synchronized playback
+state. Adjacent regressions preserve ordinary sibling diagnostics, distinguish
+equal local shape ids across slide and inherited scopes, and require exact
+legacy diagnostic strings and bytes from both existing render entry points.
+
+The deterministic animation golden gate is
+`animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest`.
+Its source-built two-slide deck has distinct visible content, an incoming fade,
+click-triggered video playback, a separate click-controlled shape, explicit
+outgoing-slide selection, and segments on both sides of the click boundary.
+The exact GIF manifest pins timestamps, six decoded frame hashes, dimensions,
+loop metadata, and the complete container hash. The exact AVI manifest pins
+timestamps, RIFF duration and dimensions, every encoded JPEG payload size and
+hash, every independently decoded frame hash, the complete container hash, and
+all media diagnostics in order. Independent structural parsing verifies RIFF,
+LIST, stream headers, every padded `movi` chunk, and every `idx1` record.
+One-field mutations prove sensitivity for every required identity.
+
+Adjacent regressions prove integer segment sampling, cumulative GIF delay,
+single preparation with at most one retained resolved frame, output-cap failure
+during codec writes, validation before rendering, JPEG quality sensitivity,
+and unchanged static PDF and raster output. The same exact locked golden runs
+in the Ubuntu workspace job and the macOS presentation-fidelity job. Both use
+deterministic bundled fonts and require identical reviewed constants.
 
 The ordered-body integration gate opens an in-code package through the public
 Word facade and compares the exact direct sequence of paragraphs, a table, a
@@ -674,7 +721,7 @@ producers because non-Microsoft writers are where parser assumptions break:
 - Keynote export
 - LibreOffice Impress
 - A multi-master corporate template
-- Decks containing SmartArt, charts, embedded video, and ink
+- Decks containing SmartArt, charts, embedded audio and video, and ink
 
 The read-facade differential runs `dump_deck` over all fifty decks and compares
 its normalized records with python-pptx 1.0.2. The executable test command pins
@@ -709,9 +756,14 @@ Five gates run against it:
 4. **Timing model round-trip**: every slide, layout, and master timing or
    transition subtree projects the supported model while unsupported siblings
    retain exact bytes. Coverage counters must remain nonzero for every bounded
-   timing category, including compatibility transitions and raw nodes.
+   timing category, including compatibility transitions. Any raw nodes present
+   are inventoried before and after without requiring the corpus to contain one.
 5. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
+6. **Media package round-trip**: the tracked embedded audio and video decks
+   preserve exact media bytes, relationships, content types, poster ownership,
+   playback settings, unsupported metadata, and part counts through save and
+   reopen without duplication.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
 `placeholder-layout-color.pptx`, and
@@ -1050,6 +1102,10 @@ required, and no binary fixture enters the repository.
 **`oxml-media`**
 - Sniffing every format from magic bytes, and **sniff beats extension**: a
   `.png` that is really a JPEG resolves to JPEG.
+- MP3, WAV, and ISO base media signature checks accept valid containers and
+  reject invalid bytes for known MIME names, including uppercase type and
+  subtype spelling. Safe MIME grammar remains strict, and unknown safe types
+  remain opaque.
 - DPI from PNG `pHYs` with unit 1 and unit 0, and from JPEG JFIF density units
   1 and 2, including a file with EXIF before the SOF.
 - **A truncation loop per format**: `for n in 0..data.len()`, assert no panic.
@@ -1321,13 +1377,13 @@ parallel, or failure-swallowing invocation.
 | Job | Command |
 |---|---|
 | changes | On pushes and pull requests, classify changed paths for the nine filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
-| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch both pinned corpora, run the exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, then run `python3 scripts/golden_png_harness.py --check` |
+| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch both pinned corpora, run the exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, run the exact locked deterministic animation golden, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
-| presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
+| presentation-fidelity | Fetch the pinned corpus, run the exact locked deterministic animation golden, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | word-fidelity | Restore the pinned Rust cache, run `cargo fetch --locked`, fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler with its locked offline helper |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |

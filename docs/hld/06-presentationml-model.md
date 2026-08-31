@@ -105,6 +105,15 @@ Presentation::notes_header_footer_mut(&mut self) -> Option<&mut CT_HeaderFooter>
 Presentation::handout_header_footer_mut(&mut self) -> Option<&mut CT_HeaderFooter>;
 ```
 
+Native audio and video package access is concrete and keyed by slide index and
+`p:cNvPr/@id`. `MediaInfo` reports `MediaKind`, embedded part metadata or the
+exact linked target, poster relationship identity, bounded
+`MediaPlaybackSettings`, and ordered `MediaDiagnostic` values. Additions accept
+`MediaSourceInput` plus a required `MediaPoster`. `Presentation::media`,
+`add_media`, `replace_media`, `extract_media`, and `remove_media` inspect and
+mutate the complete owned package graph atomically. Linked media is never
+fetched.
+
 Callers supply GUIDs and RFC 3339 timestamps. Mutation validates identities,
 authors, indices, section membership, relationship ownership, and occupied
 part paths before committing a serialized and reopened candidate. Moving a
@@ -580,6 +589,23 @@ remains the serialization source, and supported mutations replace only their
 own attribute value bytes. Unsupported siblings, owner attributes, namespace
 bindings, and relationship-bearing content therefore remain byte-identical.
 
+Picture media projects only schema-owned direct children. Standard
+`a:audioFile` and `a:videoFile` relationships are read directly from `p:nvPr`.
+Office media is read only from the expected direct `p:extLst`, `p:ext` with the
+Office media extension URI, and direct `p14:media` position. `r:link` takes
+precedence if a producer supplies both link and embed. Trim values belong to
+the `p14:media` picture extension, not to common timing nodes. Relationship
+attribute replacement uses an in-scope relationships prefix or adds a fresh
+nonconflicting binding. Unrelated extensions and nested lookalikes stay raw.
+
+The timing projection also exposes concrete audio, video, common media, and
+command values. Shape targets, volume, loop, display policy, trigger order,
+and supported play, pause, stop, and numeric seek commands are typed. A
+nonnumeric `playFrom()` or `seek()` remains `MediaCommandKind::Other` instead
+of failing the timing parse. Timing IDs are allocated from namespace-aware
+PresentationML nodes in schema-owned supported and unsupported positions while
+foreign elements and raw wrappers are ignored.
+
 Two narrow queries support the timeline resolver without adding a parallel XML
 model. `ShapeTreeChild::non_visual_name` returns the selected child's cached
 `p:cNvPr/@name`, including a selected chart graphic frame inside
@@ -641,6 +667,15 @@ blobs*. Without this function, a duplicated slide's SmartArt or embedded video
 silently points at the source slide's relationships. The preservation strategy
 that makes round-tripping possible is exactly what makes deep copy dangerous,
 and this is the mitigation.
+
+Media replacement does not apply that general raw rewrite to the complete
+picture. It changes only the direct standard media relationship attribute and
+the schema-owned Office media extension source. Duplication and cross-deck
+copy still remap all retained relationship attributes. Their shape-id map also
+updates exact PresentationML timing targets `p:spTgt/@spid` and
+`p:inkTgt/@spid`, build targets on `p:bldP`, `p:bldDgm`, `p:bldGraphic`, and
+`p:bldOleChart`, plus DrawingML connector endpoints. Foreign and qualified
+lookalikes remain byte-identical.
 
 ## Adding a slide
 
@@ -706,6 +741,12 @@ or wrong-type relationships, duplicate section ids, duplicate section slide
 ids, and section membership that names no presentation slide. Facade mutations
 stage serialization and reopen, so rejection leaves the live package and typed
 model unchanged.
+
+Media mutation validates slide and shape identity, poster bytes, safe filename
+and MIME grammar, known container signatures, relationship kind and target
+mode, schema-owned source locations, and staged structural reparse. Any failure
+leaves the live package, slide model, relationships, and payload bytes
+unchanged.
 
 Mapped to the symptoms they prevent:
 

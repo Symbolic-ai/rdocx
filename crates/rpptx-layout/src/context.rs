@@ -130,6 +130,7 @@ pub struct ResolveCtx<'a> {
     pub default_text_style: &'a CT_TextListStyle,
     pub table_styles: Option<&'a CT_TableStyleList>,
     pub(crate) list_style_cache: RefCell<HashMap<Option<PlaceholderKey>, EffectiveListStyle>>,
+    media_poster_diagnostic_identity: bool,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -150,12 +151,20 @@ impl<'a> ResolveCtx<'a> {
             default_text_style,
             table_styles: None,
             list_style_cache: RefCell::new(HashMap::new()),
+            media_poster_diagnostic_identity: false,
         }
     }
 
     /// Adds the optional `ppt/tableStyles.xml` projection used by table frames.
     pub fn with_table_styles(mut self, table_styles: &'a CT_TableStyleList) -> Self {
         self.table_styles = Some(table_styles);
+        self
+    }
+
+    /// Enables private source identity used while applying media fallback policy.
+    #[doc(hidden)]
+    pub fn with_media_poster_diagnostic_identity(mut self) -> Self {
+        self.media_poster_diagnostic_identity = true;
         self
     }
 
@@ -660,8 +669,21 @@ impl<'a> ResolveCtx<'a> {
                         message: format!("unsupported {category} retained as picture bounds"),
                     });
                 }
+                let diagnostic_start = diagnostics.len();
                 let (content, media_unsupported) =
                     resolve_picture_content(picture, source, media, diagnostics);
+                if self.media_poster_diagnostic_identity
+                    && media_unsupported.is_some()
+                    && picture.media.is_some()
+                    && let Some(shape_id) = child.non_visual_id()
+                    && let Some(diagnostic) = diagnostics.get_mut(diagnostic_start)
+                {
+                    diagnostic.message = format!(
+                        "unresolved {} media poster for shape {shape_id}: {}",
+                        flattened_source_name(source),
+                        diagnostic.message
+                    );
+                }
                 Ok(Some(ResolvedShape {
                     group_transform,
                     bounds,

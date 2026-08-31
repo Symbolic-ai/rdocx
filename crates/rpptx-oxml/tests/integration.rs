@@ -3,6 +3,286 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[test]
+fn media_model_reads_aliases_and_writes_schema_order_without_losing_raw_siblings() {
+    use rpptx_oxml::picture::{MediaKind, MediaSource};
+    use rpptx_oxml::timing::{MediaCommandKind, MediaDisplayPolicy, TimingNode, TimingTarget};
+
+    let xml = br#"<q:pic xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:x="urn:f215"><q:nvPicPr><q:cNvPr id="2" name="media"/><q:cNvPicPr/><q:nvPr><x:before-media a='A&#x20;B' r:id="rId2"><a:audioFile r:link="rId99"/></x:before-media><a:audioFile r:link="rId2"/><q:extLst><q:ext uri="{00000000-0000-0000-0000-000000000000}"><x:wrapper><p14:media r:link="rId98"><p14:trim st="1" end="2"/></p14:media></x:wrapper></q:ext><q:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media xmlns:r="urn:shadow" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships" rel:embed="rId1" rel:link="rId4"><p14:trim st="875.25" end="125.5"/><x:inside-media/></p14:media><x:metadata>keep &amp; stay</x:metadata></q:ext></q:extLst><x:after-media/></q:nvPr></q:nvPicPr><q:blipFill><a:blip r:embed="rId3"/></q:blipFill><q:spPr/></q:pic>"#;
+    let mut picture = rpptx_oxml::picture::CT_Picture::from_xml(xml).unwrap();
+    let media = picture.media.as_ref().unwrap();
+    assert_eq!(media.kind, MediaKind::Audio);
+    assert_eq!(
+        media.source,
+        MediaSource::Linked {
+            relationship_id: "rId4".to_owned()
+        }
+    );
+    assert_eq!(media.poster_relationship_id.as_deref(), Some("rId3"));
+    assert_eq!(picture.standard_media_relationship_id(), Some("rId2"));
+    assert_eq!(
+        picture.office_media_relationship_ids(),
+        &["rId1".to_owned(), "rId4".to_owned()]
+    );
+    assert_eq!(picture.media_trim_bounds(), (Some(875), Some(126)));
+    let written = String::from_utf8(picture.to_xml().unwrap()).unwrap();
+    assert!(written.starts_with("<p:pic"));
+    assert!(
+        written.contains(
+            "<x:before-media a='A&#x20;B' r:id=\"rId2\"><a:audioFile r:link=\"rId99\"/></x:before-media>"
+        )
+    );
+    assert!(written.contains("<x:metadata>keep &amp; stay</x:metadata>"));
+    assert!(written.contains("<x:inside-media/>"));
+    assert!(written.contains("<x:after-media/>"));
+    assert!(written.contains(
+        r#"<p14:media xmlns:r="urn:shadow" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships" rel:embed="rId1" rel:link="rId4"><p14:trim st="875.25" end="125.5"/>"#
+    ));
+    let unrelated_extension = r#"<q:ext uri="{00000000-0000-0000-0000-000000000000}"><x:wrapper><p14:media r:link="rId98"><p14:trim st="1" end="2"/></p14:media></x:wrapper></q:ext>"#;
+    assert!(written.contains(unrelated_extension));
+    let reparsed = rpptx_oxml::picture::CT_Picture::from_xml(written.as_bytes()).unwrap();
+    assert_eq!(reparsed.media, picture.media);
+
+    picture
+        .replace_media_relationship_ids(
+            "rId20",
+            MediaSource::Embedded {
+                relationship_id: "rId21".to_owned(),
+            },
+        )
+        .unwrap();
+    let embedded = String::from_utf8(picture.to_xml().unwrap()).unwrap();
+    assert!(embedded.contains(r#"<a:audioFile r:link="rId20"/>"#));
+    assert!(embedded.contains(r#"rel:embed="rId21">"#));
+    assert!(!embedded.contains(r#"rel:link="rId4""#));
+    assert!(!embedded.contains(r#"r:embed="rId21""#));
+    assert!(embedded.contains(r#"<p14:trim st="875.25" end="125.5"/>"#));
+    assert!(embedded.contains(r#"<a:audioFile r:link="rId99"/>"#));
+    assert!(embedded.contains(r#"<x:before-media a='A&#x20;B' r:id="rId2">"#));
+    assert!(embedded.contains(unrelated_extension));
+    assert!(embedded.contains("<x:metadata>keep &amp; stay</x:metadata>"));
+    assert_eq!(
+        picture.media.as_ref().unwrap().source,
+        MediaSource::Embedded {
+            relationship_id: "rId21".to_owned()
+        }
+    );
+
+    picture
+        .replace_media_relationship_ids(
+            "rId30",
+            MediaSource::Linked {
+                relationship_id: "rId31".to_owned(),
+            },
+        )
+        .unwrap();
+    let linked = String::from_utf8(picture.to_xml().unwrap()).unwrap();
+    assert!(linked.contains(r#"<a:audioFile r:link="rId30"/>"#));
+    assert!(linked.contains(r#"rel:link="rId31">"#));
+    assert!(!linked.contains(r#"rel:embed="rId21""#));
+    assert!(!linked.contains(r#"r:link="rId31""#));
+    assert!(linked.contains(r#"<a:audioFile r:link="rId99"/>"#));
+    assert!(linked.contains(r#"<x:before-media a='A&#x20;B' r:id="rId2">"#));
+    assert!(linked.contains("<x:inside-media/>"));
+    assert!(linked.contains(unrelated_extension));
+
+    let standard_only_xml = br#"<p:pic xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:f215"><p:nvPicPr><p:cNvPr id="5" name="standard only"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="rId40"/><x:keep/></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="rId41"/></p:blipFill><p:spPr/></p:pic>"#;
+    let mut standard_only = rpptx_oxml::picture::CT_Picture::from_xml(standard_only_xml).unwrap();
+    assert!(standard_only.office_media_relationship_ids().is_empty());
+    standard_only
+        .replace_media_relationship_ids(
+            "rId42",
+            MediaSource::Embedded {
+                relationship_id: "unused-office-id".to_owned(),
+            },
+        )
+        .unwrap();
+    let embedded_standard_only = String::from_utf8(standard_only.to_xml().unwrap()).unwrap();
+    assert!(embedded_standard_only.contains(r#"<a:videoFile r:link="rId42"/>"#));
+    assert!(embedded_standard_only.contains("<x:keep/>"));
+    assert!(!embedded_standard_only.contains("p14:media"));
+    assert!(!embedded_standard_only.contains("unused-office-id"));
+    standard_only
+        .replace_media_relationship_ids(
+            "rId43",
+            MediaSource::Linked {
+                relationship_id: "another-unused-office-id".to_owned(),
+            },
+        )
+        .unwrap();
+    let linked_standard_only = String::from_utf8(standard_only.to_xml().unwrap()).unwrap();
+    assert!(linked_standard_only.contains(r#"<a:videoFile r:link="rId43"/>"#));
+    assert!(!linked_standard_only.contains("p14:media"));
+    assert!(!linked_standard_only.contains("another-unused-office-id"));
+
+    let timing_xml = br#"<q:timing xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:x="urn:f215"><q:tnLst><x:before/><q:audio><q:cMediaNode vol="80000"><x:wrapper><x:cTn repeatCount="1" display="1"/></x:wrapper><q:cTn id="7" display="0" repeatCount="indefinite"/><q:tgtEl><q:spTgt spid="2"/></q:tgtEl><x:media-extra/></q:cMediaNode></q:audio><q:cmd type="call" cmd="seek(0.5)"><q:cBhvr><q:cTn id="8" dur="1"/><q:tgtEl><q:spTgt spid="2"/></q:tgtEl></q:cBhvr><x:command-extra/></q:cmd><x:after/></q:tnLst></q:timing>"#;
+    let timing = rpptx_oxml::timing::CT_Timing::from_xml(timing_xml).unwrap();
+    let TimingNode::Audio(audio) = &timing.nodes()[1] else {
+        panic!("expected typed audio node");
+    };
+    assert_eq!(audio.common.target, TimingTarget::Shape(2));
+    assert_eq!(audio.common.volume, Some(80_000));
+    assert!(audio.common.looped);
+    assert_eq!(
+        audio.common.display,
+        Some(MediaDisplayPolicy::HideWhenStopped)
+    );
+    let TimingNode::MediaCommand(command) = &timing.nodes()[2] else {
+        panic!("expected typed media command");
+    };
+    assert_eq!(command.command, MediaCommandKind::Seek { position_ms: 500 });
+    assert_eq!(timing.to_xml(), timing_xml);
+}
+
+#[test]
+fn media_trigger_uses_ancestor_click_sequence_context() {
+    use rpptx_oxml::timing::{CT_Timing, MediaPlaybackTrigger};
+
+    let xml = br#"<p:timing xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:tnLst><p:par><p:cTn id="1" nodeType="clickEffect"><p:childTnLst><p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="2" dur="1"/><p:tgtEl><p:spTgt spid="9"/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"#;
+    let timing = CT_Timing::from_xml(xml).unwrap();
+    assert_eq!(
+        timing.media_playback_trigger_for_shape(9),
+        Some(MediaPlaybackTrigger::InClickSequence)
+    );
+}
+
+#[test]
+fn media_insertion_uses_direct_presentation_list_and_precedes_later_children() {
+    use rpptx_oxml::timing::{CT_Timing, MediaPlaybackTrigger};
+
+    let without_list = br#"<q:timing xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:x="urn:f215"><x:keep a='A&#x20;B'/><q:bldLst/><q:extLst><x:tail/></q:extLst></q:timing>"#;
+    let mut timing = CT_Timing::from_xml(without_list).unwrap();
+    timing
+        .add_media(
+            false,
+            9,
+            80_000,
+            false,
+            false,
+            MediaPlaybackTrigger::Automatic,
+        )
+        .unwrap();
+    let written = String::from_utf8(timing.to_xml()).unwrap();
+    assert!(written.contains("<x:keep a='A&#x20;B'/><p:tnLst"));
+    assert!(written.find("<p:tnLst").unwrap() < written.find("<q:bldLst").unwrap());
+    assert!(written.find("<q:bldLst").unwrap() < written.find("<q:extLst").unwrap());
+    CT_Timing::from_xml(written.as_bytes()).unwrap();
+
+    let foreign_first = br#"<q:timing xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:x="urn:f215"><x:tnLst><x:keep a='A&#x20;B'/></x:tnLst><q:tnLst><x:existing/></q:tnLst></q:timing>"#;
+    let mut timing = CT_Timing::from_xml(foreign_first).unwrap();
+    timing
+        .add_media(
+            true,
+            10,
+            90_000,
+            false,
+            false,
+            MediaPlaybackTrigger::OnClick,
+        )
+        .unwrap();
+    let written = String::from_utf8(timing.to_xml()).unwrap();
+    assert!(written.contains("<x:tnLst><x:keep a='A&#x20;B'/></x:tnLst>"));
+    assert!(written.contains("<q:tnLst><x:existing/><p:video"));
+    CT_Timing::from_xml(written.as_bytes()).unwrap();
+}
+
+#[test]
+fn media_removal_preserves_media_shaped_content_in_unmodelled_wrappers() {
+    use rpptx_oxml::timing::{CT_Timing, TimingNode};
+
+    let retained = r#"<x:payload a='A&#x20;B'><p:cmd type="call" cmd="stop"><p:cBhvr><p:cTn id="90"/><p:tgtEl><p:spTgt spid="9"/></p:tgtEl></p:cBhvr></p:cmd></x:payload>"#;
+    let owned_audio = r#"<p:audio><p:cMediaNode><p:cTn id="1"/><p:tgtEl><p:spTgt spid="9"/></p:tgtEl></p:cMediaNode></p:audio>"#;
+    let owned_command = r#"<p:cmd type="call" cmd="play"><p:cBhvr><p:cTn id="2"/><p:tgtEl><p:spTgt spid="9"/></p:tgtEl></p:cBhvr></p:cmd>"#;
+    let other_video = r#"<p:video><p:cMediaNode><p:cTn id="3"/><p:tgtEl><p:spTgt spid="10"/></p:tgtEl></p:cMediaNode></p:video>"#;
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst>{retained}{owned_audio}{owned_command}{other_video}</p:tnLst></p:timing>"#
+    );
+    let mut timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    timing.remove_media(9).unwrap();
+    let written = String::from_utf8(timing.to_xml()).unwrap();
+    assert!(written.contains(retained));
+    assert!(!written.contains(owned_audio));
+    assert!(!written.contains(owned_command));
+    assert!(written.contains(other_video));
+    assert_eq!(written.matches("<p:cmd").count(), 1);
+    assert_eq!(timing.nodes().len(), 2);
+    assert!(matches!(timing.nodes()[0], TimingNode::Unsupported(_)));
+    assert!(matches!(timing.nodes()[1], TimingNode::Video(_)));
+}
+
+#[test]
+fn media_id_allocation_ignores_foreign_nonnumeric_time_nodes() {
+    use rpptx_oxml::timing::{CT_Timing, MediaPlaybackTrigger};
+
+    let retained = r#"<x:payload><x:cTn id="producer"/></x:payload>"#;
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst>{retained}<p:par><p:cTn id="4"/></p:par></p:tnLst></p:timing>"#
+    );
+    let mut timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    timing
+        .add_media(
+            false,
+            9,
+            80_000,
+            false,
+            false,
+            MediaPlaybackTrigger::Automatic,
+        )
+        .unwrap();
+    let written = String::from_utf8(timing.to_xml()).unwrap();
+    assert!(written.contains(retained));
+    assert!(
+        written.contains(r#"<p:cTn id="5" dur="indefinite"/>"#),
+        "{written}"
+    );
+    assert!(written.contains(r#"<p:cTn id="6" dur="1" fill="hold""#));
+}
+
+#[test]
+fn media_id_allocation_counts_unsupported_nodes_and_ignores_raw_maximum_ids() {
+    use rpptx_oxml::timing::{CT_Timing, MediaPlaybackTrigger};
+
+    let retained = r#"<x:payload><p:cTn id="4294967295"/></x:payload>"#;
+    let unsupported = r#"<p:animClr><p:cBhvr><p:cTn id="11"/><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cBhvr></p:animClr>"#;
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst>{retained}<p:par><p:cTn id="7"/></p:par>{unsupported}</p:tnLst></p:timing>"#
+    );
+    let mut timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    timing
+        .add_media(
+            true,
+            10,
+            90_000,
+            false,
+            false,
+            MediaPlaybackTrigger::OnClick,
+        )
+        .unwrap();
+    let written = String::from_utf8(timing.to_xml()).unwrap();
+    assert!(written.contains(retained));
+    assert!(written.contains(unsupported));
+    assert!(written.contains(r#"<p:cTn id="12" dur="indefinite"/>"#));
+    assert!(written.contains(r#"<p:cTn id="13" dur="1" fill="hold" nodeType="clickEffect""#));
+}
+
+#[test]
+fn nonnumeric_media_command_offsets_remain_explicit_and_byte_preserved() {
+    use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, TimingNode};
+
+    let xml = format!(
+        r#"<p:timing xmlns:p="{P_NS}" xmlns:x="urn:producer"><p:tnLst><p:cmd type="call" cmd="seek(bookmark)" x:keep='A&#x20;B'><p:cBhvr><p:cTn id="4"/><p:tgtEl><p:spTgt spid="9"/></p:tgtEl></p:cBhvr><x:tail/></p:cmd></p:tnLst></p:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    let TimingNode::MediaCommand(command) = &timing.nodes()[0] else {
+        panic!("expected typed media command");
+    };
+    assert_eq!(
+        command.command,
+        MediaCommandKind::Other("seek(bookmark)".to_owned())
+    );
+    assert_eq!(timing.to_xml(), xml.as_bytes());
+}
+
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::units::Emu;
 use oxml_drawing::color::{ColorMapSlot, ThemeColorSlot};
@@ -607,16 +887,16 @@ fn the_corpus_timeline_preserves_every_unsupported_sibling() {
     assert!(coverage.builds > 0, "corpus has no typed timing builds");
     assert!(coverage.set_values > 0, "corpus has no typed set values");
     assert!(
-        coverage.effect_parameters > 0,
-        "corpus has no typed effect parameters"
+        coverage.transition_effect_parameters > 0,
+        "corpus has no typed transition effect parameters"
+    );
+    assert!(
+        coverage.timing_effect_parameters > 0,
+        "corpus has no typed timing effect parameters"
     );
     assert!(
         coverage.compatibility_transitions > 0,
         "corpus has no typed compatibility transitions"
-    );
-    assert!(
-        coverage.unsupported_nodes > 0,
-        "corpus has no unsupported timing-node inventory"
     );
     eprintln!("timeline corpus coverage: {coverage:?}");
 }
@@ -632,7 +912,8 @@ struct TimelineCoverage {
     conditions: usize,
     builds: usize,
     set_values: usize,
-    effect_parameters: usize,
+    transition_effect_parameters: usize,
+    timing_effect_parameters: usize,
     compatibility_transitions: usize,
     unsupported_nodes: usize,
 }
@@ -670,7 +951,7 @@ fn record_timeline_round_trip(
     }
     if let Some(transition) = transition {
         coverage.transitions += 1;
-        coverage.effect_parameters += transition.effect_parameters.len();
+        coverage.transition_effect_parameters += transition.effect_parameters.len();
         if transition
             .raw_xml()
             .windows(b"AlternateContent".len())
@@ -699,11 +980,13 @@ fn record_timing_node(
         }
         TimingNode::Animate(animate) => Some(&animate.common),
         TimingNode::Effect(effect) => {
-            coverage.effect_parameters +=
+            coverage.timing_effect_parameters +=
                 usize::from(effect.filter.is_some()) + usize::from(effect.transition.is_some());
             Some(&effect.common)
         }
         TimingNode::Motion(motion) => Some(&motion.common),
+        TimingNode::Audio(media) | TimingNode::Video(media) => Some(&media.common.common),
+        TimingNode::MediaCommand(command) => Some(&command.common),
         TimingNode::Unsupported(node) => {
             coverage.unsupported_nodes += 1;
             unsupported.push(node.raw_xml().to_vec());

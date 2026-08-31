@@ -8,7 +8,9 @@ use rpptx_layout::timeline::{EvaluatedTransition, ResolvedTimelineSlide};
 use rpptx_layout::{ResolvedGeometry, ResolvedShape, ResolvedSlideTextDirections};
 use rpptx_oxml::timing::TransitionEffect;
 
-use crate::{RenderInput, RenderInputError, layout_slide_with_fonts_text_directions_and_states};
+use crate::{
+    RenderInput, RenderInputError, layout_resolved_slide_with_fonts_text_directions_and_states,
+};
 
 /// One composed page plus stable approximation diagnostics.
 #[derive(Clone, Debug)]
@@ -24,22 +26,38 @@ pub fn layout_timeline_slide_deterministic(
     timeline: &ResolvedTimelineSlide,
     text_directions: Option<&ResolvedSlideTextDirections>,
 ) -> Result<PageFrame, RenderInputError> {
-    let mut evaluated_input = input.clone();
-    let slide_count = evaluated_input.slides.len();
-    let slide = evaluated_input
-        .slides
-        .get_mut(index)
-        .ok_or(RenderInputError::SlideIndexOutOfBounds { index, slide_count })?;
-    *slide = timeline.slide.clone();
     let mut fonts =
         FontManager::new_deterministic().map_err(|error| RenderInputError::TextLayout {
             detail: error.to_string(),
         })?;
-    fonts.load_additional_fonts(&evaluated_input.fonts);
-    layout_slide_with_fonts_text_directions_and_states(
-        &evaluated_input,
-        index,
-        &mut fonts,
+    fonts.load_additional_fonts(&input.fonts);
+    layout_timeline_slide_with_font_manager(input, index, timeline, text_directions, &mut fonts)
+}
+
+/// Internal facade hook for `rpptx` prepared timeline rendering.
+///
+/// `fonts` must be the same manager that resolved and shaped `timeline`,
+/// including any dynamic fallback labels. Rasterization must use the font data
+/// retained by that manager so every [`oxml_layout::FontId`] remains coherent.
+#[doc(hidden)]
+pub fn layout_timeline_slide_with_font_manager(
+    input: &RenderInput,
+    index: usize,
+    timeline: &ResolvedTimelineSlide,
+    text_directions: Option<&ResolvedSlideTextDirections>,
+    fonts: &mut FontManager,
+) -> Result<PageFrame, RenderInputError> {
+    if index >= input.slides.len() {
+        return Err(RenderInputError::SlideIndexOutOfBounds {
+            index,
+            slide_count: input.slides.len(),
+        });
+    }
+    layout_resolved_slide_with_fonts_text_directions_and_states(
+        input,
+        &timeline.slide,
+        index + 1,
+        fonts,
         text_directions.map(Vec::as_slice),
         Some(&timeline.shape_states),
     )

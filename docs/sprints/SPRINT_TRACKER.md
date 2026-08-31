@@ -75,6 +75,7 @@ defended.
 | S58 | M20, X | 18 | 17 | 1 | 32 | 4 | Completed M20 with multilingual shaping, automatic hyphenation, bidirectional layout, and bounded incremental pagination. Published the shared 0.7.0 and 0.8.0 families and stable 0.11.1 recovery, then yanked the two incomplete 0.11.0 entries. Hardened Issues 53 and 54 plus PRs 55 through 58, and required the aggregate CI gate on the default branch. F-X060 records the archived partial 0.11.0 attempt. The full close gate passed with 49 of 49 hashes, the approved five-key feature-showcase delta, 22 package archives below 10 MiB, and final sprint review pass 26 clean |
 | S59 | M21 | 2 | 2 | 0 | 6 | 1 | Opened M21 with editable comments, replies, sections, notes and handout metadata, plus native password and signature operations with current-state invalidation. Pinned PowerPoint opened the encrypted candidate with the correct password and rejected a wrong password. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 3 clean. M21 continues in S60 with animation and transitions |
 | S60 | M21 | 2 | 2 | 0 | 8 | 2 | Added a typed timing and transition model, deterministic timeline evaluation, ordinary transition rendering, and bounded explicit-name morph composition without changing static output. The nine-case PowerPoint differential passed within 0.96 point and 0.997866 SSIM, while the full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 2 clean. M21 continues in S61 with media playback and animated export |
+| S61 | M21 | 3 | 3 | 0 | 10 | 1 | Added relationship-safe audio and video package mutation, deterministic poster and playback state, and bounded animated GIF and Motion JPEG AVI export. The macOS and Linux arm64 manifests matched exactly. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and close-boundary sprint review pass 7 clean. M21 continues in S62 with embedded objects and SmartArt |
 
 ## Completed features
 
@@ -353,6 +354,9 @@ defended.
 | F-221 | S59 | M | 2 | 1 | 2026-08-30 | Added default-off native presentation encryption and signatures with current-state invalidation |
 | F-213 | S60 | L | 4 | 1 | 2026-08-30 | Added typed, schema-ordered animation timing and transitions with lossless unsupported XML preservation |
 | F-214 | S60 | L | 4 | 1 | 2026-08-31 | Added deterministic timeline evaluation, transition rendering, and bounded morph composition without changing static output |
+| F-215 | S61 | L | 4 | 1 | 2026-08-31 | Added relationship-safe embedded and linked audio and video inspection, atomic mutation, extraction, and exact package preservation |
+| F-216 | S61 | M | 2 | 1 | 2026-08-31 | Added deterministic media poster and labelled fallback rendering with synchronized playback state and unchanged legacy entry points |
+| F-227 | S61 | L | 4 | 1 | 2026-08-31 | Added bounded deterministic animated GIF and Motion JPEG AVI export with exact cross-platform manifests |
 
 ## Velocity
 
@@ -428,6 +432,7 @@ five working days.
 | S58 | 17 | 4 | 21.25 |
 | S59 | 2 | 1 | 10.00 |
 | S60 | 2 | 2 | 5.00 |
+| S61 | 3 | 1 | 15.00 |
 
 ## Escalation record
 
@@ -491,3 +496,4 @@ was done about it. Empty is the expected state.
 | 2026-08-29 | Sprint estimate variance exceeded 30 percent | S58 | Record 4 actual days against 32 estimated. Parallel isolated workers, staged release checkpoints, established corpus oracles, and contribution hardening allowed independent work to overlap safely. The resulting 21.25 stories per week is not a sustainable forecast, so retain dependency-defined future sprint boundaries |
 | 2026-08-30 | Sprint estimate variance exceeded 30 percent | S59 | Record 1 actual day against 6 estimated. Two isolated workers reused the established PresentationML preservation model and shared package-security implementation, while the bounded reviews concentrated interaction corrections into the same integrated facade. The resulting 10.00 stories per week is not a sustainable rate, so retain the dependency-defined S60 boundary |
 | 2026-08-31 | Sprint estimate variance exceeded 30 percent | S60 | Record 2 actual days against 8 estimated. The strict dependency let F-214 reuse the completed F-213 model, while the user-supplied PowerPoint export and bounded review loop concentrated oracle calibration in one integrated path. The resulting 5.00 stories per week matches the long-run delivery velocity, so retain the dependency-defined S61 boundary |
+| 2026-08-31 | Sprint estimate variance exceeded 30 percent | S61 | Record 1 actual day against 10 estimated. Three strict dependency waves reused the completed timing, package, and rendering foundations, while the bounded reviews concentrated interaction corrections in one integrated facade and encoder path. The resulting 15.00 stories per week is not a sustainable forecast, so retain the dependency-defined S62 boundary |
