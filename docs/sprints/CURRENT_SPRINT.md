@@ -39,7 +39,7 @@ the contributed reader safety facts without weakening XML preservation.
 | F-218 | Embedded object and macro inventory | L | pending | - |
 | F-219 | SmartArt typed model | L | in-progress | codex |
 | F-220 | SmartArt layout and rendering | L | pending | - |
-| F-X071 | Integrate PRs 61 through 64 | L | pending | - |
+| F-X071 | Integrate PRs 61 through 64 | L | in-progress | codex |
 
 ## Sequencing note
 

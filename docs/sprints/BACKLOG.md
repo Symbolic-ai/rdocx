@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 5 | 1 | 9  |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 73 | 65 | 3 | 2  |
-| **Total** | **320** | **266** | **7** | **44** |
+| X, Cross-cutting (opportunistic)            | 74 | 65 | 4 | 2  |
+| **Total** | **321** | **266** | **8** | **44** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -523,5 +523,5 @@ regenerated, never hand-edited.
 | F-X068 | Tag rpptx-v0.8.0                          | S58 | S | done |
 | F-X069 | Tag v0.11.1                               | S58 | S | done |
 | F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | done |
-| F-X071 | Integrate PRs 61 through 64                | S62 | L | pending |
+| F-X071 | Integrate PRs 61 through 64                | S62 | L | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
