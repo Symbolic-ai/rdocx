@@ -77,7 +77,9 @@ pub use run::{
 };
 pub use style::{Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
-pub use table::{Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{
+    Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VMerge, VerticalAlignment,
+};
 
 #[cfg(test)]
 mod tests {
