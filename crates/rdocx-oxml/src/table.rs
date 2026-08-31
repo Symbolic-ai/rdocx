@@ -1584,6 +1584,12 @@ impl Default for CT_Tc {
 /// `CT_Row` — A table row containing cells.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Row {
+    /// The optional Word table-property exception for this row.
+    ///
+    /// Its contents affect table presentation only. The complete raw element
+    /// remains the serialization source because the layout model does not
+    /// interpret every table-property variant.
+    pub table_property_exception: Option<Vec<u8>>,
     pub properties: Option<CT_TrPr>,
     pub cells: Vec<CT_Tc>,
     /// Raw XML for children we do not model, tagged with the cell index they
@@ -1597,6 +1603,7 @@ pub struct CT_Row {
 impl CT_Row {
     pub fn new() -> Self {
         CT_Row {
+            table_property_exception: None,
             properties: None,
             cells: Vec::new(),
             extra_xml: Vec::new(),
@@ -1612,6 +1619,7 @@ impl CT_Row {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        let mut table_property_exception = None;
         let mut properties = None;
         let mut cells = Vec::new();
         let mut extra_xml = Vec::new();
@@ -1623,7 +1631,11 @@ impl CT_Row {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"trPr", &prefixes) {
+                    if is_word_element(name.as_ref(), b"tblPrEx", &prefixes)
+                        && table_property_exception.is_none()
+                    {
+                        table_property_exception = Some(capture_element(reader, e)?);
+                    } else if is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         properties = Some(CT_TrPr::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
@@ -1651,7 +1663,12 @@ impl CT_Row {
                 }
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
-                    if !matches_local_name(name.as_ref(), b"trPr") {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    if is_word_element(name.as_ref(), b"tblPrEx", &prefixes)
+                        && table_property_exception.is_none()
+                    {
+                        table_property_exception = Some(capture_empty_element(e)?);
+                    } else if !is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         extra_xml.push((cells.len(), capture_empty_element(e)?));
                     }
                 }
@@ -1666,6 +1683,7 @@ impl CT_Row {
         }
 
         Ok(CT_Row {
+            table_property_exception,
             properties,
             cells,
             extra_xml,
@@ -1675,6 +1693,10 @@ impl CT_Row {
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         writer.write_event(Event::Start(BytesStart::new("w:tr")))?;
+
+        if let Some(raw) = &self.table_property_exception {
+            writer.get_mut().write_all(raw)?;
+        }
 
         if let Some(ref props) = self.properties {
             props.to_xml(writer)?;
@@ -2739,6 +2761,27 @@ mod tests {
         assert_eq!(tr_pr.header, Some(true));
         assert_eq!(tr_pr.grid_before, Some(1));
         assert_eq!(tr_pr.grid_after, Some(2));
+    }
+
+    #[test]
+    fn table_property_exception_is_preserved_as_row_formatting() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tblPrEx><w:shd w:val="clear" w:color="auto" w:fill="ced7e7"/></w:tblPrEx><w:trPr><w:trHeight w:val="290" w:hRule="atLeast"/></w:trPr><w:tc><w:p/></w:tc></w:tr>"#,
+        );
+        let row = &table.rows[0];
+
+        assert_eq!(
+            row.table_property_exception.as_deref(),
+            Some(
+                br#"<w:tblPrEx><w:shd w:val="clear" w:color="auto" w:fill="ced7e7"/></w:tblPrEx>"#
+                    .as_slice()
+            )
+        );
+
+        let xml = table_to_xml(&table);
+        let exception = xml.find("<w:tblPrEx>").expect("exception writes");
+        let properties = xml.find("<w:trPr>").expect("row properties write");
+        assert!(exception < properties, "tblPrEx must precede trPr: {xml}");
     }
 
     #[test]
