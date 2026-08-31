@@ -23,6 +23,8 @@ use oxml_drawing::shape_props::CT_ShapeProperties;
 #[cfg(feature = "render")]
 use oxml_drawing::table::CT_TableStyleList;
 use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
+#[cfg(feature = "render")]
+use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{CT_RegularTextRun, CT_TextBody, CT_TextParagraph, TextRun};
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextBullet, TextBulletCharacter,
@@ -57,7 +59,7 @@ use rpptx_layout::timeline::{ResolvedTimelineSlide, evaluate_media_playback};
 #[cfg(feature = "render")]
 use rpptx_layout::{
     ChartResource, FlattenedItem, FlattenedSource, ResolveCtx, ResolvedContent,
-    ResolvedSlideTextDirections, ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
+    ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
@@ -90,6 +92,14 @@ use rpptx_render::{
     MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions,
 };
 use thiserror::Error;
+
+#[cfg(feature = "render")]
+mod animation;
+#[cfg(feature = "render")]
+pub use animation::{
+    AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition,
+    DeterministicAnimation, GifLoopBehavior,
+};
 
 #[cfg(feature = "default-template")]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
@@ -927,79 +937,18 @@ impl Presentation {
         outgoing_slide_index: Option<usize>,
         fallback_policy: Option<MediaFallbackPolicy>,
     ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
-        let assembly = assemble_render_input_inner(
-            &self.staged_package(false)?,
-            Some(TimelineRequest {
+        let package = self.staged_package(false)?;
+        let assembly = prepare_render_context(&package, fallback_policy.is_some())?;
+        render_prepared_timeline_request(
+            &assembly,
+            TimelineRequest {
                 slide_index,
                 outgoing_slide_index,
                 position,
                 fallback_policy,
-            }),
-        )?;
-        let incoming = assembly
-            .incoming
-            .as_ref()
-            .ok_or_else(|| render_failure(format!("slide index {slide_index} is out of bounds")))?;
-        if let Some(index) = outgoing_slide_index
-            && assembly.outgoing.is_none()
-        {
-            return Err(Error::UnknownSlideIndex {
-                index,
-                slide_count: self.slides.len(),
-            });
-        }
-        let incoming_page = layout_timeline_slide_deterministic(
-            &assembly.input,
-            slide_index,
-            incoming,
-            assembly.incoming_directions.as_ref(),
-        )
-        .map_err(|error| render_failure(error.to_string()))?;
-        let outgoing_page = match (outgoing_slide_index, assembly.outgoing.as_ref()) {
-            (Some(index), Some(outgoing)) => Some(
-                layout_timeline_slide_deterministic(
-                    &assembly.input,
-                    index,
-                    outgoing,
-                    assembly.outgoing_directions.as_ref(),
-                )
-                .map_err(|error| render_failure(error.to_string()))?,
-            ),
-            _ => None,
-        };
-        let outgoing_page = outgoing_page.as_ref();
-        let transition = incoming.state.transition.as_ref();
-        let composed = if transition.is_some_and(|transition| {
-            matches!(
-                transition.effect,
-                rpptx_oxml::timing::TransitionEffect::Morph
-            )
-        }) {
-            match (outgoing_page, assembly.outgoing.as_ref(), transition) {
-                (Some(page), Some(outgoing), Some(transition)) => {
-                    compose_morph_transition(incoming_page, incoming, page, outgoing, transition)
-                }
-                _ => compose_transition(incoming_page, outgoing_page, transition),
-            }
-        } else {
-            compose_transition(incoming_page, outgoing_page, transition)
-        };
-        let mut diagnostics = incoming.slide.diagnostics.clone();
-        diagnostics.extend(incoming.state.diagnostics.clone());
-        if let Some(outgoing) = assembly.outgoing.as_ref() {
-            diagnostics.extend(outgoing.slide.diagnostics.clone());
-            diagnostics.extend(outgoing.state.diagnostics.clone());
-        }
-        diagnostics.extend(assembly.incoming_media_diagnostics);
-        diagnostics.extend(composed.diagnostics);
-        Ok((
-            DeterministicTimelineFrame {
-                page: composed.page,
-                state: incoming.state.clone(),
-                diagnostics,
             },
-            assembly.incoming_media,
-        ))
+            self.slides.len(),
+        )
     }
 
     /// Renders the current presentation to a complete deterministic PDF.
@@ -2647,6 +2596,177 @@ impl Presentation {
             Box::new(frame),
         ))))
     }
+}
+
+#[cfg(feature = "render")]
+fn render_prepared_timeline_request(
+    assembly: &PreparedRenderAssembly,
+    request: TimelineRequest,
+    slide_count: usize,
+) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
+    #[cfg(test)]
+    let _retention = ActivePreparedFrame::enter();
+    let incoming_source =
+        assembly
+            .slides
+            .get(request.slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: request.slide_index,
+                slide_count,
+            })?;
+    let mut font_manager = FontManager::new_deterministic()
+        .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+    let mut incoming_context = ResolveCtx::new(
+        &incoming_source.theme,
+        render_effective_color_map(
+            &incoming_source.master,
+            &incoming_source.layout,
+            &incoming_source.slide,
+        ),
+        &incoming_source.master,
+        &incoming_source.layout,
+        &incoming_source.slide,
+        &assembly.default_text_style,
+    );
+    if let Some(styles) = assembly.table_styles.as_ref() {
+        incoming_context = incoming_context.with_table_styles(styles);
+    }
+    if request.fallback_policy.is_some() {
+        incoming_context = incoming_context.with_media_poster_diagnostic_identity();
+    }
+    let (mut incoming, incoming_directions) = incoming_context
+        .resolve_slide_with_chart_resources_and_text_directions_at(
+            assembly.size,
+            &incoming_source.media,
+            &incoming_source.hyperlinks,
+            &incoming_source.charts,
+            &mut font_manager,
+            request.position,
+        )
+        .map_err(|error| render_failure(format!("{}: {error}", incoming_source.slide_part)))?;
+    let mut incoming_media = Vec::new();
+    let mut incoming_media_diagnostics = Vec::new();
+    if let Some(policy) = request.fallback_policy {
+        apply_media_fallback_policy(
+            &mut incoming,
+            &incoming_source.slide,
+            policy,
+            &mut font_manager,
+        )?;
+        let (states, diagnostics) = evaluate_slide_media(&incoming_source.slide, request.position);
+        let consumed_shape_ids = states
+            .iter()
+            .map(|state| state.shape_id)
+            .collect::<HashSet<_>>();
+        incoming_media = states;
+        incoming_media_diagnostics = incoming_source.media_diagnostics.clone();
+        incoming_media_diagnostics.extend(diagnostics);
+        suppress_consumed_media_timing_diagnostics(
+            &mut incoming.state.diagnostics,
+            incoming_source.slide.timing.as_ref(),
+            &consumed_shape_ids,
+        );
+    }
+    let (outgoing, outgoing_directions) = match request.outgoing_slide_index {
+        None => (None, None),
+        Some(index) if index == request.slide_index => {
+            (Some(incoming.clone()), Some(incoming_directions.clone()))
+        }
+        Some(index) => {
+            let source = assembly
+                .slides
+                .get(index)
+                .ok_or(Error::UnknownSlideIndex { index, slide_count })?;
+            let mut context = ResolveCtx::new(
+                &source.theme,
+                render_effective_color_map(&source.master, &source.layout, &source.slide),
+                &source.master,
+                &source.layout,
+                &source.slide,
+                &assembly.default_text_style,
+            );
+            if let Some(styles) = assembly.table_styles.as_ref() {
+                context = context.with_table_styles(styles);
+            }
+            if request.fallback_policy.is_some() {
+                context = context.with_media_poster_diagnostic_identity();
+            }
+            let (mut timeline, directions) = context
+                .resolve_slide_with_chart_resources_and_text_directions_at(
+                    assembly.size,
+                    &source.media,
+                    &source.hyperlinks,
+                    &source.charts,
+                    &mut font_manager,
+                    TimelinePosition {
+                        elapsed_ms: u64::MAX,
+                        click_count: u32::MAX,
+                    },
+                )
+                .map_err(|error| render_failure(format!("{}: {error}", source.slide_part)))?;
+            if let Some(policy) = request.fallback_policy {
+                apply_media_fallback_policy(
+                    &mut timeline,
+                    &source.slide,
+                    policy,
+                    &mut font_manager,
+                )?;
+            }
+            (Some(timeline), Some(directions))
+        }
+    };
+    let incoming_page = layout_timeline_slide_deterministic(
+        &assembly.input,
+        request.slide_index,
+        &incoming,
+        Some(&incoming_directions),
+    )
+    .map_err(|error| render_failure(error.to_string()))?;
+    let outgoing_page = match (request.outgoing_slide_index, outgoing.as_ref()) {
+        (Some(index), Some(outgoing)) => Some(
+            layout_timeline_slide_deterministic(
+                &assembly.input,
+                index,
+                outgoing,
+                outgoing_directions.as_ref(),
+            )
+            .map_err(|error| render_failure(error.to_string()))?,
+        ),
+        _ => None,
+    };
+    let outgoing_page = outgoing_page.as_ref();
+    let transition = incoming.state.transition.as_ref();
+    let composed = if transition.is_some_and(|transition| {
+        matches!(
+            transition.effect,
+            rpptx_oxml::timing::TransitionEffect::Morph
+        )
+    }) {
+        match (outgoing_page, outgoing.as_ref(), transition) {
+            (Some(page), Some(outgoing), Some(transition)) => {
+                compose_morph_transition(incoming_page, &incoming, page, outgoing, transition)
+            }
+            _ => compose_transition(incoming_page, outgoing_page, transition),
+        }
+    } else {
+        compose_transition(incoming_page, outgoing_page, transition)
+    };
+    let mut diagnostics = incoming.slide.diagnostics.clone();
+    diagnostics.extend(incoming.state.diagnostics.clone());
+    if let Some(outgoing) = outgoing.as_ref() {
+        diagnostics.extend(outgoing.slide.diagnostics.clone());
+        diagnostics.extend(outgoing.state.diagnostics.clone());
+    }
+    diagnostics.extend(incoming_media_diagnostics);
+    diagnostics.extend(composed.diagnostics);
+    Ok((
+        DeterministicTimelineFrame {
+            page: composed.page,
+            state: incoming.state.clone(),
+            diagnostics,
+        },
+        incoming_media,
+    ))
 }
 
 fn validate_chart_extents(width: Emu, height: Emu) -> Result<()> {
@@ -5287,7 +5407,7 @@ fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &
 
 #[cfg(feature = "render")]
 fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutResult)> {
-    let assembly = assemble_render_input_inner(package, None)?;
+    let assembly = prepare_render_context(package, false)?;
     Ok((assembly.input, assembly.layout))
 }
 
@@ -5301,22 +5421,90 @@ struct TimelineRequest {
 }
 
 #[cfg(feature = "render")]
-struct RenderAssembly {
-    input: RenderInput,
-    layout: LayoutResult,
-    incoming: Option<ResolvedTimelineSlide>,
-    incoming_directions: Option<ResolvedSlideTextDirections>,
-    outgoing: Option<ResolvedTimelineSlide>,
-    outgoing_directions: Option<ResolvedSlideTextDirections>,
-    incoming_media: Vec<EvaluatedMediaState>,
-    incoming_media_diagnostics: Vec<oxml_layout::Diagnostic>,
+struct PreparedSlideAssembly {
+    slide_part: String,
+    slide: CT_Slide,
+    layout: CT_SlideLayout,
+    master: CT_SlideMaster,
+    theme: CT_OfficeStyleSheet,
+    media: ScopedMediaIds,
+    hyperlinks: ScopedHyperlinkTargets,
+    charts: ScopedChartResources,
+    media_diagnostics: Vec<oxml_layout::Diagnostic>,
 }
 
 #[cfg(feature = "render")]
-fn assemble_render_input_inner(
+struct PreparedRenderAssembly {
+    input: RenderInput,
+    layout: LayoutResult,
+    slides: Vec<PreparedSlideAssembly>,
+    size: (f64, f64),
+    default_text_style: CT_TextListStyle,
+    table_styles: Option<CT_TableStyleList>,
+}
+
+#[cfg(all(feature = "render", test))]
+std::thread_local! {
+    static PREPARED_RENDER_ASSEMBLY_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(all(feature = "render", test))]
+fn prepared_render_assembly_count() -> usize {
+    PREPARED_RENDER_ASSEMBLY_COUNT.get()
+}
+
+#[cfg(all(feature = "render", test))]
+std::thread_local! {
+    static ACTIVE_PREPARED_FRAME_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static MAX_PREPARED_FRAME_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(all(feature = "render", test))]
+struct ActivePreparedFrame;
+
+#[cfg(all(feature = "render", test))]
+impl ActivePreparedFrame {
+    fn enter() -> Self {
+        ACTIVE_PREPARED_FRAME_COUNT.with(|active| {
+            let current = active.get() + 1;
+            active.set(current);
+            MAX_PREPARED_FRAME_COUNT.with(|maximum| maximum.set(maximum.get().max(current)));
+        });
+        Self
+    }
+}
+
+#[cfg(all(feature = "render", test))]
+impl Drop for ActivePreparedFrame {
+    fn drop(&mut self) {
+        ACTIVE_PREPARED_FRAME_COUNT.with(|active| active.set(active.get() - 1));
+    }
+}
+
+#[cfg(all(feature = "render", test))]
+fn reset_prepared_frame_retention_count() {
+    ACTIVE_PREPARED_FRAME_COUNT.set(0);
+    MAX_PREPARED_FRAME_COUNT.set(0);
+}
+
+#[cfg(all(feature = "render", test))]
+fn max_prepared_frame_retention_count() -> usize {
+    MAX_PREPARED_FRAME_COUNT.get()
+}
+
+#[cfg(feature = "render")]
+fn prepare_render_context(
     package: &OpcPackage,
-    timeline_request: Option<TimelineRequest>,
-) -> Result<RenderAssembly> {
+    collect_media_diagnostics: bool,
+) -> Result<PreparedRenderAssembly> {
+    #[cfg(test)]
+    PREPARED_RENDER_ASSEMBLY_COUNT.with(|count| count.set(count.get() + 1));
     let presentation_part = package
         .main_document_part()
         .ok_or(Error::MissingMainDocument)?;
@@ -5342,12 +5530,7 @@ fn assemble_render_input_inner(
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
-    let mut incoming = None;
-    let mut incoming_directions = None;
-    let mut outgoing = None;
-    let mut outgoing_directions = None;
-    let mut incoming_media = Vec::new();
-    let mut incoming_media_diagnostics = Vec::new();
+    let mut prepared_slides = Vec::with_capacity(presentation.slide_ids.len());
     for (slide_index, slide_id) in presentation.slide_ids.iter().enumerate() {
         let slide_relationship = presentation_relationships
             .get_by_id(&slide_id.relationship_id)
@@ -5388,13 +5571,6 @@ fn assemble_render_input_inner(
                 message: error.to_string(),
             },
         )?;
-        let is_incoming =
-            timeline_request.is_some_and(|request| request.slide_index == slide_index);
-        let is_outgoing = timeline_request
-            .and_then(|request| request.outgoing_slide_index)
-            .is_some_and(|index| index == slide_index);
-        let needs_media_diagnostic_identity = (is_incoming || is_outgoing)
-            && timeline_request.is_some_and(|request| request.fallback_policy.is_some());
         let color_map = render_effective_color_map(&master, &layout, &slide);
         let mut context = ResolveCtx::new(
             &theme,
@@ -5407,9 +5583,6 @@ fn assemble_render_input_inner(
         if let Some(styles) = table_styles.as_ref() {
             context = context.with_table_styles(styles);
         }
-        if needs_media_diagnostic_identity {
-            context = context.with_media_poster_diagnostic_identity();
-        }
         let source_count = context
             .flatten()
             .into_iter()
@@ -5420,83 +5593,22 @@ fn assemble_render_input_inner(
             [&slide_part, &layout_part, &master_part],
             &mut media,
         )?;
-        let (resolved, slide_text_directions) = if is_incoming {
-            let request = timeline_request.expect("incoming request exists");
-            let (mut timeline, directions) = context
-                .resolve_slide_with_chart_resources_and_text_directions_at(
-                    size,
-                    &slide_media,
-                    &slide_hyperlinks,
-                    &slide_charts,
-                    &mut font_manager,
-                    request.position,
-                )
-                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
-            let mut same_slide_outgoing = None;
-            if let Some(policy) = request.fallback_policy {
-                apply_media_fallback_policy(&mut timeline, &slide, policy, &mut font_manager)?;
-                if is_outgoing {
-                    same_slide_outgoing = Some(timeline.clone());
-                }
-                let media_infos = media_infos_for_slide(package, slide_index, &slide_part, &slide)?;
-                let (states, diagnostics) = evaluate_slide_media(&slide, request.position);
-                let consumed_shape_ids = states
-                    .iter()
-                    .map(|state| state.shape_id)
-                    .collect::<HashSet<_>>();
-                incoming_media = states;
-                incoming_media_diagnostics = package_media_diagnostics(&media_infos);
-                incoming_media_diagnostics.extend(diagnostics);
-                suppress_consumed_media_timing_diagnostics(
-                    &mut timeline.state.diagnostics,
-                    slide.timing.as_ref(),
-                    &consumed_shape_ids,
-                );
-            }
-            let resolved = timeline.slide.clone();
-            incoming_directions = Some(directions.clone());
-            incoming = Some(timeline);
-            if let Some(timeline) = same_slide_outgoing {
-                outgoing = Some(timeline);
-                outgoing_directions = Some(directions.clone());
-            }
-            (resolved, directions)
-        } else if is_outgoing {
-            let (mut timeline, directions) = context
-                .resolve_slide_with_chart_resources_and_text_directions_at(
-                    size,
-                    &slide_media,
-                    &slide_hyperlinks,
-                    &slide_charts,
-                    &mut font_manager,
-                    TimelinePosition {
-                        elapsed_ms: u64::MAX,
-                        click_count: u32::MAX,
-                    },
-                )
-                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
-            if let Some(policy) = timeline_request.and_then(|request| request.fallback_policy) {
-                apply_media_fallback_policy(&mut timeline, &slide, policy, &mut font_manager)?;
-            }
-            let resolved = timeline.slide.clone();
-            outgoing_directions = Some(directions.clone());
-            outgoing = Some(timeline);
-            (resolved, directions)
+        let (resolved, slide_text_directions) = context
+            .resolve_slide_with_chart_resources_and_text_directions(
+                size,
+                &slide_media,
+                &slide_hyperlinks,
+                &slide_charts,
+                &mut font_manager,
+            )
+            .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+
+        let prepared_media_diagnostics = if collect_media_diagnostics {
+            let media_infos = media_infos_for_slide(package, slide_index, &slide_part, &slide)?;
+            package_media_diagnostics(&media_infos)
         } else {
-            context
-                .resolve_slide_with_chart_resources_and_text_directions(
-                    size,
-                    &slide_media,
-                    &slide_hyperlinks,
-                    &slide_charts,
-                    &mut font_manager,
-                )
-                .map_err(|error| render_failure(format!("{slide_part}: {error}")))?
+            Vec::new()
         };
-        if is_outgoing && is_incoming && outgoing.is_none() {
-            outgoing = incoming.clone();
-            outgoing_directions = incoming_directions.clone();
-        }
         if source_count != resolved.shapes.len() {
             return Err(render_failure(format!(
                 "{slide_part}: dropped bounded source shape, source {source_count}, resolved {}",
@@ -5505,6 +5617,17 @@ fn assemble_render_input_inner(
         }
         resolved_slides.push(resolved);
         text_directions.push(slide_text_directions);
+        prepared_slides.push(PreparedSlideAssembly {
+            slide_part,
+            slide,
+            layout,
+            master,
+            theme,
+            media: slide_media,
+            hyperlinks: slide_hyperlinks,
+            charts: slide_charts,
+            media_diagnostics: prepared_media_diagnostics,
+        });
     }
 
     let input = RenderInput {
@@ -5526,15 +5649,13 @@ fn assemble_render_input_inner(
             input.slides.len()
         )));
     }
-    Ok(RenderAssembly {
+    Ok(PreparedRenderAssembly {
         input,
         layout,
-        incoming,
-        incoming_directions,
-        outgoing,
-        outgoing_directions,
-        incoming_media,
-        incoming_media_diagnostics,
+        slides: prepared_slides,
+        size,
+        default_text_style,
+        table_styles,
     })
 }
 

@@ -171,6 +171,15 @@ existing image path. An unresolved poster can become a deterministic labelled
 fallback or a closed error according to explicit caller policy. Media payloads
 remain outside renderer image input, and no codec is decoded.
 
+Native callers can export explicit slide segments as deterministic animated
+GIF or Motion JPEG AVI. Each segment declares its duration, fixed click count,
+and optional outgoing transition slide. Sampling uses bounded integer
+millisecond timestamps at a declared frame rate, reuses one prepared package,
+resolver, and media context, and renders one opaque frame at a time. GIF loop
+metadata and cumulative centisecond timing are explicit. AVI quality, frame
+rate, dimensions, duration, chunks, and index are deterministic. Fixed frame,
+pixel, and byte caps fail closed, and no system codec or subprocess is used.
+
 ### Conditional expansion
 
 `oxml-sml` remains chart-workbook support rather than a spreadsheet library.

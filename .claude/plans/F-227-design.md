@@ -1,6 +1,6 @@
 # F-227, Animated GIF and video export
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S61
 **Size**: L
 **Depends on**: F-214, F-216
@@ -181,18 +181,18 @@ integration.
 
 ## Implementation checklist
 
-- [ ] Complete and verify F-215, then F-216, through dependency-prefix
+- [x] Complete and verify F-215, then F-216, through dependency-prefix
   checkpoints.
-- [ ] Reconcile final F-216 media and fallback types.
-- [ ] Add the approved private animation module.
-- [ ] Add request validation, hard bounds, and deterministic segment sampling.
-- [ ] Reuse one prepared media and timeline assembly per export.
-- [ ] Stream opaque deterministic raster frames into GIF and Motion JPEG AVI.
-- [ ] Preserve ordered F-214 and F-216 diagnostics.
-- [ ] Add unit, regression, integration, golden, and negative-mutation tests to
+- [x] Reconcile final F-216 media and fallback types.
+- [x] Add the approved private animation module.
+- [x] Add request validation, hard bounds, and deterministic segment sampling.
+- [x] Reuse one prepared media and timeline assembly per export.
+- [x] Stream opaque deterministic raster frames into GIF and Motion JPEG AVI.
+- [x] Preserve ordered F-214 and F-216 diagnostics.
+- [x] Add unit, regression, integration, golden, and negative-mutation tests to
   existing targets.
-- [ ] Run the exact golden on Ubuntu and macOS.
-- [ ] Run focused `rpptx` checks, every rider, and the unchanged hash harness.
+- [x] Run the exact golden on Ubuntu and macOS.
+- [x] Run focused `rpptx` checks, every rider, and the unchanged hash harness.
 
 ## Open questions
 

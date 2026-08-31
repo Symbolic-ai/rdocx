@@ -1580,6 +1580,8 @@ dependencies = [
 name = "rpptx"
 version = "0.8.0"
 dependencies = [
+ "gif",
+ "jpeg-encoder",
  "miniz_oxide 0.9.1",
  "oxml-chart",
  "oxml-core",
@@ -1593,6 +1595,7 @@ dependencies = [
  "rpptx-oxml",
  "rpptx-render",
  "thiserror",
+ "tiny-skia",
 ]
 
 [[package]]

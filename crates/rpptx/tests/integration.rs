@@ -45,6 +45,703 @@ fn slide_transitions_and_morph_metadata_survive_mutation_save_and_reopen() {
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
+fn animated_export_samples_transitions_clicks_and_media_fallbacks_in_order() {
+    use rpptx::{AnimationExportOptions, AnimationFormat, GifLoopBehavior, MediaFallbackPolicy};
+
+    let (presentation, click_shape_id, media_shape_id) = animation_test_presentation();
+    let before_click = presentation
+        .render_media_timeline_deterministic(
+            1,
+            TimelinePosition {
+                elapsed_ms: 150,
+                click_count: 0,
+            },
+            Some(0),
+            MediaFallbackPolicy::DeterministicPlaceholder,
+        )
+        .unwrap();
+    let after_click = presentation
+        .render_media_timeline_deterministic(
+            1,
+            TimelinePosition {
+                elapsed_ms: 150,
+                click_count: 1,
+            },
+            Some(0),
+            MediaFallbackPolicy::DeterministicPlaceholder,
+        )
+        .unwrap();
+    assert_eq!(before_click.media[0].phase, MediaPlaybackPhase::Stopped);
+    assert_eq!(after_click.media[0].phase, MediaPlaybackPhase::Playing);
+    assert!(
+        !before_click
+            .frame
+            .state
+            .shapes
+            .contains_key(&click_shape_id)
+    );
+    assert!(!after_click.frame.state.shapes[&click_shape_id].visible);
+    assert_eq!(before_click.media[0].shape_id, media_shape_id);
+    let before_layout = oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(before_click.frame.page)],
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    let after_layout = oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(after_click.frame.page)],
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    assert_ne!(
+        oxml_pdf::render_page_to_png(&before_layout, 0, 72.0),
+        oxml_pdf::render_page_to_png(&after_layout, 0, 72.0)
+    );
+    let exported = presentation
+        .export_animation_deterministic(
+            &animation_test_segments(),
+            AnimationExportOptions {
+                frame_rate: 10,
+                width_px: 96,
+                height_px: 54,
+                format: AnimationFormat::Gif {
+                    loop_behavior: GifLoopBehavior::Once,
+                },
+                media_fallback: MediaFallbackPolicy::DeterministicPlaceholder,
+            },
+        )
+        .expect("the approved animated facade must render a bounded source-built deck");
+
+    assert_eq!(
+        exported.frame_timestamps_ms,
+        vec![0, 100, 200, 300, 400, 500]
+    );
+    assert!(exported.bytes.starts_with(b"GIF89a"));
+    let messages = exported
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 12);
+    for frame in messages.chunks_exact(2) {
+        assert_eq!(
+            frame,
+            [
+                format!("media shape {media_shape_id} rendered as deterministic Video placeholder"),
+                format!(
+                    "media shape {media_shape_id} has unsupported content type `video/x-f227-opaque`"
+                ),
+            ]
+        );
+    }
+}
+
+fn animation_test_presentation() -> (Presentation, u32, u32) {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    presentation.add_slide(0).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut outgoing = slide
+            .add_shape("rect", Emu(0), Emu(0), Emu(9_144_000), Emu(5_143_500))
+            .unwrap();
+        outgoing.set_name("Outgoing red field").unwrap();
+        outgoing
+        .set_fill(
+            Fill::from_xml(
+                br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="D63C32"/></a:solidFill>"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    {
+        let mut slide = presentation.slide_mut(1).unwrap();
+        let mut incoming = slide
+            .add_shape("rect", Emu(0), Emu(0), Emu(9_144_000), Emu(5_143_500))
+            .unwrap();
+        incoming.set_name("Incoming blue field").unwrap();
+        incoming
+        .set_fill(
+            Fill::from_xml(
+                br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="3278D6"/></a:solidFill>"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    {
+        let mut slide = presentation.slide_mut(1).unwrap();
+        let mut click_shape = slide
+            .add_shape(
+                "rect",
+                Emu(5_943_600),
+                Emu(3_200_400),
+                Emu(1_828_800),
+                Emu(914_400),
+            )
+            .unwrap();
+        click_shape.set_name("Click-visible yellow marker").unwrap();
+        click_shape
+            .set_fill(
+                Fill::from_xml(
+                    br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="F0C541"/></a:solidFill>"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let poster = valid_one_pixel_png();
+    presentation
+        .add_media(
+            1,
+            MediaKind::Video,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"\0\0\0\x18ftypisom-f227-video",
+                filename: "f227.mp4",
+                content_type: "video/x-f227-opaque",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(914_400),
+            Emu(1_371_600),
+            Emu(2_743_200),
+            Emu(1_828_800),
+            MediaPlaybackSettings {
+                trigger: rpptx::MediaPlaybackTrigger::OnClick,
+                ..MediaPlaybackSettings::default()
+            },
+        )
+        .unwrap();
+    let media_shape_id = presentation.media(1).unwrap()[0].shape_id;
+    let bytes = presentation.to_bytes().unwrap();
+    let mut package = open_opc(&bytes, "F-227 animated source");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    let mut slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+    let click_shape_id = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_name().as_deref() == Some("Click-visible yellow marker"))
+        .and_then(ShapeTreeChild::non_visual_id)
+        .unwrap();
+    slide.transition = Some(
+        rpptx_oxml::timing::CT_SlideTransition::from_xml(
+            format!(
+                r#"<p:transition xmlns:p="{P_NS}" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" p14:dur="300"><p:fade/></p:transition>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap(),
+    );
+    let timing = format!(
+        r#"<p:timing xmlns:p="{P_NS}"><p:tnLst>
+        <p:video><p:cMediaNode vol="100000" showWhenStopped="0"><p:cTn id="1" dur="indefinite"/><p:tgtEl><p:spTgt spid="{media_shape_id}"/></p:tgtEl></p:cMediaNode></p:video>
+        <p:par><p:cTn id="2" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond evt="onClick" delay="0"/></p:stCondLst><p:childTnLst>
+        <p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="3" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="{media_shape_id}"/></p:tgtEl></p:cBhvr></p:cmd>
+        <p:set><p:cBhvr><p:cTn id="4" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="{click_shape_id}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>
+        </p:childTnLst></p:cTn></p:par>
+        </p:tnLst></p:timing>"#
+    );
+    slide.timing = Some(rpptx_oxml::timing::CT_Timing::from_xml(timing.as_bytes()).unwrap());
+    package.set_part(&slide_part, slide.to_xml().unwrap());
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(presentation.validate().is_empty());
+    (presentation, click_shape_id, media_shape_id)
+}
+
+fn animation_test_options(format: rpptx::AnimationFormat) -> rpptx::AnimationExportOptions {
+    rpptx::AnimationExportOptions {
+        frame_rate: 10,
+        width_px: 96,
+        height_px: 54,
+        format,
+        media_fallback: rpptx::MediaFallbackPolicy::PosterFrame,
+    }
+}
+
+fn animation_test_avi_options(quality: u8) -> rpptx::AnimationExportOptions {
+    rpptx::AnimationExportOptions {
+        media_fallback: rpptx::MediaFallbackPolicy::DeterministicPlaceholder,
+        ..animation_test_options(rpptx::AnimationFormat::MotionJpegAvi { quality })
+    }
+}
+
+fn animation_test_segments() -> [rpptx::AnimationSegment; 2] {
+    [
+        rpptx::AnimationSegment {
+            slide_index: 1,
+            duration_ms: 300,
+            click_count: 0,
+            transition: rpptx::AnimationTransition::FromSlide(0),
+        },
+        rpptx::AnimationSegment {
+            slide_index: 1,
+            duration_ms: 300,
+            click_count: 1,
+            transition: rpptx::AnimationTransition::FromSlide(0),
+        },
+    ]
+}
+
+fn animation_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AnimationGoldenManifest {
+    timestamps: Vec<u64>,
+    frame_hashes: Vec<u64>,
+    loop_repetitions: gif::Repeat,
+    width: u16,
+    height: u16,
+    container_hash: u64,
+}
+
+fn decoded_gif_manifest(bytes: &[u8], timestamps: Vec<u64>) -> AnimationGoldenManifest {
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::RGBA);
+    let mut decoder = options.read_info(Cursor::new(bytes)).unwrap();
+    let width = decoder.width();
+    let height = decoder.height();
+    let loop_repetitions = decoder.repeat();
+    let mut frame_hashes = Vec::new();
+    while let Some(frame) = decoder.read_next_frame().unwrap() {
+        frame_hashes.push(animation_hash(&frame.buffer));
+    }
+    AnimationGoldenManifest {
+        timestamps,
+        frame_hashes,
+        loop_repetitions,
+        width,
+        height,
+        container_hash: animation_hash(bytes),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AviChunk {
+    id: [u8; 4],
+    size: usize,
+    header_start: usize,
+    data_start: usize,
+    data_end: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AviManifest {
+    frame_rate: u32,
+    frame_count: u32,
+    width: u32,
+    height: u32,
+    duration_ms: u64,
+    payload_sizes: Vec<u32>,
+    payload_hashes: Vec<u64>,
+    decoded_frame_hashes: Vec<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AviGoldenManifest {
+    timestamps: Vec<u64>,
+    avi: AviManifest,
+    container_hash: u64,
+    diagnostics: Vec<String>,
+}
+
+fn avi_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn avi_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn avi_i32(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn avi_chunks(bytes: &[u8], start: usize, end: usize) -> Vec<AviChunk> {
+    let mut cursor = start;
+    let mut chunks = Vec::new();
+    while cursor < end {
+        assert!(cursor + 8 <= end, "truncated AVI chunk header");
+        let id = bytes[cursor..cursor + 4].try_into().unwrap();
+        let size = avi_u32(bytes, cursor + 4) as usize;
+        let data_start = cursor + 8;
+        let data_end = data_start.checked_add(size).unwrap();
+        assert!(data_end <= end, "AVI chunk exceeds its containing list");
+        let padded_end = data_end + size % 2;
+        assert!(
+            padded_end <= end,
+            "AVI chunk padding exceeds its containing list"
+        );
+        if size % 2 == 1 {
+            assert_eq!(bytes[data_end], 0, "AVI padding must be zero");
+        }
+        chunks.push(AviChunk {
+            id,
+            size,
+            header_start: cursor,
+            data_start,
+            data_end,
+        });
+        cursor = padded_end;
+    }
+    assert_eq!(cursor, end, "AVI list must end on an exact chunk boundary");
+    chunks
+}
+
+fn decoded_jpeg_pixel_hash(payload: &[u8], width: u32, height: u32) -> u64 {
+    let info = oxml_media::probe(payload).expect("AVI frame must contain a valid JPEG");
+    assert_eq!((info.width_px, info.height_px), (width, height));
+    let page = PageFrame::new(
+        1,
+        f64::from(width),
+        f64::from(height),
+        vec![PositionedElement::Image {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: f64::from(width),
+                height: f64::from(height),
+            },
+            data: payload.to_vec(),
+            content_type: "image/jpeg".to_owned(),
+            media_id: MediaId::from_bytes(payload),
+        }],
+    );
+    let layout = oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(page)],
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    let rgba = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    assert_eq!((rgba.width(), rgba.height()), (width, height));
+    animation_hash(rgba.data())
+}
+
+fn parse_avi_manifest(bytes: &[u8]) -> AviManifest {
+    assert_eq!(&bytes[..4], b"RIFF");
+    assert_eq!(avi_u32(bytes, 4) as usize, bytes.len() - 8);
+    assert_eq!(&bytes[8..12], b"AVI ");
+    let top = avi_chunks(bytes, 12, bytes.len());
+    assert_eq!(top.len(), 3);
+    assert_eq!(top[0].id, *b"LIST");
+    assert_eq!(top[1].id, *b"LIST");
+    assert_eq!(top[2].id, *b"idx1");
+    assert_eq!(&bytes[top[0].data_start..top[0].data_start + 4], b"hdrl");
+    assert_eq!(&bytes[top[1].data_start..top[1].data_start + 4], b"movi");
+    assert_eq!(top[0].size, top[0].data_end - top[0].data_start);
+    assert_eq!(top[1].size, top[1].data_end - top[1].data_start);
+
+    let hdrl = avi_chunks(bytes, top[0].data_start + 4, top[0].data_end);
+    assert_eq!(hdrl.len(), 2);
+    assert_eq!(hdrl[0].id, *b"avih");
+    assert_eq!(hdrl[0].size, 56);
+    assert_eq!(hdrl[1].id, *b"LIST");
+    assert_eq!(&bytes[hdrl[1].data_start..hdrl[1].data_start + 4], b"strl");
+    let avih = hdrl[0].data_start;
+    let microseconds_per_frame = avi_u32(bytes, avih);
+    assert_eq!(avi_u32(bytes, avih + 4), 0);
+    assert_eq!(avi_u32(bytes, avih + 8), 0);
+    assert_eq!(avi_u32(bytes, avih + 12), 0x10);
+    let frame_count = avi_u32(bytes, avih + 16);
+    assert_eq!(avi_u32(bytes, avih + 20), 0);
+    assert_eq!(avi_u32(bytes, avih + 24), 1);
+    let avih_max_payload = avi_u32(bytes, avih + 28);
+    let width = avi_u32(bytes, avih + 32);
+    let height = avi_u32(bytes, avih + 36);
+    assert_eq!(&bytes[avih + 40..avih + 56], &[0; 16]);
+
+    let strl = avi_chunks(bytes, hdrl[1].data_start + 4, hdrl[1].data_end);
+    assert_eq!(strl.len(), 2);
+    assert_eq!(strl[0].id, *b"strh");
+    assert_eq!(strl[0].size, 56);
+    assert_eq!(strl[1].id, *b"strf");
+    assert_eq!(strl[1].size, 40);
+    let strh = strl[0].data_start;
+    assert_eq!(&bytes[strh..strh + 4], b"vids");
+    assert_eq!(&bytes[strh + 4..strh + 8], b"MJPG");
+    assert_eq!(avi_u32(bytes, strh + 8), 0);
+    assert_eq!(avi_u16(bytes, strh + 12), 0);
+    assert_eq!(avi_u16(bytes, strh + 14), 0);
+    assert_eq!(avi_u32(bytes, strh + 16), 0);
+    let scale = avi_u32(bytes, strh + 20);
+    let frame_rate = avi_u32(bytes, strh + 24);
+    assert_eq!(avi_u32(bytes, strh + 28), 0);
+    assert_eq!(avi_u32(bytes, strh + 32), frame_count);
+    let strh_max_payload = avi_u32(bytes, strh + 36);
+    assert_eq!(avi_u32(bytes, strh + 40), u32::MAX);
+    assert_eq!(avi_u32(bytes, strh + 44), 0);
+    assert_eq!(avi_u16(bytes, strh + 48), 0);
+    assert_eq!(avi_u16(bytes, strh + 50), 0);
+    assert_eq!(avi_u16(bytes, strh + 52), width as u16);
+    assert_eq!(avi_u16(bytes, strh + 54), height as u16);
+    assert_eq!(microseconds_per_frame, 1_000_000 / frame_rate);
+
+    let strf = strl[1].data_start;
+    assert_eq!(avi_u32(bytes, strf), 40);
+    assert_eq!(avi_i32(bytes, strf + 4), width as i32);
+    assert_eq!(avi_i32(bytes, strf + 8), height as i32);
+    assert_eq!(avi_u16(bytes, strf + 12), 1);
+    assert_eq!(avi_u16(bytes, strf + 14), 24);
+    assert_eq!(&bytes[strf + 16..strf + 20], b"MJPG");
+    assert_eq!(avi_u32(bytes, strf + 20), width * height * 3);
+    assert_eq!(&bytes[strf + 24..strf + 40], &[0; 16]);
+
+    let movi = avi_chunks(bytes, top[1].data_start + 4, top[1].data_end);
+    assert_eq!(movi.len(), frame_count as usize);
+    let index = top[2];
+    assert_eq!(index.size % 16, 0);
+    assert_eq!(index.size / 16, movi.len());
+    let movi_type_position = top[1].data_start;
+    let mut payload_sizes = Vec::new();
+    let mut payload_hashes = Vec::new();
+    let mut decoded_frame_hashes = Vec::new();
+    for (frame_index, frame) in movi.iter().enumerate() {
+        assert_eq!(frame.id, *b"00dc");
+        let payload = &bytes[frame.data_start..frame.data_end];
+        let entry = index.data_start + frame_index * 16;
+        assert_eq!(&bytes[entry..entry + 4], b"00dc");
+        assert_eq!(avi_u32(bytes, entry + 4), 0x10);
+        assert_eq!(
+            avi_u32(bytes, entry + 8) as usize,
+            frame.header_start - movi_type_position
+        );
+        assert_eq!(avi_u32(bytes, entry + 12) as usize, frame.size);
+        payload_sizes.push(frame.size as u32);
+        payload_hashes.push(animation_hash(payload));
+        decoded_frame_hashes.push(decoded_jpeg_pixel_hash(payload, width, height));
+    }
+    let max_payload = payload_sizes.iter().copied().max().unwrap();
+    assert_eq!(avih_max_payload, max_payload);
+    assert_eq!(strh_max_payload, max_payload);
+    let duration_ms = u64::from(frame_count) * u64::from(scale) * 1_000 / u64::from(frame_rate);
+    AviManifest {
+        frame_rate,
+        frame_count,
+        width,
+        height,
+        duration_ms,
+        payload_sizes,
+        payload_hashes,
+        decoded_frame_hashes,
+    }
+}
+
+fn decoded_avi_golden_manifest(animation: &rpptx::DeterministicAnimation) -> AviGoldenManifest {
+    AviGoldenManifest {
+        timestamps: animation.frame_timestamps_ms.clone(),
+        avi: parse_avi_manifest(&animation.bytes),
+        container_hash: animation_hash(&animation.bytes),
+        diagnostics: animation
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect(),
+    }
+}
+
+#[test]
+fn animated_export_does_not_change_static_rendering() {
+    let (presentation, _, _) = animation_test_presentation();
+    let before = presentation.render_deterministic().unwrap().1;
+    let before_pdf = oxml_pdf::render_to_pdf(&before);
+    let before_png = oxml_pdf::render_page_to_png(&before, 0, 72.0).unwrap();
+    presentation
+        .export_animation_deterministic(
+            &animation_test_segments(),
+            animation_test_options(rpptx::AnimationFormat::Gif {
+                loop_behavior: rpptx::GifLoopBehavior::Once,
+            }),
+        )
+        .unwrap();
+    let after = presentation.render_deterministic().unwrap().1;
+    assert_eq!(oxml_pdf::render_to_pdf(&after), before_pdf);
+    assert_eq!(
+        oxml_pdf::render_page_to_png(&after, 0, 72.0).unwrap(),
+        before_png
+    );
+}
+
+#[test]
+fn animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest() {
+    let (presentation, _, _) = animation_test_presentation();
+    let gif = presentation
+        .export_animation_deterministic(
+            &animation_test_segments(),
+            animation_test_options(rpptx::AnimationFormat::Gif {
+                loop_behavior: rpptx::GifLoopBehavior::TotalPlays(
+                    std::num::NonZeroU16::new(3).unwrap(),
+                ),
+            }),
+        )
+        .unwrap();
+    let manifest = decoded_gif_manifest(&gif.bytes, gif.frame_timestamps_ms.clone());
+    assert_eq!(
+        manifest,
+        AnimationGoldenManifest {
+            timestamps: vec![0, 100, 200, 300, 400, 500],
+            frame_hashes: vec![
+                4_894_345_659_775_260_357,
+                14_975_209_435_305_666_729,
+                11_017_240_483_202_348_157,
+                4_894_345_659_775_260_357,
+                12_281_991_332_647_577_373,
+                439_196_692_808_906_197,
+            ],
+            loop_repetitions: gif::Repeat::Finite(2),
+            width: 96,
+            height: 54,
+            container_hash: 1_682_901_777_930_996_407,
+        }
+    );
+
+    let avi = presentation
+        .export_animation_deterministic(&animation_test_segments(), animation_test_avi_options(80))
+        .unwrap();
+    let avi_golden = decoded_avi_golden_manifest(&avi);
+    assert_eq!(
+        avi_golden,
+        AviGoldenManifest {
+            timestamps: vec![0, 100, 200, 300, 400, 500],
+            avi: AviManifest {
+                frame_rate: 10,
+                frame_count: 6,
+                width: 96,
+                height: 54,
+                duration_ms: 600,
+                payload_sizes: vec![968, 974, 1_015, 968, 907, 908],
+                payload_hashes: vec![
+                    9_345_256_692_286_977_543,
+                    2_927_541_614_763_063_172,
+                    6_127_686_133_210_419_864,
+                    9_345_256_692_286_977_543,
+                    10_353_497_591_034_183_350,
+                    7_116_127_623_826_450_847,
+                ],
+                decoded_frame_hashes: vec![
+                    15_016_817_725_945_965_948,
+                    7_383_799_236_496_809_804,
+                    9_379_829_375_826_415_478,
+                    15_016_817_725_945_965_948,
+                    12_438_950_088_017_235_599,
+                    3_796_532_621_390_706_249,
+                ],
+            },
+            container_hash: 6_525_351_511_319_371_367,
+            diagnostics: vec![
+                "media shape 6 rendered as deterministic Video placeholder".to_owned(),
+                "media shape 6 has unsupported content type `video/x-f227-opaque`".to_owned(),
+                "media shape 6 rendered as deterministic Video placeholder".to_owned(),
+                "media shape 6 has unsupported content type `video/x-f227-opaque`".to_owned(),
+                "media shape 6 rendered as deterministic Video placeholder".to_owned(),
+                "media shape 6 has unsupported content type `video/x-f227-opaque`".to_owned(),
+                "media shape 6 rendered as deterministic Video placeholder".to_owned(),
+                "media shape 6 has unsupported content type `video/x-f227-opaque`".to_owned(),
+                "media shape 6 rendered as deterministic Video placeholder".to_owned(),
+                "media shape 6 has unsupported content type `video/x-f227-opaque`".to_owned(),
+                "media shape 6 rendered as deterministic Video placeholder".to_owned(),
+                "media shape 6 has unsupported content type `video/x-f227-opaque`".to_owned(),
+            ],
+        }
+    );
+
+    let lower_quality = presentation
+        .export_animation_deterministic(&animation_test_segments(), animation_test_avi_options(40))
+        .unwrap();
+    let lower_quality_manifest = parse_avi_manifest(&lower_quality.bytes);
+    assert_eq!(
+        (
+            lower_quality_manifest.frame_rate,
+            lower_quality_manifest.frame_count,
+            lower_quality_manifest.width,
+            lower_quality_manifest.height,
+            lower_quality_manifest.duration_ms,
+        ),
+        (10, 6, 96, 54, 600)
+    );
+    assert_ne!(
+        lower_quality_manifest.payload_hashes,
+        avi_golden.avi.payload_hashes
+    );
+    assert_ne!(
+        lower_quality_manifest.decoded_frame_hashes,
+        avi_golden.avi.decoded_frame_hashes
+    );
+}
+
+#[test]
+fn the_animated_export_manifest_rejects_one_frame_timestamp_loop_and_dimension_mutations() {
+    let (presentation, _, _) = animation_test_presentation();
+    let exported = presentation
+        .export_animation_deterministic(
+            &animation_test_segments(),
+            animation_test_options(rpptx::AnimationFormat::Gif {
+                loop_behavior: rpptx::GifLoopBehavior::Infinite,
+            }),
+        )
+        .unwrap();
+    let manifest = decoded_gif_manifest(&exported.bytes, exported.frame_timestamps_ms);
+    let mut mutated = manifest.clone();
+    mutated.frame_hashes[0] ^= 1;
+    assert_ne!(mutated, manifest);
+    let mut mutated = manifest.clone();
+    mutated.timestamps[1] += 1;
+    assert_ne!(mutated, manifest);
+    let mut mutated = manifest.clone();
+    mutated.loop_repetitions = gif::Repeat::Finite(1);
+    assert_ne!(mutated, manifest);
+    let mut mutated = manifest.clone();
+    mutated.width += 1;
+    assert_ne!(mutated, manifest);
+    let mut mutated = manifest.clone();
+    mutated.height += 1;
+    assert_ne!(mutated, manifest);
+
+    let avi = presentation
+        .export_animation_deterministic(&animation_test_segments(), animation_test_avi_options(80))
+        .unwrap();
+    let avi_manifest = decoded_avi_golden_manifest(&avi);
+    let mut mutated = avi_manifest.clone();
+    mutated.container_hash ^= 1;
+    assert_ne!(mutated, avi_manifest);
+    for index in 0..avi_manifest.avi.payload_hashes.len() {
+        let mut mutated = avi_manifest.clone();
+        mutated.avi.payload_hashes[index] ^= 1;
+        assert_ne!(mutated, avi_manifest);
+    }
+    for index in 0..avi_manifest.avi.decoded_frame_hashes.len() {
+        let mut mutated = avi_manifest.clone();
+        mutated.avi.decoded_frame_hashes[index] ^= 1;
+        assert_ne!(mutated, avi_manifest);
+    }
+    for index in 0..avi_manifest.diagnostics.len() {
+        let mut mutated = avi_manifest.clone();
+        mutated.diagnostics[index].push_str(" mutation");
+        assert_ne!(mutated, avi_manifest);
+    }
+    let mut reordered = avi_manifest.clone();
+    reordered.diagnostics.swap(0, 1);
+    assert_ne!(reordered, avi_manifest);
+}
+
+#[test]
 fn add_replace_extract_and_remove_embedded_media_are_atomic() {
     use rpptx::{
         EmbeddedMediaInput, MediaDiagnostic, MediaKind, MediaLocation, MediaPlaybackSettings,
@@ -5741,9 +6438,17 @@ fn rpptx_is_an_explicit_publication_candidate() {
     assert!(manifest.contains("publish = true"));
     assert!(manifest.contains("default = [\"default-template\", \"render\", \"system-fonts\"]"));
     assert!(manifest.contains("default-template = []"));
-    assert!(manifest.contains(
-        "render = [\"dep:miniz_oxide\", \"dep:oxml-pdf\", \"dep:rpptx-layout\", \"dep:rpptx-render\"]"
-    ));
+    for dependency in [
+        "dep:gif",
+        "dep:jpeg-encoder",
+        "dep:miniz_oxide",
+        "dep:oxml-pdf",
+        "dep:rpptx-layout",
+        "dep:rpptx-render",
+        "dep:tiny-skia",
+    ] {
+        assert!(manifest.contains(dependency));
+    }
     assert!(
         manifest.contains(
             "system-fonts = [\"oxml-layout/system-fonts\", \"rpptx-render?/system-fonts\"]"

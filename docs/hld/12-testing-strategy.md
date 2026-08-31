@@ -100,6 +100,26 @@ state. Adjacent regressions preserve ordinary sibling diagnostics, distinguish
 equal local shape ids across slide and inherited scopes, and require exact
 legacy diagnostic strings and bytes from both existing render entry points.
 
+The deterministic animation golden gate is
+`animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest`.
+Its source-built two-slide deck has distinct visible content, an incoming fade,
+click-triggered video playback, a separate click-controlled shape, explicit
+outgoing-slide selection, and segments on both sides of the click boundary.
+The exact GIF manifest pins timestamps, six decoded frame hashes, dimensions,
+loop metadata, and the complete container hash. The exact AVI manifest pins
+timestamps, RIFF duration and dimensions, every encoded JPEG payload size and
+hash, every independently decoded frame hash, the complete container hash, and
+all media diagnostics in order. Independent structural parsing verifies RIFF,
+LIST, stream headers, every padded `movi` chunk, and every `idx1` record.
+One-field mutations prove sensitivity for every required identity.
+
+Adjacent regressions prove integer segment sampling, cumulative GIF delay,
+single preparation with at most one retained resolved frame, output-cap failure
+during codec writes, validation before rendering, JPEG quality sensitivity,
+and unchanged static PDF and raster output. The same exact locked golden runs
+in the Ubuntu workspace job and the macOS presentation-fidelity job. Both use
+deterministic bundled fonts and require identical reviewed constants.
+
 The ordered-body integration gate opens an in-code package through the public
 Word facade and compares the exact direct sequence of paragraphs, a table, a
 body content control, preserved producer XML, and a final paragraph. It also
@@ -1357,13 +1377,13 @@ parallel, or failure-swallowing invocation.
 | Job | Command |
 |---|---|
 | changes | On pushes and pull requests, classify changed paths for the nine filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
-| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch both pinned corpora, run the exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, then run `python3 scripts/golden_png_harness.py --check` |
+| test | Install exact uv 0.10.2 and Poppler 26.01.0, fetch both pinned corpora, run the exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, run the exact locked deterministic animation golden, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
 | release-regressions | Install cargo-release 1.1.3 with its locked dependency graph, then run `python3 -m unittest scripts.test_sprint_workflow` |
 | hash-harness | `python3 scripts/hash_harness.py --check` |
-| presentation-fidelity | Fetch the pinned corpus, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
+| presentation-fidelity | Fetch the pinned corpus, run the exact locked deterministic animation golden, then run `python3 scripts/pptx_ssim_harness.py --check` on the pinned macOS render stack |
 | word-fidelity | Restore the pinned Rust cache, run `cargo fetch --locked`, fetch the pinned Word corpus, then run `python3 scripts/docx_ssim_harness.py --check` on pinned Ubuntu 24.04 LibreOffice and Poppler with its locked offline helper |
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |

@@ -852,6 +852,29 @@ WASM, or CLI method, feature flag, production dependency, generic, trait, or
 codec decoder. Existing static and timeline entry points retain their exact
 diagnostic strings and results.
 
+The published pre-1.0 `rpptx` facade also exposes the concrete native animation
+values `AnimationTransition`, `GifLoopBehavior`, `AnimationFormat`,
+`AnimationSegment`, `AnimationExportOptions`, and `DeterministicAnimation`.
+The entry point is:
+
+```rust
+pub fn Presentation::export_animation_deterministic(
+    &self,
+    segments: &[AnimationSegment],
+    options: AnimationExportOptions,
+) -> Result<DeterministicAnimation>;
+```
+
+Segments declare slide index, positive duration, fixed click count, and either
+no transition source or an explicit outgoing slide. Options declare bounded
+frame rate and pixel dimensions, animated GIF loop behavior or Motion JPEG AVI
+quality, and the existing `MediaFallbackPolicy`. The result carries the encoded
+bytes, exact output timestamps, and ordered diagnostics. The facade uses one
+prepared media-aware timeline assembly for the complete export and writes one
+opaque frame at a time through capped pure-Rust encoders. This additive native
+surface adds no Python, WASM, CLI, trait, generic, builder, wrapper, feature
+flag, system codec, subprocess, or binary asset.
+
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a

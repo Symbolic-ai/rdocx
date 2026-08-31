@@ -151,6 +151,15 @@ position state. The facade admits only poster images to renderer media, freezes
 an unresolved poster as a deterministic labelled group when policy permits,
 and never offers audio or video payload bytes to a renderer or codec decoder.
 
+Deterministic animation export also belongs to the `rpptx` facade. It validates
+and samples explicit segments, prepares the package, resolver, font, chart,
+picture, and media state once, then evaluates and lowers one timeline sample at
+a time. The completed opaque raster immediately enters either the facade-owned
+GIF encoder or the Motion JPEG AVI writer before the next sample is resolved.
+`gif`, `jpeg-encoder`, and `tiny-skia` are optional dependencies of the existing
+`rpptx` render feature. No codec edge enters `rpptx-layout`, `rpptx-render`, or
+an `oxml-*` crate, and audio and video package payloads are still never decoded.
+
 The same boundary owns multilingual text mechanics. Rich segments retain
 logical text and source ranges while carrying script, language, direction,
 bidi level, glyph clusters, and two-dimensional advances and offsets. Script
