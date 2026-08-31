@@ -5626,6 +5626,7 @@ mod tests {
             right: Some(visible.clone()),
             inside_h: Some(visible.clone()),
             inside_v: Some(visible),
+            extra_xml: Vec::new(),
         };
         let cell = Some(CT_TblBorders {
             top: Some(nil.clone()),
@@ -5634,6 +5635,7 @@ mod tests {
             right: Some(nil),
             inside_h: None,
             inside_v: None,
+            extra_xml: Vec::new(),
         });
 
         let mut outer = Vec::new();
