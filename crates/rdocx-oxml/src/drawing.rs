@@ -251,6 +251,8 @@ pub struct CT_Anchor {
     pub wrap: WrapType,
     /// Relationship ID referencing the image part.
     pub embed_id: String,
+    /// Relationship ID referencing an externally linked image.
+    pub link_id: Option<String>,
     /// Relationship ID referencing a ChartML part.
     pub chart_rel_id: Option<String>,
     /// Z-order relative height.
@@ -424,6 +426,7 @@ impl CT_Anchor {
             dist_r: Emu(0),
             wrap: WrapType::None,
             embed_id: embed_id.to_string(),
+            link_id: None,
             chart_rel_id: None,
             relative_height: 0,
             description: Some("Background".to_string()),
@@ -481,6 +484,7 @@ impl CT_Anchor {
         let mut extent_cx = Emu(0);
         let mut extent_cy = Emu(0);
         let mut embed_id = String::new();
+        let mut link_id = None;
         let mut shape: Option<CT_Shape> = None;
         let mut description = None;
         let mut name = None;
@@ -519,6 +523,8 @@ impl CT_Anchor {
                             let val = std::str::from_utf8(&attr.value)?;
                             if matches_local_name(key, b"embed") {
                                 embed_id = val.to_string();
+                            } else if matches_local_name(key, b"link") {
+                                link_id = Some(val.to_string());
                             }
                         }
                     } else if matches_local_name(ename.as_ref(), b"simplePos") {
@@ -654,6 +660,8 @@ impl CT_Anchor {
                             let val = std::str::from_utf8(&attr.value)?;
                             if matches_local_name(key, b"embed") {
                                 embed_id = val.to_string();
+                            } else if matches_local_name(key, b"link") {
+                                link_id = Some(val.to_string());
                             }
                         }
                         reader.read_to_end_into(ename, &mut Vec::new())?;
@@ -699,6 +707,7 @@ impl CT_Anchor {
             dist_r,
             wrap,
             embed_id,
+            link_id,
             chart_rel_id: None,
             relative_height,
             description,
@@ -827,6 +836,8 @@ pub struct CT_Inline {
     pub extent_cy: Emu,
     /// Relationship ID referencing the image part
     pub embed_id: String,
+    /// Relationship ID referencing an externally linked image.
+    pub link_id: Option<String>,
     /// Relationship ID referencing a ChartML part.
     pub chart_rel_id: Option<String>,
     /// Optional description/alt text
@@ -844,6 +855,7 @@ impl CT_Inline {
             extent_cx: Emu(width_emu),
             extent_cy: Emu(height_emu),
             embed_id: embed_id.to_string(),
+            link_id: None,
             chart_rel_id: None,
             description: None,
             name: None,
@@ -857,6 +869,7 @@ impl CT_Inline {
             extent_cx: Emu(width_emu),
             extent_cy: Emu(height_emu),
             embed_id: String::new(),
+            link_id: None,
             chart_rel_id: Some(chart_rel_id.to_owned()),
             description: None,
             name: Some("Chart".to_owned()),
@@ -868,6 +881,7 @@ impl CT_Inline {
         let mut cx = Emu(0);
         let mut cy = Emu(0);
         let mut embed_id = String::new();
+        let mut link_id = None;
         let mut description = None;
         let mut name = None;
         let mut buf = Vec::new();
@@ -905,6 +919,8 @@ impl CT_Inline {
                             let val = std::str::from_utf8(&attr.value)?;
                             if matches_local_name(key, b"embed") {
                                 embed_id = val.to_string();
+                            } else if matches_local_name(key, b"link") {
+                                link_id = Some(val.to_string());
                             }
                         }
                     }
@@ -918,6 +934,8 @@ impl CT_Inline {
                             let val = std::str::from_utf8(&attr.value)?;
                             if matches_local_name(key, b"embed") {
                                 embed_id = val.to_string();
+                            } else if matches_local_name(key, b"link") {
+                                link_id = Some(val.to_string());
                             }
                         }
                         reader.read_to_end_into(ename, &mut Vec::new())?;
@@ -951,6 +969,7 @@ impl CT_Inline {
             extent_cx: cx,
             extent_cy: cy,
             embed_id,
+            link_id,
             chart_rel_id: None,
             description,
             name,
@@ -1335,6 +1354,7 @@ mod tests {
             extent_cx: Emu(914400), // 1 inch
             extent_cy: Emu(457200), // 0.5 inch
             embed_id: "rId5".to_string(),
+            link_id: None,
             chart_rel_id: None,
             description: Some("A test image".to_string()),
             name: Some("TestPic".to_string()),
@@ -1353,6 +1373,27 @@ mod tests {
         assert_eq!(inl.extent_cx, Emu(914400));
         assert_eq!(inl.extent_cy, Emu(457200));
         assert_eq!(inl.embed_id, "rId5");
+    }
+
+    #[test]
+    fn linked_image_relationships_are_retained_for_inline_and_anchor_drawings() {
+        let inline = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:inline><wp:extent cx="10" cy="20"/><a:blip r:link="rId7"/></wp:inline></w:drawing>"#,
+        ));
+        assert_eq!(inline.inline.unwrap().link_id.as_deref(), Some("rId7"));
+
+        let anchor = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:anchor><wp:extent cx="10" cy="20"/><a:blip r:link="rId8"/></wp:anchor></w:drawing>"#,
+        ));
+        assert_eq!(anchor.anchor.unwrap().link_id.as_deref(), Some("rId8"));
     }
 
     #[test]
