@@ -2846,9 +2846,9 @@ impl Document {
 
     /// Resolve the public reader projection for one numbering level.
     ///
-    /// `has_unmodeled_properties` reports retained facts attached to this
-    /// numbering instance, definition, or level that this projection does not
-    /// otherwise expose.
+    /// `has_unmodeled_properties` reports retained XML or attributes attached
+    /// to this numbering instance, definition, or level. Modeled producer
+    /// metadata that this projection does not expose is not reported here.
     pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
         if num_id == 0 {
             return None;
@@ -2880,9 +2880,6 @@ impl Document {
                 || !instance.extra_attributes.is_empty()
                 || !definition.extra_xml.is_empty()
                 || !definition.extra_attributes.is_empty()
-                || definition.nsid.is_some()
-                || definition.tmpl.is_some()
-                || definition.multi_level_type.is_some()
                 || !level.extra_xml.is_empty()
                 || !level.extra_attributes.is_empty()
                 || level.ppr_raw.is_some()
@@ -10911,10 +10908,6 @@ mod tests {
     fn reader_exposes_complete_numbering_level_facts() {
         let mut doc = Document::new();
         let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
-        let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[0];
-        definition.nsid = None;
-        definition.tmpl = None;
-        definition.multi_level_type = None;
         let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
         level.num_fmt = Some(ST_NumberFormat::Other("chicago".to_owned()));
         level.start = Some(4);
@@ -10961,7 +10954,7 @@ mod tests {
     }
 
     #[test]
-    fn numbering_level_reports_unexposed_definition_and_level_facts() {
+    fn numbering_level_distinguishes_modeled_metadata_from_retained_raw_facts() {
         let mut doc = Document::new();
         let definition_metadata_id = doc.add_list_definition(&[ListLevel::decimal()]);
         let raw_level_properties_id = doc.add_list_definition(&[ListLevel::decimal()]);
@@ -10984,7 +10977,7 @@ mod tests {
         ));
 
         assert!(
-            doc.numbering_level(definition_metadata_id, 0)
+            !doc.numbering_level(definition_metadata_id, 0)
                 .expect("definition metadata level")
                 .has_unmodeled_properties
         );
