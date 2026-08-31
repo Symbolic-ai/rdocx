@@ -26,10 +26,10 @@ use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
 };
 use rdocx_oxml::namespace::matches_local_name;
-use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
+use rdocx_oxml::numbering::{CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::settings::{CT_Settings, DocumentProtection};
-use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
+use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
@@ -2841,6 +2841,65 @@ impl Document {
             rdocx_oxml::numbering::ST_NumberFormat::Other(_) => None,
             _ => Some(false),
         }
+    }
+
+    /// Resolve the public reader projection for one numbering level.
+    ///
+    /// `has_unmodeled_properties` reports retained facts attached to this
+    /// numbering instance, definition, or level that this projection does not
+    /// otherwise expose.
+    pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
+        if num_id == 0 {
+            return None;
+        }
+        let numbering = self.numbering.as_ref()?;
+        let instance = numbering.nums.iter().find(|item| item.num_id == num_id)?;
+        let definition = numbering
+            .abstract_nums
+            .iter()
+            .find(|item| item.abstract_num_id == instance.abstract_num_id)?;
+        let level = definition.levels.iter().find(|item| item.ilvl == level)?;
+        let format = level.num_fmt.as_ref();
+
+        Some(NumberingLevel {
+            level: level.ilvl,
+            format: format
+                .map(NumberingFormat::from_st)
+                .unwrap_or(NumberingFormat::Decimal),
+            format_name: format.map(ST_NumberFormat::to_str).unwrap_or("decimal"),
+            start: level.start.unwrap_or(1),
+            suffix: level
+                .suffix
+                .map(ListLevelSuffix::from_st)
+                .unwrap_or(ListLevelSuffix::Tab),
+            level_text: level.lvl_text.as_deref(),
+            alignment: level.lvl_jc.map(list_level_alignment),
+            paragraph_style: level.p_style.as_deref(),
+            has_unmodeled_properties: !instance.extra_xml.is_empty()
+                || !instance.extra_attributes.is_empty()
+                || !definition.extra_xml.is_empty()
+                || !definition.extra_attributes.is_empty()
+                || !level.extra_xml.is_empty()
+                || !level.extra_attributes.is_empty(),
+            has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
+                Self::has_list_paragraph_presentation(level.ilvl, properties)
+            }),
+            has_marker_presentation: level
+                .rpr
+                .as_ref()
+                .is_some_and(|properties| properties != &CT_RPr::default()),
+        })
+    }
+
+    fn has_list_paragraph_presentation(level: u32, properties: &CT_PPr) -> bool {
+        let standard = CT_PPr {
+            ind_left: Some(rdocx_oxml::units::Twips(
+                (level.saturating_add(1) * 720) as i32,
+            )),
+            ind_hanging: Some(rdocx_oxml::units::Twips(360)),
+            ..CT_PPr::default()
+        };
+        properties != &standard
     }
 
     /// Append an external hyperlink to the last paragraph (creating one if
@@ -6105,6 +6164,91 @@ impl ListNumberFormat {
             Self::UpperRoman => ST_NumberFormat::UpperRoman,
             Self::Ordinal => ST_NumberFormat::Ordinal,
         }
+    }
+}
+
+/// The numbering format reported by the read-only numbering projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberingFormat<'a> {
+    Bullet,
+    Decimal,
+    LowerLetter,
+    UpperLetter,
+    LowerRoman,
+    UpperRoman,
+    Ordinal,
+    None,
+    /// A producer-defined format value retained by rdocx.
+    Other(&'a str),
+}
+
+impl<'a> NumberingFormat<'a> {
+    fn from_st(value: &'a ST_NumberFormat) -> Self {
+        match value {
+            ST_NumberFormat::Bullet => Self::Bullet,
+            ST_NumberFormat::Decimal => Self::Decimal,
+            ST_NumberFormat::LowerLetter => Self::LowerLetter,
+            ST_NumberFormat::UpperLetter => Self::UpperLetter,
+            ST_NumberFormat::LowerRoman => Self::LowerRoman,
+            ST_NumberFormat::UpperRoman => Self::UpperRoman,
+            ST_NumberFormat::Ordinal => Self::Ordinal,
+            ST_NumberFormat::None => Self::None,
+            ST_NumberFormat::Other(value) => Self::Other(value),
+        }
+    }
+}
+
+/// The layout item emitted between a list marker and paragraph content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListLevelSuffix {
+    Tab,
+    Space,
+    Nothing,
+}
+
+impl ListLevelSuffix {
+    fn from_st(value: ST_LvlSuffix) -> Self {
+        match value {
+            ST_LvlSuffix::Tab => Self::Tab,
+            ST_LvlSuffix::Space => Self::Space,
+            ST_LvlSuffix::Nothing => Self::Nothing,
+        }
+    }
+}
+
+/// Resolved reader metadata for one numbering definition level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberingLevel<'a> {
+    /// The zero-based list level.
+    pub level: u32,
+    /// The marker format at this level.
+    pub format: NumberingFormat<'a>,
+    /// The exact OOXML format name, including producer-defined values.
+    pub format_name: &'a str,
+    /// The first marker value, defaulting to one when Word omits it.
+    pub start: u32,
+    /// The item emitted between the marker and paragraph content.
+    pub suffix: ListLevelSuffix,
+    /// The Word level-text template or bullet glyph.
+    pub level_text: Option<&'a str>,
+    /// The marker alignment, when explicitly configured.
+    pub alignment: Option<crate::paragraph::Alignment>,
+    /// The paragraph style associated with this numbering level.
+    pub paragraph_style: Option<&'a str>,
+    /// Whether this level retains semantic facts this projection does not model.
+    pub has_unmodeled_properties: bool,
+    /// Whether the list item has nonstandard paragraph-level presentation.
+    pub has_paragraph_presentation: bool,
+    /// Whether the marker has run-level presentation properties.
+    pub has_marker_presentation: bool,
+}
+
+fn list_level_alignment(value: ST_Jc) -> crate::paragraph::Alignment {
+    match value {
+        ST_Jc::Center => crate::paragraph::Alignment::Center,
+        ST_Jc::Right | ST_Jc::End => crate::paragraph::Alignment::Right,
+        ST_Jc::Both | ST_Jc::Distribute => crate::paragraph::Alignment::Justify,
+        _ => crate::paragraph::Alignment::Left,
     }
 }
 
@@ -10665,6 +10809,55 @@ mod tests {
         assert_eq!(
             paragraph.inner.properties.as_ref().unwrap().num_ilvl,
             Some(8)
+        );
+    }
+
+    #[test]
+    fn reader_exposes_complete_numbering_level_facts() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.num_fmt = Some(ST_NumberFormat::Other("chicago".to_owned()));
+        level.start = Some(4);
+        level.suffix = Some(ST_LvlSuffix::Space);
+        level.lvl_jc = Some(ST_Jc::Center);
+        level.p_style = Some("ListNumber".to_owned());
+
+        let level = doc.numbering_level(num_id, 0).expect("numbering level");
+        assert_eq!(level.format, NumberingFormat::Other("chicago"));
+        assert_eq!(level.format_name, "chicago");
+        assert_eq!(level.start, 4);
+        assert_eq!(level.suffix, ListLevelSuffix::Space);
+        assert_eq!(level.alignment, Some(Alignment::Center));
+        assert_eq!(level.paragraph_style, Some("ListNumber"));
+        assert!(!level.has_unmodeled_properties);
+        assert!(!level.has_paragraph_presentation);
+        assert!(!level.has_marker_presentation);
+
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.ppr = Some(CT_PPr {
+            ind_left: Some(Twips(360)),
+            ..Default::default()
+        });
+        level.rpr = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+        level.extra_xml.push((0, b"<w:unknown/>".to_vec()));
+
+        let level = doc.numbering_level(num_id, 0).expect("numbering level");
+        assert!(level.has_unmodeled_properties);
+        assert!(level.has_paragraph_presentation);
+        assert!(level.has_marker_presentation);
+
+        let none_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0].num_fmt =
+            Some(ST_NumberFormat::None);
+        assert_eq!(
+            doc.numbering_level(none_id, 0)
+                .expect("no-numbering level")
+                .format,
+            NumberingFormat::None
         );
     }
 
