@@ -199,6 +199,12 @@ impl Field {
         )
     }
 
+    /// Whether this field was parsed from a complex `w:fldChar` sequence.
+    #[doc(hidden)]
+    pub fn is_complex(&self) -> bool {
+        self.is_parsed_complex()
+    }
+
     /// Return the text this field contributes to [`CT_R::text`].
     #[doc(hidden)]
     pub fn projected_text(&self) -> Option<&str> {
