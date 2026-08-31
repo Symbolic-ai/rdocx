@@ -2242,10 +2242,14 @@ impl CT_Lvl {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 7;
                     } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes) {
-                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)? {
-                            lvl.lvl_jc = ST_Jc::from_str(&value).ok();
+                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
+                            && let Ok(justification) = ST_Jc::from_str(&value)
+                        {
+                            lvl.lvl_jc = Some(justification);
+                            reader.read_to_end_into(name, &mut Vec::new())?;
+                        } else {
+                            lvl.extra_xml.push((9, capture_element(reader, e)?));
                         }
-                        reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 10;
                     } else if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
@@ -2299,10 +2303,14 @@ impl CT_Lvl {
                     } else if is_word_element(name.as_ref(), b"lvlText", &prefixes) {
                         lvl.lvl_text = word_attribute_value(e, b"val", &prefixes)?;
                         boundary = 7;
-                    } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes)
-                        && let Some(val) = word_attribute_value(e, b"val", &prefixes)?
-                    {
-                        lvl.lvl_jc = ST_Jc::from_str(&val).ok();
+                    } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes) {
+                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
+                            && let Ok(justification) = ST_Jc::from_str(&value)
+                        {
+                            lvl.lvl_jc = Some(justification);
+                        } else {
+                            lvl.extra_xml.push((9, capture_empty_element(e)?));
+                        }
                         boundary = 10;
                     } else if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_empty_element(e)?;
@@ -4815,5 +4823,20 @@ mod tests {
             reopened.abstract_nums[0].levels[0].num_fmt,
             Some(ST_NumberFormat::Other("chicago".to_owned()))
         );
+    }
+
+    #[test]
+    fn producer_defined_suffix_and_justification_remain_unmodelled() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:suff w:val="producer"/><w:lvlJc w:val="producer"/></w:lvl></w:abstractNum></w:numbering>"#;
+        let numbering = CT_Numbering::from_xml(xml).unwrap();
+        let level = &numbering.abstract_nums[0].levels[0];
+
+        assert_eq!(level.suffix, None);
+        assert_eq!(level.lvl_jc, None);
+        assert_eq!(level.extra_xml.len(), 2);
+
+        let output = String::from_utf8(numbering.to_xml().unwrap()).unwrap();
+        assert!(output.contains(r#"<w:suff w:val="producer"/>"#));
+        assert!(output.contains(r#"<w:lvlJc w:val="producer"/>"#));
     }
 }
