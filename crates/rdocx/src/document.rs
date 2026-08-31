@@ -2908,8 +2908,13 @@ impl Document {
                 || !instance.extra_attributes.is_empty()
                 || !definition.extra_xml.is_empty()
                 || !definition.extra_attributes.is_empty()
+                || definition.nsid.is_some()
+                || definition.tmpl.is_some()
+                || definition.multi_level_type.is_some()
                 || !level.extra_xml.is_empty()
-                || !level.extra_attributes.is_empty(),
+                || !level.extra_attributes.is_empty()
+                || level.ppr_raw.is_some()
+                || level.rpr_raw.is_some(),
             has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
                 Self::has_list_paragraph_presentation(level.ilvl, properties)
             }),
@@ -11007,6 +11012,10 @@ mod tests {
     fn reader_exposes_complete_numbering_level_facts() {
         let mut doc = Document::new();
         let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[0];
+        definition.nsid = None;
+        definition.tmpl = None;
+        definition.multi_level_type = None;
         let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
         level.num_fmt = Some(ST_NumberFormat::Other("chicago".to_owned()));
         level.start = Some(4);
@@ -11056,6 +11065,10 @@ mod tests {
     fn reader_reports_list_paragraph_presentation_separately_from_unknown_xml() {
         let mut doc = Document::new();
         let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[0];
+        definition.nsid = None;
+        definition.tmpl = None;
+        definition.multi_level_type = None;
         let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
         level.ppr = Some(CT_PPr {
             ind_left: Some(Twips(360)),
@@ -11065,6 +11078,41 @@ mod tests {
         let level = doc.numbering_level(num_id, 0).expect("numbering level");
         assert!(level.has_paragraph_presentation);
         assert!(!level.has_unmodeled_properties);
+    }
+
+    #[test]
+    fn numbering_level_reports_unexposed_definition_and_level_facts() {
+        let mut doc = Document::new();
+        let definition_metadata_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let raw_level_properties_id = doc.add_list_definition(&[ListLevel::decimal()]);
+
+        let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[0];
+        definition.nsid = Some("12345678".to_owned());
+        definition.tmpl = Some("87654321".to_owned());
+        definition.multi_level_type = Some("hybridMultilevel".to_owned());
+
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0];
+        level.ppr_raw = Some((
+            CT_PPr::default(),
+            b"<w:pPr><producer:property/></w:pPr>".to_vec(),
+            vec!["producer".to_owned()],
+        ));
+        level.rpr_raw = Some((
+            CT_RPr::default(),
+            b"<w:rPr><producer:property/></w:rPr>".to_vec(),
+            vec!["producer".to_owned()],
+        ));
+
+        assert!(
+            doc.numbering_level(definition_metadata_id, 0)
+                .expect("definition metadata level")
+                .has_unmodeled_properties
+        );
+        assert!(
+            doc.numbering_level(raw_level_properties_id, 0)
+                .expect("raw properties level")
+                .has_unmodeled_properties
+        );
     }
 
     #[test]
