@@ -82,6 +82,8 @@ pub struct CT_TblBorders {
     pub right: Option<CT_BorderEdge>,
     pub inside_h: Option<CT_BorderEdge>,
     pub inside_v: Option<CT_BorderEdge>,
+    /// Other border edges retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 impl CT_TblBorders {
@@ -123,8 +125,11 @@ impl CT_TblBorders {
                     } else if is_word_element(name.as_ref(), b"insideV", &prefixes) {
                         borders.inside_v =
                             Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
+                    } else {
+                        borders.extra_xml.push(capture_empty_element(e)?);
                     }
                 }
+                Ok(Event::Start(ref e)) => borders.extra_xml.push(capture_element(reader, e)?),
                 Ok(Event::End(ref e))
                     if matches_local_name(e.name().as_ref(), b"tblBorders")
                         || matches_local_name(e.name().as_ref(), b"tcBorders") =>
@@ -161,6 +166,9 @@ impl CT_TblBorders {
         if let Some(ref e) = self.inside_v {
             e.to_xml(writer, "w:insideV")?;
         }
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
+        }
         writer.write_event(Event::End(BytesEnd::new(tag)))?;
         Ok(())
     }
@@ -172,6 +180,7 @@ impl CT_TblBorders {
             && self.right.is_none()
             && self.inside_h.is_none()
             && self.inside_v.is_none()
+            && self.extra_xml.is_empty()
     }
 }
 
@@ -392,6 +401,8 @@ pub struct CT_TblPr {
     pub change: Option<CT_Revision>,
     /// Malformed table property changes retained verbatim.
     pub revision_xml: Vec<Vec<u8>>,
+    /// Other table properties retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 /// `w:tblLook` — which parts of a table style's conditional formatting apply.
@@ -573,6 +584,11 @@ impl CT_TblPr {
                                 &capture_empty_element(e)?,
                                 owner_bindings,
                             )?);
+                    } else {
+                        pr.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -605,7 +621,10 @@ impl CT_TblPr {
                                 owner_bindings,
                             )?);
                     } else {
-                        reader.read_to_end_into(name, &mut Vec::new())?;
+                        pr.extra_xml.push(crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"tblPr") => {
@@ -673,6 +692,9 @@ impl CT_TblPr {
         }
         if let Some(change) = &self.change {
             change.write_xml(writer)?;
+        }
+        for raw in &self.extra_xml {
+            writer.get_mut().write_all(raw)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:tblPr")))?;
@@ -837,6 +859,10 @@ pub struct CT_TrPr {
     pub header: Option<bool>,
     /// Row alignment
     pub jc: Option<ST_Jc>,
+    /// Number of grid columns omitted before the first cell.
+    pub grid_before: Option<u32>,
+    /// Number of grid columns omitted after the final cell.
+    pub grid_after: Option<u32>,
     /// Allow row to break across pages
     pub cant_split: Option<bool>,
     /// `w:cnfStyle` — which conditional parts of the table style this row is.
@@ -848,6 +874,8 @@ pub struct CT_TrPr {
     pub revision_markers: Vec<CT_Revision>,
     /// Malformed row markers retained verbatim.
     pub revision_xml: Vec<Vec<u8>>,
+    /// Other row properties retained verbatim.
+    pub extra_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
@@ -885,6 +913,10 @@ impl CT_TrPr {
                         if let Some(val) = get_val_attr(e)? {
                             pr.jc = ST_Jc::from_str(&val).ok();
                         }
+                    } else if matches_local_name(name.as_ref(), b"gridBefore") {
+                        pr.grid_before = get_val_attr(e)?.map(|value| value.parse()).transpose()?;
+                    } else if matches_local_name(name.as_ref(), b"gridAfter") {
+                        pr.grid_after = get_val_attr(e)?.map(|value| value.parse()).transpose()?;
                     } else if matches_local_name(name.as_ref(), b"cnfStyle") {
                         pr.cnf_style = get_val_attr(e)?;
                     } else if matches_local_name(name.as_ref(), b"cantSplit") {
@@ -902,6 +934,8 @@ impl CT_TrPr {
                         || matches_local_name(name.as_ref(), b"del")
                     {
                         pr.revision_xml.push(capture_empty_element(e)?);
+                    } else {
+                        pr.extra_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::Start(ref e)) => {
@@ -920,7 +954,7 @@ impl CT_TrPr {
                     {
                         pr.revision_xml.push(capture_element(reader, e)?);
                     } else {
-                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                        pr.extra_xml.push(capture_element(reader, e)?);
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"trPr") => {
@@ -976,10 +1010,27 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(grid_before) = self.grid_before {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridBefore");
+            e.push_attribute(("w:val", buffer.format(grid_before)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if let Some(grid_after) = self.grid_after {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridAfter");
+            e.push_attribute(("w:val", buffer.format(grid_after)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
         for revision in &self.revision_markers {
             revision.write_xml(writer)?;
         }
         for raw in &self.revision_xml {
+            writer.get_mut().write_all(raw)?;
+        }
+        for raw in &self.extra_xml {
             writer.get_mut().write_all(raw)?;
         }
 
@@ -993,8 +1044,11 @@ impl CT_TrPr {
             && self.jc.is_none()
             && self.cant_split.is_none()
             && self.cnf_style.is_none()
+            && self.grid_before.is_none()
+            && self.grid_after.is_none()
             && self.revision_markers.is_empty()
             && self.revision_xml.is_empty()
+            && self.extra_xml.is_empty()
     }
 }
 
@@ -1033,6 +1087,8 @@ pub struct CT_TcPr {
     pub width: Option<CT_TblWidth>,
     /// Horizontal merge (number of grid columns spanned)
     pub grid_span: Option<u32>,
+    /// Legacy horizontal merge state.
+    pub h_merge: Option<String>,
     /// Vertical merge
     pub v_merge: Option<VMerge>,
     /// Cell borders
@@ -1145,6 +1201,8 @@ impl CT_TcPr {
                 }
                 pr.grid_span = Some(span);
             }
+        } else if is_word_element(name.as_ref(), b"hMerge", word_prefixes) {
+            pr.h_merge = Some(get_word_val_attr(e, word_prefixes)?.unwrap_or_default());
         } else if is_word_element(name.as_ref(), b"vMerge", word_prefixes) {
             pr.v_merge = Some(match get_word_val_attr(e, word_prefixes)?.as_deref() {
                 Some("restart") => VMerge::Restart,
@@ -1206,6 +1264,13 @@ impl CT_TcPr {
 
         // Unmodelled w:hMerge is preserved at boundary 3.
         write_extras_at(writer, &self.extra_xml, 3)?;
+        if let Some(h_merge) = &self.h_merge {
+            let mut e = BytesStart::new("w:hMerge");
+            if !h_merge.is_empty() {
+                e.push_attribute(("w:val", h_merge.as_str()));
+            }
+            writer.write_event(Event::Empty(e))?;
+        }
         write_extras_at(writer, &self.extra_xml, 4)?;
         if let Some(ref vm) = self.v_merge {
             let mut e = BytesStart::new("w:vMerge");
@@ -1263,6 +1328,7 @@ impl CT_TcPr {
     fn is_empty(&self) -> bool {
         self.width.is_none()
             && self.grid_span.is_none()
+            && self.h_merge.is_none()
             && self.v_merge.is_none()
             && self.borders.is_none()
             && self.shading.is_none()
@@ -2530,10 +2596,10 @@ mod tests {
             .properties
             .as_ref()
             .expect("cell properties parse");
+        assert_eq!(properties.h_merge.as_deref(), Some(""));
         assert_eq!(
             properties.extra_xml,
             vec![
-                (3, br#"<w:hMerge/>"#.to_vec()),
                 (8, br#"<w:tcMar/>"#.to_vec()),
                 (12, br#"<w:hideMark/>"#.to_vec()),
                 (13, br#"<w:headers/>"#.to_vec()),
@@ -2660,6 +2726,8 @@ mod tests {
                  <w:trPr>
                    <w:trHeight w:val="720" w:hRule="exact"/>
                    <w:tblHeader/>
+                   <w:gridBefore w:val="1"/>
+                   <w:gridAfter w:val="2"/>
                  </w:trPr>
                  <w:tc><w:p/></w:tc>
                </w:tr>"#,
@@ -2669,6 +2737,45 @@ mod tests {
         assert_eq!(tr_pr.height, Some(Twips(720)));
         assert_eq!(tr_pr.height_rule, Some("exact".to_string()));
         assert_eq!(tr_pr.header, Some(true));
+        assert_eq!(tr_pr.grid_before, Some(1));
+        assert_eq!(tr_pr.grid_after, Some(2));
+    }
+
+    #[test]
+    fn unmodelled_table_property_groups_are_retained() {
+        let table = parse_table(
+            r#"<w:tblPr><w:bidiVisual/><w:tblBorders><w:diagonalDown/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:trPr><w:tblCellSpacing/></w:trPr><w:tc><w:tcPr><w:fitText/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+
+        let table_properties = table.properties.as_ref().expect("table properties parse");
+        assert_eq!(table_properties.extra_xml.len(), 1);
+        assert_eq!(
+            table_properties
+                .borders
+                .as_ref()
+                .expect("table borders parse")
+                .extra_xml
+                .len(),
+            1
+        );
+        assert_eq!(
+            table.rows[0]
+                .properties
+                .as_ref()
+                .expect("row properties parse")
+                .extra_xml
+                .len(),
+            1
+        );
+        assert_eq!(
+            table.rows[0].cells[0]
+                .properties
+                .as_ref()
+                .expect("cell properties parse")
+                .extra_xml
+                .len(),
+            1
+        );
     }
 
     #[test]
