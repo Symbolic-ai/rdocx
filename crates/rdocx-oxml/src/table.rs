@@ -128,10 +128,25 @@ impl CT_TblBorders {
                         borders.inside_v =
                             Some(CT_BorderEdge::from_xml_attrs_with_prefixes(e, &prefixes)?);
                     } else {
-                        borders.extra_xml.push(capture_empty_element(e)?);
+                        let raw = capture_empty_element(e)?;
+                        borders
+                            .extra_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &raw,
+                                &preserved_table_raw_bindings(&prefixes),
+                            )?);
                     }
                 }
-                Ok(Event::Start(ref e)) => borders.extra_xml.push(capture_element(reader, e)?),
+                Ok(Event::Start(ref e)) => {
+                    let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let raw = capture_element(reader, e)?;
+                    borders
+                        .extra_xml
+                        .push(crate::text::raw_with_external_bindings(
+                            &raw,
+                            &preserved_table_raw_bindings(&prefixes),
+                        )?);
+                }
                 Ok(Event::End(ref e))
                     if matches_local_name(e.name().as_ref(), b"tblBorders")
                         || matches_local_name(e.name().as_ref(), b"tcBorders") =>
@@ -2898,6 +2913,37 @@ mod tests {
         assert_eq!(borders.top.unwrap().val, ST_Border::Single);
         assert_eq!(borders.inside_h.unwrap().val, ST_Border::Single);
         assert_eq!(borders.inside_v.unwrap().val, ST_Border::Single);
+    }
+
+    #[test]
+    fn retained_border_children_keep_owner_namespace_bindings() {
+        let table = parse_table(
+            r#"<w:tblPr>
+                 <w:tblBorders xmlns:table-ext="urn:table-border">
+                   <table-ext:diagonal table-ext:value="kept"/>
+                 </w:tblBorders>
+               </w:tblPr>
+               <w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+               <w:tr><w:tc><w:tcPr>
+                 <w:tcBorders xmlns:cell-ext="urn:cell-border">
+                   <cell-ext:diagonal cell-ext:value="kept"/>
+                 </w:tcBorders>
+               </w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+
+        let xml = table_to_xml(&table);
+        assert!(
+            xml.contains(
+                r#"<table-ext:diagonal table-ext:value="kept" xmlns:table-ext="urn:table-border"/>"#
+            ),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(
+                r#"<cell-ext:diagonal cell-ext:value="kept" xmlns:cell-ext="urn:cell-border"/>"#
+            ),
+            "{xml}"
+        );
     }
 
     #[test]
