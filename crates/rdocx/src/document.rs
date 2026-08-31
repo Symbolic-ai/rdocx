@@ -42,6 +42,7 @@ use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::revision::RevisionRef;
+use crate::run::RunRef;
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef};
 
@@ -3709,6 +3710,36 @@ impl Document {
         style::resolve_paragraph_properties(style_id, &self.styles)
     }
 
+    /// Resolve inherited, numbering-level, and direct properties for a
+    /// concrete paragraph.
+    pub fn effective_paragraph_properties(&self, paragraph: &ParagraphRef<'_>) -> CT_PPr {
+        let direct = paragraph.inner.properties.as_ref();
+        let mut effective = style::resolve_paragraph_properties(
+            direct.and_then(|properties| properties.style_id.as_deref()),
+            &self.styles,
+        );
+
+        if let Some(num_id) = effective.num_id {
+            effective.num_ilvl = effective.num_ilvl.or_else(|| {
+                self.numbering_level_for_style(
+                    num_id,
+                    direct.and_then(|properties| properties.style_id.as_deref()),
+                )
+            });
+        }
+
+        if let Some((num_id, level)) = effective.num_id.zip(effective.num_ilvl)
+            && let Some(definition) = self.numbering_definition(num_id, level)
+            && let Some(properties) = &definition.ppr
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) = direct {
+            effective.merge_from(properties);
+        }
+        effective
+    }
+
     /// Resolve the effective run properties for the given paragraph and character styles,
     /// walking the full inheritance chain.
     pub fn resolve_run_properties(
@@ -3717,6 +3748,71 @@ impl Document {
         run_style_id: Option<&str>,
     ) -> CT_RPr {
         style::resolve_run_properties(para_style_id, run_style_id, &self.styles)
+    }
+
+    /// Resolve inherited, numbering-level, paragraph-mark, and direct
+    /// properties for one concrete run.
+    pub fn effective_run_properties(
+        &self,
+        paragraph: &ParagraphRef<'_>,
+        run: &RunRef<'_>,
+    ) -> CT_RPr {
+        let paragraph_properties = paragraph.inner.properties.as_ref();
+        let direct = run.inner.properties.as_ref();
+        let mut effective = style::resolve_run_properties(
+            paragraph_properties.and_then(|properties| properties.style_id.as_deref()),
+            direct.and_then(|properties| properties.style_id.as_deref()),
+            &self.styles,
+        );
+        let effective_paragraph = self.effective_paragraph_properties(paragraph);
+
+        if let Some((num_id, level)) = effective_paragraph.num_id.zip(effective_paragraph.num_ilvl)
+            && let Some(definition) = self.numbering_definition(num_id, level)
+            && let Some(properties) = &definition.rpr
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) =
+            paragraph_properties.and_then(|properties| properties.rpr.as_ref())
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) = direct {
+            effective.merge_from(properties);
+        }
+        effective
+    }
+
+    fn numbering_definition(
+        &self,
+        num_id: u32,
+        level: u32,
+    ) -> Option<&rdocx_oxml::numbering::CT_Lvl> {
+        if num_id == 0 {
+            return None;
+        }
+        self.numbering
+            .as_ref()?
+            .get_abstract_num_for(num_id)?
+            .levels
+            .iter()
+            .find(|definition| definition.ilvl == level)
+    }
+
+    fn numbering_level_for_style(&self, num_id: u32, style_id: Option<&str>) -> Option<u32> {
+        let definition = self.numbering.as_ref()?.get_abstract_num_for(num_id)?;
+        let mut style_id = style_id?;
+        for _ in 0..self.styles.styles.len() {
+            if let Some(level) = definition
+                .levels
+                .iter()
+                .find(|level| level.p_style.as_deref() == Some(style_id))
+            {
+                return Some(level.ilvl);
+            }
+            style_id = self.styles.get_by_id(style_id)?.based_on.as_deref()?;
+        }
+        None
     }
 
     // ---- Section/Page setup ----
@@ -10859,6 +10955,64 @@ mod tests {
                 .format,
             NumberingFormat::None
         );
+    }
+
+    #[test]
+    fn reader_resolves_concrete_paragraph_and_run_properties() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.p_style = Some("ListBase".to_owned());
+        level.ppr = Some(CT_PPr {
+            keep_next: Some(true),
+            ..Default::default()
+        });
+        level.rpr = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+
+        doc.add_style(
+            StyleBuilder::paragraph("ListBase", "List Base")
+                .paragraph_properties(CT_PPr {
+                    num_id: Some(num_id),
+                    ..Default::default()
+                })
+                .run_properties(CT_RPr {
+                    italic: Some(true),
+                    ..Default::default()
+                }),
+        );
+        doc.add_style(StyleBuilder::paragraph("ListChild", "List Child").based_on("ListBase"));
+        doc.add_paragraph("text").style("ListChild");
+
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let properties = paragraph.properties.as_mut().expect("paragraph style");
+        properties.ind_left = Some(Twips(720));
+        properties.rpr = Some(CT_RPr {
+            strike: Some(true),
+            ..Default::default()
+        });
+        paragraph.runs[0].properties = Some(CT_RPr {
+            vanish: Some(true),
+            ..Default::default()
+        });
+
+        let paragraph = doc.paragraph(0).expect("paragraph");
+        let run = paragraph.runs().next().expect("run");
+        let paragraph_properties = doc.effective_paragraph_properties(&paragraph);
+        let run_properties = doc.effective_run_properties(&paragraph, &run);
+
+        assert_eq!(paragraph_properties.num_id, Some(num_id));
+        assert_eq!(paragraph_properties.num_ilvl, Some(0));
+        assert_eq!(paragraph_properties.keep_next, Some(true));
+        assert_eq!(paragraph_properties.ind_left, Some(Twips(720)));
+        assert_eq!(run_properties.italic, Some(true));
+        assert_eq!(run_properties.bold, Some(true));
+        assert_eq!(run_properties.strike, Some(true));
+        assert_eq!(run_properties.vanish, Some(true));
     }
 
     #[test]
