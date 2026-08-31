@@ -1029,7 +1029,7 @@ mod tests {
             height: Some(Twips(240)),
             grid_before: Some(1),
             grid_after: Some(2),
-            extra_xml: vec![b"<w:tblCellSpacing/>".to_vec()],
+            extra_xml: vec![(9, b"<w:tblCellSpacing/>".to_vec())],
             ..Default::default()
         });
 
