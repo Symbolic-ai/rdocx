@@ -3750,8 +3750,8 @@ impl Document {
         style::resolve_run_properties(para_style_id, run_style_id, &self.styles)
     }
 
-    /// Resolve inherited, numbering-level, paragraph-mark, and direct
-    /// properties for one concrete run.
+    /// Resolve inherited, paragraph-mark, and direct properties for one
+    /// concrete body run.
     pub fn effective_run_properties(
         &self,
         paragraph: &ParagraphRef<'_>,
@@ -3764,14 +3764,6 @@ impl Document {
             direct.and_then(|properties| properties.style_id.as_deref()),
             &self.styles,
         );
-        let effective_paragraph = self.effective_paragraph_properties(paragraph);
-
-        if let Some((num_id, level)) = effective_paragraph.num_id.zip(effective_paragraph.num_ilvl)
-            && let Some(definition) = self.numbering_definition(num_id, level)
-            && let Some(properties) = &definition.rpr
-        {
-            effective.merge_from(properties);
-        }
         if let Some(properties) =
             paragraph_properties.and_then(|properties| properties.rpr.as_ref())
         {
@@ -11010,9 +11002,14 @@ mod tests {
         assert_eq!(paragraph_properties.keep_next, Some(true));
         assert_eq!(paragraph_properties.ind_left, Some(Twips(720)));
         assert_eq!(run_properties.italic, Some(true));
-        assert_eq!(run_properties.bold, Some(true));
+        assert_eq!(run_properties.bold, None);
         assert_eq!(run_properties.strike, Some(true));
         assert_eq!(run_properties.vanish, Some(true));
+        assert!(
+            doc.numbering_level(num_id, 0)
+                .expect("numbering level")
+                .has_marker_presentation
+        );
     }
 
     #[test]
