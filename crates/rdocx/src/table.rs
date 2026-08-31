@@ -125,6 +125,7 @@ impl<'a> Table<'a> {
             right: Some(edge.clone()),
             inside_h: Some(edge.clone()),
             inside_v: Some(edge),
+            extra_xml: Vec::new(),
         });
     }
 
