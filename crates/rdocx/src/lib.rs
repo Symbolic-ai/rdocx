@@ -45,7 +45,8 @@ pub use comparison::ComparisonDiagnostic;
 pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
-    ListLevel, ListNumberFormat, OutlineNode, RenderOptions, UnsupportedXmlRef,
+    ListLevel, ListLevelSuffix, ListNumberFormat, NumberingFormat, NumberingLevel, OutlineNode,
+    RenderOptions, UnsupportedXmlRef,
 };
 pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
