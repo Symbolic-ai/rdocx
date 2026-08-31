@@ -2324,6 +2324,28 @@ impl Document {
         })
     }
 
+    /// Whether the document declares a page background that may affect its
+    /// visible appearance.
+    pub fn has_document_background(&self) -> bool {
+        self.document.background_xml.is_some()
+    }
+
+    /// Whether any document section carries layout formatting.
+    ///
+    /// This includes the final body section and sections attached to paragraph
+    /// properties. Callers that cannot preserve page layout can reject such
+    /// documents without treating section XML as ordinary body content.
+    pub fn has_section_layout_formatting(&self) -> bool {
+        self.section_properties_in_order().any(section_has_layout)
+    }
+
+    /// Whether any document section retains XML that the semantic section
+    /// reader does not model.
+    pub fn has_unmodeled_section_properties(&self) -> bool {
+        self.section_properties_in_order()
+            .any(|properties| !properties.extra_xml.is_empty() || properties.change.is_some())
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -3658,6 +3680,23 @@ impl Document {
         run_style_id: Option<&str>,
     ) -> CT_RPr {
         style::resolve_run_properties(para_style_id, run_style_id, &self.styles)
+    }
+
+    fn section_properties_in_order(&self) -> impl Iterator<Item = &CT_SectPr> {
+        self.document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    None
+                }
+            })
+            .chain(self.document.body.sect_pr.iter())
     }
 
     // ---- Section/Page setup ----
@@ -6082,6 +6121,22 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
     }
 }
 
+fn section_has_layout(properties: &CT_SectPr) -> bool {
+    properties.page_width.is_some()
+        || properties.page_height.is_some()
+        || properties.orientation.is_some()
+        || properties.margin_top.is_some()
+        || properties.margin_right.is_some()
+        || properties.margin_bottom.is_some()
+        || properties.margin_left.is_some()
+        || properties.gutter.is_some()
+        || properties.header_distance.is_some()
+        || properties.footer_distance.is_some()
+        || properties.section_type.is_some()
+        || properties.columns.is_some()
+        || properties.title_pg.is_some()
+}
+
 /// Numbering format for one level of a custom list definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListNumberFormat {
@@ -6740,6 +6795,26 @@ mod tests {
                 "paragraph:last",
             ]
         );
+    }
+
+    #[test]
+    fn reader_reports_background_and_section_completeness_facts() {
+        let mut doc = Document::new();
+        assert!(!doc.has_document_background());
+        assert!(doc.has_section_layout_formatting());
+        assert!(!doc.has_unmodeled_section_properties());
+
+        doc.document.background_xml = Some(b"<w:background/>".to_vec());
+        doc.document
+            .body
+            .sect_pr
+            .as_mut()
+            .expect("default section properties")
+            .extra_xml
+            .push(b"<w:printerSettings r:id=\"rId1\"/>".to_vec());
+
+        assert!(doc.has_document_background());
+        assert!(doc.has_unmodeled_section_properties());
     }
 
     #[test]
