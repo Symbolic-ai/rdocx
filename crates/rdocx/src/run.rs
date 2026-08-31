@@ -147,6 +147,12 @@ impl FieldRef<'_> {
     pub fn dirty(&self) -> Option<bool> {
         self.inner.dirty
     }
+
+    /// Whether the retained field source carries semantic attributes outside
+    /// the modeled reader projection.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.inner.has_unmodeled_semantic_attributes()
+    }
 }
 
 /// One direct child of a run, in source order.
@@ -837,6 +843,17 @@ mod tests {
         paragraph.runs.remove(0)
     }
 
+    fn run_from_paragraph_inner_xml(inner_xml: &str) -> CT_R {
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{inner_xml}</w:p></w:body></w:document>"#
+        );
+        let mut document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let BodyContent::Paragraph(mut paragraph) = document.body.content.remove(0) else {
+            panic!("expected paragraph");
+        };
+        paragraph.runs.remove(0)
+    }
+
     #[test]
     fn legacy_horizontal_rule_classification_is_namespace_aware() {
         let cases = [
@@ -925,6 +942,33 @@ mod tests {
         let items = run.items().collect::<Vec<_>>();
         assert!(matches!(items[0], RunItemRef::Text("typed")));
         assert!(matches!(items[1], RunItemRef::UnsupportedXml(b"<x:raw/>")));
+    }
+
+    #[test]
+    fn field_reader_reports_unmodeled_semantic_attributes() {
+        let supported = run_from_paragraph_inner_xml(
+            r#"<w:fldSimple w:instr="PAGE" w:dirty="false"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+        );
+        let unsupported = run_from_paragraph_inner_xml(
+            r#"<w:fldSimple w:instr="PAGE" w:fldLock="true"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+        );
+
+        let supported_run = RunRef { inner: &supported };
+        let RunItemRef::Field(supported) = supported_run.items().next().expect("supported field")
+        else {
+            panic!("expected field");
+        };
+        let unsupported_run = RunRef {
+            inner: &unsupported,
+        };
+        let RunItemRef::Field(unsupported) =
+            unsupported_run.items().next().expect("unsupported field")
+        else {
+            panic!("expected field");
+        };
+
+        assert!(!supported.has_unmodeled_semantic_attributes());
+        assert!(unsupported.has_unmodeled_semantic_attributes());
     }
 
     #[test]

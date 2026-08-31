@@ -11,7 +11,7 @@ use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
 use crate::namespace::{R_NS, matches_local_name};
 use crate::numbering::{namespace_bindings, parse_scoped_ppr, word_prefixes_at};
-use crate::properties::{CT_PPr, CT_RPr, is_word_element};
+use crate::properties::{CT_PPr, CT_RPr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 
@@ -204,6 +204,23 @@ impl Field {
     pub fn projected_text(&self) -> Option<&str> {
         self.is_parsed_complex()
             .then_some(self.cached_result.as_str())
+    }
+
+    /// Whether the retained field source carries semantic attributes outside
+    /// the modeled instruction, type, and dirty-state projection.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        let FieldSource::Parsed {
+            form,
+            raw_xml,
+            word_prefixes,
+            ..
+        } = &self.source
+        else {
+            return false;
+        };
+
+        field_source_has_unmodeled_semantic_attributes(raw_xml, *form, word_prefixes)
+            .unwrap_or(true)
     }
 
     /// Return the stored display split by its original result-run formatting.
@@ -2792,6 +2809,62 @@ fn scan_complex_source(raw: &[u8], word_prefixes: &[String]) -> Result<ComplexSo
                 }
             }
             Event::Eof => return Ok(ComplexSourceScan { runs, nested }),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn field_source_has_unmodeled_semantic_attributes(
+    raw: &[u8],
+    form: FieldForm,
+    word_prefixes: &[String],
+) -> Result<bool> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) | Event::Empty(element) => {
+                let prefixes = word_prefixes_at(&element, word_prefixes)?;
+                let allowed = match form {
+                    FieldForm::Simple
+                        if is_word_element(element.name().as_ref(), b"fldSimple", &prefixes) =>
+                    {
+                        &[b"instr".as_slice(), b"dirty".as_slice()][..]
+                    }
+                    FieldForm::Complex
+                        if is_word_element(element.name().as_ref(), b"fldChar", &prefixes) =>
+                    {
+                        &[b"fldCharType".as_slice(), b"dirty".as_slice()][..]
+                    }
+                    _ => {
+                        buffer.clear();
+                        continue;
+                    }
+                };
+
+                for attribute in element.attributes() {
+                    let attribute = attribute?;
+                    let key = attribute.key.as_ref();
+                    if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                        continue;
+                    }
+                    if allowed
+                        .iter()
+                        .any(|local| is_word_attribute(key, local, &prefixes))
+                    {
+                        continue;
+                    }
+                    return Ok(true);
+                }
+
+                if matches!(form, FieldForm::Simple) {
+                    return Ok(false);
+                }
+            }
+            Event::Eof => return Ok(false),
             _ => {}
         }
         buffer.clear();
