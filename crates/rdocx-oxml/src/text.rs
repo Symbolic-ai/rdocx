@@ -1045,6 +1045,10 @@ pub struct HyperlinkSpan {
     pub rel_id: Option<String>,
     /// Optional anchor within the document (for internal links).
     pub anchor: Option<String>,
+    /// Optional user-facing hover text.
+    pub tooltip: Option<String>,
+    /// Optional location in the hyperlink target document.
+    pub doc_location: Option<String>,
     /// Index of the first run in the hyperlink (inclusive).
     pub run_start: usize,
     /// Index of the last run in the hyperlink (exclusive).
@@ -1077,7 +1081,13 @@ pub struct ComplexFieldHyperlink {
     pub target: String,
 }
 
-type ParsedHyperlinkAttributes = (Option<String>, Option<String>, Vec<(String, String)>);
+type ParsedHyperlinkAttributes = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Vec<(String, String)>,
+);
 
 pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
     HYPERLINK_REVISION_FLAG | hyperlink_index
@@ -1852,6 +1862,8 @@ impl CT_P {
                 let suffix = HyperlinkSpan {
                     rel_id: hyperlink.rel_id.clone(),
                     anchor: hyperlink.anchor.clone(),
+                    tooltip: hyperlink.tooltip.clone(),
+                    doc_location: hyperlink.doc_location.clone(),
                     run_start: run_index + 1,
                     run_end: hyperlink.run_end + 1,
                     extra_attributes: hyperlink.extra_attributes.clone(),
@@ -2228,7 +2240,7 @@ impl CT_P {
                             extra_xml.push((runs.len(), raw));
                         }
                     } else if is_word_element(name.as_ref(), b"hyperlink", &prefixes) {
-                        let (rel_id, anchor, extra_attributes) =
+                        let (rel_id, anchor, tooltip, doc_location, extra_attributes) =
                             parse_hyperlink_attributes(e, &prefixes)?;
                         let raw = capture_element(reader, e)?;
                         let parsed = parse_hyperlink_children(&raw, &prefixes)?;
@@ -2247,6 +2259,8 @@ impl CT_P {
                             hyperlinks.push(HyperlinkSpan {
                                 rel_id,
                                 anchor,
+                                tooltip,
+                                doc_location,
                                 run_start,
                                 run_end,
                                 extra_attributes,
@@ -4087,6 +4101,8 @@ fn parse_hyperlink_attributes(
 ) -> Result<ParsedHyperlinkAttributes> {
     let mut rel_id = None;
     let mut anchor = None;
+    let mut tooltip = None;
+    let mut doc_location = None;
     let mut extra = Vec::new();
     for attribute in element.attributes() {
         let attribute = attribute?;
@@ -4098,11 +4114,15 @@ fn parse_hyperlink_attributes(
             rel_id = Some(value);
         } else if attribute_in_namespace(name, b"anchor", crate::namespace::W_NS, scope) {
             anchor = Some(value);
+        } else if attribute_in_namespace(name, b"tooltip", crate::namespace::W_NS, scope) {
+            tooltip = Some(value);
+        } else if attribute_in_namespace(name, b"docLocation", crate::namespace::W_NS, scope) {
+            doc_location = Some(value);
         } else {
             extra.push((std::str::from_utf8(name)?.to_owned(), value));
         }
     }
-    Ok((rel_id, anchor, extra))
+    Ok((rel_id, anchor, tooltip, doc_location, extra))
 }
 
 fn attribute_in_namespace(name: &[u8], local: &[u8], namespace: &str, scope: &[String]) -> bool {
@@ -4304,6 +4324,14 @@ fn write_hyperlink_start<W: std::io::Write>(
     }
     if let Some(anchor) = &hyperlink.anchor {
         element.push_attribute((anchor_name.as_str(), anchor.as_str()));
+    }
+    if let Some(tooltip) = &hyperlink.tooltip {
+        let tooltip_name = format!("{word_prefix}:tooltip");
+        element.push_attribute((tooltip_name.as_str(), tooltip.as_str()));
+    }
+    if let Some(doc_location) = &hyperlink.doc_location {
+        let doc_location_name = format!("{word_prefix}:docLocation");
+        element.push_attribute((doc_location_name.as_str(), doc_location.as_str()));
     }
     for (name, value) in &hyperlink.extra_attributes {
         element.push_attribute((name.as_str(), value.as_str()));
@@ -5129,11 +5157,35 @@ mod tests {
     #[test]
     fn parse_hyperlink_with_anchor() {
         let p = parse_paragraph(
-            r#"<w:hyperlink w:anchor="section1"><w:r><w:t>Go to section</w:t></w:r></w:hyperlink>"#,
+            r#"<w:hyperlink w:anchor="section1" w:tooltip="Jump" w:docLocation="target"><w:r><w:t>Go to section</w:t></w:r></w:hyperlink>"#,
         );
         assert_eq!(p.hyperlinks.len(), 1);
         assert_eq!(p.hyperlinks[0].anchor, Some("section1".to_string()));
+        assert_eq!(p.hyperlinks[0].tooltip.as_deref(), Some("Jump"));
+        assert_eq!(p.hyperlinks[0].doc_location.as_deref(), Some("target"));
         assert!(p.hyperlinks[0].rel_id.is_none());
+    }
+
+    #[test]
+    fn parse_hyperlink_uses_local_namespace_aliases_without_reporting_declarations() {
+        let p = parse_paragraph(concat!(
+            r#"<q:hyperlink xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"q:tooltip="Jump" q:docLocation="target" q:history="1">"#,
+            r#"<q:r><q:t>Go</q:t></q:r></q:hyperlink>"#,
+        ));
+        assert_eq!(p.hyperlinks[0].tooltip.as_deref(), Some("Jump"));
+        assert_eq!(p.hyperlinks[0].doc_location.as_deref(), Some("target"));
+        assert!(
+            p.hyperlinks[0]
+                .extra_attributes
+                .contains(&("q:history".to_owned(), "1".to_owned()))
+        );
+        assert!(
+            p.hyperlinks[0]
+                .extra_attributes
+                .iter()
+                .any(|(name, _)| name == "xmlns:q")
+        );
     }
 
     #[test]
@@ -5157,6 +5209,8 @@ mod tests {
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: Some("rId7".to_string()),
             anchor: None,
+            tooltip: None,
+            doc_location: None,
             run_start: 1,
             run_end: 2,
             extra_attributes: Vec::new(),

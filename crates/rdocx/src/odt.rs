@@ -6839,6 +6839,8 @@ mod tests {
         paragraph.hyperlinks.push(rdocx_oxml::text::HyperlinkSpan {
             rel_id: None,
             anchor: Some("bookmark".to_owned()),
+            tooltip: None,
+            doc_location: None,
             run_start: 0,
             run_end: 1,
             extra_attributes: Vec::new(),
