@@ -423,7 +423,7 @@ regenerated, never hand-edited.
 | F-224 | HTML slide content import                    | S64 | L | pending |
 | F-225 | PDF page content import                      | S64 | L | pending |
 | F-226 | Notes and handout export                     | S63 | M | pending |
-| F-227 | Animated GIF and video export                | S61 | L | pending |
+| F-227 | Animated GIF and video export                | S61 | L | in-progress |
 <!-- AUTOGEN:backlog-M21 END -->
 
 ### M22, Word depth
