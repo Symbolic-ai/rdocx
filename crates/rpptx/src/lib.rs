@@ -33,7 +33,10 @@ use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
 #[cfg(feature = "render")]
-use oxml_layout::{Color, FontManager, LayoutResult, PageFrame, PositionedElement, Rect};
+use oxml_layout::{
+    Color, FontManager, GlyphRun, GroupElement, LayoutResult, PageFrame, Path as LayoutPath, Point,
+    PositionedElement, Rect, Transform,
+};
 use oxml_media::{
     ImageFormat, MediaNamer, audio_video_signature_matches, is_safe_content_type, probe, resolve,
 };
@@ -46,13 +49,15 @@ pub use oxml_opc::{
 };
 use oxml_opc::{OpcError, OpcPackage, Relationships};
 #[cfg(feature = "render")]
-use rpptx_layout::timeline::ResolvedTimelineSlide;
+pub use rpptx_layout::timeline::{
+    EvaluatedFrameState, EvaluatedMediaState, MediaPlaybackPhase, TimelinePosition,
+};
 #[cfg(feature = "render")]
-pub use rpptx_layout::timeline::{EvaluatedFrameState, TimelinePosition};
+use rpptx_layout::timeline::{ResolvedTimelineSlide, evaluate_media_playback};
 #[cfg(feature = "render")]
 use rpptx_layout::{
-    ChartResource, FlattenedItem, ResolveCtx, ResolvedSlideTextDirections, ScopedChartResources,
-    ScopedHyperlinkTargets, ScopedMediaIds,
+    ChartResource, FlattenedItem, FlattenedSource, ResolveCtx, ResolvedContent,
+    ResolvedSlideTextDirections, ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
@@ -95,6 +100,23 @@ pub struct DeterministicTimelineFrame {
     pub page: PageFrame,
     pub state: EvaluatedFrameState,
     pub diagnostics: Vec<oxml_layout::Diagnostic>,
+}
+
+/// How the media-aware renderer handles a media picture's poster.
+#[cfg(feature = "render")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaFallbackPolicy {
+    PosterFrame,
+    DeterministicPlaceholder,
+    Fail,
+}
+
+/// One deterministic page and its synchronized media playback state.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug)]
+pub struct DeterministicMediaTimelineFrame {
+    pub frame: DeterministicTimelineFrame,
+    pub media: Vec<EvaluatedMediaState>,
 }
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
@@ -873,12 +895,43 @@ impl Presentation {
         position: TimelinePosition,
         outgoing_slide_index: Option<usize>,
     ) -> Result<DeterministicTimelineFrame> {
+        self.render_timeline_deterministic_inner(slide_index, position, outgoing_slide_index, None)
+            .map(|(frame, _)| frame)
+    }
+
+    /// Evaluates one deterministic page and synchronized media playback state.
+    #[cfg(feature = "render")]
+    pub fn render_media_timeline_deterministic(
+        &self,
+        slide_index: usize,
+        position: TimelinePosition,
+        outgoing_slide_index: Option<usize>,
+        fallback_policy: MediaFallbackPolicy,
+    ) -> Result<DeterministicMediaTimelineFrame> {
+        let (frame, media) = self.render_timeline_deterministic_inner(
+            slide_index,
+            position,
+            outgoing_slide_index,
+            Some(fallback_policy),
+        )?;
+        Ok(DeterministicMediaTimelineFrame { frame, media })
+    }
+
+    #[cfg(feature = "render")]
+    fn render_timeline_deterministic_inner(
+        &self,
+        slide_index: usize,
+        position: TimelinePosition,
+        outgoing_slide_index: Option<usize>,
+        fallback_policy: Option<MediaFallbackPolicy>,
+    ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
         let assembly = assemble_render_input_inner(
             &self.staged_package(false)?,
             Some(TimelineRequest {
                 slide_index,
                 outgoing_slide_index,
                 position,
+                fallback_policy,
             }),
         )?;
         let incoming = assembly
@@ -935,12 +988,16 @@ impl Presentation {
             diagnostics.extend(outgoing.slide.diagnostics.clone());
             diagnostics.extend(outgoing.state.diagnostics.clone());
         }
+        diagnostics.extend(assembly.incoming_media_diagnostics);
         diagnostics.extend(composed.diagnostics);
-        Ok(DeterministicTimelineFrame {
-            page: composed.page,
-            state: incoming.state.clone(),
-            diagnostics,
-        })
+        Ok((
+            DeterministicTimelineFrame {
+                page: composed.page,
+                state: incoming.state.clone(),
+                diagnostics,
+            },
+            assembly.incoming_media,
+        ))
     }
 
     /// Renders the current presentation to a complete deterministic PDF.
@@ -5233,6 +5290,7 @@ struct TimelineRequest {
     slide_index: usize,
     outgoing_slide_index: Option<usize>,
     position: TimelinePosition,
+    fallback_policy: Option<MediaFallbackPolicy>,
 }
 
 #[cfg(feature = "render")]
@@ -5243,6 +5301,8 @@ struct RenderAssembly {
     incoming_directions: Option<ResolvedSlideTextDirections>,
     outgoing: Option<ResolvedTimelineSlide>,
     outgoing_directions: Option<ResolvedSlideTextDirections>,
+    incoming_media: Vec<EvaluatedMediaState>,
+    incoming_media_diagnostics: Vec<oxml_layout::Diagnostic>,
 }
 
 #[cfg(feature = "render")]
@@ -5279,6 +5339,8 @@ fn assemble_render_input_inner(
     let mut incoming_directions = None;
     let mut outgoing = None;
     let mut outgoing_directions = None;
+    let mut incoming_media = Vec::new();
+    let mut incoming_media_diagnostics = Vec::new();
     for (slide_index, slide_id) in presentation.slide_ids.iter().enumerate() {
         let slide_relationship = presentation_relationships
             .get_by_id(&slide_id.relationship_id)
@@ -5319,6 +5381,13 @@ fn assemble_render_input_inner(
                 message: error.to_string(),
             },
         )?;
+        let is_incoming =
+            timeline_request.is_some_and(|request| request.slide_index == slide_index);
+        let is_outgoing = timeline_request
+            .and_then(|request| request.outgoing_slide_index)
+            .is_some_and(|index| index == slide_index);
+        let needs_media_diagnostic_identity = (is_incoming || is_outgoing)
+            && timeline_request.is_some_and(|request| request.fallback_policy.is_some());
         let color_map = render_effective_color_map(&master, &layout, &slide);
         let mut context = ResolveCtx::new(
             &theme,
@@ -5331,6 +5400,9 @@ fn assemble_render_input_inner(
         if let Some(styles) = table_styles.as_ref() {
             context = context.with_table_styles(styles);
         }
+        if needs_media_diagnostic_identity {
+            context = context.with_media_poster_diagnostic_identity();
+        }
         let source_count = context
             .flatten()
             .into_iter()
@@ -5341,14 +5413,9 @@ fn assemble_render_input_inner(
             [&slide_part, &layout_part, &master_part],
             &mut media,
         )?;
-        let is_incoming =
-            timeline_request.is_some_and(|request| request.slide_index == slide_index);
-        let is_outgoing = timeline_request
-            .and_then(|request| request.outgoing_slide_index)
-            .is_some_and(|index| index == slide_index);
         let (resolved, slide_text_directions) = if is_incoming {
             let request = timeline_request.expect("incoming request exists");
-            let (timeline, directions) = context
+            let (mut timeline, directions) = context
                 .resolve_slide_with_chart_resources_and_text_directions_at(
                     size,
                     &slide_media,
@@ -5358,12 +5425,21 @@ fn assemble_render_input_inner(
                     request.position,
                 )
                 .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+            if let Some(policy) = request.fallback_policy {
+                apply_media_fallback_policy(&mut timeline, &slide, policy, &mut font_manager)?;
+                let (states, diagnostics) = evaluate_slide_media(&slide, request.position);
+                incoming_media = states;
+                incoming_media_diagnostics = diagnostics;
+                timeline.state.diagnostics.retain(|diagnostic| {
+                    diagnostic.message != "media timing is retained for synchronized playback"
+                });
+            }
             let resolved = timeline.slide.clone();
             incoming_directions = Some(directions.clone());
             incoming = Some(timeline);
             (resolved, directions)
         } else if is_outgoing {
-            let (timeline, directions) = context
+            let (mut timeline, directions) = context
                 .resolve_slide_with_chart_resources_and_text_directions_at(
                     size,
                     &slide_media,
@@ -5376,6 +5452,12 @@ fn assemble_render_input_inner(
                     },
                 )
                 .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+            if let Some(policy) = timeline_request.and_then(|request| request.fallback_policy) {
+                apply_media_fallback_policy(&mut timeline, &slide, policy, &mut font_manager)?;
+                timeline.state.diagnostics.retain(|diagnostic| {
+                    diagnostic.message != "media timing is retained for synchronized playback"
+                });
+            }
             let resolved = timeline.slide.clone();
             outgoing_directions = Some(directions.clone());
             outgoing = Some(timeline);
@@ -5431,6 +5513,184 @@ fn assemble_render_input_inner(
         incoming_directions,
         outgoing,
         outgoing_directions,
+        incoming_media,
+        incoming_media_diagnostics,
+    })
+}
+
+#[cfg(feature = "render")]
+fn evaluate_slide_media(
+    slide: &CT_Slide,
+    position: TimelinePosition,
+) -> (Vec<EvaluatedMediaState>, Vec<oxml_layout::Diagnostic>) {
+    let mut specs = Vec::new();
+    collect_slide_media_specs(&slide.common_slide_data.shape_tree.children, &mut specs);
+    let mut states = Vec::with_capacity(specs.len());
+    let mut diagnostics = Vec::new();
+    for (shape_id, _, trim_start_ms, trim_end_ms) in specs {
+        let (state, mut media_diagnostics) = evaluate_media_playback(
+            slide.timing.as_ref(),
+            shape_id,
+            trim_start_ms,
+            trim_end_ms,
+            position,
+        );
+        states.push(state);
+        diagnostics.append(&mut media_diagnostics);
+    }
+    (states, diagnostics)
+}
+
+#[cfg(feature = "render")]
+fn collect_slide_media_specs(
+    children: &[ShapeTreeChild],
+    specs: &mut Vec<(u32, MediaKind, Option<u64>, Option<u64>)>,
+) {
+    for child in children {
+        match child {
+            ShapeTreeChild::Picture(picture) => {
+                if let Some(media) = picture.media.as_ref()
+                    && let Some(shape_id) = child.non_visual_id()
+                {
+                    let (trim_start_ms, trim_end_ms) = picture.media_trim_bounds();
+                    specs.push((shape_id, media.kind, trim_start_ms, trim_end_ms));
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                collect_slide_media_specs(&group.children, specs);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(feature = "render")]
+fn apply_media_fallback_policy(
+    timeline: &mut ResolvedTimelineSlide,
+    slide: &CT_Slide,
+    policy: MediaFallbackPolicy,
+    fonts: &mut FontManager,
+) -> Result<()> {
+    let mut specs = Vec::new();
+    collect_slide_media_specs(&slide.common_slide_data.shape_tree.children, &mut specs);
+    let kinds = specs
+        .into_iter()
+        .map(|(shape_id, kind, _, _)| (shape_id, kind))
+        .collect::<HashMap<_, _>>();
+    for (shape, identity) in timeline.slide.shapes.iter_mut().zip(&timeline.identities) {
+        if identity.source != FlattenedSource::Slide {
+            continue;
+        }
+        let Some(shape_id) = identity.shape_id else {
+            continue;
+        };
+        let Some(kind) = kinds.get(&shape_id).copied() else {
+            continue;
+        };
+        let poster_resolved = matches!(shape.content, ResolvedContent::Image(_));
+        if poster_resolved && policy != MediaFallbackPolicy::DeterministicPlaceholder {
+            continue;
+        }
+        if policy == MediaFallbackPolicy::Fail {
+            return Err(render_failure(format!(
+                "media shape {shape_id} has no renderer-compatible poster"
+            )));
+        }
+        let label = match kind {
+            MediaKind::Audio => "Audio",
+            MediaKind::Video => "Video",
+        };
+        shape.content = ResolvedContent::Group(render_media_placeholder(
+            label,
+            shape.bounds.width,
+            shape.bounds.height,
+            fonts,
+        )?);
+        shape.unsupported = Some("media poster");
+        let fallback_message =
+            format!("media shape {shape_id} rendered as deterministic {label} placeholder");
+        let poster_diagnostic_prefix =
+            format!("unresolved slide media poster for shape {shape_id}:");
+        if let Some(diagnostic) = timeline
+            .slide
+            .diagnostics
+            .iter_mut()
+            .find(|diagnostic| diagnostic.message.starts_with(&poster_diagnostic_prefix))
+        {
+            diagnostic.message = fallback_message;
+        } else {
+            timeline.slide.diagnostics.push(oxml_layout::Diagnostic {
+                message: fallback_message,
+            });
+        }
+    }
+    restore_media_poster_diagnostic_messages(&mut timeline.slide.diagnostics);
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn restore_media_poster_diagnostic_messages(diagnostics: &mut [oxml_layout::Diagnostic]) {
+    for diagnostic in diagnostics {
+        let Some(message) = legacy_media_poster_diagnostic_message(&diagnostic.message) else {
+            continue;
+        };
+        diagnostic.message = message.to_owned();
+    }
+}
+
+#[cfg(feature = "render")]
+fn legacy_media_poster_diagnostic_message(message: &str) -> Option<&str> {
+    ["slide", "layout", "master"]
+        .into_iter()
+        .find_map(|source| {
+            let identity =
+                message.strip_prefix(&format!("unresolved {source} media poster for shape "))?;
+            let (shape_id, legacy) = identity.split_once(": ")?;
+            (!shape_id.is_empty() && shape_id.chars().all(|character| character.is_ascii_digit()))
+                .then_some(legacy)
+        })
+}
+
+#[cfg(feature = "render")]
+fn render_media_placeholder(
+    label: &str,
+    width: f64,
+    height: f64,
+    fonts: &mut FontManager,
+) -> Result<GroupElement> {
+    let font_id = fonts
+        .resolve_font_for_text(Some("Carlito"), false, false, label)
+        .map_err(|error| render_failure(format!("media fallback font: {error}")))?;
+    let shaped = fonts
+        .shape_text(font_id, label, 9.0)
+        .map_err(|error| render_failure(format!("media fallback shaping: {error}")))?;
+    Ok(GroupElement {
+        transform: Transform::IDENTITY,
+        clip: Some(LayoutPath::rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        })),
+        opacity: 1.0,
+        effects: Vec::new(),
+        children: vec![PositionedElement::Text(GlyphRun {
+            origin: Point {
+                x: 4.0,
+                y: (height / 2.0).max(9.0),
+            },
+            font_id,
+            font_size: 9.0,
+            glyph_ids: shaped.glyph_ids,
+            advances: shaped.advances,
+            text: label.to_owned(),
+            source: None,
+            color: Color::BLACK,
+            bold: false,
+            italic: false,
+            field_kind: None,
+            note: None,
+        })],
     })
 }
 

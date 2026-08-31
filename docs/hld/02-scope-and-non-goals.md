@@ -148,7 +148,7 @@ after v1 leans on that rather than away from it.
 |---|---|---|
 | Charts are a PowerPoint capability | **M15** | `oxml-chart` now owns the format-neutral engine. `rpptx-chart` remains a deprecated compatibility shim |
 | Animations, transitions, and `p:timing` are preserved but never executed | **M21** | The static renderer and corpus now provide the geometry, timing-independent frame state, and output backends needed to add bounded timeline execution without making it a prerequisite for ordinary slide rendering |
-| Video and audio are preservation-only poster content | **M21** | The native package model now inspects, adds, replaces, extracts, and removes embedded or linked media while static rendering remains poster-only |
+| Video and audio are preservation-only poster content | **M21** | The native package model edits embedded or linked media, and the additive media-aware timeline path returns poster or labelled fallback output with synchronized playback state while static rendering remains poster-only |
 
 These entries are decisions, not corrections. The v1 positions were right when
 they were written.
@@ -165,6 +165,11 @@ Audio and video editing is a package operation, not playback or decoding.
 Native callers can inspect and atomically mutate media sources, poster images,
 relationships, and bounded playback settings. Unknown safe payloads remain
 extractable and diagnostic. Static rendering continues to use the poster.
+The additive deterministic media timeline facade returns the ordinary timeline
+frame with ordered audio and video playback states. A valid poster uses the
+existing image path. An unresolved poster can become a deterministic labelled
+fallback or a closed error according to explicit caller policy. Media payloads
+remain outside renderer image input, and no codec is decoded.
 
 ### Conditional expansion
 

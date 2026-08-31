@@ -1,6 +1,6 @@
 # F-216, Media poster and playback rendering
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S61
 **Size**: M
 **Depends on**: F-214, F-215
@@ -91,9 +91,14 @@ impl Presentation {
         slide_index: usize,
         position: TimelinePosition,
         outgoing_slide_index: Option<usize>,
+        fallback_policy: MediaFallbackPolicy,
     ) -> Result<DeterministicMediaTimelineFrame>;
 }
 ```
+
+The fallback policy is an explicit input to the media-aware facade entry point.
+This keeps all three approved policies callable and leaves the existing static
+and timeline entry points unchanged.
 
 The nested result preserves source compatibility for
 `render_timeline_deterministic`. A shared private implementation assembles and
@@ -161,18 +166,18 @@ blocks integration.
 
 ## Implementation checklist
 
-- [ ] Complete and verify the F-215 dependency prefix.
-- [ ] Reconcile input type names and stable identity with completed F-215.
-- [ ] Add playback boundary and click-count tests to the existing timeline
+- [x] Complete and verify the F-215 dependency prefix.
+- [x] Reconcile input type names and stable identity with completed F-215.
+- [x] Add playback boundary and click-count tests to the existing timeline
   module.
-- [ ] Resolve valid posters and deterministic labelled fallbacks.
-- [ ] Keep audio and video payloads outside renderer image media.
-- [ ] Add checked playback-state evaluation without decoding codecs.
-- [ ] Add the combined deterministic facade result.
-- [ ] Add source-built integration, regression, and golden cases to the
+- [x] Resolve valid posters and deterministic labelled fallbacks.
+- [x] Keep audio and video payloads outside renderer image media.
+- [x] Add checked playback-state evaluation without decoding codecs.
+- [x] Add the combined deterministic facade result.
+- [x] Add source-built integration, regression, and golden cases to the
   existing integration binary.
-- [ ] Prove existing static and timeline entry points remain unchanged.
-- [ ] Run focused `rpptx-layout`, `rpptx-render`, and `rpptx` checks, then
+- [x] Prove existing static and timeline entry points remain unchanged.
+- [x] Run focused `rpptx-layout`, `rpptx-render`, and `rpptx` checks, then
   every routed rider.
 
 ## Open questions

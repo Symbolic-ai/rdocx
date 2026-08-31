@@ -89,6 +89,17 @@ and same-presentation duplicate-slide shape-reference remapping. Tests assert
 independent expected package facts rather than comparing only pre-mutation and
 post-mutation views.
 
+The deterministic media timeline golden gate is
+`static_poster_output_and_timestamped_playback_state_match_source_built_oracle_fixtures`.
+It builds poster, audio, video, link, codec, trigger, trim, volume, loop,
+pause, seek, stop, and unknown-duration cases in the existing `rpptx`
+integration binary. A valid poster and independent labelled Audio and Video
+fallbacks use deterministic fonts at literal 150 dpi and pin exact decoded
+RGBA SHA-256 values. Normalized timestamp rows pin the synchronized playback
+state. Adjacent regressions preserve ordinary sibling diagnostics, distinguish
+equal local shape ids across slide and inherited scopes, and require exact
+legacy diagnostic strings and bytes from both existing render entry points.
+
 The ordered-body integration gate opens an in-code package through the public
 Word facade and compares the exact direct sequence of paragraphs, a table, a
 body content control, preserved producer XML, and a final paragraph. It also

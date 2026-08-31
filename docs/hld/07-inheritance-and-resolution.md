@@ -163,6 +163,16 @@ the boundary in points using 12,700 EMU per point. The same scoped resource
 value records each resolved media item's package content type when format
 support must be decided before the renderer boundary.
 
+A media picture resolves its poster through this same source-scoped image
+lookup. Media-aware timeline assembly can request a private diagnostic identity
+made from the producing slide, layout, or master scope and the local shape id.
+That identity selects only the owning slide poster diagnostic when fallback is
+applied, then any remaining internal tags return to their exact legacy text.
+Ordinary static resolution and the existing timeline path never enable the
+identity. A valid poster remains `ResolvedContent::Image`. An unresolved poster
+can freeze as a labelled backend-neutral group without changing inherited or
+ordinary sibling diagnostics.
+
 `ResolveCtx::resolve_slide_with_chart_resources` additionally accepts
 `ScopedChartResources` and the caller's `FontManager`. The chart maps keep
 slide, layout and master relationship identifiers separate. A parsed supported

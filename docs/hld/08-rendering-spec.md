@@ -932,6 +932,21 @@ crossfades unmatched content with diagnostics. The outgoing morph page and its
 evaluated state always use the same timestamp. Static entry points retain their
 original non-identity resolver and byte output.
 
+The media-aware timeline entry point shares this one assembly and returns the
+ordinary deterministic timeline frame with ordered `EvaluatedMediaState`
+values. Playback folding is source ordered and checked. It covers play, pause,
+stop, seek, click and automatic triggers, trim bounds, normalized volume, and
+finite looping. Non-looping playback becomes stopped at the exact finite end.
+Looping without a known positive interval stays diagnostic.
+
+A valid audio or video poster lowers through the existing image path. Explicit
+fallback policy can retain that poster, replace it with a deterministic
+`Audio` or `Video` group shaped with bundled fonts, or fail closed. Only poster
+PNG or JPEG bytes enter `RenderInput.media`. Audio and video payload bytes do
+not enter renderer media, and no page, PDF, or raster backend decodes a media
+codec. The existing static and timeline entry points retain their exact page
+and diagnostic behavior.
+
 ## Word bookmark field pagination
 
 Word `REF` fields resolve the text of one uniquely correlated top-level
@@ -1089,6 +1104,12 @@ the scope of the slide, layout, or master that
 supplied `p:bg`. Theme-referenced picture fills are rejected
 precisely until a theme media scope exists. They never fall back to a same-named
 identifier in another scope.
+
+Audio and video package relationships remain upstream of `RenderInput`.
+Media-aware assembly reads their typed playback settings and timing commands,
+but only a separately resolved poster relationship can contribute `MediaData`.
+The combined facade result therefore synchronizes page and playback state
+without adding a positioned audio or video element or a codec dependency.
 
 The same assembly step constructs `ScopedChartResources`. Each internal chart
 relationship resolves against its producing part, parses the target as

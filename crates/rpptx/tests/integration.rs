@@ -1512,8 +1512,10 @@ use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
     Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, ChartData,
-    ChartKind, ConnectorType, Emu, Error, Fill, Presentation, ShapeKind, ShapeRef, TextBullet,
-    TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
+    ChartKind, ConnectorType, EmbeddedMediaInput, Emu, Error, Fill, MediaDiagnostic,
+    MediaFallbackPolicy, MediaKind, MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster,
+    MediaSourceInput, Presentation, ShapeKind, ShapeRef, TextBullet, TextBulletCharacter,
+    TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -8215,6 +8217,789 @@ fn ordinary_static_rendering_does_not_execute_the_timeline() {
         oxml_pdf::render_page_to_png(&timeline_layout, 0, 150.0).unwrap(),
         oxml_pdf::render_page_to_png(&static_layout, 0, 150.0).unwrap()
     );
+}
+
+fn media_render_fixture(kind: MediaKind, content_type: &str) -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let poster = valid_one_pixel_png();
+    let (bytes, filename) = match kind {
+        MediaKind::Audio => (b"ID3f216-audio".as_slice(), "media.mp3"),
+        MediaKind::Video => (b"\0\0\0\x18ftypisom-f216-video".as_slice(), "media.mp4"),
+    };
+    presentation
+        .add_media(
+            0,
+            kind,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes,
+                filename,
+                content_type,
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(914_400),
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(1_828_800),
+            MediaPlaybackSettings {
+                trigger: rpptx::MediaPlaybackTrigger::Automatic,
+                ..MediaPlaybackSettings::default()
+            },
+        )
+        .unwrap();
+    presentation
+}
+
+fn page_text(page: &PageFrame) -> Vec<String> {
+    let mut labels = Vec::new();
+    walk(&page.elements, &mut |element, _| match element {
+        PositionedElement::Text(run) => labels.push(run.text.clone()),
+        PositionedElement::MultilingualText(run) => labels.push(run.logical_text.clone()),
+        _ => {}
+    });
+    labels
+}
+
+fn page_image_count(page: &PageFrame) -> usize {
+    let mut count = 0;
+    walk(&page.elements, &mut |element, _| {
+        if matches!(element, PositionedElement::Image { .. }) {
+            count += 1;
+        }
+    });
+    count
+}
+
+fn decoded_png_rgba_sha256(png: &[u8]) -> String {
+    let path = std::env::temp_dir().join(format!(
+        "rpptx-f216-rgba-{}-{}.png",
+        std::process::id(),
+        MediaId::from_bytes(png).0,
+    ));
+    fs::write(&path, png).unwrap();
+    let script = r#"from pathlib import Path
+import hashlib
+import sys
+sys.path.insert(0, sys.argv[1])
+from pptx_ssim_harness import decode_png
+_, _, rgba = decode_png(Path(sys.argv[2]))
+print(hashlib.sha256(bytes(rgba)).hexdigest())
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .arg(workspace_root().join("scripts"))
+        .arg(&path)
+        .output()
+        .unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(
+        output.status.success(),
+        "F-216 RGBA decoder failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn valid_media_posters_resolve_through_the_existing_image_content_path() {
+    let presentation = media_render_fixture(MediaKind::Video, "video/mp4");
+    let rendered = presentation
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 250,
+                click_count: 0,
+            },
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+
+    assert_eq!(page_image_count(&rendered.frame.page), 1);
+    assert!(!page_text(&rendered.frame.page).contains(&"Video".to_owned()));
+    let (input, _) = presentation.render_deterministic().unwrap();
+    assert_eq!(
+        input.media.len(),
+        1,
+        "only the poster enters renderer media"
+    );
+    assert!(
+        !input
+            .media
+            .contains_key(&MediaId::from_bytes(b"\0\0\0\x18ftypisom-f216-video"))
+    );
+
+    let placeholder = presentation
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::DeterministicPlaceholder,
+        )
+        .unwrap();
+    assert!(page_text(&placeholder.frame.page).contains(&"Video".to_owned()));
+}
+
+#[test]
+fn unsupported_codecs_keep_the_poster_without_attempting_to_decode_the_payload() {
+    let presentation = media_render_fixture(MediaKind::Video, "video/x-f216-opaque");
+    let media = presentation.media(0).unwrap().remove(0);
+    assert!(
+        media
+            .diagnostics
+            .contains(&MediaDiagnostic::UnsupportedContentType {
+                content_type: "video/x-f216-opaque".to_owned(),
+            })
+    );
+    let payload = presentation
+        .extract_media(0, media.shape_id)
+        .unwrap()
+        .unwrap();
+    let rendered = presentation
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    assert_eq!(payload, b"\0\0\0\x18ftypisom-f216-video");
+    assert_eq!(page_image_count(&rendered.frame.page), 1);
+}
+
+#[test]
+fn missing_media_posters_remain_visible_and_do_not_change_timeline_siblings() {
+    let presentation = media_render_fixture(MediaKind::Audio, "audio/mpeg");
+    let poster_relationship_id = presentation.media(0).unwrap()[0]
+        .poster_relationship_id
+        .clone()
+        .unwrap();
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "missing media poster");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    package
+        .part_rels
+        .get_mut(&slide_part)
+        .unwrap()
+        .items
+        .retain(|relationship| relationship.id != poster_relationship_id);
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let position = TimelinePosition {
+        elapsed_ms: 250,
+        click_count: 0,
+    };
+    let ordinary = presentation
+        .render_timeline_deterministic(0, position, None)
+        .unwrap();
+    let rendered = presentation
+        .render_media_timeline_deterministic(0, position, None, MediaFallbackPolicy::PosterFrame)
+        .unwrap();
+
+    assert!(page_text(&rendered.frame.page).contains(&"Audio".to_owned()));
+    assert_eq!(rendered.frame.state.shapes, ordinary.state.shapes);
+    assert_eq!(rendered.frame.state.transition, ordinary.state.transition);
+    assert_eq!(rendered.media.len(), 1);
+    assert!(rendered.frame.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("rendered as deterministic Audio placeholder")
+    }));
+    assert!(
+        presentation
+            .render_media_timeline_deterministic(0, position, None, MediaFallbackPolicy::Fail,)
+            .is_err()
+    );
+}
+
+#[test]
+fn media_fallback_preserves_a_preceding_ordinary_missing_picture_diagnostic() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let ordinary_picture = sparse_preview_png();
+    presentation
+        .add_picture(
+            0,
+            &ordinary_picture,
+            "ordinary.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
+    let poster = valid_one_pixel_png();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"ID3f216-diagnostic-identity",
+                filename: "identity.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(914_400),
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(1_828_800),
+            MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let media = presentation.media(0).unwrap().remove(0);
+    let poster_relationship_id = media.poster_relationship_id.unwrap();
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "ordinary picture before media",
+    );
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+    let ordinary_relationship_id = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find_map(|child| match child {
+            ShapeTreeChild::Picture(picture) if picture.media.is_none() => picture
+                .blip_fill
+                .as_ref()
+                .and_then(|fill| fill.blip.as_ref())
+                .and_then(|blip| blip.embed.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(ordinary_relationship_id, poster_relationship_id);
+    package
+        .part_rels
+        .get_mut(&slide_part)
+        .unwrap()
+        .items
+        .retain(|relationship| {
+            relationship.id != ordinary_relationship_id && relationship.id != poster_relationship_id
+        });
+
+    let rendered = Presentation::from_bytes(&package_bytes(package))
+        .unwrap()
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    let ordinary_message =
+        format!("missing slide picture image relationship `{ordinary_relationship_id}`");
+    let fallback_message = format!(
+        "media shape {} rendered as deterministic Audio placeholder",
+        media.shape_id
+    );
+
+    assert_eq!(
+        rendered
+            .frame
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message == ordinary_message)
+            .count(),
+        1
+    );
+    assert_eq!(
+        rendered
+            .frame
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message == fallback_message)
+            .count(),
+        1
+    );
+    assert!(
+        !rendered
+            .frame
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("media poster for shape") })
+    );
+}
+
+#[test]
+fn legacy_render_entry_points_keep_exact_unresolved_poster_diagnostics() {
+    let presentation = media_render_fixture(MediaKind::Audio, "audio/mpeg");
+    let poster_relationship_id = presentation.media(0).unwrap()[0]
+        .poster_relationship_id
+        .clone()
+        .unwrap();
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "legacy unresolved media poster diagnostic",
+    );
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    package
+        .part_rels
+        .get_mut(&slide_part)
+        .unwrap()
+        .items
+        .retain(|relationship| relationship.id != poster_relationship_id);
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let expected = format!("missing slide picture image relationship `{poster_relationship_id}`");
+
+    let (input, layout) = presentation.render_deterministic().unwrap();
+    assert_eq!(
+        input.slides[0]
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        vec![expected.as_str()]
+    );
+    assert_eq!(
+        input.slides[0].diagnostics[0].message.as_bytes(),
+        expected.as_bytes()
+    );
+    assert_eq!(
+        layout
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        vec![expected.as_str()]
+    );
+
+    let timeline = presentation
+        .render_timeline_deterministic(0, TimelinePosition::default(), None)
+        .unwrap();
+    assert_eq!(
+        timeline
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            expected.as_str(),
+            "media timing is retained for synchronized playback",
+            "media timing is retained for synchronized playback",
+        ]
+    );
+    assert_eq!(
+        timeline.diagnostics[0].message.as_bytes(),
+        expected.as_bytes()
+    );
+}
+
+#[test]
+fn media_fallback_identity_distinguishes_inherited_and_slide_shape_ids() {
+    let presentation = media_render_fixture(MediaKind::Audio, "audio/mpeg");
+    let media = presentation.media(0).unwrap().remove(0);
+    let original_shape_id = media.shape_id;
+    let shared_shape_id = 424_242;
+    let poster_relationship_id = media.poster_relationship_id.unwrap();
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "source scoped media poster diagnostic",
+    );
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    let layout_relationship = package
+        .get_part_rels(&slide_part)
+        .unwrap()
+        .get_by_type(rel_types::SLIDE_LAYOUT)
+        .unwrap();
+    let layout_part = OpcPackage::resolve_rel_target(&slide_part, &layout_relationship.target);
+    let master_relationship = package
+        .get_part_rels(&layout_part)
+        .unwrap()
+        .get_by_type(rel_types::SLIDE_MASTER)
+        .unwrap();
+    let master_part = OpcPackage::resolve_rel_target(&layout_part, &master_relationship.target);
+
+    let slide_xml = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let slide_xml = slide_xml.replacen(
+        &format!(r#"<p:cNvPr id="{original_shape_id}""#),
+        &format!(r#"<p:cNvPr id="{shared_shape_id}""#),
+        1,
+    );
+    let slide_xml = slide_xml.replace(
+        &format!(r#"spid="{original_shape_id}""#),
+        &format!(r#"spid="{shared_shape_id}""#),
+    );
+    let picture_start = slide_xml.find("<p:pic").unwrap();
+    let picture_end =
+        slide_xml[picture_start..].find("</p:pic>").unwrap() + picture_start + "</p:pic>".len();
+    let inherited_poster_relationship_id = "rIdF216MissingMasterPoster";
+    let inherited_picture = slide_xml[picture_start..picture_end].replace(
+        &format!(r#"r:embed="{poster_relationship_id}""#),
+        &format!(r#"r:embed="{inherited_poster_relationship_id}""#),
+    );
+    package.set_part(&slide_part, slide_xml.into_bytes());
+    package
+        .part_rels
+        .get_mut(&slide_part)
+        .unwrap()
+        .items
+        .retain(|relationship| relationship.id != poster_relationship_id);
+
+    let mut master_xml =
+        String::from_utf8(package.get_part(&master_part).unwrap().to_vec()).unwrap();
+    if !master_xml.contains("xmlns:p14=") {
+        master_xml = master_xml.replacen(
+            "<p:sldMaster",
+            r#"<p:sldMaster xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main""#,
+            1,
+        );
+    }
+    master_xml = master_xml.replacen("</p:spTree>", &format!("{inherited_picture}</p:spTree>"), 1);
+    package.set_part(&master_part, master_xml.into_bytes());
+
+    let rendered = Presentation::from_bytes(&package_bytes(package))
+        .unwrap()
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    let inherited_message =
+        format!("missing master picture image relationship `{inherited_poster_relationship_id}`");
+    let slide_message =
+        format!("missing slide picture image relationship `{poster_relationship_id}`");
+    let fallback_message =
+        format!("media shape {shared_shape_id} rendered as deterministic Audio placeholder");
+
+    assert_eq!(
+        rendered
+            .frame
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message == inherited_message)
+            .count(),
+        1
+    );
+    assert_eq!(
+        rendered
+            .frame
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message == fallback_message)
+            .count(),
+        1
+    );
+    assert!(
+        !rendered
+            .frame
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == slide_message)
+    );
+    assert!(
+        !rendered
+            .frame
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("media poster for shape"))
+    );
+}
+
+#[test]
+fn media_timeline_frames_return_the_page_and_synchronized_playback_state_once() {
+    let presentation = media_render_fixture(MediaKind::Video, "video/mp4");
+    let position = TimelinePosition {
+        elapsed_ms: 375,
+        click_count: 0,
+    };
+    let ordinary = presentation
+        .render_timeline_deterministic(0, position, None)
+        .unwrap();
+    let rendered = presentation
+        .render_media_timeline_deterministic(0, position, None, MediaFallbackPolicy::PosterFrame)
+        .unwrap();
+
+    assert_eq!(rendered.frame.state.shapes, ordinary.state.shapes);
+    assert_eq!(rendered.frame.state.transition, ordinary.state.transition);
+    assert_eq!(rendered.frame.page.elements, ordinary.page.elements);
+    assert_eq!(rendered.media.len(), 1);
+    assert_eq!(rendered.media[0].phase, MediaPlaybackPhase::Playing);
+    assert_eq!(rendered.media[0].source_position_ms, 375);
+    assert_eq!(rendered.media[0].volume, 1.0);
+}
+
+fn media_playback_golden_fixture() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let poster = valid_one_pixel_png();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"ID3f216-playback-golden",
+                filename: "playback.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(914_400),
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(1_828_800),
+            MediaPlaybackSettings {
+                trim_start_ms: Some(50),
+                trim_end_ms: Some(250),
+                volume: 25_000,
+                looped: true,
+                show_when_stopped: false,
+                trigger: rpptx::MediaPlaybackTrigger::Automatic,
+            },
+        )
+        .unwrap();
+    let shape_id = presentation.media(0).unwrap()[0].shape_id;
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "F-216 playback golden");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    let slide = String::from_utf8(package.get_part(&slide_part).unwrap().to_vec()).unwrap();
+    let commands = format!(
+        r#"<p:cmd type="call" cmd="pause"><p:cBhvr><p:cTn id="100" dur="1"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl></p:cBhvr></p:cmd><p:cmd type="call" cmd="playFrom(0.2)"><p:cBhvr><p:cTn id="101" dur="1"><p:stCondLst><p:cond delay="400"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl></p:cBhvr></p:cmd><p:cmd type="call" cmd="stop"><p:cBhvr><p:cTn id="102" dur="1"><p:stCondLst><p:cond delay="700"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl></p:cBhvr></p:cmd>"#
+    );
+    let slide = slide.replacen("</p:tnLst>", &format!("{commands}</p:tnLst>"), 1);
+    package.set_part(&slide_part, slide.into_bytes());
+    Presentation::from_bytes(&package_bytes(package)).unwrap()
+}
+
+#[test]
+fn static_poster_output_and_timestamped_playback_state_match_source_built_oracle_fixtures() {
+    let presentation = media_render_fixture(MediaKind::Video, "video/mp4");
+    let rendered = presentation
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 375,
+                click_count: 0,
+            },
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    let layout = oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(rendered.frame.page)],
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    let png = oxml_pdf::render_page_to_png(&layout, 0, 150.0).unwrap();
+    let row = format!(
+        "shape={} phase={:?} position={} volume={:.2} loop={}",
+        rendered.media[0].shape_id,
+        rendered.media[0].phase,
+        rendered.media[0].source_position_ms,
+        rendered.media[0].volume,
+        rendered.media[0].looping,
+    );
+
+    assert_eq!(
+        decoded_png_rgba_sha256(&png),
+        "d635fc93667da98961df92e0158c9baf3fb1e3bd0fa05006913bf2e2c55b1cac"
+    );
+    assert_eq!(
+        row,
+        "shape=4 phase=Playing position=375 volume=1.00 loop=false"
+    );
+
+    let fallback_hashes = [
+        (MediaKind::Audio, "audio/mpeg"),
+        (MediaKind::Video, "video/mp4"),
+    ]
+    .into_iter()
+    .map(|(kind, content_type)| {
+        let presentation = media_render_fixture(kind, content_type);
+        let deterministic_fonts = presentation.render_deterministic().unwrap().1.fonts;
+        let fallback = presentation
+            .render_media_timeline_deterministic(
+                0,
+                TimelinePosition::default(),
+                None,
+                MediaFallbackPolicy::DeterministicPlaceholder,
+            )
+            .unwrap();
+        let layout = oxml_layout::LayoutResult::new(
+            vec![std::sync::Arc::new(fallback.frame.page)],
+            deterministic_fonts,
+            None,
+            Vec::new(),
+        );
+        decoded_png_rgba_sha256(&oxml_pdf::render_page_to_png(&layout, 0, 150.0).unwrap())
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(
+        fallback_hashes,
+        vec![
+            "79e8da66b2cedf6a8b37b1eb723d4e278e22076aff5cdcff0616e0e7f2decec5",
+            "bca557835b53eb1ac671297c1d641c4f2e335fa51aa5515651ca95cc104e6917",
+        ]
+    );
+
+    let playback = media_playback_golden_fixture();
+    let rows = [0, 200, 300, 400, 450, 700]
+        .into_iter()
+        .map(|elapsed_ms| {
+            let frame = playback
+                .render_media_timeline_deterministic(
+                    0,
+                    TimelinePosition {
+                        elapsed_ms,
+                        click_count: 0,
+                    },
+                    None,
+                    MediaFallbackPolicy::PosterFrame,
+                )
+                .unwrap();
+            let state = &frame.media[0];
+            format!(
+                "{elapsed_ms}\t{:?}\t{}\t{:.2}\t{}",
+                state.phase, state.source_position_ms, state.volume, state.looping,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            "0\tPlaying\t50\t0.25\ttrue",
+            "200\tPlaying\t50\t0.25\ttrue",
+            "300\tPaused\t150\t0.25\ttrue",
+            "400\tPlaying\t200\t0.25\ttrue",
+            "450\tPlaying\t50\t0.25\ttrue",
+            "700\tStopped\t50\t0.25\ttrue",
+        ]
+    );
+
+    let mut click = Presentation::new().unwrap();
+    click.add_slide(0).unwrap();
+    let poster = valid_one_pixel_png();
+    click
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"ID3f216-click-golden",
+                filename: "click.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(914_400),
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(1_828_800),
+            MediaPlaybackSettings {
+                trigger: rpptx::MediaPlaybackTrigger::OnClick,
+                ..MediaPlaybackSettings::default()
+            },
+        )
+        .unwrap();
+    let click_rows = [0, 1]
+        .into_iter()
+        .map(|click_count| {
+            click
+                .render_media_timeline_deterministic(
+                    0,
+                    TimelinePosition {
+                        elapsed_ms: 100,
+                        click_count,
+                    },
+                    None,
+                    MediaFallbackPolicy::PosterFrame,
+                )
+                .unwrap()
+                .media[0]
+                .phase
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        click_rows,
+        vec![MediaPlaybackPhase::Stopped, MediaPlaybackPhase::Playing]
+    );
+
+    let mut linked = Presentation::new().unwrap();
+    linked.add_slide(0).unwrap();
+    linked
+        .add_media(
+            0,
+            MediaKind::Video,
+            MediaSourceInput::Linked {
+                target: "https://example.invalid/f216.mp4",
+                content_type: "video/mp4",
+            },
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(914_400),
+            Emu(914_400),
+            Emu(2_743_200),
+            Emu(1_828_800),
+            MediaPlaybackSettings {
+                trigger: rpptx::MediaPlaybackTrigger::Automatic,
+                ..MediaPlaybackSettings::default()
+            },
+        )
+        .unwrap();
+    let linked_info = linked.media(0).unwrap().remove(0);
+    assert_eq!(
+        linked_info.source,
+        rpptx::MediaLocation::Linked {
+            target: "https://example.invalid/f216.mp4".to_owned(),
+        }
+    );
+    assert_eq!(linked.extract_media(0, linked_info.shape_id).unwrap(), None);
+    let linked_frame = linked
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    assert_eq!(page_image_count(&linked_frame.frame.page), 1);
+    assert_eq!(linked_frame.media[0].phase, MediaPlaybackPhase::Playing);
 }
 
 #[test]

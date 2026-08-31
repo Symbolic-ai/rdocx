@@ -828,6 +828,30 @@ option, production dependency, or feature flag. Existing static render methods
 do not enter the timeline path. Unsupported timing behaviours remain explicit
 raw nodes rather than acquiring a second authoring surface.
 
+The published pre-1.0 `rpptx-layout` crate also exposes
+`MediaPlaybackPhase` and `EvaluatedMediaState`. The published pre-1.0 `rpptx`
+facade adds `MediaFallbackPolicy`, `DeterministicMediaTimelineFrame`, and one
+media-aware deterministic entry point:
+
+```rust
+pub fn Presentation::render_media_timeline_deterministic(
+    &self,
+    slide_index: usize,
+    position: TimelinePosition,
+    outgoing_slide_index: Option<usize>,
+    fallback_policy: MediaFallbackPolicy,
+) -> Result<DeterministicMediaTimelineFrame>;
+```
+
+The nested result retains the existing `DeterministicTimelineFrame` and adds
+ordered playback states with stable shape id, phase, source position,
+normalized volume, and loop status. `PosterFrame`,
+`DeterministicPlaceholder`, and `Fail` make every approved poster policy
+callable. This is additive pre-1.0 native Rust surface. It adds no Python,
+WASM, or CLI method, feature flag, production dependency, generic, trait, or
+codec decoder. Existing static and timeline entry points retain their exact
+diagnostic strings and results.
+
 ## Packaging
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a

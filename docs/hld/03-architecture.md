@@ -131,20 +131,25 @@ format.
 Presentation timeline execution keeps the same layered boundary.
 `rpptx-oxml` projects typed timing, transitions, target presence, and
 non-visual names without executing them. `rpptx-layout` owns pure slide-local
-evaluation, stable source identity, group-space geometry, and resolved frame
-state. `rpptx-render` lowers that state through the existing page path and
-composes page-frame groups for transitions and bounded morph. The `rpptx`
+evaluation, stable source identity, group-space geometry, resolved frame
+state, and synchronized media playback state. `rpptx-render` lowers that state
+through the existing page path and composes page-frame groups for transitions
+and bounded morph. The `rpptx`
 facade assembles incoming and optional outgoing slides and returns the page,
-state, and diagnostics together. Static resolver and renderer entry points do
-not pass through the timeline path, and shared output backends remain unaware
-of PresentationML timing.
+state, and diagnostics together. Its media-aware entry point adds ordered
+playback states and applies explicit poster fallback policy inside that same
+assembly. Static resolver and renderer entry points do not pass through the
+timeline path, and shared output backends remain unaware of PresentationML
+timing or media playback.
 
 Presentation media editing follows that boundary. `rpptx-oxml` projects the
 schema-owned picture and timing XML while retaining raw serialization sources.
 `rpptx` owns relationship graphs, package payloads, and atomic mutation.
 `oxml-media` owns format-neutral signature classification and naming.
-`rpptx-layout` diagnoses retained timing, and the renderer continues to paint
-the poster without decoding or playing media.
+`rpptx-layout` evaluates checked trim, trigger, command, loop, volume, and
+position state. The facade admits only poster images to renderer media, freezes
+an unresolved poster as a deterministic labelled group when policy permits,
+and never offers audio or video payload bytes to a renderer or codec decoder.
 
 The same boundary owns multilingual text mechanics. Rich segments retain
 logical text and source ranges while carrying script, language, direction,
