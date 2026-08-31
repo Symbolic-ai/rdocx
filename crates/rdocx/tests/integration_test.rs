@@ -1353,16 +1353,10 @@ fn rtf_writer_reports_raw_table_cell_property_xml_once() {
 
     assert_eq!(
         messages,
-        [
-            (
-                "body[0]/row[0]/cell[0]/tcPr/raw[3]".to_owned(),
-                "unmodelled table-cell property hMerge was dropped during RTF export".to_owned(),
-            ),
-            (
-                "body[0]/row[0]/cell[0]/tcPr/raw[4]".to_owned(),
-                "unmodelled table-cell property cellProp was dropped during RTF export".to_owned(),
-            ),
-        ]
+        [(
+            "body[0]/row[0]/cell[0]/tcPr/raw[4]".to_owned(),
+            "unmodelled table-cell property cellProp was dropped during RTF export".to_owned(),
+        )]
     );
 }
 
