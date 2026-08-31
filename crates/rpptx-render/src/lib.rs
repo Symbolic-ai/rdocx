@@ -230,9 +230,9 @@ pub fn layout_presentation_deterministic(
 /// Lowers every slide with the same manager that shaped any frozen group content.
 pub fn layout_presentation_with_font_manager(
     input: &RenderInput,
-    font_manager: FontManager,
+    mut font_manager: FontManager,
 ) -> Result<LayoutResult, RenderInputError> {
-    layout_presentation_with_font_manager_inner(input, font_manager, None)
+    layout_presentation_with_font_manager_inner(input, &mut font_manager, None)
 }
 
 /// Lowers every slide with paragraph directions from the additive resolver path.
@@ -241,7 +241,20 @@ pub fn layout_presentation_with_font_manager(
 /// order. A table shape has one text-body entry per cell in row-major order.
 pub fn layout_presentation_with_font_manager_and_text_directions(
     input: &RenderInput,
-    font_manager: FontManager,
+    mut font_manager: FontManager,
+    text_directions: &[ResolvedSlideTextDirections],
+) -> Result<LayoutResult, RenderInputError> {
+    layout_presentation_with_font_manager_and_text_directions_mut(
+        input,
+        &mut font_manager,
+        text_directions,
+    )
+}
+
+/// Lowers every slide while retaining the caller-owned deterministic font identity.
+pub fn layout_presentation_with_font_manager_and_text_directions_mut(
+    input: &RenderInput,
+    font_manager: &mut FontManager,
     text_directions: &[ResolvedSlideTextDirections],
 ) -> Result<LayoutResult, RenderInputError> {
     layout_presentation_with_font_manager_inner(input, font_manager, Some(text_directions))
@@ -249,7 +262,7 @@ pub fn layout_presentation_with_font_manager_and_text_directions(
 
 fn layout_presentation_with_font_manager_inner(
     input: &RenderInput,
-    mut font_manager: FontManager,
+    font_manager: &mut FontManager,
     text_directions: Option<&[ResolvedSlideTextDirections]>,
 ) -> Result<LayoutResult, RenderInputError> {
     let pages = (0..input.slides.len())
@@ -257,7 +270,7 @@ fn layout_presentation_with_font_manager_inner(
             layout_slide_with_fonts_and_text_directions(
                 input,
                 index,
-                &mut font_manager,
+                font_manager,
                 text_directions
                     .and_then(|directions| directions.get(index))
                     .map(Vec::as_slice),
@@ -324,6 +337,24 @@ pub(crate) fn layout_slide_with_fonts_text_directions_and_states(
             index,
             slide_count: input.slides.len(),
         })?;
+    layout_resolved_slide_with_fonts_text_directions_and_states(
+        input,
+        slide,
+        index + 1,
+        font_manager,
+        text_directions,
+        shape_states,
+    )
+}
+
+pub(crate) fn layout_resolved_slide_with_fonts_text_directions_and_states(
+    input: &RenderInput,
+    slide: &ResolvedSlide,
+    page_number: usize,
+    font_manager: &mut FontManager,
+    text_directions: Option<&[Vec<Vec<oxml_layout::TextDirection>>]>,
+    shape_states: Option<&[rpptx_layout::timeline::EvaluatedShapeState]>,
+) -> Result<PageFrame, RenderInputError> {
     let mut elements = Vec::new();
     let mut background_paint = None;
     match slide.background.as_ref() {
@@ -371,7 +402,7 @@ pub(crate) fn layout_slide_with_fonts_text_directions_and_states(
                     input,
                     shape,
                     font_manager,
-                    index + 1,
+                    page_number,
                     text_directions
                         .and_then(|directions| directions.get(shape_index))
                         .map(Vec::as_slice),
@@ -408,7 +439,7 @@ pub(crate) fn layout_slide_with_fonts_text_directions_and_states(
             })
             .collect::<Result<Vec<_>, _>>()?,
     );
-    let mut page = PageFrame::new(index + 1, slide.size.0, slide.size.1, elements);
+    let mut page = PageFrame::new(page_number, slide.size.0, slide.size.1, elements);
     page.background = background_paint;
     Ok(page)
 }

@@ -85,11 +85,11 @@ use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
 use rpptx_oxml::timing::{TimingNode, TimingTarget};
 #[cfg(feature = "render")]
 use rpptx_render::timeline::{
-    compose_morph_transition, compose_transition, layout_timeline_slide_deterministic,
+    compose_morph_transition, compose_transition, layout_timeline_slide_with_font_manager,
 };
 #[cfg(feature = "render")]
 use rpptx_render::{
-    MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions,
+    MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions_mut,
 };
 use thiserror::Error;
 
@@ -938,9 +938,9 @@ impl Presentation {
         fallback_policy: Option<MediaFallbackPolicy>,
     ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
         let package = self.staged_package(false)?;
-        let assembly = prepare_render_context(&package, fallback_policy.is_some())?;
+        let mut assembly = prepare_render_context(&package, fallback_policy.is_some())?;
         render_prepared_timeline_request(
-            &assembly,
+            &mut assembly,
             TimelineRequest {
                 slide_index,
                 outgoing_slide_index,
@@ -948,6 +948,7 @@ impl Presentation {
                 fallback_policy,
             },
             self.slides.len(),
+            false,
         )
     }
 
@@ -969,6 +970,8 @@ impl Presentation {
     }
 
     fn staged_package(&self, preserve_unchanged_modelled_parts: bool) -> Result<OpcPackage> {
+        #[cfg(all(feature = "render", test))]
+        STAGED_PACKAGE_COUNT.with(|count| count.set(count.get() + 1));
         if self.core_properties_dirty
             && self
                 .package
@@ -2600,12 +2603,13 @@ impl Presentation {
 
 #[cfg(feature = "render")]
 fn render_prepared_timeline_request(
-    assembly: &PreparedRenderAssembly,
+    assembly: &mut PreparedRenderAssembly,
     request: TimelineRequest,
     slide_count: usize,
+    reuse_prepared_fonts: bool,
 ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
     #[cfg(test)]
-    let _retention = ActivePreparedFrame::enter();
+    let _retention = ActiveResolvedSample::enter();
     let incoming_source =
         assembly
             .slides
@@ -2614,8 +2618,15 @@ fn render_prepared_timeline_request(
                 index: request.slide_index,
                 slide_count,
             })?;
-    let mut font_manager = FontManager::new_deterministic()
-        .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+    let mut legacy_font_manager;
+    let font_manager = if reuse_prepared_fonts {
+        &mut assembly.font_manager
+    } else {
+        legacy_font_manager = FontManager::new_deterministic()
+            .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+        legacy_font_manager.load_additional_fonts(&assembly.input.fonts);
+        &mut legacy_font_manager
+    };
     let mut incoming_context = ResolveCtx::new(
         &incoming_source.theme,
         render_effective_color_map(
@@ -2640,19 +2651,14 @@ fn render_prepared_timeline_request(
             &incoming_source.media,
             &incoming_source.hyperlinks,
             &incoming_source.charts,
-            &mut font_manager,
+            font_manager,
             request.position,
         )
         .map_err(|error| render_failure(format!("{}: {error}", incoming_source.slide_part)))?;
     let mut incoming_media = Vec::new();
     let mut incoming_media_diagnostics = Vec::new();
     if let Some(policy) = request.fallback_policy {
-        apply_media_fallback_policy(
-            &mut incoming,
-            &incoming_source.slide,
-            policy,
-            &mut font_manager,
-        )?;
+        apply_media_fallback_policy(&mut incoming, &incoming_source.slide, policy, font_manager)?;
         let (states, diagnostics) = evaluate_slide_media(&incoming_source.slide, request.position);
         let consumed_shape_ids = states
             .iter()
@@ -2697,7 +2703,7 @@ fn render_prepared_timeline_request(
                     &source.media,
                     &source.hyperlinks,
                     &source.charts,
-                    &mut font_manager,
+                    font_manager,
                     TimelinePosition {
                         elapsed_ms: u64::MAX,
                         click_count: u32::MAX,
@@ -2705,30 +2711,27 @@ fn render_prepared_timeline_request(
                 )
                 .map_err(|error| render_failure(format!("{}: {error}", source.slide_part)))?;
             if let Some(policy) = request.fallback_policy {
-                apply_media_fallback_policy(
-                    &mut timeline,
-                    &source.slide,
-                    policy,
-                    &mut font_manager,
-                )?;
+                apply_media_fallback_policy(&mut timeline, &source.slide, policy, font_manager)?;
             }
             (Some(timeline), Some(directions))
         }
     };
-    let incoming_page = layout_timeline_slide_deterministic(
+    let incoming_page = layout_timeline_slide_with_font_manager(
         &assembly.input,
         request.slide_index,
         &incoming,
         Some(&incoming_directions),
+        font_manager,
     )
     .map_err(|error| render_failure(error.to_string()))?;
     let outgoing_page = match (request.outgoing_slide_index, outgoing.as_ref()) {
         (Some(index), Some(outgoing)) => Some(
-            layout_timeline_slide_deterministic(
+            layout_timeline_slide_with_font_manager(
                 &assembly.input,
                 index,
                 outgoing,
                 outgoing_directions.as_ref(),
+                font_manager,
             )
             .map_err(|error| render_failure(error.to_string()))?,
         ),
@@ -5437,6 +5440,7 @@ struct PreparedSlideAssembly {
 struct PreparedRenderAssembly {
     input: RenderInput,
     layout: LayoutResult,
+    font_manager: FontManager,
     slides: Vec<PreparedSlideAssembly>,
     size: (f64, f64),
     default_text_style: CT_TextListStyle,
@@ -5445,57 +5449,75 @@ struct PreparedRenderAssembly {
 
 #[cfg(all(feature = "render", test))]
 std::thread_local! {
+    static STAGED_PACKAGE_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
     static PREPARED_RENDER_ASSEMBLY_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_MEDIA_ASSEMBLY_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_LAYOUT_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_FONT_MANAGER_COUNT: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
 
 #[cfg(all(feature = "render", test))]
-fn prepared_render_assembly_count() -> usize {
-    PREPARED_RENDER_ASSEMBLY_COUNT.get()
+fn animation_preparation_counts() -> (usize, usize, usize, usize, usize) {
+    (
+        STAGED_PACKAGE_COUNT.get(),
+        PREPARED_RENDER_ASSEMBLY_COUNT.get(),
+        PREPARED_MEDIA_ASSEMBLY_COUNT.get(),
+        PREPARED_LAYOUT_COUNT.get(),
+        PREPARED_FONT_MANAGER_COUNT.get(),
+    )
 }
 
 #[cfg(all(feature = "render", test))]
 std::thread_local! {
-    static ACTIVE_PREPARED_FRAME_COUNT: std::cell::Cell<usize> = const {
+    static ACTIVE_RESOLVED_SAMPLE_COUNT: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
-    static MAX_PREPARED_FRAME_COUNT: std::cell::Cell<usize> = const {
+    static MAX_RESOLVED_SAMPLE_COUNT: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
 
 #[cfg(all(feature = "render", test))]
-struct ActivePreparedFrame;
+struct ActiveResolvedSample;
 
 #[cfg(all(feature = "render", test))]
-impl ActivePreparedFrame {
+impl ActiveResolvedSample {
     fn enter() -> Self {
-        ACTIVE_PREPARED_FRAME_COUNT.with(|active| {
+        ACTIVE_RESOLVED_SAMPLE_COUNT.with(|active| {
             let current = active.get() + 1;
             active.set(current);
-            MAX_PREPARED_FRAME_COUNT.with(|maximum| maximum.set(maximum.get().max(current)));
+            MAX_RESOLVED_SAMPLE_COUNT.with(|maximum| maximum.set(maximum.get().max(current)));
         });
         Self
     }
 }
 
 #[cfg(all(feature = "render", test))]
-impl Drop for ActivePreparedFrame {
+impl Drop for ActiveResolvedSample {
     fn drop(&mut self) {
-        ACTIVE_PREPARED_FRAME_COUNT.with(|active| active.set(active.get() - 1));
+        ACTIVE_RESOLVED_SAMPLE_COUNT.with(|active| active.set(active.get() - 1));
     }
 }
 
 #[cfg(all(feature = "render", test))]
-fn reset_prepared_frame_retention_count() {
-    ACTIVE_PREPARED_FRAME_COUNT.set(0);
-    MAX_PREPARED_FRAME_COUNT.set(0);
+fn reset_resolved_sample_retention_count() {
+    ACTIVE_RESOLVED_SAMPLE_COUNT.set(0);
+    MAX_RESOLVED_SAMPLE_COUNT.set(0);
 }
 
 #[cfg(all(feature = "render", test))]
-fn max_prepared_frame_retention_count() -> usize {
-    MAX_PREPARED_FRAME_COUNT.get()
+fn max_resolved_sample_retention_count() -> usize {
+    MAX_RESOLVED_SAMPLE_COUNT.get()
 }
 
 #[cfg(feature = "render")]
@@ -5526,6 +5548,10 @@ fn prepare_render_context(
         .ok_or_else(|| render_failure("presentation relationships are missing"))?;
 
     let mut media = HashMap::new();
+    #[cfg(test)]
+    PREPARED_MEDIA_ASSEMBLY_COUNT.with(|count| count.set(count.get() + 1));
+    #[cfg(test)]
+    PREPARED_FONT_MANAGER_COUNT.with(|count| count.set(count.get() + 1));
     let mut font_manager = FontManager::new_deterministic()
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -5636,9 +5662,11 @@ fn prepare_render_context(
         fonts: Vec::new(),
         metadata: None,
     };
-    let layout = layout_presentation_with_font_manager_and_text_directions(
+    #[cfg(test)]
+    PREPARED_LAYOUT_COUNT.with(|count| count.set(count.get() + 1));
+    let layout = layout_presentation_with_font_manager_and_text_directions_mut(
         &input,
-        font_manager,
+        &mut font_manager,
         &text_directions,
     )
     .map_err(|error| render_failure(error.to_string()))?;
@@ -5652,6 +5680,7 @@ fn prepare_render_context(
     Ok(PreparedRenderAssembly {
         input,
         layout,
+        font_manager,
         slides: prepared_slides,
         size,
         default_text_style,

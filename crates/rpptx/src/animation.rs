@@ -164,9 +164,12 @@ struct PreparedAnimationAssembly {
 }
 
 impl PreparedAnimationAssembly {
-    fn render_with_diagnostics(&self, sample: FrameSample) -> Result<(PageFrame, Vec<Diagnostic>)> {
+    fn render_with_diagnostics(
+        &mut self,
+        sample: FrameSample,
+    ) -> Result<(PageFrame, Vec<Diagnostic>)> {
         render_prepared_timeline_request(
-            &self.assembly,
+            &mut self.assembly,
             TimelineRequest {
                 slide_index: sample.slide_index,
                 outgoing_slide_index: sample.outgoing_slide_index,
@@ -177,6 +180,7 @@ impl PreparedAnimationAssembly {
                 fallback_policy: Some(self.fallback),
             },
             self.slide_count,
+            true,
         )
         .map(|(frame, _)| (frame.page, frame.diagnostics))
     }
@@ -191,17 +195,17 @@ impl Presentation {
     ) -> Result<DeterministicAnimation> {
         let samples = validate_and_sample(segments, options, self.slides.len())?;
         let package = self.staged_package(false)?;
-        let prepared = PreparedAnimationAssembly {
+        let mut prepared = PreparedAnimationAssembly {
             assembly: prepare_render_context(&package, true)?,
             slide_count: self.slides.len(),
             fallback: options.media_fallback,
         };
         match options.format {
             AnimationFormat::Gif { loop_behavior } => {
-                encode_gif(&prepared, &samples, options, loop_behavior)
+                encode_gif(&mut prepared, &samples, options, loop_behavior)
             }
             AnimationFormat::MotionJpegAvi { quality } => {
-                encode_motion_jpeg_avi(&prepared, &samples, options, quality)
+                encode_motion_jpeg_avi(&mut prepared, &samples, options, quality)
             }
         }
     }
@@ -326,7 +330,7 @@ fn validate_and_sample(
 }
 
 fn encode_gif(
-    prepared: &PreparedAnimationAssembly,
+    prepared: &mut PreparedAnimationAssembly,
     samples: &[FrameSample],
     options: AnimationExportOptions,
     loop_behavior: GifLoopBehavior,
@@ -356,7 +360,7 @@ fn encode_gif(
             diagnostics.append(&mut frame_diagnostics);
             let mut rgba = rasterize_opaque_exact(
                 &page,
-                &prepared.assembly.layout.fonts,
+                prepared.assembly.font_manager.all_font_data(),
                 options.width_px,
                 options.height_px,
             )?;
@@ -384,7 +388,7 @@ fn gif_delay(frame_index: u64, frame_rate: u16) -> u16 {
 }
 
 fn encode_motion_jpeg_avi(
-    prepared: &PreparedAnimationAssembly,
+    prepared: &mut PreparedAnimationAssembly,
     samples: &[FrameSample],
     options: AnimationExportOptions,
     quality: u8,
@@ -410,7 +414,7 @@ fn encode_motion_jpeg_avi(
         diagnostics.append(&mut frame_diagnostics);
         let rgba = rasterize_opaque_exact(
             &page,
-            &prepared.assembly.layout.fonts,
+            prepared.assembly.font_manager.all_font_data(),
             options.width_px,
             options.height_px,
         )?;
@@ -451,19 +455,14 @@ fn encode_motion_jpeg_avi(
 
 fn rasterize_opaque_exact(
     page: &PageFrame,
-    fonts: &[FontData],
+    fonts: Vec<FontData>,
     width: u32,
     height: u32,
 ) -> Result<Vec<u8>> {
     if !page.width.is_finite() || page.width <= 0.0 {
         return Err(render_failure("animation page width is invalid"));
     }
-    let layout = LayoutResult::new(
-        vec![Arc::new(page.clone())],
-        fonts.to_vec(),
-        None,
-        Vec::new(),
-    );
+    let layout = LayoutResult::new(vec![Arc::new(page.clone())], fonts, None, Vec::new());
     let dpi = 72.0 * f64::from(width) / page.width;
     let png = oxml_pdf::render_page_to_png(&layout, 0, dpi)
         .ok_or_else(|| render_failure("animation rasterization failed"))?;
@@ -668,11 +667,14 @@ mod tests {
         CappedBuffer, GifLoopBehavior, MediaFallbackPolicy, gif_delay, validate_and_sample,
     };
     use crate::{
-        Presentation, max_prepared_frame_retention_count, prepared_render_assembly_count,
-        reset_prepared_frame_retention_count,
+        CT_TextCharacterProperties, EmbeddedMediaInput, Emu, MediaKind, MediaPlaybackSettings,
+        MediaPoster, MediaSourceInput, Presentation, TextFont, animation_preparation_counts,
+        max_resolved_sample_retention_count, prepare_render_context,
+        reset_resolved_sample_retention_count,
     };
     use gif::{Encoder as GifEncoder, Frame as GifFrame};
     use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEncoder};
+    use oxml_layout::{PositionedElement, walk};
 
     #[test]
     fn sampling_uses_integer_millisecond_timestamps_without_crossing_segment_duration() {
@@ -815,11 +817,11 @@ mod tests {
     }
 
     #[test]
-    fn multi_frame_export_prepares_package_resolver_and_media_assembly_once() {
+    fn fifty_frame_export_prepares_package_resolver_media_layout_and_fonts_once() {
         let mut presentation = Presentation::new().unwrap();
         presentation.add_slide(0).unwrap();
-        let before = prepared_render_assembly_count();
-        reset_prepared_frame_retention_count();
+        let before = animation_preparation_counts();
+        reset_resolved_sample_retention_count();
         let exported = presentation
             .export_animation_deterministic(
                 &[AnimationSegment {
@@ -842,8 +844,112 @@ mod tests {
         assert_eq!(exported.frame_timestamps_ms.len(), 50);
         assert_eq!(exported.frame_timestamps_ms[0], 0);
         assert_eq!(exported.frame_timestamps_ms[49], 490);
-        assert_eq!(prepared_render_assembly_count() - before, 1);
-        assert_eq!(max_prepared_frame_retention_count(), 1);
+        let after = animation_preparation_counts();
+        assert_eq!(after.0 - before.0, 1, "package preparation");
+        assert_eq!(after.1 - before.1, 1, "resolver preparation");
+        assert_eq!(after.2 - before.2, 1, "media preparation");
+        assert_eq!(after.3 - before.3, 1, "layout preparation");
+        assert_eq!(after.4 - before.4, 1, "font preparation");
+        assert_eq!(max_resolved_sample_retention_count(), 1);
+    }
+
+    #[test]
+    fn mixed_font_samples_and_dynamic_media_label_share_one_font_identity() {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(0).unwrap();
+        presentation.add_slide(0).unwrap();
+        for (slide_index, text, family) in [
+            (0, "CaladeaWAVE", "Caladea"),
+            (1, "Liberationmmmm", "Liberation Sans"),
+        ] {
+            let mut slide = presentation.slide_mut(slide_index).unwrap();
+            let mut textbox = slide
+                .add_textbox(Emu(4_000_000), Emu(500_000), Emu(4_500_000), Emu(900_000))
+                .unwrap();
+            textbox.set_text(text).unwrap();
+            let mut frame = textbox.text_frame().unwrap();
+            let mut paragraph = frame.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            let mut properties = CT_TextCharacterProperties::default();
+            properties.font_size = Some(3_200);
+            run.set_properties(properties);
+            run.set_font(Some(TextFont::new(family).unwrap()));
+        }
+        let poster = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0xda, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xf7, 0x03, 0x41,
+            0x43, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        presentation
+            .add_media(
+                1,
+                MediaKind::Video,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: b"opaque-video",
+                    filename: "video.bin",
+                    content_type: "video/x-test-opaque",
+                }),
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                Emu(914_400),
+                Emu(1_371_600),
+                Emu(2_743_200),
+                Emu(1_828_800),
+                MediaPlaybackSettings::default(),
+            )
+            .unwrap();
+
+        let package = presentation.staged_package(false).unwrap();
+        let mut prepared = super::PreparedAnimationAssembly {
+            assembly: prepare_render_context(&package, true).unwrap(),
+            slide_count: 2,
+            fallback: MediaFallbackPolicy::DeterministicPlaceholder,
+        };
+        let mut identities = Vec::new();
+        for (slide_index, expected_texts) in [
+            (0, &["CaladeaWAVE"][..]),
+            (1, &["Liberationmmmm", "Video"][..]),
+        ] {
+            let (page, _) = prepared
+                .render_with_diagnostics(super::FrameSample {
+                    slide_index,
+                    local_timestamp_ms: 0,
+                    output_timestamp_ms: 0,
+                    click_count: 0,
+                    outgoing_slide_index: None,
+                })
+                .unwrap();
+            let fonts = prepared.assembly.font_manager.all_font_data();
+            walk(&page.elements, &mut |element, _| {
+                let (text, font_id) = match element {
+                    PositionedElement::Text(run) => (run.text.as_str(), run.font_id),
+                    PositionedElement::MultilingualText(run) => {
+                        (run.logical_text.as_str(), run.font_id)
+                    }
+                    _ => return,
+                };
+                if expected_texts.contains(&text) {
+                    let family = fonts
+                        .iter()
+                        .find(|font| font.id == font_id)
+                        .map(|font| font.family.clone())
+                        .expect("every sampled glyph id must exist in the retained font table");
+                    identities.push((text.to_owned(), family));
+                }
+            });
+        }
+        assert_eq!(
+            identities,
+            [
+                ("CaladeaWAVE".to_owned(), "Caladea".to_owned()),
+                ("Liberationmmmm".to_owned(), "Liberation Sans".to_owned(),),
+                ("Video".to_owned(), "Carlito".to_owned()),
+            ]
+        );
     }
 
     #[test]

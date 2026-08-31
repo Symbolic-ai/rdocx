@@ -137,6 +137,141 @@ fn animated_export_samples_transitions_clicks_and_media_fallbacks_in_order() {
     }
 }
 
+#[test]
+fn animated_export_keeps_mixed_font_ids_and_dynamic_media_labels_coherent() {
+    use rpptx::{AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition};
+
+    let (mut presentation, _, _) = animation_test_presentation();
+    for (slide_index, text, family) in [
+        (0, "CaladeaWAVE", "Caladea"),
+        (1, "Liberationmmmm", "Liberation Sans"),
+    ] {
+        let mut slide = presentation.slide_mut(slide_index).unwrap();
+        let mut textbox = slide
+            .add_textbox(Emu(4_000_000), Emu(500_000), Emu(4_500_000), Emu(900_000))
+            .unwrap();
+        textbox.set_text(text).unwrap();
+        let mut frame = textbox.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        let mut run = paragraph.run_mut(0).unwrap();
+        let mut properties = CT_TextCharacterProperties::default();
+        properties.font_size = Some(3_200);
+        run.set_properties(properties);
+        run.set_font(Some(TextFont::new(family).unwrap()));
+    }
+
+    let segments = [
+        AnimationSegment {
+            slide_index: 0,
+            duration_ms: 100,
+            click_count: 0,
+            transition: AnimationTransition::None,
+        },
+        AnimationSegment {
+            slide_index: 1,
+            duration_ms: 100,
+            click_count: 1,
+            transition: AnimationTransition::None,
+        },
+        AnimationSegment {
+            slide_index: 0,
+            duration_ms: 100,
+            click_count: 0,
+            transition: AnimationTransition::None,
+        },
+        AnimationSegment {
+            slide_index: 1,
+            duration_ms: 100,
+            click_count: 1,
+            transition: AnimationTransition::None,
+        },
+    ];
+    let exported = presentation
+        .export_animation_deterministic(
+            &segments,
+            AnimationExportOptions {
+                frame_rate: 10,
+                width_px: 320,
+                height_px: 180,
+                format: AnimationFormat::Gif {
+                    loop_behavior: rpptx::GifLoopBehavior::Once,
+                },
+                media_fallback: MediaFallbackPolicy::DeterministicPlaceholder,
+            },
+        )
+        .unwrap();
+    let frames = decoded_gif_frames(&exported.bytes);
+    assert_eq!(frames.len(), 4);
+    assert_eq!(frames[0], frames[2], "Caladea pixels must remain exact");
+    assert_eq!(
+        frames[1], frames[3],
+        "Liberation Sans and Carlito label pixels must remain exact"
+    );
+    assert_ne!(animation_hash(&frames[0]), animation_hash(&frames[1]));
+
+    let poster = presentation
+        .export_animation_deterministic(
+            &segments,
+            AnimationExportOptions {
+                frame_rate: 10,
+                width_px: 320,
+                height_px: 180,
+                format: AnimationFormat::Gif {
+                    loop_behavior: rpptx::GifLoopBehavior::Once,
+                },
+                media_fallback: MediaFallbackPolicy::PosterFrame,
+            },
+        )
+        .unwrap();
+    let poster_frames = decoded_gif_frames(&poster.bytes);
+    let media_region = (32, 48, 96, 64);
+    assert_ne!(
+        rgba_region(&frames[1], 320, media_region),
+        rgba_region(&poster_frames[1], 320, media_region),
+        "the on-demand Video label must replace the static poster pixels"
+    );
+    let avi = presentation
+        .export_animation_deterministic(
+            &segments,
+            AnimationExportOptions {
+                frame_rate: 10,
+                width_px: 320,
+                height_px: 180,
+                format: AnimationFormat::MotionJpegAvi { quality: 80 },
+                media_fallback: MediaFallbackPolicy::DeterministicPlaceholder,
+            },
+        )
+        .unwrap();
+    let avi_frames = parse_avi_manifest(&avi.bytes).decoded_frame_hashes;
+    assert_eq!(avi_frames[0], avi_frames[2]);
+    assert_eq!(avi_frames[1], avi_frames[3]);
+    assert_ne!(avi_frames[0], avi_frames[1]);
+}
+
+fn decoded_gif_frames(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::RGBA);
+    let mut decoder = options.read_info(Cursor::new(bytes)).unwrap();
+    let mut frames = Vec::new();
+    while let Some(frame) = decoder.read_next_frame().unwrap() {
+        frames.push(frame.buffer.to_vec());
+    }
+    frames
+}
+
+fn rgba_region(
+    rgba: &[u8],
+    image_width: usize,
+    (x, y, width, height): (usize, usize, usize, usize),
+) -> Vec<u8> {
+    let mut region = Vec::with_capacity(width * height * 4);
+    for row in y..y + height {
+        let start = (row * image_width + x) * 4;
+        region.extend_from_slice(&rgba[start..start + width * 4]);
+    }
+    region
+}
+
 fn animation_test_presentation() -> (Presentation, u32, u32) {
     let mut presentation = Presentation::new().unwrap();
     presentation.add_slide(0).unwrap();

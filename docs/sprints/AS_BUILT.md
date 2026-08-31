@@ -10491,8 +10491,9 @@ goldens, and the unchanged legacy facade paths.
 
 **What was built.** The native presentation facade now exports bounded
 deterministic animated GIF and Motion JPEG AVI bytes from explicit slide
-segments. Each segment carries its own timeline position, click count,
-transition source, and media fallback policy. GIF export preserves cumulative
+segments. Each segment carries its own timeline position, click count, and
+transition source, while one media fallback policy applies to the export. GIF
+export preserves cumulative
 centisecond timing and explicit loop behavior. AVI export writes an MJPEG
 stream with exact RIFF headers, frame chunks, indexes, duration, dimensions,
 and diagnostics.
