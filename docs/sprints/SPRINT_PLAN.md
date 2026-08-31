@@ -1145,7 +1145,7 @@ Codec handling is bounded to reviewed backends. Unsupported media remains
 extractable and visible through poster frames and diagnostics rather than being
 dropped.
 
-#### Sprint S62, SmartArt and embedded content
+#### Sprint S62, SmartArt, embedded content, and reader contributions
 
 **Goal**: model the two major opaque PresentationML surfaces without executing
 untrusted content.
@@ -1155,10 +1155,13 @@ untrusted content.
 | F-218 | Embedded object and macro inventory | L |
 | F-219 | SmartArt typed model | L |
 | F-220 | SmartArt layout and rendering | L |
+| F-X071 | Integrate PRs 61 through 64 | L |
 
 OLE, ActiveX, and VBA remain inventory, extraction, replacement, removal, and
 preservation surfaces. SmartArt gains typed editing and rendering only for the
-bounded corpus algorithms.
+bounded corpus algorithms. F-X071 independently adopts the reviewed Word
+reader contributions from PRs 61 through 64 and hardens namespace, schema-order,
+and effective-style edge cases before integration.
 
 #### Sprint S63, ODP, notes and handouts
 

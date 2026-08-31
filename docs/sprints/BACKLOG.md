@@ -523,4 +523,5 @@ regenerated, never hand-edited.
 | F-X068 | Tag rpptx-v0.8.0                          | S58 | S | done |
 | F-X069 | Tag v0.11.1                               | S58 | S | done |
 | F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | done |
+| F-X071 | Integrate PRs 61 through 64                | S62 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

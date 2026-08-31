@@ -3491,6 +3491,25 @@ misplaced, or wrong-job dependency priming. The current pinned Word corpus and
 PR 58 hosted run emit nonempty evidence, and all 49 output hashes remain
 unchanged. The integrated hosted Word job remains a sprint-completion rider.
 
+### F-X071, Integrate PRs 61 through 64 (L)
+
+Adopt the current reviewed outcomes of PRs 61 through 64 as one current-tree
+Word reader integration while retaining authenticated contributor credit.
+Expose hyperlink and drawing safety facts, document and table completeness
+facts, numbering and effective-formatting facts, and tracked insertion and
+field facts. Harden the submitted table reader so retained XML carries every
+required ancestor namespace binding and malformed row revision markers remain
+in their schema slots. Harden effective numbering so the explicit or default
+paragraph style identity is used consistently for style and numbering-level
+resolution. Audit the bounded nested-revision and complex-field additions at
+the exact adopted source SHA before integration. No reader fact may give typed
+meaning to a foreign-namespace lookalike or weaken unmodelled XML preservation.
+
+**Depends on**: none.
+**Test gate**: regression. Focused namespace, schema-order, default-style,
+revision-depth, and reader-projection fixtures pass after save and reopen, the
+complete Word suites pass, and all 49 output hashes remain unchanged.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

@@ -3,9 +3,10 @@
 **Milestone**: M21 Presentation depth.
 
 **Goal**: model the two major opaque PresentationML surfaces without executing
-untrusted content. The sprint adds safe OLE, ActiveX, and VBA inventory and
-mutation, then gives the bounded SmartArt corpus typed editing and deterministic
-rendering while preserving unsupported algorithms and payloads.
+untrusted content, and integrate the four reviewed Word reader contributions.
+The sprint adds safe OLE, ActiveX, and VBA inventory and mutation, gives the
+bounded SmartArt corpus typed editing and deterministic rendering, and exposes
+the contributed reader safety facts without weakening XML preservation.
 
 ## Spec references
 
@@ -38,6 +39,7 @@ rendering while preserving unsupported algorithms and payloads.
 | F-218 | Embedded object and macro inventory | L | pending | - |
 | F-219 | SmartArt typed model | L | in-progress | codex |
 | F-220 | SmartArt layout and rendering | L | pending | - |
+| F-X071 | Integrate PRs 61 through 64 | L | pending | - |
 
 ## Sequencing note
 
@@ -49,6 +51,10 @@ typed editing, and unsupported-algorithm preservation. F-220 depends on F-219
 and must consume that completed model through the existing resolver, DrawingML,
 text, layout, and renderer boundaries rather than create a second diagram
 projection.
+
+F-X071 is independent of the PresentationML wave. It adopts the four Word
+reader contributions at their reviewed source SHAs, preserves contributor
+credit, and hardens the two incomplete submissions before integration.
 
 ## Definition of done for this sprint
 
@@ -64,5 +70,7 @@ projection.
   PowerPoint geometry and SSIM thresholds.
 - Missing previews and unsupported diagram behavior remain visible through
   deterministic fallbacks and stable diagnostics rather than disappearing.
+- Hyperlink, drawing, table, numbering, revision, and field reader facts retain
+  namespace identity, schema order, and effective-style semantics.
 - Full verification passes with every deterministic hash explained, every
   package archive below 10 MiB, and the bounded sprint review clean.
