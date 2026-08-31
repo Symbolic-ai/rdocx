@@ -110,13 +110,9 @@ impl CT_Revision {
         };
         let (kind, id, author, timestamp) = kind;
         let (content, content_paragraph, nested_revisions) = if kind == RevisionKind::Insertion {
+            let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
             let paragraph = parse_insertion_content(&raw_xml, &prefixes)?;
-            let content = if paragraph.runs.is_empty() {
-                RevisionContent::Marker
-            } else {
-                RevisionContent::Runs(paragraph.runs.clone())
-            };
-            (content, Some(Box::new(paragraph)), Vec::new())
+            (content, Some(Box::new(paragraph)), nested_revisions)
         } else {
             let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
             (content, None, nested_revisions)
@@ -790,6 +786,43 @@ mod tests {
         assert_eq!(paragraph.text(), "beforelinked");
         assert_eq!(paragraph.hyperlinks.len(), 1);
         assert_eq!(paragraph.hyperlinks[0].rel_id.as_deref(), Some("rId9"));
+    }
+
+    #[test]
+    fn insertion_content_retains_nested_revision_projection() {
+        let raw = format!(
+            r#"<w:ins xmlns:w="{W_NS}" w:id="7" w:author="Ada"><w:r><w:t>before</w:t></w:r><w:del w:id="8" w:author="Ben"><w:r><w:delText>removed</w:delText></w:r></w:del><w:ins w:id="9" w:author="Cy"><w:r><w:t>nested</w:t></w:r></w:ins><w:r><w:t>after</w:t></w:r></w:ins>"#
+        )
+        .into_bytes();
+        let revision = CT_Revision::from_raw(raw, &["w".to_owned()]).expect("insertion parses");
+
+        let RevisionContent::Runs(runs) = revision.content() else {
+            panic!("insertion exposes direct runs");
+        };
+        assert_eq!(
+            runs.iter().map(CT_R::text).collect::<String>(),
+            "beforeafter"
+        );
+        assert_eq!(
+            revision
+                .nested_revisions()
+                .iter()
+                .map(|(boundary, nested)| (*boundary, nested.kind()))
+                .collect::<Vec<_>>(),
+            vec![(1, RevisionKind::Deletion), (1, RevisionKind::Insertion),]
+        );
+        let paragraph = revision
+            .content_paragraph()
+            .expect("insertion exposes paragraph content");
+        assert_eq!(paragraph.text(), "beforeafter");
+        assert_eq!(
+            paragraph
+                .revisions
+                .iter()
+                .map(|(_, _, nested)| nested.kind())
+                .collect::<Vec<_>>(),
+            vec![RevisionKind::Deletion, RevisionKind::Insertion]
+        );
     }
 
     #[test]
