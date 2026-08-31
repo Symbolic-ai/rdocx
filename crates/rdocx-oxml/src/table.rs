@@ -984,6 +984,20 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
+        if let Some(grid_before) = self.grid_before {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridBefore");
+            e.push_attribute(("w:val", buffer.format(grid_before)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
+        if let Some(grid_after) = self.grid_after {
+            let mut buffer = itoa::Buffer::new();
+            let mut e = BytesStart::new("w:gridAfter");
+            e.push_attribute(("w:val", buffer.format(grid_after)));
+            writer.write_event(Event::Empty(e))?;
+        }
+
         if let Some(ref cant_split) = self.cant_split
             && *cant_split
         {
@@ -1007,20 +1021,6 @@ impl CT_TrPr {
         if let Some(jc) = self.jc {
             let mut e = BytesStart::new("w:jc");
             e.push_attribute(("w:val", jc.to_str()));
-            writer.write_event(Event::Empty(e))?;
-        }
-
-        if let Some(grid_before) = self.grid_before {
-            let mut buffer = itoa::Buffer::new();
-            let mut e = BytesStart::new("w:gridBefore");
-            e.push_attribute(("w:val", buffer.format(grid_before)));
-            writer.write_event(Event::Empty(e))?;
-        }
-
-        if let Some(grid_after) = self.grid_after {
-            let mut buffer = itoa::Buffer::new();
-            let mut e = BytesStart::new("w:gridAfter");
-            e.push_attribute(("w:val", buffer.format(grid_after)));
             writer.write_event(Event::Empty(e))?;
         }
 
@@ -2761,6 +2761,37 @@ mod tests {
         assert_eq!(tr_pr.header, Some(true));
         assert_eq!(tr_pr.grid_before, Some(1));
         assert_eq!(tr_pr.grid_after, Some(2));
+    }
+
+    #[test]
+    fn row_properties_write_grid_offsets_in_schema_order() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+               <w:tr>
+                 <w:trPr>
+                   <w:gridBefore w:val="1"/>
+                   <w:gridAfter w:val="2"/>
+                   <w:cantSplit/>
+                   <w:trHeight w:val="720" w:hRule="exact"/>
+                   <w:tblHeader/>
+                   <w:jc w:val="center"/>
+                 </w:trPr>
+                 <w:tc><w:p/></w:tc>
+               </w:tr>"#,
+        );
+
+        let xml = table_to_xml(&table);
+        let children = [
+            "<w:gridBefore",
+            "<w:gridAfter",
+            "<w:cantSplit",
+            "<w:trHeight",
+            "<w:tblHeader",
+            "<w:jc",
+        ];
+        let positions = children.map(|child| xml.find(child).expect("row property writes"));
+
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{xml}");
     }
 
     #[test]
