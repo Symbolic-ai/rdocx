@@ -19,6 +19,18 @@ pub enum BreakKind {
     Column,
 }
 
+/// The source representation of a Word field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
+    /// A `w:fldSimple` element.
+    Simple,
+    /// A `w:fldChar` begin/separate/end sequence.
+    Complex,
+}
+
+/// Resolved or direct run properties returned by the reader API.
+pub type RunProperties = CT_RPr;
+
 /// An immutable drawing embedded in a run.
 #[derive(Debug, Clone, Copy)]
 pub struct DrawingRef<'a> {
@@ -114,6 +126,25 @@ pub struct FieldRef<'a> {
     inner: &'a Field,
 }
 
+/// One cached display segment retained from a complex field result.
+#[derive(Debug, Clone, Copy)]
+pub struct FieldDisplaySegmentRef<'a> {
+    text: &'a str,
+    properties: Option<&'a RunProperties>,
+}
+
+impl FieldDisplaySegmentRef<'_> {
+    /// The visible text retained from the result run.
+    pub fn text(&self) -> &str {
+        self.text
+    }
+
+    /// Direct run properties retained from the result run.
+    pub fn properties(&self) -> Option<&RunProperties> {
+        self.properties
+    }
+}
+
 /// An immutable legacy VML horizontal rule retained by a run.
 #[derive(Debug, Clone, Copy)]
 pub struct LegacyHorizontalRuleRef<'a> {
@@ -128,6 +159,15 @@ impl LegacyHorizontalRuleRef<'_> {
 }
 
 impl FieldRef<'_> {
+    /// Whether the field was represented as a simple element or complex run sequence.
+    pub fn kind(&self) -> FieldKind {
+        if self.inner.is_complex() {
+            FieldKind::Complex
+        } else {
+            FieldKind::Simple
+        }
+    }
+
     /// The retained field instruction text.
     pub fn instruction(&self) -> &str {
         &self.inner.instruction.raw
@@ -152,6 +192,15 @@ impl FieldRef<'_> {
     /// the modeled reader projection.
     pub fn has_unmodeled_semantic_attributes(&self) -> bool {
         self.inner.has_unmodeled_semantic_attributes()
+    }
+
+    /// Cached display segments retained from the result runs of a complex field.
+    pub fn cached_display_segments(&self) -> Vec<FieldDisplaySegmentRef<'_>> {
+        self.inner
+            .cached_display_segments()
+            .into_iter()
+            .map(|(text, properties)| FieldDisplaySegmentRef { text, properties })
+            .collect()
     }
 }
 
@@ -969,6 +1018,34 @@ mod tests {
 
         assert!(!supported.has_unmodeled_semantic_attributes());
         assert!(unsupported.has_unmodeled_semantic_attributes());
+    }
+
+    #[test]
+    fn field_reader_exposes_complex_cached_display_segments() {
+        let simple = run_from_paragraph_inner_xml(
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+        );
+        let complex = run_from_paragraph_inner_xml(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>1</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>2</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+
+        let simple_run = RunRef { inner: &simple };
+        let RunItemRef::Field(simple) = simple_run.items().next().unwrap() else {
+            panic!("expected simple field");
+        };
+        let complex_run = RunRef { inner: &complex };
+        let RunItemRef::Field(complex) = complex_run.items().next().unwrap() else {
+            panic!("expected complex field");
+        };
+
+        assert_eq!(simple.kind(), FieldKind::Simple);
+        assert_eq!(complex.kind(), FieldKind::Complex);
+        let segments = complex.cached_display_segments();
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text(), "1");
+        assert_eq!(segments[0].properties().unwrap().bold, Some(true));
+        assert_eq!(segments[1].text(), "2");
+        assert_eq!(segments[1].properties().unwrap().italic, Some(true));
     }
 
     #[test]

@@ -72,8 +72,8 @@ pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{
-    BreakKind, DrawingRef, FieldRef, LegacyHorizontalRuleRef, Run, RunItemRef, RunRef,
-    UnderlineStyle,
+    BreakKind, DrawingRef, FieldDisplaySegmentRef, FieldKind, FieldRef, LegacyHorizontalRuleRef,
+    Run, RunItemRef, RunProperties, RunRef, UnderlineStyle,
 };
 pub use style::{Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
