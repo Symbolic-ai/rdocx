@@ -800,7 +800,10 @@ impl<'a> RowRef<'a> {
             || self.inner.properties.as_ref().is_some_and(|properties| {
                 properties.height.is_some()
                     || properties.height_rule.is_some()
+                    || properties.header.is_some()
                     || properties.jc.is_some()
+                    || properties.grid_before.is_some()
+                    || properties.grid_after.is_some()
                     || properties.cant_split.is_some()
                     || properties.cnf_style.is_some()
             })
@@ -1095,6 +1098,32 @@ mod tests {
         assert!(cell.has_cell_margins());
         assert!(cell.has_text_direction());
         assert!(cell.has_conditional_formatting());
+    }
+
+    #[test]
+    fn row_formatting_includes_header_and_grid_offset_properties() {
+        for properties in [
+            CT_TrPr {
+                header: Some(true),
+                ..Default::default()
+            },
+            CT_TrPr {
+                grid_before: Some(1),
+                ..Default::default()
+            },
+            CT_TrPr {
+                grid_after: Some(1),
+                ..Default::default()
+            },
+        ] {
+            let mut inner = CT_Tbl::new();
+            let mut row = CT_Row::new();
+            row.properties = Some(properties);
+            inner.rows.push(row);
+
+            let table = TableRef { inner: &inner };
+            assert!(table.row(0).unwrap().has_formatting());
+        }
     }
 
     #[test]
