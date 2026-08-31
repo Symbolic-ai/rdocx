@@ -721,6 +721,66 @@ models. This is an additive semver change for the published pre-1.0
 flag. Unsupported modern comment XML and all legacy comment parts remain
 preserved, so consumers do not need a parallel raw authoring API.
 
+## Native PowerPoint media model
+
+The published pre-1.0 `rpptx` facade exposes concrete native Rust media values:
+`MediaInfo`, `MediaLocation`, `EmbeddedMediaInput`, `MediaSourceInput`,
+`MediaPoster`, `MediaPlaybackSettings`, `MediaPlaybackTrigger`, and
+`MediaDiagnostic`. `MediaKind` is the concrete audio or video discriminator.
+The facade methods are:
+
+```rust
+pub fn Presentation::media(&self, slide_index: usize) -> Result<Vec<MediaInfo>>;
+pub fn Presentation::add_media(
+    &mut self,
+    slide_index: usize,
+    kind: MediaKind,
+    source: MediaSourceInput<'_>,
+    poster: MediaPoster<'_>,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+    settings: MediaPlaybackSettings,
+) -> Result<ShapeRef<'_>>;
+pub fn Presentation::replace_media(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+    source: MediaSourceInput<'_>,
+) -> Result<()>;
+pub fn Presentation::extract_media(
+    &self,
+    slide_index: usize,
+    shape_id: u32,
+) -> Result<Option<Vec<u8>>>;
+pub fn Presentation::remove_media(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+) -> Result<()>;
+```
+
+Embedded sources require bytes, a safe filename, and an explicit safe content
+type. Linked sources retain their exact external target and are never fetched.
+Add requires a validated poster image. Mutations preserve raw XML, schema
+order, relationship ownership, shared payloads, shape identity, geometry, and
+failure atomicity. Unknown safe media types remain opaque, extractable, and
+diagnostic.
+
+The published pre-1.0 `rpptx-oxml` picture and timing modules expose concrete
+media projections. Trim start and end belong to the Office picture extension.
+`CommonMediaNode` does not carry trim fields, and `CT_Timing::add_media` accepts
+only timing-owned volume, loop, display, trigger, and target values. The
+published pre-1.0 `oxml-opc` crate adds audio, video, and Microsoft media
+relationship constants. The dependency-free `oxml-media` crate adds safe MIME
+and container-signature classification plus non-image media naming.
+
+These are additive pre-1.0 native Rust APIs. The timing signature and common
+media value exclude trim because the Office picture extension owns it. No
+Python method, WASM method, CLI option, production dependency, feature flag, or
+decoder surface exists.
+
 ## Native PowerPoint timing model
 
 The published pre-1.0 `rpptx-oxml` crate exposes concrete timing and transition

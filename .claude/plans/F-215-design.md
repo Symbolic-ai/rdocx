@@ -1,6 +1,6 @@
 # F-215, Audio and video package model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S61
 **Size**: L
 **Depends on**: none
@@ -224,18 +224,18 @@ new opt-in mutation API. Any delta is unexplained and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add typed picture media and timing media projections without replacing
+- [x] Add typed picture media and timing media projections without replacing
   retained raw XML.
-- [ ] Add audio, video, and Microsoft media relationship constants.
-- [ ] Add concrete inspection values and atomic facade mutations.
-- [ ] Reuse package-wide content hashing and collision-safe media naming.
-- [ ] Preserve linked targets without fetching them.
-- [ ] Keep unsupported codec bytes extractable and diagnostic.
-- [ ] Remove only relationship-owned candidates that become unreachable.
-- [ ] Extend duplicate and transfer relationship remapping to media.
-- [ ] Add corpus round-trip, source-built mutation, failure-atomicity, and
+- [x] Add audio, video, and Microsoft media relationship constants.
+- [x] Add concrete inspection values and atomic facade mutations.
+- [x] Reuse package-wide content hashing and collision-safe media naming.
+- [x] Preserve linked targets without fetching them.
+- [x] Keep unsupported codec bytes extractable and diagnostic.
+- [x] Remove only relationship-owned candidates that become unreachable.
+- [x] Extend duplicate and transfer relationship remapping to media.
+- [x] Add corpus round-trip, source-built mutation, failure-atomicity, and
   orphan-preservation tests to existing binaries.
-- [ ] Run focused `rpptx-oxml`, `oxml-opc`, `oxml-media`, and `rpptx` checks,
+- [x] Run focused `rpptx-oxml`, `oxml-opc`, `oxml-media`, and `rpptx` checks,
   then every routed rider.
 
 ## Open questions

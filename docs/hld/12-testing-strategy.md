@@ -65,13 +65,29 @@ The Presentation timing round-trip gate is
 slide, layout, and master in the 50-deck corpus. The gate requires nonzero
 coverage for timing roots, transitions, typed nodes, conditions, builds, set
 values, transition parameters, compatibility-wrapped transitions, and
-unsupported timing nodes. It serializes and reparses each model, compares the
-typed projection, and inventories unsupported node bytes before and after.
+effect parameters. It serializes and reparses each model, compares the typed
+projection, and inventories any unsupported node bytes before and after. A
+category that becomes fully typed does not require a synthetic raw node.
 Source-built regressions cover namespace aliases, compatibility choice and
 fallback selection, singleton and schema order rejection, lexical owner-tag
 preservation, atomic mutation, morph metadata, and the narrow PowerPoint empty
 layout-transition compatibility shape. A parse-state size guard and the full
 `rpptx` corpus package test keep the default test-thread stack sufficient.
+
+The Presentation media package round-trip gate is
+`embedded_audio_and_video_corpus_media_round_trip_without_duplication`. It
+opens the configured `EmbeddedAudio.pptx` and `EmbeddedVideo.pptx` corpus
+decks, inspects their audio and video sources, extracts exact embedded bytes,
+saves and reopens, and requires stable relationship types, targets, content
+types, poster ownership, playback settings, unsupported metadata, and package
+part counts. The gate requires the external corpus in completion verification.
+Source-built cases in the existing `rpptx-oxml` and `rpptx` integration
+binaries cover embedded and linked add, replacement, extraction, removal,
+failure atomicity, relationship ownership, shared and orphan payloads, raw XML,
+namespace shadows, schema position, timing IDs, command fallbacks, duplication,
+and same-presentation duplicate-slide shape-reference remapping. Tests assert
+independent expected package facts rather than comparing only pre-mutation and
+post-mutation views.
 
 The ordered-body integration gate opens an in-code package through the public
 Word facade and compares the exact direct sequence of paragraphs, a table, a
@@ -674,7 +690,7 @@ producers because non-Microsoft writers are where parser assumptions break:
 - Keynote export
 - LibreOffice Impress
 - A multi-master corporate template
-- Decks containing SmartArt, charts, embedded video, and ink
+- Decks containing SmartArt, charts, embedded audio and video, and ink
 
 The read-facade differential runs `dump_deck` over all fifty decks and compares
 its normalized records with python-pptx 1.0.2. The executable test command pins
@@ -709,9 +725,14 @@ Five gates run against it:
 4. **Timing model round-trip**: every slide, layout, and master timing or
    transition subtree projects the supported model while unsupported siblings
    retain exact bytes. Coverage counters must remain nonzero for every bounded
-   timing category, including compatibility transitions and raw nodes.
+   timing category, including compatibility transitions. Any raw nodes present
+   are inventoried before and after without requiring the corpus to contain one.
 5. **Opens without repair** (M8 and M11): every saved deck opened manually in
    PowerPoint once per milestone. Not automatable, and not skippable.
+6. **Media package round-trip**: the tracked embedded audio and video decks
+   preserve exact media bytes, relationships, content types, poster ownership,
+   playback settings, unsupported metadata, and part counts through save and
+   reopen without duplication.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
 `placeholder-layout-color.pptx`, and
@@ -1050,6 +1071,10 @@ required, and no binary fixture enters the repository.
 **`oxml-media`**
 - Sniffing every format from magic bytes, and **sniff beats extension**: a
   `.png` that is really a JPEG resolves to JPEG.
+- MP3, WAV, and ISO base media signature checks accept valid containers and
+  reject invalid bytes for known MIME names, including uppercase type and
+  subtype spelling. Safe MIME grammar remains strict, and unknown safe types
+  remain opaque.
 - DPI from PNG `pHYs` with unit 1 and unit 0, and from JPEG JFIF density units
   1 and 2, including a file with EXIF before the SOF.
 - **A truncation loop per format**: `for n in 0..data.len()`, assert no panic.

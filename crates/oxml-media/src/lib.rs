@@ -83,6 +83,71 @@ fn media_index(name: &str, directory: &str, stem: &str) -> Option<usize> {
     digits.parse().ok().filter(|index| *index > 0)
 }
 
+/// Returns whether `value` is a parameter-free MIME content type.
+///
+/// Both the type and subtype must use the RFC token alphabet. Parameters,
+/// whitespace, empty components, and non-ASCII bytes are rejected.
+pub fn is_safe_content_type(value: &str) -> bool {
+    let Some((type_name, subtype)) = value.split_once('/') else {
+        return false;
+    };
+    !type_name.is_empty()
+        && !subtype.is_empty()
+        && !subtype.contains('/')
+        && type_name.bytes().all(is_mime_token_byte)
+        && subtype.bytes().all(is_mime_token_byte)
+}
+
+fn is_mime_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+/// Checks bytes for a supported audio or video container content type.
+///
+/// `Some(true)` means the known signature matches, `Some(false)` means it does
+/// not match, and `None` means the content type is not classified here. The
+/// classifier recognizes MP3, RIFF WAVE, and ISO base media containers without
+/// claiming to identify the codec inside a container.
+pub fn audio_video_signature_matches(data: &[u8], content_type: &str) -> Option<bool> {
+    if matches_content_type(content_type, &["audio/mpeg", "audio/mp3"]) {
+        Some(
+            data.starts_with(b"ID3")
+                || data
+                    .get(..2)
+                    .is_some_and(|prefix| prefix[0] == 0xff && prefix[1] & 0xe0 == 0xe0),
+        )
+    } else if matches_content_type(content_type, &["audio/wav", "audio/wave", "audio/x-wav"]) {
+        Some(data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WAVE"))
+    } else if matches_content_type(content_type, &["audio/mp4", "video/mp4", "application/mp4"]) {
+        Some(data.get(4..8) == Some(b"ftyp"))
+    } else {
+        None
+    }
+}
+
+fn matches_content_type(content_type: &str, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| content_type.eq_ignore_ascii_case(candidate))
+}
+
 /// An image format supported by OOXML consumers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageFormat {
@@ -723,7 +788,59 @@ fn is_standard_wmf(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageFormat, ImageInfo, MediaNamer, NativeSize, probe, resolve};
+    use super::{
+        ImageFormat, ImageInfo, MediaNamer, NativeSize, audio_video_signature_matches,
+        is_safe_content_type, probe, resolve,
+    };
+
+    #[test]
+    fn audio_video_signatures_and_safe_content_types_are_format_neutral() {
+        assert_eq!(
+            audio_video_signature_matches(b"ID3\x04\0\0payload", "audio/mpeg"),
+            Some(true)
+        );
+        assert_eq!(
+            audio_video_signature_matches(b"not mp3", "audio/mpeg"),
+            Some(false)
+        );
+        assert_eq!(
+            audio_video_signature_matches(b"ID3\x04\0\0payload", "Audio/MPEG"),
+            Some(true)
+        );
+        assert_eq!(
+            audio_video_signature_matches(b"not mp3", "Audio/MPEG"),
+            Some(false)
+        );
+        assert_eq!(
+            audio_video_signature_matches(b"RIFF\0\0\0\0WAVEpayload", "audio/wav"),
+            Some(true)
+        );
+        assert_eq!(
+            audio_video_signature_matches(b"\0\0\0\x18ftypisom", "video/mp4"),
+            Some(true)
+        );
+        assert_eq!(audio_video_signature_matches(b"opaque", "video/webm"), None);
+
+        for valid in [
+            "audio/mpeg",
+            "video/vnd.example+codec",
+            "application/x-example_media",
+        ] {
+            assert!(is_safe_content_type(valid), "{valid}");
+        }
+        for invalid in [
+            "",
+            "/",
+            "audio/",
+            "/mpeg",
+            "audio /mpeg",
+            "not a/type with spaces",
+            "audio/mpeg; charset=binary",
+            "audio/mpeg/extra",
+        ] {
+            assert!(!is_safe_content_type(invalid), "{invalid}");
+        }
+    }
 
     const SVG_WITH_PROLOG: &[u8] = br#"<?xml version="1.0"?>
         <!-- generated -->

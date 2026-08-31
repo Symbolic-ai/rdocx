@@ -8,7 +8,7 @@ crates/
   oxml-core          units, xml helpers, entity decoding, raw-XML capture,
                      core / app / custom properties
   oxml-opc           ZIP and OPC package, relationships, content types
-  oxml-media         image sniffing, dimensions and DPI, MIME, media naming
+  oxml-media         image and media sniffing, dimensions and DPI, MIME, naming
   oxml-drawing       DrawingML: colour, transforms, geometry, fills, lines,
                      effects, theme, text body
   oxml-layout        output types, font manager, bundled fonts, line breaking
@@ -85,10 +85,12 @@ Ordinary, Python, WASM, and CLI graphs do not include either security feature
 or its cryptographic dependencies.
 
 **`oxml-media` has no dependencies at all.** It owns byte sniffing, image header
-probing, and intrinsic EMU sizing through its local `NativeSize` value. It
-remains a leaf that anything can take cheaply without importing `oxml-core`.
-The `rdocx` facade depends on it directly for collision-free Word media names,
-sniffed package metadata, and byte-first HTML and layout MIME inputs.
+probing, intrinsic EMU sizing through its local `NativeSize` value, safe MIME
+grammar, bounded media-container signature checks, and collision-safe naming.
+It remains a leaf that anything can take cheaply without importing
+`oxml-core`. The format facades depend on it directly for package media names,
+sniffed package metadata, and byte-first MIME inputs. The container checks do
+not claim a codec decoder.
 
 **Inbound HTML belongs to the `rdocx` facade.** The private importer uses
 `scraper` for HTML5 document and fragment tree repair, then projects supported
@@ -136,6 +138,13 @@ facade assembles incoming and optional outgoing slides and returns the page,
 state, and diagnostics together. Static resolver and renderer entry points do
 not pass through the timeline path, and shared output backends remain unaware
 of PresentationML timing.
+
+Presentation media editing follows that boundary. `rpptx-oxml` projects the
+schema-owned picture and timing XML while retaining raw serialization sources.
+`rpptx` owns relationship graphs, package payloads, and atomic mutation.
+`oxml-media` owns format-neutral signature classification and naming.
+`rpptx-layout` diagnoses retained timing, and the renderer continues to paint
+the poster without decoding or playing media.
 
 The same boundary owns multilingual text mechanics. Rich segments retain
 logical text and source ranges while carrying script, language, direction,

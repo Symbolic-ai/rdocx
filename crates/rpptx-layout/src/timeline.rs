@@ -289,6 +289,15 @@ fn evaluate_nodes(
             });
             continue;
         }
+        if matches!(
+            node,
+            TimingNode::Audio(_) | TimingNode::Video(_) | TimingNode::MediaCommand(_)
+        ) {
+            context.state.diagnostics.push(Diagnostic {
+                message: "media timing is retained for synchronized playback".to_owned(),
+            });
+            continue;
+        }
         let common = common(node);
         let suggested = match (scheduling, common.node_type.as_ref(), previous) {
             (Scheduling::Sequence, Some(TimingNodeType::WithEffect), Some((start, _))) => start,
@@ -317,6 +326,9 @@ fn common(node: &TimingNode) -> &CommonTimeNode {
         TimingNode::Animate(node) => &node.common,
         TimingNode::Effect(node) => &node.common,
         TimingNode::Motion(node) => &node.common,
+        TimingNode::Audio(_) | TimingNode::Video(_) | TimingNode::MediaCommand(_) => {
+            unreachable!("media nodes are diagnosed by the caller")
+        }
         TimingNode::Unsupported(_) => unreachable!("unsupported nodes are diagnosed by the caller"),
     }
 }
@@ -460,6 +472,7 @@ fn evaluate_node(
             }
             end
         }
+        TimingNode::Audio(_) | TimingNode::Video(_) | TimingNode::MediaCommand(_) => start,
         TimingNode::Unsupported(_) => start,
     }
 }

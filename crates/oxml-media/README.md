@@ -1,10 +1,13 @@
 # oxml-media
 
-Dependency-free media format detection, collision-safe naming, and intrinsic image sizing for OOXML packages.
+Dependency-free image and audio or video container detection, collision-safe
+naming, MIME validation, and intrinsic image sizing for OOXML packages.
 
 ## Use it when
 
-Use this crate when an OOXML writer must identify or size image bytes without decoding the complete image.
+Use this crate when an OOXML writer must identify or size image bytes, validate
+a package content type, or check MP3, RIFF WAVE, and ISO base media signatures
+without decoding the complete payload.
 
 ## Relationship
 

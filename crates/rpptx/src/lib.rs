@@ -34,7 +34,9 @@ use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
 #[cfg(feature = "render")]
 use oxml_layout::{Color, FontManager, LayoutResult, PageFrame, PositionedElement, Rect};
-use oxml_media::{ImageFormat, MediaNamer, probe, resolve};
+use oxml_media::{
+    ImageFormat, MediaNamer, audio_video_signature_matches, is_safe_content_type, probe, resolve,
+};
 pub use oxml_opc::PackageReadLimits;
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
@@ -56,8 +58,10 @@ pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
+use rpptx_oxml::namespace::P_NS;
 use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
-use rpptx_oxml::picture::CT_Picture;
+pub use rpptx_oxml::picture::MediaKind;
+use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, PictureMedia};
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 pub use rpptx_oxml::presentation::Section;
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
@@ -68,6 +72,8 @@ use rpptx_oxml::shape_tree::{
 use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout};
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
+pub use rpptx_oxml::timing::MediaPlaybackTrigger;
+use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
 #[cfg(feature = "render")]
 use rpptx_render::timeline::{
     compose_morph_transition, compose_transition, layout_timeline_slide_deterministic,
@@ -95,6 +101,88 @@ const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// One inspected media source resolved through the slide relationship scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaLocation {
+    Embedded {
+        part_name: String,
+        content_type: String,
+    },
+    Linked {
+        target: String,
+    },
+}
+
+/// Caller bytes and package metadata for one embedded media payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EmbeddedMediaInput<'a> {
+    pub bytes: &'a [u8],
+    pub filename: &'a str,
+    pub content_type: &'a str,
+}
+
+/// A new embedded or external media source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaSourceInput<'a> {
+    Embedded(EmbeddedMediaInput<'a>),
+    Linked {
+        target: &'a str,
+        content_type: &'a str,
+    },
+}
+
+/// Required poster bytes for a newly authored media picture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaPoster<'a> {
+    pub bytes: &'a [u8],
+    pub filename: &'a str,
+}
+
+/// The supported media playback settings retained by inspection and mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaPlaybackSettings {
+    pub trim_start_ms: Option<u64>,
+    pub trim_end_ms: Option<u64>,
+    pub volume: u32,
+    pub looped: bool,
+    pub show_when_stopped: bool,
+    pub trigger: MediaPlaybackTrigger,
+}
+
+impl Default for MediaPlaybackSettings {
+    fn default() -> Self {
+        Self {
+            trim_start_ms: None,
+            trim_end_ms: None,
+            volume: 100_000,
+            looped: false,
+            show_when_stopped: false,
+            trigger: MediaPlaybackTrigger::OnClick,
+        }
+    }
+}
+
+/// A non-fatal limitation discovered while inspecting media.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaDiagnostic {
+    UnsupportedContentType { content_type: String },
+    MissingPlaybackTiming,
+    UnsupportedPlaybackCommand { command: String },
+    MissingPoster,
+}
+
+/// One media picture and its package-resolved playback state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaInfo {
+    pub slide_index: usize,
+    pub shape_id: u32,
+    pub kind: MediaKind,
+    pub source: MediaLocation,
+    pub poster_relationship_id: Option<String>,
+    pub settings: MediaPlaybackSettings,
+    pub diagnostics: Vec<MediaDiagnostic>,
+}
 
 /// An error opening, resolving, or serialising a presentation package.
 #[derive(Debug, Error)]
@@ -206,6 +294,12 @@ pub enum Error {
 
     #[error("{operation} failed: {message}")]
     InvalidChartMutation {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("{operation} failed: {message}")]
+    InvalidMediaMutation {
         operation: &'static str,
         message: String,
     },
@@ -330,6 +424,7 @@ struct MediaEntry {
 struct MediaStore {
     by_id: HashMap<MediaId, Vec<MediaEntry>>,
     namer: MediaNamer,
+    media_namer: MediaNamer,
 }
 
 impl MediaStore {
@@ -337,6 +432,11 @@ impl MediaStore {
         let namer = MediaNamer::scan(
             "/ppt/media",
             "image",
+            package.parts.keys().map(String::as_str),
+        );
+        let media_namer = MediaNamer::scan(
+            "/ppt/media",
+            "media",
             package.parts.keys().map(String::as_str),
         );
         let mut by_id: HashMap<MediaId, Vec<MediaEntry>> = HashMap::new();
@@ -368,7 +468,11 @@ impl MediaStore {
                     newly_inserted: false,
                 });
         }
-        Self { by_id, namer }
+        Self {
+            by_id,
+            namer,
+            media_namer,
+        }
     }
 
     fn insert(&mut self, package: &mut OpcPackage, bytes: &[u8], filename: &str) -> String {
@@ -395,6 +499,36 @@ impl MediaStore {
         let extension = format.extension();
         let content_type = format.content_type();
         let part_name = self.namer.next_part_name(extension);
+        package.set_part(&part_name, bytes.to_vec());
+        register_content_type(package, &part_name, extension, content_type);
+        self.by_id.entry(media_id).or_default().push(MediaEntry {
+            part_name: part_name.clone(),
+            bytes: bytes.to_vec(),
+            extension: extension.to_owned(),
+            content_type: content_type.to_owned(),
+            newly_inserted: true,
+        });
+        part_name
+    }
+
+    fn insert_explicit(
+        &mut self,
+        package: &mut OpcPackage,
+        bytes: &[u8],
+        extension: &str,
+        content_type: &str,
+    ) -> String {
+        let media_id = MediaId::from_bytes(bytes);
+        if let Some(existing) = self.by_id.get(&media_id).and_then(|bucket| {
+            bucket.iter().find(|entry| {
+                entry.bytes == bytes
+                    && entry.extension == extension
+                    && entry.content_type == content_type
+            })
+        }) {
+            return existing.part_name.clone();
+        }
+        let part_name = self.media_namer.next_part_name(extension);
         package.set_part(&part_name, bytes.to_vec());
         register_content_type(package, &part_name, extension, content_type);
         self.by_id.entry(media_id).or_default().push(MediaEntry {
@@ -2068,6 +2202,413 @@ impl Presentation {
         ))
     }
 
+    /// Inspects the media pictures on one slide in z-order.
+    pub fn media(&self, slide_index: usize) -> Result<Vec<MediaInfo>> {
+        let record = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let relationships = self
+            .package
+            .get_part_rels(&record.part_name)
+            .cloned()
+            .unwrap_or_default();
+        record
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ShapeTreeChild::Picture(picture) => picture
+                    .media
+                    .as_ref()
+                    .zip(child.non_visual_id())
+                    .map(|(media, shape_id)| (picture, media, shape_id)),
+                _ => None,
+            })
+            .map(|(picture, media, shape_id)| {
+                let relationship_id = media.source.relationship_id();
+                let relationship = relationships.get_by_id(relationship_id).ok_or_else(|| {
+                    Error::MissingRelationship {
+                        source_part: record.part_name.clone(),
+                        relationship_id: relationship_id.to_owned(),
+                    }
+                })?;
+                if relationship.rel_type != rel_types::POWERPOINT_MEDIA
+                    && relationship.rel_type != media_relationship_type(media.kind)
+                {
+                    return Err(Error::WrongRelationshipType {
+                        source_part: record.part_name.clone(),
+                        relationship_id: relationship_id.to_owned(),
+                        expected: rel_types::POWERPOINT_MEDIA,
+                        actual: relationship.rel_type.clone(),
+                    });
+                }
+                let source = if relationship_is_external(relationship) {
+                    MediaLocation::Linked {
+                        target: relationship.target.clone(),
+                    }
+                } else {
+                    let part_name =
+                        OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+                    required_part(&self.package, &part_name)?;
+                    let content_type = self
+                        .package
+                        .content_types
+                        .content_type_for(&part_name)
+                        .ok_or_else(|| {
+                            invalid_media_mutation(
+                                "inspect media",
+                                format!("package part {part_name} has no content type"),
+                            )
+                        })?
+                        .to_owned();
+                    MediaLocation::Embedded {
+                        part_name,
+                        content_type,
+                    }
+                };
+                let (settings, mut diagnostics) =
+                    media_playback_settings(picture, record.slide.timing.as_ref(), shape_id);
+                let content_type = match &source {
+                    MediaLocation::Embedded { content_type, .. } => Some(content_type.as_str()),
+                    MediaLocation::Linked { .. } => None,
+                };
+                if let Some(content_type) = content_type
+                    && !is_known_media_content_type(content_type)
+                {
+                    diagnostics.push(MediaDiagnostic::UnsupportedContentType {
+                        content_type: content_type.to_owned(),
+                    });
+                }
+                if media.poster_relationship_id.is_none() {
+                    diagnostics.push(MediaDiagnostic::MissingPoster);
+                }
+                Ok(MediaInfo {
+                    slide_index,
+                    shape_id,
+                    kind: media.kind,
+                    source,
+                    poster_relationship_id: media.poster_relationship_id.clone(),
+                    settings,
+                    diagnostics,
+                })
+            })
+            .collect()
+    }
+
+    /// Adds one media picture, poster, relationship scope, and timing node atomically.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_media(
+        &mut self,
+        slide_index: usize,
+        kind: MediaKind,
+        source: MediaSourceInput<'_>,
+        poster: MediaPoster<'_>,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+        settings: MediaPlaybackSettings,
+    ) -> Result<ShapeRef<'_>> {
+        self.require_slide_index(slide_index)?;
+        validate_media_settings(settings)?;
+        validate_media_source(source)?;
+        if ImageFormat::sniff(poster.bytes).is_none() {
+            return Err(invalid_media_mutation(
+                "add media",
+                format!("poster {} has unsupported image bytes", poster.filename),
+            ));
+        }
+        if width.0 <= 0 || height.0 <= 0 {
+            return Err(invalid_media_mutation(
+                "add media",
+                "media width and height must be positive",
+            ));
+        }
+
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let shape_id = ShapeIdAllocator::scan(
+            &staged.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree,
+        )
+        .allocate();
+        let poster_part =
+            staged
+                .media_store
+                .insert(&mut staged.package, poster.bytes, poster.filename);
+        let mut relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let poster_relationship_id = relationships.add(
+            rel_types::IMAGE,
+            &relative_part_target(&slide_part, &poster_part),
+        );
+        let (standard_relationship_id, microsoft_relationship_id, picture_source) =
+            add_media_relationships(
+                &mut staged.package,
+                &mut staged.media_store,
+                &slide_part,
+                &mut relationships,
+                kind,
+                source,
+                true,
+            )?;
+        let microsoft_relationship_id = microsoft_relationship_id
+            .expect("new media pictures always include the Office media relationship");
+        let picture = CT_Picture::new_media(
+            shape_id,
+            &format!("{} {shape_id}", media_kind_name(kind)),
+            kind,
+            match picture_source {
+                PictureMediaSource::Embedded { .. } => PictureMediaSource::Embedded {
+                    relationship_id: standard_relationship_id,
+                },
+                PictureMediaSource::Linked { .. } => PictureMediaSource::Linked {
+                    relationship_id: standard_relationship_id,
+                },
+            },
+            &microsoft_relationship_id,
+            &poster_relationship_id,
+            settings.trim_start_ms,
+            settings.trim_end_ms,
+            positioned_transform(left, top, width, height),
+        )
+        .map_err(|error| invalid_media_mutation("add media", error.to_string()))?;
+        staged.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .append_child(ShapeTreeChild::Picture(picture));
+        let timing = staged.slides[slide_index]
+            .slide
+            .timing
+            .get_or_insert_with(|| {
+                CT_Timing::from_xml(
+                    format!(r#"<p:timing xmlns:p="{P_NS}"><p:tnLst/></p:timing>"#).as_bytes(),
+                )
+                .expect("canonical media timing shell")
+            });
+        timing
+            .add_media(
+                kind == MediaKind::Video,
+                shape_id,
+                settings.volume,
+                settings.looped,
+                settings.show_when_stopped,
+                settings.trigger,
+            )
+            .map_err(|error| invalid_media_mutation("add media", error.to_string()))?;
+        staged.package.part_rels.insert(slide_part, relationships);
+        self.commit_candidate(staged)?;
+        self.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find(|child| child.non_visual_id() == Some(shape_id))
+            .map(shape_ref)
+            .ok_or_else(|| invalid_media_mutation("add media", "authored picture was not retained"))
+    }
+
+    /// Replaces one media source while preserving its shape, poster, and timing.
+    pub fn replace_media(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        source: MediaSourceInput<'_>,
+    ) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        validate_media_source(source)?;
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let picture = media_picture_shape(&staged.slides[slide_index].slide, shape_id)?;
+        let media = picture.media.as_ref().expect("media picture").clone();
+        let standard_relationship_id = picture.standard_media_relationship_id().map(str::to_owned);
+        let has_office_media = !picture.office_media_relationship_ids().is_empty();
+        let mut old_relationship_ids = picture.office_media_relationship_ids().to_vec();
+        if !old_relationship_ids
+            .iter()
+            .any(|id| id == media.source.relationship_id())
+        {
+            old_relationship_ids.push(media.source.relationship_id().to_owned());
+        }
+        if let Some(standard_relationship_id) = &standard_relationship_id
+            && !old_relationship_ids.contains(standard_relationship_id)
+        {
+            old_relationship_ids.push(standard_relationship_id.clone());
+        }
+        let mut relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let old_relationships = old_relationship_ids
+            .iter()
+            .map(|relationship_id| {
+                relationships
+                    .get_by_id(relationship_id)
+                    .cloned()
+                    .ok_or_else(|| Error::MissingRelationship {
+                        source_part: slide_part.clone(),
+                        relationship_id: relationship_id.clone(),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let (standard_id, microsoft_id, picture_source) = add_media_relationships(
+            &mut staged.package,
+            &mut staged.media_store,
+            &slide_part,
+            &mut relationships,
+            media.kind,
+            source,
+            has_office_media,
+        )?;
+        let source_id = microsoft_id.unwrap_or_else(|| standard_id.clone());
+        let replacement_source = match picture_source {
+            PictureMediaSource::Embedded { .. } => PictureMediaSource::Embedded {
+                relationship_id: source_id,
+            },
+            PictureMediaSource::Linked { .. } => PictureMediaSource::Linked {
+                relationship_id: source_id,
+            },
+        };
+        let target_picture = staged.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter_mut()
+            .find(|child| child.non_visual_id() == Some(shape_id))
+            .and_then(|child| match child {
+                ShapeTreeChild::Picture(picture) => Some(picture),
+                _ => None,
+            })
+            .ok_or_else(|| invalid_media_mutation("replace media", "media picture is missing"))?;
+        target_picture
+            .replace_media_relationship_ids(&standard_id, replacement_source)
+            .map_err(|error| invalid_media_mutation("replace media", error.to_string()))?;
+        let referenced = slide_relationship_ids(&staged.slides[slide_index].slide)?;
+        let mut candidates = HashSet::new();
+        relationships.items.retain(|relationship| {
+            let Some(old) = old_relationships
+                .iter()
+                .find(|old| old.id == relationship.id)
+            else {
+                return true;
+            };
+            if referenced.contains(&old.id) {
+                return true;
+            }
+            if !relationship_is_external(old) {
+                candidates.insert(OpcPackage::resolve_rel_target(&slide_part, &old.target));
+            }
+            false
+        });
+        staged.package.part_rels.insert(slide_part, relationships);
+        prune_unreachable_media(&mut staged.package, &candidates);
+        staged.media_store = MediaStore::scan(&staged.package);
+        self.commit_candidate(staged)
+    }
+
+    /// Extracts embedded media bytes, or returns `None` for linked media.
+    pub fn extract_media(&self, slide_index: usize, shape_id: u32) -> Result<Option<Vec<u8>>> {
+        let record = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let media = media_picture(&record.slide, shape_id)?;
+        let relationship_id = media.source.relationship_id();
+        let relationship = self
+            .package
+            .get_part_rels(&record.part_name)
+            .and_then(|relationships| relationships.get_by_id(relationship_id))
+            .ok_or_else(|| Error::MissingRelationship {
+                source_part: record.part_name.clone(),
+                relationship_id: relationship_id.to_owned(),
+            })?;
+        if relationship_is_external(relationship) {
+            return Ok(None);
+        }
+        let part_name = OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+        Ok(Some(required_part(&self.package, &part_name)?.to_vec()))
+    }
+
+    /// Removes one media picture and only its relationship-owned package candidates.
+    pub fn remove_media(&mut self, slide_index: usize, shape_id: u32) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let mut staged = self.clone();
+        let slide_part = staged.slides[slide_index].part_name.clone();
+        let picture = media_picture_shape(&staged.slides[slide_index].slide, shape_id)?;
+        let media = picture.media.as_ref().expect("media picture").clone();
+        let standard_relationship_id = picture.standard_media_relationship_id().map(str::to_owned);
+        let office_relationship_ids = picture.office_media_relationship_ids().to_vec();
+        let mut relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let mut owned_ids = office_relationship_ids.into_iter().collect::<HashSet<_>>();
+        owned_ids.insert(media.source.relationship_id().to_owned());
+        if let Some(standard_relationship_id) = standard_relationship_id {
+            owned_ids.insert(standard_relationship_id);
+        }
+        if let Some(poster_relationship_id) = media.poster_relationship_id {
+            owned_ids.insert(poster_relationship_id);
+        }
+        for relationship_id in &owned_ids {
+            relationships
+                .get_by_id(relationship_id)
+                .ok_or_else(|| Error::MissingRelationship {
+                    source_part: slide_part.clone(),
+                    relationship_id: relationship_id.clone(),
+                })?;
+        }
+        staged.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .remove_child_by_id(shape_id)
+            .map_err(|error| invalid_media_mutation("remove media", error.to_string()))?
+            .ok_or_else(|| invalid_media_mutation("remove media", "media picture is missing"))?;
+        if let Some(timing) = &mut staged.slides[slide_index].slide.timing {
+            timing
+                .remove_media(shape_id)
+                .map_err(|error| invalid_media_mutation("remove media", error.to_string()))?;
+        }
+        let referenced = slide_relationship_ids(&staged.slides[slide_index].slide)?;
+        let mut candidates = HashSet::new();
+        relationships.items.retain(|relationship| {
+            if !owned_ids.contains(&relationship.id) || referenced.contains(&relationship.id) {
+                return true;
+            }
+            if !relationship_is_external(relationship) {
+                candidates.insert(OpcPackage::resolve_rel_target(
+                    &slide_part,
+                    &relationship.target,
+                ));
+            }
+            false
+        });
+        staged.package.part_rels.insert(slide_part, relationships);
+        prune_unreachable_media(&mut staged.package, &candidates);
+        staged.media_store = MediaStore::scan(&staged.package);
+        self.commit_candidate(staged)
+    }
+
     /// Appends an editable relationship-backed chart to one slide.
     #[allow(clippy::too_many_arguments)]
     pub fn add_chart(
@@ -2174,6 +2715,214 @@ fn invalid_chart_mutation(operation: &'static str, message: impl Into<String>) -
     Error::InvalidChartMutation {
         operation,
         message: message.into(),
+    }
+}
+
+fn invalid_media_mutation(operation: &'static str, message: impl Into<String>) -> Error {
+    Error::InvalidMediaMutation {
+        operation,
+        message: message.into(),
+    }
+}
+
+fn media_kind_name(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Audio => "Audio",
+        MediaKind::Video => "Video",
+    }
+}
+
+fn media_relationship_type(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Audio => rel_types::AUDIO,
+        MediaKind::Video => rel_types::VIDEO,
+    }
+}
+
+fn media_picture(slide: &CT_Slide, shape_id: u32) -> Result<&PictureMedia> {
+    media_picture_shape(slide, shape_id)?
+        .media
+        .as_ref()
+        .ok_or_else(|| {
+            invalid_media_mutation(
+                "inspect media",
+                format!("shape id {shape_id} is not a media picture"),
+            )
+        })
+}
+
+fn media_picture_shape(slide: &CT_Slide, shape_id: u32) -> Result<&CT_Picture> {
+    slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_id() == Some(shape_id))
+        .and_then(|child| match child {
+            ShapeTreeChild::Picture(picture) if picture.media.is_some() => Some(picture),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            invalid_media_mutation(
+                "inspect media",
+                format!("shape id {shape_id} is not a media picture"),
+            )
+        })
+}
+
+fn slide_relationship_ids(slide: &CT_Slide) -> Result<HashSet<String>> {
+    let xml = slide
+        .to_xml()
+        .map_err(|error| invalid_media_mutation("inspect media references", error.to_string()))?;
+    relationship_ids(&xml)
+        .map(|ids| ids.into_iter().collect())
+        .map_err(|error| invalid_media_mutation("inspect media references", error.to_string()))
+}
+
+fn media_playback_settings(
+    picture: &CT_Picture,
+    timing: Option<&CT_Timing>,
+    shape_id: u32,
+) -> (MediaPlaybackSettings, Vec<MediaDiagnostic>) {
+    let mut settings = MediaPlaybackSettings::default();
+    (settings.trim_start_ms, settings.trim_end_ms) = picture.media_trim_bounds();
+    let mut diagnostics = Vec::new();
+    let Some(timing) = timing else {
+        diagnostics.push(MediaDiagnostic::MissingPlaybackTiming);
+        return (settings, diagnostics);
+    };
+    if let Some(media) = timing.media_for_shape(shape_id) {
+        settings.volume = media.common.volume.unwrap_or(100_000);
+        settings.looped = media.common.looped;
+        settings.show_when_stopped = matches!(
+            media.common.display,
+            Some(MediaDisplayPolicy::ShowWhenStopped)
+        );
+    } else {
+        diagnostics.push(MediaDiagnostic::MissingPlaybackTiming);
+    }
+    if let Some(trigger) = timing.media_playback_trigger_for_shape(shape_id) {
+        settings.trigger = trigger;
+    }
+    if let Some(command) = timing.media_commands_for_shape(shape_id).first()
+        && let MediaCommandKind::Other(command) = &command.command
+    {
+        diagnostics.push(MediaDiagnostic::UnsupportedPlaybackCommand {
+            command: command.clone(),
+        });
+    }
+    (settings, diagnostics)
+}
+
+fn validate_media_settings(settings: MediaPlaybackSettings) -> Result<()> {
+    if settings.volume > 100_000 {
+        return Err(invalid_media_mutation(
+            "configure media",
+            "volume must be between 0 and 100000",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_media_source(source: MediaSourceInput<'_>) -> Result<()> {
+    let (bytes, filename, target, content_type) = match source {
+        MediaSourceInput::Embedded(input) => (
+            Some(input.bytes),
+            Some(input.filename),
+            None,
+            input.content_type,
+        ),
+        MediaSourceInput::Linked {
+            target,
+            content_type,
+        } => (None, None, Some(target), content_type),
+    };
+    if !is_safe_content_type(content_type) {
+        return Err(invalid_media_mutation(
+            "configure media",
+            "content type must be an explicit MIME value",
+        ));
+    }
+    if let Some(target) = target
+        && (target.is_empty() || target.bytes().any(|byte| byte.is_ascii_control()))
+    {
+        return Err(invalid_media_mutation(
+            "configure media",
+            "linked target must be non-empty and contain no control characters",
+        ));
+    }
+    if let (Some(bytes), Some(filename)) = (bytes, filename) {
+        safe_media_extension(filename)?;
+        if audio_video_signature_matches(bytes, content_type) == Some(false) {
+            return Err(invalid_media_mutation(
+                "configure media",
+                format!("{filename} bytes do not match {content_type}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn safe_media_extension(filename: &str) -> Result<String> {
+    let extension = filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= 16
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+        .ok_or_else(|| {
+            invalid_media_mutation(
+                "configure media",
+                format!("{filename} requires a safe filename extension"),
+            )
+        })?;
+    Ok(extension.to_ascii_lowercase())
+}
+
+fn is_known_media_content_type(content_type: &str) -> bool {
+    audio_video_signature_matches(&[], content_type).is_some()
+}
+
+fn add_media_relationships(
+    package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    slide_part: &str,
+    relationships: &mut Relationships,
+    kind: MediaKind,
+    source: MediaSourceInput<'_>,
+    include_office_media: bool,
+) -> Result<(String, Option<String>, PictureMediaSource)> {
+    match source {
+        MediaSourceInput::Embedded(input) => {
+            let extension = safe_media_extension(input.filename)?;
+            let media_part =
+                media_store.insert_explicit(package, input.bytes, &extension, input.content_type);
+            let target = relative_part_target(slide_part, &media_part);
+            let standard = relationships.add(media_relationship_type(kind), &target);
+            let microsoft = include_office_media
+                .then(|| relationships.add(rel_types::POWERPOINT_MEDIA, &target));
+            Ok((
+                standard.clone(),
+                microsoft,
+                PictureMediaSource::Embedded {
+                    relationship_id: standard,
+                },
+            ))
+        }
+        MediaSourceInput::Linked { target, .. } => {
+            let standard = relationships.add_external(media_relationship_type(kind), target);
+            let microsoft = include_office_media
+                .then(|| relationships.add_external(rel_types::POWERPOINT_MEDIA, target));
+            Ok((
+                standard.clone(),
+                microsoft,
+                PictureMediaSource::Linked {
+                    relationship_id: standard,
+                },
+            ))
+        }
     }
 }
 

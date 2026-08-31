@@ -128,7 +128,7 @@ COMMENTS              // Word comments part
 // PresentationML
 SLIDE, SLIDE_LAYOUT, SLIDE_MASTER, NOTES_SLIDE, NOTES_MASTER,
 PRES_PROPS, VIEW_PROPS, TABLE_STYLES, HANDOUT_MASTER,
-POWERPOINT_COMMENTS, POWERPOINT_AUTHORS
+POWERPOINT_COMMENTS, POWERPOINT_AUTHORS, AUDIO, VIDEO, POWERPOINT_MEDIA
 ```
 
 A `content_types` constants module is added alongside, so neither format crate
@@ -285,7 +285,8 @@ docx                      pptx
 /word/embeddings/         /ppt/notesSlides/notesSlideN.xml
   WorkbookN.xlsx          /ppt/theme/themeN.xml
 /word/comments.xml        /ppt/media/imageN.ext
-/word/commentsExtended.xml /ppt/charts/chartN.xml
+/word/commentsExtended.xml /ppt/media/mediaN.ext
+                          /ppt/charts/chartN.xml
                           /ppt/embeddings/WorkbookN.xlsx
                           /ppt/authors.xml
                           /ppt/comments/commentN.xml
@@ -305,7 +306,8 @@ all serialize successfully.
 
 ## Media
 
-`oxml-media` owns everything about an image byte string.
+`oxml-media` owns image-byte interpretation and bounded, format-neutral media
+classification and naming.
 
 ```rust
 pub enum ImageFormat { Png, Jpeg, Gif, Bmp, Tiff, Webp, Svg, Emf, Wmf }
@@ -348,6 +350,11 @@ filename extension, so a `.png` that is really a JPEG receives the JPEG
 extension and content type. Unknown bytes fall back through a recognised
 filename extension and finally to PNG for compatibility.
 
+Audio and video helpers keep safe MIME grammar strict while comparing known
+type and subtype names case-insensitively. MP3, WAV, and ISO base media inputs
+must carry their expected container signature. Unknown safe content types and
+extensions remain opaque payloads rather than acquiring a decoder claim.
+
 `rdocx::Document` scans existing `/word/media/imageN.ext` parts into a
 `MediaNamer` when it opens. Every body, header, footer, and raw-XML image path
 uses the allocator and registers the sniffed canonical extension and content
@@ -388,6 +395,20 @@ only when no remaining internal package relationship reaches it. Pre-existing
 orphan media outside that candidate set is left untouched. The facade rebuilds
 its content-hash media index after the graph change, so a later insertion sees
 the surviving package state.
+
+Non-image PowerPoint media uses `/ppt/media/mediaN.ext`. Complete-byte hashes
+provide candidate buckets, and reuse requires an exact byte match plus a
+compatible extension and content type. Each picture retains independent poster
+ownership. Embedded audio and video use the standard relationship plus the
+Microsoft Office media relationship when the model requires both. Linked
+sources preserve the exact external target and never fetch it.
+
+Media facade mutations stage a cloned package and slide, serialize and reopen
+the result, and publish it only after every picture, timing, relationship,
+content-type, and payload change succeeds. Replacement preserves the shape id,
+geometry, poster, and bounded playback settings. Removal prunes only payload
+candidates made newly unreachable by relationships removed in that operation.
+Shared targets, retained raw references, and producer orphans survive.
 
 Header parsing is lifted from the PDF crate, where `jpeg_dimensions` and the
 PNG IHDR reader are currently private. The JPEG walk classifies SOI, TEM and

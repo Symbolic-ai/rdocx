@@ -44,6 +44,1466 @@ fn slide_transitions_and_morph_metadata_survive_mutation_save_and_reopen() {
 }
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[test]
+fn add_replace_extract_and_remove_embedded_media_are_atomic() {
+    use rpptx::{
+        EmbeddedMediaInput, MediaDiagnostic, MediaKind, MediaLocation, MediaPlaybackSettings,
+        MediaPlaybackTrigger, MediaPoster, MediaSourceInput,
+    };
+
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let poster = valid_one_pixel_png();
+    let initial = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .add_media(
+                0,
+                MediaKind::Video,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: b"not an mp4",
+                    filename: "broken.mp4",
+                    content_type: "video/mp4",
+                }),
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                Emu(1),
+                Emu(2),
+                Emu(300),
+                Emu(200),
+                MediaPlaybackSettings::default(),
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), initial);
+
+    let audio = b"ID3\x04\0\0opaque-mp3-payload";
+    let settings = MediaPlaybackSettings {
+        trim_start_ms: Some(875),
+        trim_end_ms: Some(125),
+        volume: 80_000,
+        looped: true,
+        show_when_stopped: true,
+        trigger: MediaPlaybackTrigger::Automatic,
+    };
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: audio,
+                filename: "sample.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(10),
+            Emu(20),
+            Emu(300),
+            Emu(200),
+            settings,
+        )
+        .unwrap();
+    let first = presentation.media(0).unwrap().remove(0);
+    assert_eq!(first.kind, MediaKind::Audio);
+    assert_eq!(first.settings, settings);
+    assert!(first.diagnostics.is_empty());
+    assert_eq!(
+        presentation.extract_media(0, first.shape_id).unwrap(),
+        Some(audio.to_vec())
+    );
+    let authored_package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let authored_slide =
+        String::from_utf8(authored_package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert!(authored_slide.contains(r#"<p14:trim st="875" end="125"/>"#));
+    assert!(!authored_slide.contains("trimStart="));
+    assert!(!authored_slide.contains("trimEnd="));
+    let first_part = match &first.source {
+        MediaLocation::Embedded { part_name, .. } => part_name.clone(),
+        MediaLocation::Linked { .. } => panic!("expected embedded audio"),
+    };
+
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: audio,
+                filename: "same.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "same-poster.png",
+            },
+            Emu(40),
+            Emu(50),
+            Emu(300),
+            Emu(200),
+            MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let media = presentation.media(0).unwrap();
+    let second = media
+        .iter()
+        .find(|item| item.shape_id != first.shape_id)
+        .unwrap();
+    assert_eq!(
+        second.source,
+        MediaLocation::Embedded {
+            part_name: first_part.clone(),
+            content_type: "audio/mpeg".to_owned(),
+        }
+    );
+
+    let before_failed_replace = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .replace_media(
+                0,
+                first.shape_id,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: b"wrong signature",
+                    filename: "wrong.wav",
+                    content_type: "audio/wav",
+                }),
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before_failed_replace);
+
+    let opaque = b"unsupported codec bytes stay exact";
+    presentation
+        .replace_media(
+            0,
+            first.shape_id,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: opaque,
+                filename: "opaque.cstm",
+                content_type: "application/x-example-media",
+            }),
+        )
+        .unwrap();
+    let replaced = presentation
+        .media(0)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.shape_id == first.shape_id)
+        .unwrap();
+    assert_eq!(replaced.settings, settings);
+    assert_eq!(
+        replaced.poster_relationship_id,
+        first.poster_relationship_id
+    );
+    assert_eq!(
+        replaced.diagnostics,
+        vec![MediaDiagnostic::UnsupportedContentType {
+            content_type: "application/x-example-media".to_owned(),
+        }]
+    );
+    assert_eq!(
+        presentation.extract_media(0, first.shape_id).unwrap(),
+        Some(opaque.to_vec())
+    );
+
+    presentation
+        .add_media(
+            0,
+            MediaKind::Video,
+            MediaSourceInput::Linked {
+                target: "https://example.invalid/movie.webm?sig=A%2FB",
+                content_type: "video/webm",
+            },
+            MediaPoster {
+                bytes: &poster,
+                filename: "linked-poster.png",
+            },
+            Emu(70),
+            Emu(80),
+            Emu(300),
+            Emu(200),
+            MediaPlaybackSettings {
+                trigger: MediaPlaybackTrigger::InClickSequence,
+                ..MediaPlaybackSettings::default()
+            },
+        )
+        .unwrap();
+    let linked = presentation
+        .media(0)
+        .unwrap()
+        .into_iter()
+        .find(|item| matches!(item.source, MediaLocation::Linked { .. }))
+        .unwrap();
+    assert_eq!(
+        linked.source,
+        MediaLocation::Linked {
+            target: "https://example.invalid/movie.webm?sig=A%2FB".to_owned(),
+        }
+    );
+    assert_eq!(
+        linked.settings.trigger,
+        MediaPlaybackTrigger::InClickSequence
+    );
+    assert_eq!(
+        presentation.extract_media(0, linked.shape_id).unwrap(),
+        None
+    );
+
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.media(0).unwrap(), presentation.media(0).unwrap());
+    assert_eq!(
+        reopened.extract_media(0, first.shape_id).unwrap(),
+        Some(opaque.to_vec())
+    );
+
+    let second_shape_id = second.shape_id;
+    presentation.remove_media(0, first.shape_id).unwrap();
+    assert_eq!(
+        presentation.extract_media(0, second_shape_id).unwrap(),
+        Some(audio.to_vec())
+    );
+    let package = OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    assert!(package.get_part(&first_part).is_some());
+    presentation.remove_media(0, second_shape_id).unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    assert!(package.get_part(&first_part).is_none());
+    presentation.remove_media(0, linked.shape_id).unwrap();
+    assert!(presentation.media(0).unwrap().is_empty());
+}
+
+#[test]
+fn media_replacement_switches_office_source_kind_in_both_directions() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+    use rpptx_oxml::picture::MediaSource as PictureMediaSource;
+
+    let poster = valid_one_pixel_png();
+    let original = b"ID3original-replacement-audio";
+    let replacement = b"ID3embedded-after-link";
+    let linked_target = "https://example.invalid/replacement.mp3?token=A%2FB";
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: original,
+                filename: "original.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let shape_id = presentation.media(0).unwrap()[0].shape_id;
+
+    presentation
+        .replace_media(
+            0,
+            shape_id,
+            MediaSourceInput::Linked {
+                target: linked_target,
+                content_type: "audio/mpeg",
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        presentation.media(0).unwrap()[0].source,
+        MediaLocation::Linked {
+            target: linked_target.to_owned()
+        }
+    );
+    assert_eq!(presentation.extract_media(0, shape_id).unwrap(), None);
+    let linked_package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let linked_slide =
+        CT_Slide::from_xml(linked_package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let linked_picture = linked_slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_id() == Some(shape_id))
+        .and_then(|child| match child {
+            ShapeTreeChild::Picture(picture) => Some(picture),
+            _ => None,
+        })
+        .unwrap();
+    let PictureMediaSource::Linked {
+        relationship_id: linked_office_id,
+    } = &linked_picture.media.as_ref().unwrap().source
+    else {
+        panic!("expected linked Office media source");
+    };
+    assert_eq!(linked_picture.office_media_relationship_ids().len(), 1);
+    let linked_relationships = linked_package.get_part_rels(SLIDE_TWO_PART).unwrap();
+    for relationship_id in [
+        linked_picture.standard_media_relationship_id().unwrap(),
+        linked_office_id,
+    ] {
+        assert_eq!(
+            linked_relationships
+                .get_by_id(relationship_id)
+                .unwrap()
+                .target_mode
+                .as_deref(),
+            Some("External")
+        );
+    }
+
+    presentation
+        .replace_media(
+            0,
+            shape_id,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: replacement,
+                filename: "replacement.mp3",
+                content_type: "audio/mpeg",
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        presentation.extract_media(0, shape_id).unwrap().as_deref(),
+        Some(replacement.as_slice())
+    );
+    let embedded_package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let embedded_slide =
+        CT_Slide::from_xml(embedded_package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let embedded_picture = embedded_slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_id() == Some(shape_id))
+        .and_then(|child| match child {
+            ShapeTreeChild::Picture(picture) => Some(picture),
+            _ => None,
+        })
+        .unwrap();
+    let PictureMediaSource::Embedded {
+        relationship_id: embedded_office_id,
+    } = &embedded_picture.media.as_ref().unwrap().source
+    else {
+        panic!("expected embedded Office media source");
+    };
+    assert_eq!(embedded_picture.office_media_relationship_ids().len(), 1);
+    let embedded_relationships = embedded_package.get_part_rels(SLIDE_TWO_PART).unwrap();
+    assert!(
+        embedded_relationships
+            .items
+            .iter()
+            .all(|relationship| relationship.target != linked_target)
+    );
+    for relationship_id in [
+        embedded_picture.standard_media_relationship_id().unwrap(),
+        embedded_office_id,
+    ] {
+        assert_eq!(
+            embedded_relationships
+                .get_by_id(relationship_id)
+                .unwrap()
+                .target_mode,
+            None
+        );
+    }
+}
+
+#[test]
+fn media_replacement_preserves_unrelated_raw_standard_relationship_references() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let poster = valid_one_pixel_png();
+    let original = b"ID3raw-reference-original";
+    let linked_target = "https://example.invalid/raw-reference-replacement.mp3";
+    let mut authored = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    authored
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: original,
+                filename: "original.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let media = authored.media(0).unwrap().remove(0);
+    let shape_id = media.shape_id;
+    let old_part = match media.source {
+        MediaLocation::Embedded { part_name, .. } => part_name,
+        MediaLocation::Linked { .. } => panic!("expected embedded media"),
+    };
+
+    let mut package = OpcPackage::from_reader(Cursor::new(authored.to_bytes().unwrap())).unwrap();
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let picture = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_id() == Some(shape_id))
+        .and_then(|child| match child {
+            ShapeTreeChild::Picture(picture) => Some(picture),
+            _ => None,
+        })
+        .unwrap();
+    let old_standard_id = picture.standard_media_relationship_id().unwrap().to_owned();
+    let marker = format!(r#"<a:audioFile r:link="{old_standard_id}"/>"#);
+    let raw_reference = format!(
+        r#"<a:extLst data-f215='keep'><a:ext uri="{{F215-RAW-RELATIONSHIP}}"><a:hlinkClick r:id="{old_standard_id}"/></a:ext></a:extLst>"#
+    );
+    let slide_xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert_eq!(slide_xml.matches(&marker).count(), 1);
+    package.set_part(
+        SLIDE_TWO_PART,
+        slide_xml
+            .replacen(&marker, &format!("{marker}{raw_reference}"), 1)
+            .into_bytes(),
+    );
+
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .replace_media(
+            0,
+            shape_id,
+            MediaSourceInput::Linked {
+                target: linked_target,
+                content_type: "audio/mpeg",
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        presentation.media(0).unwrap()[0].source,
+        MediaLocation::Linked {
+            target: linked_target.to_owned(),
+        }
+    );
+    let replaced = OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let replaced_slide =
+        String::from_utf8(replaced.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert!(replaced_slide.contains(&raw_reference));
+    assert!(
+        replaced
+            .get_part_rels(SLIDE_TWO_PART)
+            .unwrap()
+            .get_by_id(&old_standard_id)
+            .is_some()
+    );
+    assert_eq!(replaced.get_part(&old_part), Some(original.as_slice()));
+}
+
+#[test]
+fn standard_only_media_replacement_rewrites_only_the_standard_relationship() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let poster = valid_one_pixel_png();
+    let original = b"ID3standard-only-original";
+    let replacement = b"ID3standard-only-replacement";
+    let linked_target = "https://example.invalid/standard-only.mp3?token=A%2FB";
+    let mut authored = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    authored
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: original,
+                filename: "original.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let shape_id = authored.media(0).unwrap()[0].shape_id;
+    let mut package = OpcPackage::from_reader(Cursor::new(authored.to_bytes().unwrap())).unwrap();
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let picture = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_id() == Some(shape_id))
+        .and_then(|child| match child {
+            ShapeTreeChild::Picture(picture) => Some(picture),
+            _ => None,
+        })
+        .unwrap();
+    let office_id = picture.office_media_relationship_ids()[0].clone();
+    let extension = format!(
+        r#"<p:extLst><p:ext uri="{{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}}"><p14:media r:embed="{office_id}"/></p:ext></p:extLst>"#
+    );
+    let slide_xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    assert_eq!(slide_xml.matches(&extension).count(), 1);
+    package.set_part(
+        SLIDE_TWO_PART,
+        slide_xml.replacen(&extension, "", 1).into_bytes(),
+    );
+    package
+        .part_rels
+        .get_mut(SLIDE_TWO_PART)
+        .unwrap()
+        .items
+        .retain(|relationship| relationship.id != office_id);
+
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert_eq!(
+        presentation.extract_media(0, shape_id).unwrap().as_deref(),
+        Some(original.as_slice())
+    );
+    presentation
+        .replace_media(
+            0,
+            shape_id,
+            MediaSourceInput::Linked {
+                target: linked_target,
+                content_type: "audio/mpeg",
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        presentation.media(0).unwrap()[0].source,
+        MediaLocation::Linked {
+            target: linked_target.to_owned()
+        }
+    );
+    assert_eq!(presentation.extract_media(0, shape_id).unwrap(), None);
+    let linked_package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let linked_relationships = linked_package.get_part_rels(SLIDE_TWO_PART).unwrap();
+    assert!(
+        linked_relationships
+            .get_all_by_type(rel_types::POWERPOINT_MEDIA)
+            .is_empty()
+    );
+    let linked_standard = linked_relationships.get_all_by_type(rel_types::AUDIO);
+    assert_eq!(linked_standard.len(), 1);
+    assert_eq!(linked_standard[0].target, linked_target);
+    assert_eq!(linked_standard[0].target_mode.as_deref(), Some("External"));
+    assert!(
+        !String::from_utf8(linked_package.get_part(SLIDE_TWO_PART).unwrap().to_vec())
+            .unwrap()
+            .contains("p14:media")
+    );
+
+    let before_failed_replace = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .replace_media(
+                0,
+                shape_id,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: b"not a wave",
+                    filename: "invalid.wav",
+                    content_type: "audio/wav",
+                }),
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before_failed_replace);
+
+    presentation
+        .replace_media(
+            0,
+            shape_id,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: replacement,
+                filename: "replacement.mp3",
+                content_type: "audio/mpeg",
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        presentation.extract_media(0, shape_id).unwrap().as_deref(),
+        Some(replacement.as_slice())
+    );
+    let embedded_package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let embedded_relationships = embedded_package.get_part_rels(SLIDE_TWO_PART).unwrap();
+    assert!(
+        embedded_relationships
+            .get_all_by_type(rel_types::POWERPOINT_MEDIA)
+            .is_empty()
+    );
+    let embedded_standard = embedded_relationships.get_all_by_type(rel_types::AUDIO);
+    assert_eq!(embedded_standard.len(), 1);
+    assert_eq!(embedded_standard[0].target_mode, None);
+    assert!(
+        !String::from_utf8(embedded_package.get_part(SLIDE_TWO_PART).unwrap().to_vec())
+            .unwrap()
+            .contains("p14:media")
+    );
+}
+
+#[test]
+fn dual_source_removal_drops_both_office_relationships_and_keeps_shared_payloads() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let payload = b"ID3dual-source-shared-audio";
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    for left in [Emu(1), Emu(40)] {
+        presentation
+            .add_media(
+                0,
+                MediaKind::Audio,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: payload,
+                    filename: "dual.mp3",
+                    content_type: "audio/mpeg",
+                }),
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                left,
+                Emu(2),
+                Emu(30),
+                Emu(20),
+                rpptx::MediaPlaybackSettings::default(),
+            )
+            .unwrap();
+    }
+    let media = presentation.media(0).unwrap();
+    let first_shape_id = media[0].shape_id;
+    let second_shape_id = media[1].shape_id;
+    let shared_part = match &media[0].source {
+        MediaLocation::Embedded { part_name, .. } => part_name.clone(),
+        MediaLocation::Linked { .. } => panic!("expected embedded media"),
+    };
+    let mut package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let first_picture = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| child.non_visual_id() == Some(first_shape_id))
+        .and_then(|child| match child {
+            ShapeTreeChild::Picture(picture) => Some(picture),
+            _ => None,
+        })
+        .unwrap();
+    let embedded_office_id = first_picture.office_media_relationship_ids()[0].clone();
+    let first_standard_id = first_picture
+        .standard_media_relationship_id()
+        .unwrap()
+        .to_owned();
+    let first_poster_id = first_picture
+        .media
+        .as_ref()
+        .unwrap()
+        .poster_relationship_id
+        .as_ref()
+        .unwrap()
+        .clone();
+    let linked_office_id = package
+        .part_rels
+        .get_mut(SLIDE_TWO_PART)
+        .unwrap()
+        .add_external(
+            rel_types::POWERPOINT_MEDIA,
+            "https://example.invalid/producer-link.mp3",
+        );
+    let slide_xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let source_attribute = format!(r#"r:embed="{embedded_office_id}""#);
+    assert_eq!(slide_xml.matches(&source_attribute).count(), 1);
+    let dual_attribute = format!(r#"r:embed="{embedded_office_id}" r:link="{linked_office_id}""#);
+    package.set_part(
+        SLIDE_TWO_PART,
+        slide_xml
+            .replacen(&source_attribute, &dual_attribute, 1)
+            .into_bytes(),
+    );
+
+    let dual_bytes = package_bytes(package);
+    let replacement = b"ID3dual-source-replacement-audio";
+    let mut replacement_case = Presentation::from_bytes(&dual_bytes).unwrap();
+    replacement_case
+        .replace_media(
+            0,
+            first_shape_id,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: replacement,
+                filename: "replacement.mp3",
+                content_type: "audio/mpeg",
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        replacement_case
+            .extract_media(0, first_shape_id)
+            .unwrap()
+            .as_deref(),
+        Some(replacement.as_slice())
+    );
+    let replaced_package =
+        OpcPackage::from_reader(Cursor::new(replacement_case.to_bytes().unwrap())).unwrap();
+    let replaced_relationships = replaced_package.get_part_rels(SLIDE_TWO_PART).unwrap();
+    for relationship_id in [&embedded_office_id, &linked_office_id, &first_standard_id] {
+        assert!(replaced_relationships.get_by_id(relationship_id).is_none());
+    }
+    assert!(replaced_relationships.get_by_id(&first_poster_id).is_some());
+    assert!(replaced_package.get_part(&shared_part).is_some());
+
+    let mut dual = Presentation::from_bytes(&dual_bytes).unwrap();
+    assert_eq!(
+        dual.media(0).unwrap()[0].source,
+        MediaLocation::Linked {
+            target: "https://example.invalid/producer-link.mp3".to_owned()
+        }
+    );
+    dual.remove_media(0, first_shape_id).unwrap();
+    let after_first = OpcPackage::from_reader(Cursor::new(dual.to_bytes().unwrap())).unwrap();
+    let relationships = after_first.get_part_rels(SLIDE_TWO_PART).unwrap();
+    for relationship_id in [
+        embedded_office_id,
+        linked_office_id,
+        first_standard_id,
+        first_poster_id,
+    ] {
+        assert!(relationships.get_by_id(&relationship_id).is_none());
+    }
+    assert!(after_first.get_part(&shared_part).is_some());
+    assert_eq!(
+        dual.extract_media(0, second_shape_id).unwrap().as_deref(),
+        Some(payload.as_slice())
+    );
+
+    dual.remove_media(0, second_shape_id).unwrap();
+    let after_second = OpcPackage::from_reader(Cursor::new(dual.to_bytes().unwrap())).unwrap();
+    assert!(after_second.get_part(&shared_part).is_none());
+}
+
+#[test]
+fn embedded_audio_and_video_corpus_media_round_trip_without_duplication() {
+    use rpptx::{MediaKind, MediaLocation, MediaPlaybackSettings, MediaPlaybackTrigger};
+
+    let corpus = corpus_dir();
+    let cases = [
+        (
+            corpus.join("EmbeddedAudio.pptx"),
+            MediaKind::Audio,
+            4,
+            "/ppt/media/media1.mp3",
+            "audio/mpeg",
+            rel_types::AUDIO,
+            br#"<a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{9A81383C-4007-750D-FE55-453D231AD88A}"/>"#.as_slice(),
+        ),
+        (
+            corpus.join("EmbeddedVideo.pptx"),
+            MediaKind::Video,
+            2,
+            "/ppt/media/media1.mp4",
+            "video/mp4",
+            rel_types::VIDEO,
+            br#"<a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{A48A45DC-D4F4-4A17-9406-AF61E7DDE9CC}"/>"#.as_slice(),
+        ),
+    ];
+    if cases.iter().any(|case| !case.0.is_file()) {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required embedded-media corpus decks are missing under {}",
+            corpus.display()
+        );
+        return;
+    }
+    for (path, kind, shape_id, media_part, content_type, standard_type, creation_id) in cases {
+        let source = fs::read(&path).unwrap();
+        let original_package = OpcPackage::from_reader(Cursor::new(&source)).unwrap();
+        let presentation = Presentation::from_bytes(&source).unwrap();
+        let media = presentation.media(0).unwrap();
+        assert_eq!(media.len(), 1, "{}", path.display());
+        assert_eq!(media[0].shape_id, shape_id, "{}", path.display());
+        assert_eq!(media[0].kind, kind, "{}", path.display());
+        assert_eq!(
+            media[0].source,
+            MediaLocation::Embedded {
+                part_name: media_part.to_owned(),
+                content_type: content_type.to_owned(),
+            },
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            media[0].poster_relationship_id.as_deref(),
+            Some("rId4"),
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            media[0].settings,
+            MediaPlaybackSettings {
+                trim_start_ms: None,
+                trim_end_ms: None,
+                volume: 80_000,
+                looped: false,
+                show_when_stopped: false,
+                trigger: MediaPlaybackTrigger::InClickSequence,
+            },
+            "{}",
+            path.display()
+        );
+        assert!(media[0].diagnostics.is_empty(), "{}", path.display());
+        let expected_media_bytes = original_package.get_part(media_part).unwrap();
+        assert_eq!(
+            presentation.extract_media(0, shape_id).unwrap().as_deref(),
+            Some(expected_media_bytes),
+            "{}",
+            path.display()
+        );
+        let original_relationships = original_package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap();
+        for (id, expected_type, expected_target) in [
+            ("rId1", rel_types::POWERPOINT_MEDIA, &media_part[5..]),
+            ("rId2", standard_type, &media_part[5..]),
+            ("rId4", rel_types::IMAGE, "../media/image1.png"),
+        ] {
+            let relationship = original_relationships.get_by_id(id).unwrap();
+            assert_eq!(relationship.rel_type, expected_type, "{}", path.display());
+            let expected_target = if id == "rId4" {
+                expected_target.to_owned()
+            } else {
+                format!("../{}", expected_target)
+            };
+            assert_eq!(relationship.target, expected_target, "{}", path.display());
+        }
+        let saved = presentation.to_bytes().unwrap();
+        let saved_package = OpcPackage::from_reader(Cursor::new(&saved)).unwrap();
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened.extract_media(0, shape_id).unwrap().as_deref(),
+            Some(expected_media_bytes),
+            "{}",
+            path.display()
+        );
+        let saved_media_parts = saved_package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/media/"))
+            .count();
+        assert_eq!(saved_media_parts, 2, "{}", path.display());
+        let slide = saved_package.get_part("/ppt/slides/slide1.xml").unwrap();
+        assert!(
+            slide
+                .windows(creation_id.len())
+                .any(|value| value == creation_id)
+        );
+        let saved_relationships = saved_package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap();
+        for (id, expected_type, expected_target) in [
+            (
+                "rId1",
+                rel_types::POWERPOINT_MEDIA,
+                format!("../{}", &media_part[5..]),
+            ),
+            ("rId2", standard_type, format!("../{}", &media_part[5..])),
+            ("rId4", rel_types::IMAGE, "../media/image1.png".to_owned()),
+        ] {
+            let relationship = saved_relationships.get_by_id(id).unwrap();
+            assert_eq!(relationship.rel_type, expected_type, "{}", path.display());
+            assert_eq!(relationship.target, expected_target, "{}", path.display());
+        }
+        assert_eq!(
+            saved_package.content_types.content_type_for(media_part),
+            Some(content_type)
+        );
+    }
+}
+
+#[test]
+fn linked_media_keeps_external_targets_and_never_fetches_them() {
+    use rpptx::{
+        MediaKind, MediaLocation, MediaPlaybackSettings, MediaPlaybackTrigger, MediaPoster,
+        MediaSourceInput,
+    };
+
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let poster = valid_one_pixel_png();
+    let target = "https://127.0.0.1:9/media/movie.webm?token=A%2FB";
+    let settings = MediaPlaybackSettings {
+        trim_start_ms: Some(250),
+        trim_end_ms: Some(1_750),
+        volume: 65_000,
+        looped: true,
+        show_when_stopped: true,
+        trigger: MediaPlaybackTrigger::InClickSequence,
+    };
+    presentation
+        .add_media(
+            0,
+            MediaKind::Video,
+            MediaSourceInput::Linked {
+                target,
+                content_type: "video/webm",
+            },
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            settings,
+        )
+        .unwrap();
+    let before_save = presentation.media(0).unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    let media = reopened.media(0).unwrap().remove(0);
+    assert_eq!(reopened.media(0).unwrap(), before_save);
+    assert_eq!(
+        media.source,
+        MediaLocation::Linked {
+            target: target.to_owned()
+        }
+    );
+    assert!(media.poster_relationship_id.is_some());
+    assert_eq!(media.settings, settings);
+    assert!(media.diagnostics.is_empty());
+    assert_eq!(reopened.extract_media(0, media.shape_id).unwrap(), None);
+    let package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+    let relationships = package.get_part_rels(SLIDE_TWO_PART).unwrap();
+    let external = relationships
+        .items
+        .iter()
+        .filter(|relationship| relationship.target == target)
+        .collect::<Vec<_>>();
+    assert_eq!(external.len(), 2);
+    assert!(
+        external
+            .iter()
+            .all(|relationship| { relationship.target_mode.as_deref() == Some("External") })
+    );
+}
+
+#[test]
+fn unsupported_codec_bytes_remain_packaged_extractable_and_diagnosable() {
+    use rpptx::{EmbeddedMediaInput, MediaDiagnostic, MediaKind, MediaPoster, MediaSourceInput};
+
+    let payload = b"opaque unsupported codec payload";
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: payload,
+                filename: "payload.xyzcodec",
+                content_type: "audio/x-example-codec",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    let media = reopened.media(0).unwrap().remove(0);
+    assert_eq!(
+        media.diagnostics,
+        vec![MediaDiagnostic::UnsupportedContentType {
+            content_type: "audio/x-example-codec".to_owned()
+        }]
+    );
+    assert_eq!(
+        reopened.extract_media(0, media.shape_id).unwrap(),
+        Some(payload.to_vec())
+    );
+}
+
+#[test]
+fn media_dedup_requires_compatible_extension_and_content_type() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: &poster,
+                filename: "opaque.binmedia",
+                content_type: "application/x-opaque-media",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: &poster,
+                filename: "opaque.binmedia",
+                content_type: "audio/x-different-opaque",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(40),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+
+    let media = presentation.media(0).unwrap();
+    let (first_part, second_part) = match (&media[0].source, &media[1].source) {
+        (
+            MediaLocation::Embedded {
+                part_name: first,
+                content_type: first_type,
+            },
+            MediaLocation::Embedded {
+                part_name: second,
+                content_type: second_type,
+            },
+        ) => {
+            assert_eq!(first_type, "application/x-opaque-media");
+            assert_eq!(second_type, "audio/x-different-opaque");
+            (first.clone(), second.clone())
+        }
+        _ => panic!("expected two embedded media sources"),
+    };
+    assert_ne!(first_part, second_part);
+    assert!(first_part.ends_with(".binmedia"));
+    assert!(second_part.ends_with(".binmedia"));
+
+    let package = OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let poster_part = package
+        .get_part_rels(SLIDE_TWO_PART)
+        .unwrap()
+        .get_by_id(media[0].poster_relationship_id.as_deref().unwrap())
+        .map(|relationship| OpcPackage::resolve_rel_target(SLIDE_TWO_PART, &relationship.target))
+        .unwrap();
+    assert_ne!(first_part, poster_part);
+    assert_eq!(
+        package.content_types.content_type_for(&poster_part),
+        Some("image/png")
+    );
+}
+
+#[test]
+fn invalid_media_content_types_fail_atomically() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaPoster, MediaSourceInput};
+
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    for content_type in ["/", "audio /mpeg", "not a/type with spaces"] {
+        let before = presentation.to_bytes().unwrap();
+        assert!(
+            presentation
+                .add_media(
+                    0,
+                    MediaKind::Audio,
+                    MediaSourceInput::Embedded(EmbeddedMediaInput {
+                        bytes: b"opaque",
+                        filename: "opaque.bin",
+                        content_type,
+                    }),
+                    MediaPoster {
+                        bytes: &poster,
+                        filename: "poster.png",
+                    },
+                    Emu(1),
+                    Emu(2),
+                    Emu(30),
+                    Emu(20),
+                    rpptx::MediaPlaybackSettings::default(),
+                )
+                .is_err(),
+            "{content_type}"
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), before, "{content_type}");
+    }
+    let before = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .add_media(
+                0,
+                MediaKind::Audio,
+                MediaSourceInput::Linked {
+                    target: "https://example.invalid/audio",
+                    content_type: "audio /mpeg",
+                },
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                Emu(1),
+                Emu(2),
+                Emu(30),
+                Emu(20),
+                rpptx::MediaPlaybackSettings::default(),
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn known_media_content_types_are_case_insensitive_for_signature_validation() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .add_media(
+                0,
+                MediaKind::Audio,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: b"not an mp3",
+                    filename: "invalid.mp3",
+                    content_type: "Audio/MPEG",
+                }),
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                Emu(1),
+                Emu(2),
+                Emu(30),
+                Emu(20),
+                rpptx::MediaPlaybackSettings::default(),
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let valid = b"ID3\x04\0\0uppercase-mime";
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: valid,
+                filename: "valid.mp3",
+                content_type: "Audio/MPEG",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let media = presentation.media(0).unwrap().remove(0);
+    let MediaLocation::Embedded { content_type, .. } = &media.source else {
+        panic!("expected embedded media");
+    };
+    assert_eq!(content_type, "Audio/MPEG");
+    assert_eq!(
+        presentation.extract_media(0, media.shape_id).unwrap(),
+        Some(valid.to_vec())
+    );
+}
+
+#[test]
+fn media_removal_deletes_only_parts_owned_by_the_removed_relationships() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let payload = b"ID3shared-audio";
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    for left in [Emu(1), Emu(40)] {
+        presentation
+            .add_media(
+                0,
+                MediaKind::Audio,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: payload,
+                    filename: "shared.mp3",
+                    content_type: "audio/mpeg",
+                }),
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                left,
+                Emu(2),
+                Emu(30),
+                Emu(20),
+                rpptx::MediaPlaybackSettings::default(),
+            )
+            .unwrap();
+    }
+    let media = presentation.media(0).unwrap();
+    let part = match &media[0].source {
+        MediaLocation::Embedded { part_name, .. } => part_name.clone(),
+        MediaLocation::Linked { .. } => panic!("expected embedded media"),
+    };
+    assert_eq!(media[1].source, media[0].source);
+    presentation.remove_media(0, media[0].shape_id).unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    assert!(package.get_part(&part).is_some());
+    presentation.remove_media(0, media[1].shape_id).unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    assert!(package.get_part(&part).is_none());
+}
+
+#[test]
+fn replace_and_remove_preserve_shared_relationship_references() {
+    use std::collections::HashMap;
+
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaPoster, MediaSourceInput};
+    use rpptx_oxml::relmap::rewrite_exact_rel_ids;
+
+    let poster = valid_one_pixel_png();
+    let payload = b"ID3shared-relationship-audio";
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    for left in [Emu(1), Emu(40)] {
+        presentation
+            .add_media(
+                0,
+                MediaKind::Audio,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: payload,
+                    filename: "shared.mp3",
+                    content_type: "audio/mpeg",
+                }),
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                left,
+                Emu(2),
+                Emu(30),
+                Emu(20),
+                rpptx::MediaPlaybackSettings::default(),
+            )
+            .unwrap();
+    }
+    let media = presentation.media(0).unwrap();
+    let first_shape_id = media[0].shape_id;
+    let second_shape_id = media[1].shape_id;
+    let mut package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let pictures = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            ShapeTreeChild::Picture(picture) if picture.media.is_some() => Some(picture),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let first_standard = pictures[0]
+        .standard_media_relationship_id()
+        .unwrap()
+        .to_owned();
+    let first_microsoft = pictures[0]
+        .media
+        .as_ref()
+        .unwrap()
+        .source
+        .relationship_id()
+        .to_owned();
+    let first_poster = pictures[0]
+        .media
+        .as_ref()
+        .unwrap()
+        .poster_relationship_id
+        .as_ref()
+        .unwrap()
+        .to_owned();
+    let second_standard = pictures[1]
+        .standard_media_relationship_id()
+        .unwrap()
+        .to_owned();
+    let second_microsoft = pictures[1]
+        .media
+        .as_ref()
+        .unwrap()
+        .source
+        .relationship_id()
+        .to_owned();
+    let second_poster = pictures[1]
+        .media
+        .as_ref()
+        .unwrap()
+        .poster_relationship_id
+        .as_ref()
+        .unwrap()
+        .to_owned();
+    let replacements = HashMap::from([
+        (second_standard.clone(), first_standard.clone()),
+        (second_microsoft.clone(), first_microsoft.clone()),
+        (second_poster.clone(), first_poster.clone()),
+    ]);
+    let shared_slide =
+        rewrite_exact_rel_ids(package.get_part(SLIDE_TWO_PART).unwrap(), &replacements).unwrap();
+    package.set_part(SLIDE_TWO_PART, shared_slide);
+    package
+        .part_rels
+        .get_mut(SLIDE_TWO_PART)
+        .unwrap()
+        .items
+        .retain(|relationship| {
+            !matches!(
+                relationship.id.as_str(),
+                id if id == second_standard || id == second_microsoft || id == second_poster
+            )
+        });
+    let shared_bytes = package_bytes(package);
+
+    let mut replacement_case = Presentation::from_bytes(&shared_bytes).unwrap();
+    let replacement = b"ID3replacement-audio";
+    replacement_case
+        .replace_media(
+            0,
+            first_shape_id,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: replacement,
+                filename: "replacement.mp3",
+                content_type: "audio/mpeg",
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        replacement_case
+            .extract_media(0, first_shape_id)
+            .unwrap()
+            .as_deref(),
+        Some(replacement.as_slice())
+    );
+    assert_eq!(
+        replacement_case
+            .extract_media(0, second_shape_id)
+            .unwrap()
+            .as_deref(),
+        Some(payload.as_slice())
+    );
+
+    let mut removal_case = Presentation::from_bytes(&shared_bytes).unwrap();
+    removal_case.remove_media(0, first_shape_id).unwrap();
+    assert_eq!(
+        removal_case
+            .extract_media(0, second_shape_id)
+            .unwrap()
+            .as_deref(),
+        Some(payload.as_slice())
+    );
+    let saved = OpcPackage::from_reader(Cursor::new(removal_case.to_bytes().unwrap())).unwrap();
+    let relationships = saved.get_part_rels(SLIDE_TWO_PART).unwrap();
+    for id in [first_standard, first_microsoft, first_poster] {
+        assert!(relationships.get_by_id(&id).is_some(), "{id}");
+    }
+}
+
+#[test]
+fn duplicated_media_slides_rewrite_every_retained_relationship_id() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let payload = b"ID3duplicate-audio";
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: payload,
+                filename: "duplicate.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    presentation.duplicate_slide(0).unwrap();
+    let first = presentation.media(0).unwrap().remove(0);
+    let duplicate = presentation.media(1).unwrap().remove(0);
+    assert_ne!(first.shape_id, duplicate.shape_id);
+    assert_eq!(
+        presentation.extract_media(0, first.shape_id).unwrap(),
+        Some(payload.to_vec())
+    );
+    assert_eq!(
+        presentation.extract_media(1, duplicate.shape_id).unwrap(),
+        Some(payload.to_vec())
+    );
+    let (
+        MediaLocation::Embedded {
+            part_name: first_part,
+            ..
+        },
+        MediaLocation::Embedded {
+            part_name: duplicate_part,
+            ..
+        },
+    ) = (&first.source, &duplicate.source)
+    else {
+        panic!("expected embedded media on both slides");
+    };
+    assert_eq!(first_part, duplicate_part);
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.media(0).unwrap(), vec![first]);
+    assert_eq!(reopened.media(1).unwrap(), vec![duplicate]);
+}
+
 use oxml_chart::{AxisData, CT_ChartSpace};
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
@@ -2147,6 +3607,49 @@ fn duplicate_slide_assigns_fresh_shape_ids_and_rewrites_connector_endpoints() {
         Some(15)
     );
     assert!(!duplicate.contains(r#"<p:cNvPr id="2""#));
+    assert!(presentation.validate().is_empty());
+}
+
+#[test]
+fn duplicate_slide_rewrites_schema_shape_targets_without_touching_raw_lookalikes() {
+    let mut package = open_opc(&mutation_fixture_bytes(), "schema shape target fixture");
+    let source_xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let raw_build_lookalikes = r#"<x:bldOleChart xmlns:x="urn:f215" spid="2" keep='A&#x20;B'/><p:bldOleChart xmlns:x="urn:f215" x:spid="2"/>"#;
+    let raw_ink_lookalikes = r#"<x:inkTgt xmlns:x="urn:f215" spid="2" keep='C&#x20;D'/><x:wrapper xmlns:x="urn:f215"><p:inkTgt x:spid="2"/></x:wrapper>"#;
+    let timing = format!(
+        r#"<p:timing><p:tnLst><p:set><p:cBhvr><p:cTn id="1"/><p:tgtEl><p:inkTgt spid="2"/>{raw_ink_lookalikes}</p:tgtEl></p:cBhvr></p:set></p:tnLst><p:bldLst><p:bldOleChart spid="2" grpId="7"/>{raw_build_lookalikes}</p:bldLst></p:timing>"#
+    );
+    assert!(!source_xml.contains("<p:timing"));
+    package.set_part(
+        SLIDE_TWO_PART,
+        source_xml
+            .replacen("</p:sld>", &format!("{timing}</p:sld>"), 1)
+            .into_bytes(),
+    );
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    presentation
+        .duplicate_slide(0)
+        .expect("duplicate schema shape targets");
+
+    let package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "duplicated schema shape targets",
+    );
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let duplicate_relationship = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .get_by_id(&model.slide_ids[1].relationship_id)
+        .unwrap();
+    let duplicate_part =
+        OpcPackage::resolve_rel_target(PRESENTATION_PART, &duplicate_relationship.target);
+    let duplicate = String::from_utf8(package.get_part(&duplicate_part).unwrap().to_vec()).unwrap();
+    assert!(duplicate.contains(r#"<p:cNvPr id="9" name="old""#));
+    assert!(duplicate.contains(r#"<p:inkTgt spid="9"/>"#));
+    assert!(duplicate.contains(r#"<p:bldOleChart spid="9" grpId="7"/>"#));
+    assert!(duplicate.contains(raw_ink_lookalikes));
+    assert!(duplicate.contains(raw_build_lookalikes));
     assert!(presentation.validate().is_empty());
 }
 
