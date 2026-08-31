@@ -87,6 +87,24 @@ impl<'a> HyperlinkRef<'a> {
         self.inner().anchor.as_deref()
     }
 
+    /// The optional hyperlink tooltip.
+    pub fn tooltip(&self) -> Option<&'a str> {
+        self.inner().tooltip.as_deref()
+    }
+
+    /// The optional location in the hyperlink target document.
+    pub fn doc_location(&self) -> Option<&'a str> {
+        self.inner().doc_location.as_deref()
+    }
+
+    /// Whether the hyperlink retains attributes outside the modeled reader API.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.inner()
+            .extra_attributes
+            .iter()
+            .any(|(name, _)| name != "xmlns" && !name.starts_with("xmlns:"))
+    }
+
     /// Get the combined text of the hyperlink runs.
     pub fn text(&self) -> String {
         let hyperlink = self.inner();
@@ -344,11 +362,11 @@ impl<'a> Paragraph<'a> {
         self.inner.hyperlinks.push(HyperlinkSpan {
             rel_id: Some(relationship_id.to_string()),
             anchor: None,
+            tooltip: tooltip.map(str::to_owned),
+            doc_location: None,
             run_start,
             run_end: run_start + 1,
-            extra_attributes: tooltip
-                .map(|tooltip| vec![("w:tooltip".to_string(), tooltip.to_string())])
-                .unwrap_or_default(),
+            extra_attributes: Vec::new(),
             extra_xml: Vec::new(),
             preserved_raw_before: None,
         });
@@ -1252,5 +1270,35 @@ impl<'a> ParagraphRef<'a> {
             .as_ref()
             .and_then(|ppr| ppr.shading.as_ref())
             .and_then(|shd| shd.fill.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hyperlink_reader_exposes_modeled_and_unmodeled_attributes() {
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("linked");
+        paragraph.hyperlinks.push(HyperlinkSpan {
+            rel_id: Some("rId1".to_owned()),
+            anchor: None,
+            tooltip: Some("Open link".to_owned()),
+            doc_location: Some("section-two".to_owned()),
+            run_start: 0,
+            run_end: 1,
+            extra_attributes: vec![("w:history".to_owned(), "1".to_owned())],
+            extra_xml: Vec::new(),
+            preserved_raw_before: None,
+        });
+        let hyperlink = HyperlinkRef {
+            paragraph: &paragraph,
+            index: 0,
+        };
+
+        assert_eq!(hyperlink.tooltip(), Some("Open link"));
+        assert_eq!(hyperlink.doc_location(), Some("section-two"));
+        assert!(hyperlink.has_unmodeled_semantic_attributes());
     }
 }

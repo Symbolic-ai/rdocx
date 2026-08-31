@@ -2314,6 +2314,8 @@ fn render_paragraph_projection(paragraph: &CT_P) -> CT_P {
             .map(|hyperlink| HyperlinkSpan {
                 rel_id: hyperlink.rel_id.clone(),
                 anchor: hyperlink.anchor.clone(),
+                tooltip: hyperlink.tooltip.clone(),
+                doc_location: hyperlink.doc_location.clone(),
                 run_start: hyperlink.run_start,
                 run_end: hyperlink.run_end,
                 extra_attributes: Vec::new(),
@@ -4181,6 +4183,8 @@ mod tests {
         paragraph.hyperlinks.push(HyperlinkSpan {
             rel_id: Some("rId1".to_owned()),
             anchor: None,
+            tooltip: None,
+            doc_location: None,
             run_start: 0,
             run_end: usize::MAX,
             extra_attributes: Vec::new(),
@@ -4795,6 +4799,8 @@ mod tests {
         paragraph.inner.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("bookmark".to_owned()),
+            tooltip: None,
+            doc_location: None,
             run_start: internal_start,
             run_end: internal_start + 1,
             extra_attributes: Vec::new(),
