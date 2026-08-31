@@ -1478,6 +1478,7 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
                     ilvl: level.ilvl,
                     start: level.start,
                     num_fmt: level.num_fmt.clone(),
+                    p_style: None,
                     suffix: level.suffix,
                     lvl_text: None,
                     lvl_jc: level.lvl_jc,
@@ -1489,7 +1490,9 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
                     rpr_raw: None,
                 })
                 .collect(),
+            nsid: None,
             multi_level_type: None,
+            tmpl: None,
             extra_xml: Vec::new(),
             extra_attributes: Vec::new(),
         })
