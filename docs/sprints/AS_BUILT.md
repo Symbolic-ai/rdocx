@@ -10482,3 +10482,58 @@ both below 10 MiB.
 `MediaFallbackPolicy` directly. Preserve the single shared assembly, the
 source-scoped diagnostic identity, deterministic font mode, fixed 150 dpi
 goldens, and the unchanged legacy facade paths.
+
+### F-227, Animated GIF and video export
+
+**Sprint.** S61
+**Completed.** 2026-08-31
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native presentation facade now exports bounded
+deterministic animated GIF and Motion JPEG AVI bytes from explicit slide
+segments. Each segment carries its own timeline position, click count,
+transition source, and media fallback policy. GIF export preserves cumulative
+centisecond timing and explicit loop behavior. AVI export writes an MJPEG
+stream with exact RIFF headers, frame chunks, indexes, duration, dimensions,
+and diagnostics.
+
+**Non-obvious choices.** One prepared package, resolver, media, layout, and
+font context is reused for the whole export. Each timestamp resolves and
+renders one frame, feeds it directly to a capped encoder, and drops it before
+the next sample. GIF and JPEG writes fail at the configured byte cap. AVI
+patches sizes in one seekable capped buffer and retains only bounded index
+metadata. No subprocess or external codec runtime is used.
+
+**Deviations from the design plan.** None. The approved private
+`crates/rpptx/src/animation.rs` module contains the concrete exporter. The
+workspace adds `gif` 0.14.2 and enables the existing `jpeg-encoder` standard
+library writer at the `rpptx` facade edge. No new crate, trait, generic,
+feature flag, integration binary, or binary fixture was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named
+`animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest`
+gate passed unchanged on macOS and Linux arm64 with Rust 1.97.1. Its six
+timestamps, decoded GIF frame hashes, loop count, dimensions, ordered
+diagnostics, and GIF container hash `1682901777930996407` match the reviewed
+manifest. The AVI gate independently parses every RIFF and LIST boundary,
+header, stream rate, frame chunk, index entry, JPEG payload, decoded frame,
+duration, dimension, and ordered diagnostic. Its exact container hash is
+`6525351511319371367`. Negative mutations cover every encoded and decoded AVI
+identity plus diagnostic contents and order. Regressions prove real
+two-slide fade, click-triggered shape and media state, bounded 50-frame
+streaming, immediate output-cap rejection, and quality sensitivity. Full
+integrated verification passed all changed crates, the workspace, no-default,
+WASM, rustdoc, README, dependency, corpus, supply-chain, and 22-package dry-run
+gates. Every archive remained below 10 MiB, with `rpptx` at 180,361 bytes.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve explicit segment ownership, exact
+integer timestamp sampling, cumulative GIF delays, one-frame resolution, and
+the native bounded encoder path. Treat the macOS and Linux manifest as one
+identity contract. Platform-specific container, payload, decoded-pixel, or
+diagnostic constants are not acceptable.

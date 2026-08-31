@@ -37,7 +37,7 @@ codecs stay packaged, extractable, visible through fallbacks, and diagnosed.
 |------|-------|------|--------|-------|
 | F-215 | Audio and video package model | L | done | - |
 | F-216 | Media poster and playback rendering | M | done | - |
-| F-227 | Animated GIF and video export | L | in-progress | codex |
+| F-227 | Animated GIF and video export | L | done | - |
 
 ## Sequencing note
 

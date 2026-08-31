@@ -355,6 +355,7 @@ defended.
 | F-214 | S60 | L | 4 | 1 | 2026-08-31 | Added deterministic timeline evaluation, transition rendering, and bounded morph composition without changing static output |
 | F-215 | S61 | L | 4 | 1 | 2026-08-31 | Added relationship-safe embedded and linked audio and video inspection, atomic mutation, extraction, and exact package preservation |
 | F-216 | S61 | M | 2 | 1 | 2026-08-31 | Added deterministic media poster and labelled fallback rendering with synchronized playback state and unchanged legacy entry points |
+| F-227 | S61 | L | 4 | 1 | 2026-08-31 | Added bounded deterministic animated GIF and Motion JPEG AVI export with exact cross-platform manifests |
 
 ## Velocity
 
