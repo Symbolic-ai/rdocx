@@ -11939,6 +11939,38 @@ mod watermark_tests {
 }
 
 #[cfg(test)]
+mod reader_revision_tests {
+    use super::*;
+
+    #[test]
+    fn revision_reader_exposes_tracked_insertion_paragraph_items() {
+        let xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:ins w:id="7" w:author="Ada"><w:r><w:t>before</w:t></w:r><w:hyperlink r:id="rId9"><w:r><w:t>linked</w:t></w:r></w:hyperlink></w:ins></w:p></w:body></w:document>"#;
+        let mut document = Document::new();
+        document.document = CT_Document::from_xml(xml).expect("document parses");
+        let crate::BodyItemRef::Paragraph(paragraph) =
+            document.body_items().next().expect("paragraph body item")
+        else {
+            panic!("expected paragraph");
+        };
+        let crate::ParagraphItemRef::Revision(revision) =
+            paragraph.items().next().expect("revision paragraph item")
+        else {
+            panic!("expected revision");
+        };
+        let insertion = revision
+            .insertion_paragraph()
+            .expect("insertion paragraph projection");
+        let items = insertion.items().collect::<Vec<_>>();
+
+        assert!(matches!(items[0], crate::ParagraphItemRef::Run(_)));
+        let crate::ParagraphItemRef::Hyperlink(link) = &items[1] else {
+            panic!("expected hyperlink");
+        };
+        assert_eq!(link.relationship_id(), Some("rId9"));
+    }
+}
+
+#[cfg(test)]
 mod odttf_tests {
     use super::*;
 
