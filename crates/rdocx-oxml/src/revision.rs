@@ -11,7 +11,7 @@ use crate::raw_xml::capture_empty_element;
 use crate::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CellContent};
 use crate::text::{CT_P, CT_R, hyperlink_revision_index};
 
-const MAX_REVISION_NESTING_DEPTH: usize = 64;
+const MAX_REVISION_NESTING_DEPTH: usize = 32;
 
 /// The modeled tracked-change element kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
