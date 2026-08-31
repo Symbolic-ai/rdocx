@@ -7,6 +7,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::error::Result;
 use crate::namespace::matches_local_name;
+use crate::numbering::namespace_bindings;
 use crate::raw_xml::capture_element;
 use crate::units::Emu;
 
@@ -1098,6 +1099,39 @@ fn chart_relationship_id(xml: &[u8]) -> Result<Option<String>> {
     }
 }
 
+fn image_relationship_ids(xml: &[u8]) -> Result<(String, Option<String>)> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut embed_id = String::new();
+    let mut link_id = None;
+    loop {
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element)
+                if namespace_matches(&namespace, drawing_ns::A, b"a")
+                    && matches_local_name(element.name().as_ref(), b"blip") =>
+            {
+                for attribute in element.attributes() {
+                    let attribute = attribute?;
+                    let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                    if !namespace_matches(&namespace, drawing_ns::R, b"r") {
+                        continue;
+                    }
+                    let value = std::str::from_utf8(&attribute.value)?.to_owned();
+                    match local.as_ref() {
+                        b"embed" => embed_id = value,
+                        b"link" => link_id = Some(value),
+                        _ => {}
+                    }
+                }
+            }
+            Event::Eof => return Ok((embed_id, link_id)),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 fn graphic_data_uri_is_chart(element: &BytesStart<'_>) -> Result<bool> {
     for attribute in element.attributes() {
         let attribute = attribute?;
@@ -1240,6 +1274,13 @@ impl CT_Drawing {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        Self::from_xml_with_prefixes(reader, &[format!("\0r\0{}", drawing_ns::R)])
+    }
+
+    pub(crate) fn from_xml_with_prefixes(
+        reader: &mut Reader<&[u8]>,
+        prefixes: &[String],
+    ) -> Result<Self> {
         let mut inline = None;
         let mut anchor = None;
         let mut buf = Vec::new();
@@ -1251,7 +1292,11 @@ impl CT_Drawing {
                     if matches_local_name(name.as_ref(), b"inline") {
                         // Capture full raw XML, then re-parse for structured fields
                         let raw = capture_element(reader, e)?;
-                        let mut re_reader = Reader::from_reader(raw.as_slice());
+                        let scoped_raw = crate::text::raw_with_external_bindings(
+                            &raw,
+                            &namespace_bindings(prefixes),
+                        )?;
+                        let mut re_reader = Reader::from_reader(scoped_raw.as_slice());
                         re_reader.config_mut().trim_text(true);
                         // Skip to the <wp:inline> start
                         let mut rbuf = Vec::new();
@@ -1261,7 +1306,9 @@ impl CT_Drawing {
                                     if matches_local_name(ie.name().as_ref(), b"inline") =>
                                 {
                                     let mut inl = CT_Inline::from_xml(&mut re_reader)?;
-                                    inl.chart_rel_id = chart_relationship_id(&raw)?;
+                                    (inl.embed_id, inl.link_id) =
+                                        image_relationship_ids(&scoped_raw)?;
+                                    inl.chart_rel_id = chart_relationship_id(&scoped_raw)?;
                                     inl.raw_xml = Some(raw);
                                     inline = Some(inl);
                                     break;
@@ -1275,7 +1322,11 @@ impl CT_Drawing {
                     } else if matches_local_name(name.as_ref(), b"anchor") {
                         // Capture full raw XML, then re-parse for structured fields
                         let raw = capture_element(reader, e)?;
-                        let mut re_reader = Reader::from_reader(raw.as_slice());
+                        let scoped_raw = crate::text::raw_with_external_bindings(
+                            &raw,
+                            &namespace_bindings(prefixes),
+                        )?;
+                        let mut re_reader = Reader::from_reader(scoped_raw.as_slice());
                         re_reader.config_mut().trim_text(true);
                         let mut rbuf = Vec::new();
                         loop {
@@ -1284,7 +1335,9 @@ impl CT_Drawing {
                                     if matches_local_name(ie.name().as_ref(), b"anchor") =>
                                 {
                                     let mut anc = CT_Anchor::from_xml(&mut re_reader, ie)?;
-                                    anc.chart_rel_id = chart_relationship_id(&raw)?;
+                                    (anc.embed_id, anc.link_id) =
+                                        image_relationship_ids(&scoped_raw)?;
+                                    anc.chart_rel_id = chart_relationship_id(&scoped_raw)?;
                                     anc.raw_xml = Some(raw);
                                     anchor = Some(anc);
                                     break;
@@ -1394,6 +1447,25 @@ mod tests {
             r#"<wp:anchor><wp:extent cx="10" cy="20"/><a:blip r:link="rId8"/></wp:anchor></w:drawing>"#,
         ));
         assert_eq!(anchor.anchor.unwrap().link_id.as_deref(), Some("rId8"));
+    }
+
+    #[test]
+    fn linked_image_relationships_require_the_office_relationship_namespace() {
+        let foreign = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+            r#"<wp:inline><a:blip xmlns:x="urn:producer" x:link="rIdBad"/></wp:inline></w:drawing>"#,
+        ));
+        assert!(foreign.inline.unwrap().link_id.is_none());
+
+        let aliased = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+            r#"<wp:inline><a:blip xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships" q:link="rId9"/></wp:inline></w:drawing>"#,
+        ));
+        assert_eq!(aliased.inline.unwrap().link_id.as_deref(), Some("rId9"));
     }
 
     #[test]
