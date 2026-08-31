@@ -82,6 +82,12 @@ pub struct UnsupportedXmlRef<'a> {
 }
 
 impl<'a> UnsupportedXmlRef<'a> {
+    /// Inspect preserved reader-item bytes using the same unsupported XML
+    /// projection as body compatibility items.
+    pub fn from_bytes(raw: &'a [u8]) -> Self {
+        Self::raw(raw, &[])
+    }
+
     fn raw(raw: &'a [u8], inherited_namespaces: &'a [(String, String)]) -> Self {
         let names = raw_element_names(raw);
         let namespace_uri = names.as_ref().and_then(|(name, _)| {
@@ -11510,7 +11516,7 @@ mod watermark_tests {
 }
 
 #[cfg(test)]
-mod reader_revision_tests {
+mod reader_fact_tests {
     use super::*;
 
     #[test]
@@ -11538,6 +11544,21 @@ mod reader_revision_tests {
             panic!("expected hyperlink");
         };
         assert_eq!(link.relationship_id(), Some("rId9"));
+    }
+
+    #[test]
+    fn unsupported_xml_reader_inspects_preserved_item_bytes() {
+        let raw = br#"<w:proofErr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:type="spellStart"/>"#;
+        let fact = UnsupportedXmlRef::from_bytes(raw);
+
+        assert_eq!(fact.raw_xml(), Some(raw.as_slice()));
+        assert_eq!(fact.qualified_name(), Some("w:proofErr"));
+        assert_eq!(fact.local_name(), "proofErr");
+        assert_eq!(
+            fact.namespace_uri(),
+            Some("http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+        );
+        assert!(!fact.has_child_content());
     }
 }
 
