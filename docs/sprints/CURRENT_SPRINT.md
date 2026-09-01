@@ -39,7 +39,7 @@ shared rendering backends.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-220 | SmartArt layout and rendering | L | pending | - |
+| F-220 | SmartArt layout and rendering | L | in-progress | codex |
 | F-222 | ODP read and write | L | pending | - |
 | F-223 | Modern presentation package variants | M | pending | - |
 | F-226 | Notes and handout export | M | pending | - |
