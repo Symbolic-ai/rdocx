@@ -955,6 +955,14 @@ impl CT_TrPr {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+    ) -> Result<Self> {
         let mut pr = CT_TrPr::default();
         let mut boundary = 0usize;
         let mut buf = Vec::new();
@@ -997,7 +1005,10 @@ impl CT_TrPr {
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes)
                         || is_word_element(name.as_ref(), b"del", &prefixes)
                     {
-                        let raw = capture_empty_element(e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             pr.revision_markers.push(revision);
                         } else {
@@ -1006,9 +1017,19 @@ impl CT_TrPr {
                     } else if matches_local_name(name.as_ref(), b"ins")
                         || matches_local_name(name.as_ref(), b"del")
                     {
-                        pr.revision_xml.push(capture_empty_element(e)?);
+                        pr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?);
                     } else {
-                        pr.extra_xml.push((at, capture_empty_element(e)?));
+                        pr.extra_xml.push((
+                            at,
+                            crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                     }
                     boundary = next;
                 }
@@ -1018,7 +1039,10 @@ impl CT_TrPr {
                     if is_word_element(e.name().as_ref(), b"ins", &prefixes)
                         || is_word_element(e.name().as_ref(), b"del", &prefixes)
                     {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             pr.revision_markers.push(revision);
                         } else {
@@ -1027,9 +1051,19 @@ impl CT_TrPr {
                     } else if matches_local_name(e.name().as_ref(), b"ins")
                         || matches_local_name(e.name().as_ref(), b"del")
                     {
-                        pr.revision_xml.push(capture_element(reader, e)?);
+                        pr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?);
                     } else {
-                        pr.extra_xml.push((at, capture_element(reader, e)?));
+                        pr.extra_xml.push((
+                            at,
+                            crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                     }
                     boundary = next;
                 }
@@ -1736,6 +1770,14 @@ impl CT_Row {
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
     ) -> Result<Self> {
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, word_prefixes, &[])
+    }
+
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings(
+        reader: &mut Reader<&[u8]>,
+        word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
+    ) -> Result<Self> {
         let mut table_property_exception = None;
         let mut properties = None;
         let mut cells = Vec::new();
@@ -1753,7 +1795,14 @@ impl CT_Row {
                     {
                         table_property_exception = Some(capture_element(reader, e)?);
                     } else if is_word_element(name.as_ref(), b"trPr", &prefixes) {
-                        properties = Some(CT_TrPr::from_xml_with_prefixes(reader, &prefixes)?);
+                        let local_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        let property_bindings =
+                            merged_owner_bindings(owner_bindings, &local_bindings);
+                        properties = Some(CT_TrPr::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &property_bindings,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
                         cells.push(CT_Tc::from_xml_with_prefixes_and_owner_bindings(
@@ -1951,7 +2000,12 @@ impl CT_Tbl {
                     } else if is_word_element(name.as_ref(), b"tblGrid", &prefixes) {
                         grid = Some(CT_TblGrid::from_xml_with_prefixes(reader, &prefixes)?);
                     } else if is_word_element(name.as_ref(), b"tr", &prefixes) {
-                        rows.push(CT_Row::from_xml_with_prefixes(reader, &prefixes)?);
+                        let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        rows.push(CT_Row::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
                         if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
@@ -3000,6 +3054,38 @@ mod tests {
             grid < spacing && spacing < alignment && alignment < insertion && insertion < change,
             "{xml}"
         );
+    }
+
+    #[test]
+    fn retained_row_properties_keep_inherited_owner_namespace_bindings() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+               <w:tr xmlns:row-ext="urn:row-property">
+                 <w:trPr xmlns:properties-ext="urn:properties-property">
+                   <row-ext:fromRow row-ext:value="kept"/>
+                   <properties-ext:fromProperties properties-ext:value="kept"/>
+                 </w:trPr>
+                 <w:tc><w:p/></w:tc>
+               </w:tr>"#,
+        );
+
+        let first_xml = table_to_xml(&table);
+        assert!(
+            first_xml.contains(
+                r#"<row-ext:fromRow row-ext:value="kept" xmlns:row-ext="urn:row-property"/>"#
+            ),
+            "{first_xml}"
+        );
+        assert!(
+            first_xml.contains(
+                r#"<properties-ext:fromProperties properties-ext:value="kept" xmlns:properties-ext="urn:properties-property"/>"#
+            ),
+            "{first_xml}"
+        );
+
+        let reparsed = parse_scoped_table(&first_xml).expect("serialized table reparses");
+        let second_xml = table_to_xml(&reparsed);
+        assert_eq!(second_xml, first_xml);
     }
 
     #[test]
