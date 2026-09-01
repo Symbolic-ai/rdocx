@@ -14,7 +14,7 @@ use crate::properties::{
     CT_Shd, get_val_attr, get_word_val_attr, is_word_attribute, is_word_element,
 };
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::revision::CT_Revision;
+use crate::revision::{CT_Revision, RevisionKind};
 #[cfg(test)]
 use crate::shared::ST_Border;
 use crate::shared::ST_Jc;
@@ -937,8 +937,8 @@ pub struct CT_TrPr {
     pub cnf_style: Option<String>,
     /// Contextual row insertion and deletion markers in schema order.
     pub revision_markers: Vec<CT_Revision>,
-    /// Malformed row markers retained verbatim.
-    pub revision_xml: Vec<Vec<u8>>,
+    /// Malformed row markers retained at their insertion or deletion schema slot.
+    pub revision_xml: Vec<(usize, Vec<u8>)>,
     /// Other row properties retained at their schema insertion slots.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
@@ -1010,16 +1010,18 @@ impl CT_TrPr {
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             pr.revision_markers.push(revision);
                         } else {
-                            pr.revision_xml.push(raw);
+                            pr.revision_xml.push((at, raw));
                         }
                     } else if matches_local_name(name.as_ref(), b"ins")
                         || matches_local_name(name.as_ref(), b"del")
                     {
-                        pr.revision_xml
-                            .push(crate::text::raw_with_external_bindings(
+                        pr.revision_xml.push((
+                            row_revision_boundary(name.as_ref()),
+                            crate::text::raw_with_external_bindings(
                                 &capture_empty_element(e)?,
                                 owner_bindings,
-                            )?);
+                            )?,
+                        ));
                     } else {
                         pr.extra_xml.push((
                             at,
@@ -1044,16 +1046,18 @@ impl CT_TrPr {
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             pr.revision_markers.push(revision);
                         } else {
-                            pr.revision_xml.push(raw);
+                            pr.revision_xml.push((at, raw));
                         }
                     } else if matches_local_name(e.name().as_ref(), b"ins")
                         || matches_local_name(e.name().as_ref(), b"del")
                     {
-                        pr.revision_xml
-                            .push(crate::text::raw_with_external_bindings(
+                        pr.revision_xml.push((
+                            row_revision_boundary(e.name().as_ref()),
+                            crate::text::raw_with_external_bindings(
                                 &capture_element(reader, e)?,
                                 owner_bindings,
-                            )?);
+                            )?,
+                        ));
                     } else {
                         pr.extra_xml.push((
                             at,
@@ -1145,20 +1149,36 @@ impl CT_TrPr {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 11..=13 {
+        for boundary in 11..=12 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
-        for revision in &self.revision_markers {
-            revision.write_xml(writer)?;
-        }
-        for raw in &self.revision_xml {
-            writer.get_mut().write_all(raw)?;
-        }
+        self.write_revisions_at(writer, RevisionKind::Insertion, 12)?;
+        write_extras_at(writer, &self.extra_xml, 13)?;
+        self.write_revisions_at(writer, RevisionKind::Deletion, 13)?;
         for boundary in 14..=15 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("w:trPr")))?;
+        Ok(())
+    }
+
+    fn write_revisions_at<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        kind: RevisionKind,
+        boundary: usize,
+    ) -> Result<()> {
+        for revision in self
+            .revision_markers
+            .iter()
+            .filter(|revision| revision.kind() == kind)
+        {
+            revision.write_xml(writer)?;
+        }
+        for (_, raw) in self.revision_xml.iter().filter(|(at, _)| *at == boundary) {
+            writer.get_mut().write_all(raw)?;
+        }
         Ok(())
     }
 
@@ -1173,6 +1193,14 @@ impl CT_TrPr {
             && self.revision_markers.is_empty()
             && self.revision_xml.is_empty()
             && self.extra_xml.is_empty()
+    }
+}
+
+fn row_revision_boundary(name: &[u8]) -> usize {
+    if matches_local_name(name, b"ins") {
+        12
+    } else {
+        13
     }
 }
 
@@ -3169,6 +3197,39 @@ mod tests {
         let reparsed = parse_scoped_table(&first_xml).expect("serialized table reparses");
         let second_xml = table_to_xml(&reparsed);
         assert_eq!(second_xml, first_xml);
+    }
+
+    #[test]
+    fn malformed_row_insertions_stay_before_typed_deletions() {
+        let table = parse_table(
+            r#"<w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+               <w:tr>
+                 <w:trPr>
+                   <w:ins w:id="1"/>
+                   <w:del w:id="2" w:author="Ada"/>
+                 </w:trPr>
+                 <w:tc><w:p/></w:tc>
+               </w:tr>"#,
+        );
+
+        let properties = table.rows[0].properties.as_ref().unwrap();
+        assert_eq!(
+            properties.revision_xml,
+            vec![(12, br#"<w:ins w:id="1"/>"#.to_vec())]
+        );
+        assert_eq!(properties.revision_markers.len(), 1);
+        assert_eq!(
+            properties.revision_markers[0].kind(),
+            RevisionKind::Deletion
+        );
+
+        let first_xml = table_to_xml(&table);
+        let insertion = first_xml.find("<w:ins").expect("insertion writes");
+        let deletion = first_xml.find("<w:del").expect("deletion writes");
+        assert!(insertion < deletion, "{first_xml}");
+
+        let reparsed = parse_scoped_table(&first_xml).expect("serialized table reparses");
+        assert_eq!(table_to_xml(&reparsed), first_xml);
     }
 
     #[test]
