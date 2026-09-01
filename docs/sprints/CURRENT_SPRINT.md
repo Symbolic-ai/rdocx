@@ -1,12 +1,15 @@
 # Current Sprint, S63
 
-**Milestone**: M21 Presentation depth.
+**Milestone**: M21 Presentation depth, plus reporter-confirmed Word editor
+performance cliffs.
 
 **Goal**: broaden modern presentation interchange and complete the presenter
 and audience output surfaces. The sprint first completes the carried SmartArt
 renderer, then adds bounded ODP interchange, preserves modern presentation
 package variants, and exports notes pages and audience handouts through the
-shared rendering backends.
+shared rendering backends. Two cross-cutting fixes keep paragraph caching
+enabled across note references and let ordinary prose reuse pagination within
+the existing aggregate cache budget.
 
 ## Spec references
 
@@ -31,9 +34,9 @@ shared rendering backends.
 - `docs/hld/12-testing-strategy.md`, for the pinned PowerPoint and LibreOffice
   differentials, package round trips, deterministic fonts, and unchanged hash
   harness requirements.
-- `docs/hld/14-development-backlog.md`, for the F-220, F-222, F-223, and F-226
-  acceptance gates, dependency order, and the still-open M21 representative
-  deck gate.
+- `docs/hld/14-development-backlog.md`, for the F-220, F-222, F-223, F-226,
+  F-X072, and F-X073 acceptance gates, dependency order, and the still-open M21
+  representative deck gate.
 
 ## The wave
 
@@ -43,6 +46,8 @@ shared rendering backends.
 | F-222 | ODP read and write | L | pending | - |
 | F-223 | Modern presentation package variants | M | pending | - |
 | F-226 | Notes and handout export | M | pending | - |
+| F-X072 | Keep paragraph caching across note references | M | pending | - |
+| F-X073 | Restart ordinary-prose pagination within the aggregate cache | L | pending | - |
 
 ## Sequencing note
 
@@ -59,6 +64,11 @@ run independently once claimed. F-226 depends on the completed F-217 notes and
 handout model and can also run independently. Their integration still follows
 F-220 and F-222 where shared package or rendering interactions exist.
 
+F-X072 and F-X073 address issues 65 and 66. They run sequentially because both
+change the Word layout cache engine and its regression surface. F-X072 reuses
+the completed F-X062 note-context work. F-X073 follows F-X072 so its restart
+checkpoints are measured against the final paragraph-cache accounting.
+
 ## Definition of done for this sprint
 
 - Supported list, hierarchy, cycle, relationship, matrix, and pyramid SmartArt
@@ -72,5 +82,10 @@ F-220 and F-222 where shared package or rendering interactions exist.
   class with executable payloads preserved and never executed.
 - Speaker notes, notes pages, and audience handouts render in order through the
   declared master hierarchy with matching text, metadata, and geometry.
+- A footnote or endnote reference invalidates only its own paragraph cache
+  entry, while later safe paragraphs continue to reuse exact cached layout.
+- Long ordinary prose can publish restart checkpoints within the existing
+  aggregate cache budget, and edit, insert, delete, and undo paths remain
+  byte-for-byte equal to a fresh layout.
 - Full verification passes with every deterministic hash explained, every
   package archive below 10 MiB, and the bounded sprint review clean.

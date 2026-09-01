@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 7 | 1 | 7  |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 74 | 66 | 3 | 2  |
-| **Total** | **321** | **269** | **7** | **42** |
+| X, Cross-cutting (opportunistic)            | 76 | 66 | 3 | 4  |
+| **Total** | **323** | **269** | **7** | **44** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -524,4 +524,6 @@ regenerated, never hand-edited.
 | F-X069 | Tag v0.11.1                               | S58 | S | done |
 | F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | done |
 | F-X071 | Integrate PRs 61 through 64                | S62 | L | done |
+| F-X072 | Keep paragraph caching across note references | S63 | M | pending |
+| F-X073 | Restart ordinary-prose pagination within the aggregate cache | S63 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

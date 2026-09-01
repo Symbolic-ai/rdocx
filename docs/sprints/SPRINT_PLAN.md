@@ -1164,8 +1164,9 @@ and effective-style edge cases before integration.
 
 #### Sprint S63, ODP, notes and handouts
 
-**Goal**: broaden modern presentation interchange and complete the presenter
-and audience output surfaces.
+**Goal**: broaden modern presentation interchange, complete the presenter and
+audience output surfaces, and remove two reporter-confirmed Word editor cache
+cliffs.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1173,12 +1174,19 @@ and audience output surfaces.
 | F-222 | ODP read and write | L |
 | F-223 | Modern presentation package variants | M |
 | F-226 | Notes and handout export | M |
+| F-X072 | Keep paragraph caching across note references | M |
+| F-X073 | Restart ordinary-prose pagination within the aggregate cache | L |
 
 F-220 completes the carried SmartArt validator boundary before F-222 consumes
 SmartArt through ODP interchange. ODP uses a declared LibreOffice differential
 boundary. Notes pages and handouts reuse the existing master hierarchy and
 shared PDF and image backends. Modern macro, template, and slide-show variants
 build on the embedded-content inventory from S62.
+
+F-X072 and F-X073 address issues 65 and 66 sequentially. The first keeps
+paragraph-cache reads enabled after note-reference paragraphs. The second lets
+ordinary prose publish bounded restart checkpoints and charges them against the
+existing aggregate cache budget.
 
 #### Sprint S64, HTML and PDF slide import
 

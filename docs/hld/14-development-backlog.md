@@ -3513,6 +3513,40 @@ meaning to a foreign-namespace lookalike or weaken unmodelled XML preservation.
 revision-depth, and reader-projection fixtures pass after save and reopen, the
 complete Word suites pass, and all 49 output hashes remain unchanged.
 
+### F-X072, Keep paragraph caching across note references (M)
+
+Keep paragraph-cache reads available after an otherwise safe paragraph that
+contains a footnote or endnote reference. The cache key continues to include
+the complete typed paragraph and revision view, while cache-context reuse
+continues to compare the exact footnote and endnote parts. A changed reference
+ID or changed note part therefore invalidates the affected reuse boundary
+without poisoning later safe paragraphs. Fields, numbering, drawings, raw
+children, and other unsupported paragraph-cache content remain conservative.
+
+**Depends on**: F-X062.
+**Test gate**: regression. A 700-paragraph document with one early footnote or
+endnote reference records 699 paragraph-cache hits and one rebuild after a
+later paragraph edit. Warm and fresh layouts are byte-for-byte equal. Changing
+the reference or note part invalidates the required entry, and existing unsafe
+content remains excluded.
+
+### F-X073, Restart ordinary-prose pagination within the aggregate cache (L)
+
+Permit restart-pagination records for ordinary multi-line prose, headings, and
+keep-together paragraphs when the complete checkpoint state already represents
+their effects. Continue to reject unrepresented numbering, drawings, fields,
+multilingual state, raw content, and other unsafe inputs. Charge restart records
+against the actual paragraph, table, header or footer, and restart cache bytes
+under the existing aggregate budget rather than an independent 8 MiB ceiling.
+The existing entry caps and exact context fingerprints remain fail-closed.
+
+**Depends on**: F-202, F-X062, F-X072.
+**Test gate**: regression. A 700-paragraph ordinary-prose document containing
+a heading publishes a restart candidate larger than 8 MiB when the aggregate
+remains below 64 MiB. Late edit, insert, delete, and undo layouts reuse bounded
+work and remain byte-for-byte equal to fresh layout. A candidate above the
+aggregate budget is rejected without changing output.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
