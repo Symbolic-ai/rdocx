@@ -10680,3 +10680,45 @@ nitpicks.
 authoritative when exposing preserved reader facts. Preserve exact producer
 content unless the typed projection owns it. Any future live PR changes must be
 audited against the hardened canonical behavior rather than assumed newer.
+
+### F-X072, Keep paragraph caching across note references
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Direct body paragraphs containing a footnote or endnote
+reference now remain eligible for paragraph-cache reuse. A later edit in a
+700-paragraph document reuses 699 exact cached paragraphs and rebuilds one,
+instead of the early reference disabling every later cache read.
+
+**Non-obvious choices.** The complete typed paragraph remains the key, so a
+changed note ID misses its paragraph. Exact footnote and endnote parts remain
+in the retained-work context, so changed note content invalidates reuse for the
+transaction. Note-bearing table, header, and footer paragraphs remain
+conservative because their retained payloads do not own body note placement.
+
+**Deviations from the design plan.** None. The implementation changes one
+private safety predicate and adds one private helper with table and header or
+footer consumers. It adds no public API, dependency, feature, module, file,
+trait, or generic.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The footnote and endnote gates each require 699 hits and one rebuild
+after a late edit. Additional regressions cover changed reference IDs, changed
+note parts, exact warm and fresh equality, and conservative fields, numbering,
+drawings, raw children, tables, headers, and footers. Full workspace
+verification, the 219-test `rdocx-layout` suite, no-default fonts, WASM,
+rustdoc, README inventories, and the release 1,000-page performance gate all
+passed. Microscope pass 2 reported zero defects, zero smells, and zero
+nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Direct body note references are safe only
+because both the complete paragraph and exact note-part context are compared.
+Do not reduce either identity, and do not widen table or related-story caching
+without making body note placement part of that payload's ownership.

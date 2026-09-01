@@ -1,6 +1,6 @@
 # F-X072, Keep paragraph caching across note references
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S63
 **Size**: M
 **Depends on**: F-X062
@@ -86,13 +86,13 @@ not rendered output. Any output delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add discriminating footnote and endnote cache regressions.
-- [ ] Keep note references cache safe only when the remaining paragraph is safe.
-- [ ] Prove changed reference IDs and changed note parts invalidate reuse.
-- [ ] Preserve conservative handling for every existing unsafe content class.
-- [ ] Prove deterministic warm and fresh output equality.
-- [ ] Run affected suites, full verification, routed riders, and the unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Add discriminating footnote and endnote cache regressions.
+- [x] Keep note references cache safe only when the remaining paragraph is safe.
+- [x] Prove changed reference IDs and changed note parts invalidate reuse.
+- [x] Preserve conservative handling for every existing unsafe content class.
+- [x] Prove deterministic warm and fresh output equality.
+- [x] Run affected suites, full verification, routed riders, and the unchanged hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

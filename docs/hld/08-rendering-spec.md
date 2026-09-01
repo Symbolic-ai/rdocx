@@ -720,11 +720,17 @@ wrapping-drawing state. Numbering, drawings including `AlternateContent`,
 fields, hyperlinks, relationships, media, generated markers, content controls,
 preserved producer XML, and other traversal-sensitive input
 bypass body reuse. Encountering any such body block disables later
-retained-block reads for that layout, so inserting an earlier note or numbering
-input cannot leave a later generated marker stale. Cacheable paragraph and
-table entries share one immutable `Arc` block with the active layout
-transaction. A private concrete side overlay holds result-local provenance and
-the paragraph structure ids consumed by paginator emission. Public
+retained-block reads for that layout, so inserting earlier numbering input
+cannot leave a later generated marker stale. A direct footnote or endnote
+reference in an otherwise safe body paragraph remains cacheable. Its explicit
+note ID is part of the complete typed paragraph key, and the exact footnote and
+endnote parts remain part of the retained-work context. Changing the reference
+misses that paragraph. Changing either note part disables retained reads for
+the transaction. Note references inside tables, headers, or footers remain
+uncacheable because those retained payloads do not own body note placement.
+Cacheable paragraph and table entries share one immutable `Arc` block with the
+active layout transaction. A private concrete side overlay holds result-local
+provenance and the paragraph structure ids consumed by paginator emission. Public
 `ParagraphBlock`, `TableBlock`, `LayoutBlock`, and `Section` stay unchanged.
 The overlay preserves exact scalar ranges and the recursive `MarkedContent`
 tree without mutating cached payloads. Each entry owns its diagnostics and

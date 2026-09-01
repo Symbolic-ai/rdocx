@@ -2344,9 +2344,24 @@ fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
             && run.content.iter().all(|content| {
                 matches!(
                     content,
-                    RunContent::Text(_) | RunContent::Tab | RunContent::Break(_)
+                    RunContent::Text(_)
+                        | RunContent::Tab
+                        | RunContent::Break(_)
+                        | RunContent::FootnoteRef { .. }
+                        | RunContent::EndnoteRef { .. }
                 )
             })
+    })
+}
+
+fn paragraph_has_note_reference(paragraph: &CT_P) -> bool {
+    paragraph.runs.iter().any(|run| {
+        run.content.iter().any(|content| {
+            matches!(
+                content,
+                RunContent::FootnoteRef { .. } | RunContent::EndnoteRef { .. }
+            )
+        })
     })
 }
 
@@ -2384,7 +2399,7 @@ fn header_footer_part_is_cache_safe(
             run.extra_xml.clear();
             run.extra_xml_positions.clear();
         }
-        paragraph_is_cache_safe(&projected, styles)
+        !paragraph_has_note_reference(&projected) && paragraph_is_cache_safe(&projected, styles)
     })
 }
 
@@ -2490,7 +2505,8 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
                             .is_none_or(|properties| properties.extra_xml.is_empty())
                         && cell.content.iter().all(|content| match content {
                             CellContent::Paragraph(paragraph) => {
-                                paragraph_is_cache_safe(paragraph, styles)
+                                !paragraph_has_note_reference(paragraph)
+                                    && paragraph_is_cache_safe(paragraph, styles)
                             }
                             CellContent::Table(table) => table_is_cache_safe(table, styles),
                             CellContent::ContentControl(_) => false,
@@ -9235,6 +9251,128 @@ mod tests {
         );
     }
 
+    fn note_reference_cache_input(stream: NoteStream, include_second_note: bool) -> LayoutInput {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+
+        let mut input = make_input_with_text("note cache paragraph 000");
+        for index in 1..700 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("note cache paragraph {index:03}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let BodyContent::Paragraph(reference) = &mut input.document.body.content[20] else {
+            panic!("note reference belongs to a paragraph");
+        };
+        let mut marker = CT_R::new("");
+        marker.content = vec![match stream {
+            NoteStream::Footnote => RunContent::FootnoteRef { id: 1 },
+            NoteStream::Endnote => RunContent::EndnoteRef { id: 1 },
+        }];
+        reference.runs.push(marker);
+
+        let note = |id, text: &str| {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(text);
+            CT_Footnote {
+                id,
+                note_type: NoteType::Normal,
+                paragraphs: vec![paragraph],
+            }
+        };
+        let mut notes = vec![note(1, "first note text")];
+        if include_second_note {
+            notes.push(note(2, "second note text"));
+        }
+        let part = Some(CT_Footnotes { footnotes: notes });
+        match stream {
+            NoteStream::Footnote => input.footnotes = part,
+            NoteStream::Endnote => input.endnotes = part,
+        }
+        input
+    }
+
+    fn assert_note_reference_does_not_poison_later_hits(stream: NoteStream) {
+        let mut input = note_reference_cache_input(stream, false);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("cold note layout succeeds");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 700));
+
+        set_body_paragraph_text(&mut input, 350, "note cache paragraph 350 changed");
+        let warm = engine.layout(&input).expect("warm note layout succeeds");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh note layout succeeds");
+
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+    }
+
+    #[test]
+    fn note_reference_does_not_poison_later_paragraph_cache_hits() {
+        assert_note_reference_does_not_poison_later_hits(NoteStream::Footnote);
+    }
+
+    #[test]
+    fn endnote_reference_does_not_poison_later_paragraph_cache_hits() {
+        assert_note_reference_does_not_poison_later_hits(NoteStream::Endnote);
+    }
+
+    #[test]
+    fn changed_note_reference_or_note_part_invalidates_required_cache_entry() {
+        let mut input = note_reference_cache_input(NoteStream::Footnote, true);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("cold note layout succeeds");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 700));
+
+        let BodyContent::Paragraph(reference) = &mut input.document.body.content[20] else {
+            panic!("note reference belongs to a paragraph");
+        };
+        reference.runs.last_mut().expect("marker run").content =
+            vec![RunContent::FootnoteRef { id: 2 }];
+        let warm_reference = engine
+            .layout(&input)
+            .expect("changed reference layout succeeds");
+        let fresh_reference = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh changed reference layout succeeds");
+        assert_layout_results_equal(&warm_reference, &fresh_reference);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+
+        input.footnotes.as_mut().expect("footnotes exist").footnotes[1].paragraphs[0].runs[0]
+            .content = vec![RunContent::Text(rdocx_oxml::text::CT_Text::new(
+            "second note text changed",
+        ))];
+        let warm_note = engine.layout(&input).expect("changed note layout succeeds");
+        let fresh_note = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh changed note layout succeeds");
+        assert_layout_results_equal(&warm_note, &fresh_note);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 1_401));
+    }
+
+    #[test]
+    fn note_reference_warm_layout_equals_fresh_layout() {
+        let mut input = related_story_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout(&input)
+            .expect("cold related-story layout succeeds");
+        set_body_paragraph_text(&mut input, 350, "related note paragraph changed");
+
+        let warm = engine
+            .layout(&input)
+            .expect("warm related-story layout succeeds");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh related-story layout succeeds");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+    }
+
     fn mixed_editor_input() -> LayoutInput {
         let mut input = make_input_with_text("");
         input.document.body.content.clear();
@@ -9352,11 +9490,6 @@ mod tests {
 
     #[test]
     fn unsafe_prefix_still_disables_later_paragraph_hits() {
-        let mut note = CT_P::new();
-        let mut note_run = CT_R::new("");
-        note_run.content = vec![RunContent::FootnoteRef { id: 1 }];
-        note.runs.push(note_run);
-
         let mut field = CT_P::new();
         let mut field_run = CT_R::new("");
         field_run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
@@ -9366,8 +9499,27 @@ mod tests {
         numbered.add_run("numbered prefix");
         numbered.properties.get_or_insert_default().num_id = Some(1);
 
-        for (name, unsafe_paragraph) in [("note", note), ("field", field), ("numbering", numbered)]
-        {
+        let mut drawing = CT_P::new();
+        let mut drawing_run = CT_R::new("");
+        drawing_run.content = vec![RunContent::Drawing(rdocx_oxml::drawing::CT_Drawing {
+            inline: None,
+            anchor: None,
+        })];
+        drawing.runs.push(drawing_run);
+
+        let mut raw = CT_P::new();
+        raw.extra_xml.push((
+            0,
+            br#"<w:unknown xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#
+                .to_vec(),
+        ));
+
+        for (name, unsafe_paragraph) in [
+            ("field", field),
+            ("numbering", numbered),
+            ("drawing", drawing),
+            ("raw child", raw),
+        ] {
             let mut input = make_input_with_text("safe cached suffix");
             let mut engine = Engine::new_deterministic().expect("bundled fonts load");
             engine.layout(&input).expect("prime safe suffix");
@@ -10445,7 +10597,7 @@ mod tests {
             .layout(&input)
             .expect("cold insertion layout");
         assert_layout_results_equal(&warm_insert, &cold_insert);
-        assert_eq!(engine.paragraph_cache_counts(), (1, 3));
+        assert_eq!(engine.paragraph_cache_counts(), (2, 3));
 
         input.document.body.content.remove(1);
         let warm_delete = engine.layout(&input).expect("warm deletion layout");
@@ -10455,7 +10607,7 @@ mod tests {
             .expect("cold deletion layout");
         assert_layout_results_equal(&warm_delete, &cold_delete);
         assert_layout_results_equal(&original, &warm_delete);
-        assert_eq!(engine.paragraph_cache_counts(), (3, 3));
+        assert_eq!(engine.paragraph_cache_counts(), (4, 3));
     }
 
     #[test]

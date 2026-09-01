@@ -496,9 +496,13 @@ paragraphs, edits one paragraph, and requires 699 warm hits with only the edit
 rebuilt. The complete warm result and source map equal a fresh cold result, and
 restart pagination reports a bounded rebuilt range. A forced fingerprint
 collision still requires exact typed paragraph equality. Focused cases prove
-that note, field, and numbering prefixes disable later reads, a late failure
-publishes nothing, hits preserve insertion order, and FIFO eviction holds at
-the independently pinned 4,096-entry and 50 MiB paragraph limits. Cacheable
+that an early direct footnote or endnote reference still permits 699 hits and
+one rebuild, while fields, numbering, drawings, and raw-child prefixes disable
+later reads. Changing the reference ID misses its paragraph key, changing a
+note part invalidates the exact retained context, note-bearing table and header
+or footer content remains conservative, a late failure publishes nothing, hits
+preserve insertion order, and FIFO eviction holds at the independently pinned
+4,096-entry and 50 MiB paragraph limits. Cacheable
 active paragraph and table blocks share immutable cache payloads through a
 private representation. Warm and fresh results must retain exact pages,
 structure, provenance, and nested table paths while public block APIs remain
