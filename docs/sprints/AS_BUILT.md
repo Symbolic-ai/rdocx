@@ -10538,3 +10538,50 @@ integer timestamp sampling, cumulative GIF delays, one-frame resolution, and
 the native bounded encoder path. Treat the macOS and Linux manifest as one
 identity contract. Platform-specific container, payload, decoded-pixel, or
 diagnostic constants are not acceptable.
+
+### F-219, SmartArt typed model
+
+**Sprint.** S62
+**Completed.** 2026-09-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Presentation packages now expose bounded typed SmartArt
+data, layout, quick-style, colour, and cached-drawing parts. Callers can inspect
+diagram identities and supported content, edit node text atomically, duplicate
+complete diagram graphs, and transfer placeholder-free SmartArt slides between
+presentations through an explicitly selected destination layout.
+
+**Non-obvious choices.** Raw part bytes remain authoritative until a supported
+field is edited. Checked edits and transfers validate exact relationship roles,
+duplicate graph identities, namespace safety, schema positions, placeholder
+absence, and complete owned graphs before committing. Cross-presentation
+transfer accepts only the five diagram relationship types plus
+relationship-free internal images, rejects unsupported dependencies, and uses
+one 128-part ceiling in preflight and copy.
+
+**Deviations from the design plan.** None. The approved additive pre-1.0 API
+includes `Presentation::transfer_smartart_slide_from` and the bounded
+`CT_Slide::contains_placeholder` helper. The approved diagram model is the one
+new source module. No dependency, feature flag, trait, integration binary, or
+binary fixture was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The named round-trip gate proved supported nodes remain editable
+after save and reopen while unrelated mutations leave unsupported diagram parts
+byte-exact. Focused coverage also exercises all five part roots, alias prefixes,
+schema order, producing relationship scopes, duplicate identities, atomic
+failures, slide duplication, cross-presentation transfer, nested graph cycles,
+the 128-part ceiling, and the pinned 50-deck SmartArt corpus. Full integrated
+verification and all parser, dependency, API, package, and archive-size riders
+passed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** F-220 should consume the typed layout family,
+point graph, DrawingML node text, style and colour projections directly. Keep
+unsupported algorithms and producer extensions raw, preserve schema-owned
+projection boundaries, and keep complete graph validation atomic.
