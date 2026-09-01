@@ -36,10 +36,10 @@ the contributed reader safety facts without weakening XML preservation.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-218 | Embedded object and macro inventory | L | in-progress | codex |
+| F-218 | Embedded object and macro inventory | L | done | - |
 | F-219 | SmartArt typed model | L | done | - |
-| F-220 | SmartArt layout and rendering | L | in-progress | codex |
-| F-X071 | Integrate PRs 61 through 64 | L | in-progress | codex |
+| F-220 | SmartArt layout and rendering | L | pending | codex |
+| F-X071 | Integrate PRs 61 through 64 | L | done | - |
 
 ## Sequencing note
 
@@ -56,6 +56,14 @@ F-X071 is independent of the PresentationML wave. It adopts the four Word
 reader contributions at their reviewed source SHAs, preserves contributor
 credit, and hardens the two incomplete submissions before integration.
 
+## Carry record
+
+F-220 is carried to S63 with its worker branch and worktree retained. Ten
+microscope passes completed, but the final review still found two actionable
+fail-closed validator gaps around same-kind instruction ordering and exact
+owner-path semantics. The reviewed F-220 source is not part of S62. S63 must
+finish those gaps and obtain a clean microscope pass before F-222 begins.
+
 ## Definition of done for this sprint
 
 - OLE objects, ActiveX controls, and VBA projects report exact payload hashes,
@@ -65,9 +73,8 @@ credit, and hardens the two incomplete submissions before integration.
 - Supported SmartArt data, layout, style, colour, text, and relationship
   ownership remain editable, and unsupported diagram algorithms remain
   byte-preserved through unrelated mutations.
-- Supported list, hierarchy, cycle, relationship, matrix, and pyramid diagrams
-  render through shared DrawingML and text engines within the declared
-  PowerPoint geometry and SSIM thresholds.
+- SmartArt rendering remains assigned to F-220 and is carried to S63. S62 does
+  not claim its PowerPoint geometry and SSIM gate.
 - Missing previews and unsupported diagram behavior remain visible through
   deterministic fallbacks and stable diagnostics rather than disappearing.
 - Hyperlink, drawing, table, numbering, revision, and field reader facts retain

@@ -10585,3 +10585,98 @@ passed.
 point graph, DrawingML node text, style and colour projections directly. Keep
 unsupported algorithms and producer extensions raw, preserve schema-owned
 projection boundaries, and keep complete graph validation atomic.
+
+### F-218, Embedded object and macro inventory
+
+**Sprint.** S62
+**Completed.** 2026-09-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The presentation facade now inventories relationship-owned
+OLE objects, ActiveX controls, and VBA projects without executing them. Each
+entry reports stable package coordinates, content type, byte length, SHA-256,
+and signature state. Callers can extract bytes exactly and replace or remove
+content through atomic package transactions.
+
+**Non-obvious choices.** Ownership follows namespace-aware XML references and
+complete relationship graphs across slides, layouts, masters, control parts,
+and the presentation. Mutations preserve shared targets and unrelated orphans.
+Signature evidence is either retained as invalidated or removed through an
+explicit policy. Private relationship markers make invalidation observable
+after save and reopen without adding a default cryptographic dependency.
+
+**Deviations from the design plan.** None. The approved private
+`crates/rpptx/src/embedded.rs` module contains the graph and transaction logic.
+The native pre-1.0 facade additions are intentional. Existing workspace
+dependencies provide SHA-256 and XML parsing. No feature flag, trait, generic,
+integration binary, or binary fixture was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`, and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** Source-built regressions cover exact inventory and extraction,
+shared and orphan retention, transactional replacement and removal, safe
+internal targets, schema-position ownership, duplicate identities, complete
+signature topology, and both signature policies. The tracked corpus proves two
+layout-owned and one master-owned OLE frame. Fresh-reopen tests cover ordinary
+package and VBA signature invalidation with and without the optional digital
+signature verifier. Full workspace verification, corpus, LibreOffice,
+no-default, WASM, rustdoc, dependency, supply-chain, publish dry-run, and
+archive-size gates passed. The final microscope pass reported zero defects,
+zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep executable payloads opaque and retain the
+source-part plus relationship-id identity. Validate the complete ownership and
+signature graph before mutation. Never infer ownership from filenames or file
+extensions, and never delete an unreachable producer orphan that the requested
+operation does not own.
+
+### F-X071, Integrate PRs 61 through 64
+
+**Sprint.** S62
+**Completed.** 2026-09-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The reviewed reader outcomes from PRs 61 through 64 are
+integrated as one hardened Word reader boundary. Hyperlink and drawing facts,
+table and row properties, numbering metadata and effective formatting, nested
+revisions, and complex-field display segments are available without weakening
+raw XML preservation. The contribution is credited to `@pedroassumpcao`.
+
+**Non-obvious choices.** PRs 61 and 64 supplied directly usable outcomes. PR
+62 required namespace propagation through every table owner and expanded-name
+revision-slot handling. PR 63 required default-style numbering association and
+a narrower producer-content contract that still reports retained raw paragraph
+and run properties. Later live heads were audited and intentionally not adopted
+where they duplicated the hardened result or reintroduced those defects.
+
+**Deviations from the design plan.** None. The pinned contribution inputs were
+PR 61 at `7c40c2e`, PR 62 at `fa48a39`, PR 63 at `60bc663`, and PR 64 at
+`5cb5cba`. The maintained result includes subsequent hardening without a new
+crate, module, feature flag, trait, generic, or dependency.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** Regressions cover expanded-name drawing relationships, inherited
+table namespace bindings, malformed revision schema slots, direct and
+default-style numbering, nested revision depth and source order, complex field
+segments, producer raw property reporting, and repeated save and reopen.
+Complete `rdocx-oxml`, `rdocx`, `rdocx-html`, and `rdocx-layout` suites passed,
+including the LibreOffice boundary. Full workspace verification, no-default,
+WASM, rustdoc, dependency, supply-chain, publish dry-run, and archive-size
+gates passed. Microscope pass 10 reported zero defects, zero smells, and zero
+nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep namespace identity and schema position
+authoritative when exposing preserved reader facts. Preserve exact producer
+content unless the typed projection owns it. Any future live PR changes must be
+audited against the hardened canonical behavior rather than assumed newer.

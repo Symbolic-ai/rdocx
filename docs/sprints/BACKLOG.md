@@ -36,10 +36,10 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
-| M21, Presentation depth                        | 15 | 6 | 2 | 7  |
+| M21, Presentation depth                        | 15 | 7 | 0 | 8  |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 74 | 65 | 4 | 2  |
-| **Total** | **321** | **267** | **9** | **42** |
+| X, Cross-cutting (opportunistic)            | 74 | 66 | 3 | 2  |
+| **Total** | **321** | **269** | **6** | **43** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -414,9 +414,9 @@ regenerated, never hand-edited.
 | F-215 | Audio and video package model                | S61 | L | done |
 | F-216 | Media poster and playback rendering          | S61 | M | done |
 | F-217 | Presentation collaboration and navigation model | S59 | L | done |
-| F-218 | Embedded object and macro inventory          | S62 | L | in-progress |
+| F-218 | Embedded object and macro inventory          | S62 | L | done |
 | F-219 | SmartArt typed model                         | S62 | L | done |
-| F-220 | SmartArt layout and rendering                | S62 | L | in-progress |
+| F-220 | SmartArt layout and rendering                | S63 | L | pending |
 | F-221 | Presentation encryption and signatures      | S59 | M | done |
 | F-222 | ODP read and write                           | S63 | L | pending |
 | F-223 | Modern presentation package variants        | S63 | M | pending |
@@ -523,5 +523,5 @@ regenerated, never hand-edited.
 | F-X068 | Tag rpptx-v0.8.0                          | S58 | S | done |
 | F-X069 | Tag v0.11.1                               | S58 | S | done |
 | F-X070 | Yank incomplete v0.11.0 packages          | S58 | S | done |
-| F-X071 | Integrate PRs 61 through 64                | S62 | L | in-progress |
+| F-X071 | Integrate PRs 61 through 64                | S62 | L | done |
 <!-- AUTOGEN:backlog-MX END -->

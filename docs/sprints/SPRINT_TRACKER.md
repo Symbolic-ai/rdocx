@@ -358,6 +358,8 @@ defended.
 | F-216 | S61 | M | 2 | 1 | 2026-08-31 | Added deterministic media poster and labelled fallback rendering with synchronized playback state and unchanged legacy entry points |
 | F-227 | S61 | L | 4 | 1 | 2026-08-31 | Added bounded deterministic animated GIF and Motion JPEG AVI export with exact cross-platform manifests |
 | F-219 | S62 | L | 4 | 1 | 2026-09-01 | Added a bounded typed SmartArt model with atomic editing, graph-safe duplication and transfer, and exact unsupported XML preservation |
+| F-218 | S62 | L | 4 | 1 | 2026-09-01 | Added relationship-owned embedded-content inventory, byte-exact extraction, and atomic OLE, ActiveX, and VBA mutation with explicit signature policies |
+| F-X071 | S62 | L | 4 | 1 | 2026-09-01 | Integrated and hardened the reader outcomes from PRs 61 through 64 with contributor credit and exact namespace, schema-order, and effective-style preservation |
 
 ## Velocity
 
