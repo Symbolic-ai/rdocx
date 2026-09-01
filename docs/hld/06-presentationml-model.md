@@ -88,6 +88,13 @@ SlideMut::set_background(&mut self, fill: Fill) -> Result<()>;
 SlideMut::clear_background(&mut self);
 ```
 
+The native facade also owns the ODP conversion boundary. Import creates a fresh
+presentation containing ordered slides, ordinary rectangle shapes and text
+boxes, tables, embedded images, slide names, and speaker notes. Export projects
+the same subset without mutating the source. Charts, transitions, media,
+animation, SmartArt, and unsupported appearance semantics remain outside the
+editable ODP subset and produce stable source or model path diagnostics.
+
 Native collaboration, section, and master-setting access is also concrete and
 ordered:
 

@@ -37,6 +37,13 @@ names exactly the root, content, and emitted images. Ordered style allocation,
 fixed namespace prefixes, fixed ZIP metadata, and bounded retained output make
 two writes of one document byte-identical.
 
+ODP uses the same non-OPC ownership rule in `rpptx`. Its reader requires the
+first stored presentation mimetype, indexes all safe unique entries before XML
+projection, and enforces caller-selected entry, part, and total expansion
+limits. Its writer emits `mimetype`, fixed-prefix `content.xml`, sorted image
+entries, and the exact manifest with deterministic ZIP metadata. Path saves
+stage and sync a sibling file before portable atomic replacement.
+
 EPUB output is also ZIP but not OPC. The private `rdocx` writer emits the
 uncompressed `mimetype` entry first, followed by the container, package,
 navigation, stylesheet, source-ordered spine items, and deduplicated media.

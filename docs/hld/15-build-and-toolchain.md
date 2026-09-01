@@ -140,6 +140,12 @@ Builds otherwise stay native. There is no development container. The Linux-only
 work, manylinux wheels, `wasm32` checks and the LibreOffice render oracle, runs
 on CI runners as it always would have.
 
+ODP conversion adds no external production tool and reuses the workspace
+`zip`, `quick-xml`, and `oxml-media` dependencies. LibreOffice 26.2.5.2 remains
+an explicit ignored acceptance gate that runs with an isolated user profile.
+Publish dry runs and the 10 MiB archive ceiling cover the additive native API
+and private converter module.
+
 ## Feature flags
 
 | Crate | Feature | Default | Notes |

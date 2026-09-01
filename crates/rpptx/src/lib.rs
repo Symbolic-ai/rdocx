@@ -110,11 +110,15 @@ use thiserror::Error;
 mod animation;
 #[cfg(feature = "render")]
 mod diagram;
+#[cfg(feature = "default-template")]
+mod odp;
 #[cfg(feature = "render")]
 pub use animation::{
     AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition,
     DeterministicAnimation, GifLoopBehavior,
 };
+#[cfg(feature = "default-template")]
+pub use odp::{OdpDiagnostic, OdpReadResult, OdpWriteResult};
 
 #[cfg(feature = "default-template")]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
@@ -261,6 +265,14 @@ pub struct MediaInfo {
 pub enum Error {
     #[error(transparent)]
     Package(#[from] OpcError),
+
+    #[cfg(feature = "default-template")]
+    #[error("ODP conversion error in {part:?} at byte {offset}: {message}")]
+    Odp {
+        part: Option<String>,
+        offset: u64,
+        message: String,
+    },
 
     #[cfg(feature = "render")]
     #[error("PDF conformance error: {0}")]

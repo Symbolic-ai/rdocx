@@ -10819,3 +10819,53 @@ smells, and zero nitpicks.
 model. Any newly supported authentic program needs an explicit bounded semantic
 profile and external common-source evidence. Do not infer plausible geometry
 from an unknown program or weaken the cycle1 identity boundary.
+
+### F-222, ODP read and write
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The native presentation facade now reads bounded ODP
+packages and writes deterministic ODP packages. The editable subset includes
+slides, ordinary rectangles and text boxes, tables, embedded images, slide
+names, and notes. Unsupported safe content is retained as stable, capped,
+location-aware diagnostics rather than silently disappearing.
+
+**Non-obvious choices.** The reader requires the stored ODP mimetype first,
+validates safe unique archive paths, parses namespace-expanded XML at exact
+schema positions, and applies part, total, depth, node, text, and diagnostic
+limits. The writer charges escaped text and media before growth, writes a
+complete manifest, and publishes files atomically. It does not claim parity for
+charts, transitions, animation, media timing, SmartArt, or unsupported visual
+appearance.
+
+**Deviations from the design plan.** None. The approved private
+`crates/rpptx/src/odp.rs` module contains the package and projection logic. The
+native pre-1.0 facade additions are intentional. The existing workspace ZIP
+dependency is used directly. No feature flag, trait, generic, integration
+binary, or binary fixture was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built regressions cover supported round trips, deterministic
+archive construction, namespace aliases and lookalikes, duplicate expanded
+attributes, unsafe entries, every declared resource limit, diagnostic order
+and ceiling, malformed images, and atomic read and save failures. The pinned
+LibreOffice 26.2.5.2 gate passed in both ODP-to-PPTX and PPTX-to-ODP directions.
+The full workspace, presentation, Clippy, no-default-font, WASM, rustdoc,
+README, publish dry-run, archive-size, prose, workflow, and skill-sync gates
+passed. Microscope pass 2 reported zero defects, zero smells, and zero
+nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep ODP import bounded before allocation and
+classify nodes by expanded name and schema position. Add a construct to the
+editable subset only when both directions have a pinned differential. Every
+safe unsupported direct object must produce one stable diagnostic.

@@ -275,6 +275,13 @@ portable replacement primitive. A failure cannot truncate an existing
 destination. Export does not mutate the source document. Python, WASM, and CLI
 surfaces gain no ODT export entry point and retain their existing contracts.
 
+Native Rust callers can import and export OpenDocument Presentation through
+`Presentation::from_odp_bytes`, `from_odp_bytes_with_limits`, `open_odp`,
+`to_odp_bytes`, and `save_odp`. Read and write result values carry ordered
+`OdpDiagnostic` records. Read failures publish no presentation, and path writes
+serialize fully before atomic replacement. This is an additive pre-1.0 native
+surface. Python, WASM, and CLI bindings gain no ODP entry point.
+
 Native Rust callers can export EPUB 3 through `Document::to_epub_bytes` and
 `Document::save_epub`. The byte API returns `EpubWriteResult`, which carries
 the bounded deterministic publication and ordered location-aware

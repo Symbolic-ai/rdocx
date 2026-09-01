@@ -86,6 +86,408 @@ fn embedded_inventory_reports_exact_hashes_relationships_and_signature_state() {
 }
 
 #[test]
+#[ignore = "requires pinned LibreOffice 26.2.5.2"]
+fn odp_reader_and_writer_match_pinned_libreoffice_both_directions() {
+    let source = f222_source_presentation();
+    let source_odp = source.to_odp_bytes().unwrap();
+    let root = f222_temp_directory("oracle");
+    fs::create_dir_all(&root).unwrap();
+    let odp_path = root.join("rust-source.odp");
+    fs::write(&odp_path, &source_odp.bytes).unwrap();
+    f222_libreoffice_convert(&odp_path, "pptx", &root);
+    let opened = Presentation::open(root.join("rust-source.pptx")).unwrap();
+    assert_eq!(opened.len(), 1);
+    assert!(opened.slide(0).unwrap().text().contains("ODP oracle title"));
+    f222_assert_libreoffice_pdf(&odp_path, &root, "ODP oracle title");
+
+    let pptx_path = root.join("pptx-source.pptx");
+    source.save(&pptx_path).unwrap();
+    f222_libreoffice_convert(&pptx_path, "odp", &root);
+    let imported = Presentation::open_odp(root.join("pptx-source.odp")).unwrap();
+    assert_eq!(imported.presentation.len(), 1);
+    assert!(
+        imported
+            .presentation
+            .slide(0)
+            .unwrap()
+            .text()
+            .contains("ODP oracle title")
+    );
+    f222_assert_libreoffice_pdf(&pptx_path, &root, "ODP oracle title");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn odp_round_trip_preserves_supported_presentation_content() {
+    let source = Presentation::from_odp_bytes(&f222_odp_fixture()).unwrap();
+    assert!(source.diagnostics.is_empty());
+    let slide = source.presentation.slide(0).unwrap();
+    assert!(slide.text().contains("F-222 text box"));
+    assert!(slide.text().contains("F-222 rectangle"));
+    assert_eq!(slide.notes_text().as_deref(), Some("F-222 speaker notes"));
+    assert!(
+        slide
+            .shapes()
+            .any(|shape| shape.kind() == ShapeKind::Picture)
+    );
+    assert!(slide.shapes().any(|shape| shape.table().is_some()));
+
+    let exported = source.presentation.to_odp_bytes().unwrap();
+    assert!(exported.diagnostics.is_empty());
+    let reopened = Presentation::from_odp_bytes(&exported.bytes).unwrap();
+    let issues = reopened.presentation.validate();
+    assert!(issues.is_empty(), "{issues:?}");
+    Presentation::from_bytes(&reopened.presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.presentation.len(), 1);
+    let slide = reopened.presentation.slide(0).unwrap();
+    assert!(slide.text().contains("F-222 text box"));
+    assert!(slide.text().contains("F-222 rectangle"));
+    assert!(slide.text().contains("row 2, column 2"));
+    assert_eq!(slide.notes_text().as_deref(), Some("F-222 speaker notes"));
+    assert!(
+        slide
+            .shapes()
+            .any(|shape| shape.kind() == ShapeKind::Picture)
+    );
+}
+
+#[test]
+fn odp_packages_are_bounded_deterministic_and_manifest_complete() {
+    let presentation = Presentation::from_odp_bytes(&f222_odp_fixture())
+        .unwrap()
+        .presentation;
+    let first = presentation.to_odp_bytes().unwrap().bytes;
+    let second = presentation.to_odp_bytes().unwrap().bytes;
+    assert_eq!(first, second);
+    let mut archive = zip::ZipArchive::new(Cursor::new(&first)).unwrap();
+    let mimetype = archive.by_index(0).unwrap();
+    assert_eq!(mimetype.name(), "mimetype");
+    assert_eq!(mimetype.compression(), zip::CompressionMethod::Stored);
+    drop(mimetype);
+    let manifest = {
+        let mut entry = archive.by_name("META-INF/manifest.xml").unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+        String::from_utf8(bytes).unwrap()
+    };
+    assert!(manifest.contains("Pictures/image-1-4.png"));
+    assert!(
+        Presentation::from_odp_bytes_with_limits(
+            &first,
+            rpptx::PackageReadLimits {
+                max_entries: 2,
+                max_part_uncompressed_bytes: u64::MAX,
+                max_total_uncompressed_bytes: u64::MAX,
+            }
+        )
+        .is_err()
+    );
+
+    let aliased = f222_minimal_odp(
+        r#"<o:document-content xmlns:o="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:d="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"><o:body><o:presentation><d:page d:name="aliased"/></o:presentation></o:body></o:document-content>"#,
+        None,
+        false,
+    );
+    assert_eq!(
+        Presentation::from_odp_bytes(&aliased)
+            .unwrap()
+            .presentation
+            .len(),
+        1
+    );
+
+    let nested_lookalike = f222_minimal_odp(
+        r#"<o:document-content xmlns:o="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:d="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:x="urn:opaque"><o:body><x:opaque><o:presentation><d:page/></o:presentation></x:opaque></o:body></o:document-content>"#,
+        None,
+        false,
+    );
+    assert!(Presentation::from_odp_bytes(&nested_lookalike).is_err());
+
+    let unsafe_path = f222_minimal_odp(
+        r#"<o:document-content xmlns:o="urn:oasis:names:tc:opendocument:xmlns:office:1.0"><o:body><o:presentation/></o:body></o:document-content>"#,
+        Some(("../unsafe.bin", b"unsafe")),
+        false,
+    );
+    assert!(Presentation::from_odp_bytes(&unsafe_path).is_err());
+
+    let duplicate = f222_minimal_odp(
+        r#"<o:document-content xmlns:o="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:d="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:x="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"><o:body><o:presentation><d:page d:name="first" x:name="second"/></o:presentation></o:body></o:document-content>"#,
+        None,
+        false,
+    );
+    assert!(Presentation::from_odp_bytes(&duplicate).is_err());
+
+    let mut oversized = Presentation::new().unwrap();
+    oversized.add_slide(0).unwrap();
+    oversized
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(
+            Emu::from_cm(1.0),
+            Emu::from_cm(1.0),
+            Emu::from_cm(5.0),
+            Emu::from_cm(2.0),
+        )
+        .unwrap()
+        .set_text(&"'".repeat(3_000_000))
+        .unwrap();
+    assert!(oversized.to_odp_bytes().is_err());
+}
+
+#[test]
+fn odp_lossy_diagnostics_are_stable_bounded_and_location_aware() {
+    let mut presentation = Presentation::from_odp_bytes(&f222_odp_fixture())
+        .unwrap()
+        .presentation;
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_connector(
+            ConnectorType::Straight,
+            Emu::from_cm(1.0),
+            Emu::from_cm(1.0),
+            Emu::from_cm(4.0),
+            Emu::from_cm(4.0),
+        )
+        .unwrap();
+    let first = presentation.to_odp_bytes().unwrap();
+    let second = presentation.to_odp_bytes().unwrap();
+    assert_eq!(first.diagnostics, second.diagnostics);
+    assert_eq!(first.diagnostics.len(), 1);
+    assert_eq!(first.diagnostics[0].path, "slides/0/shapes/4");
+    assert_eq!(
+        first.diagnostics[0].message,
+        "unsupported shape was dropped"
+    );
+
+    let unsupported = f222_minimal_odp(
+        r#"<o:document-content xmlns:o="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:d="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"><o:body><o:presentation><d:page><d:line/></d:page></o:presentation></o:body></o:document-content>"#,
+        None,
+        false,
+    );
+    let diagnostics = Presentation::from_odp_bytes(&unsupported)
+        .unwrap()
+        .diagnostics;
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].path, "slides/0/objects/0");
+    assert_eq!(
+        diagnostics[0].message,
+        "unsupported ODP line content was dropped"
+    );
+
+    let lines = "<d:line/>".repeat(5_001);
+    let bounded_content = format!(
+        r#"<o:document-content xmlns:o="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:d="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"><o:body><o:presentation><d:page>{lines}</d:page><d:page>{lines}</d:page></o:presentation></o:body></o:document-content>"#
+    );
+    let bounded = f222_minimal_odp(&bounded_content, None, false);
+    let error = match Presentation::from_odp_bytes(&bounded) {
+        Ok(_) => panic!("diagnostic ceiling accepted unbounded ODP losses"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("diagnostic limit"));
+}
+
+#[test]
+fn failed_odp_read_and_save_never_publish_partial_state() {
+    assert!(Presentation::from_odp_bytes(b"not an ODP package").is_err());
+    let presentation = f222_source_presentation();
+    let before = presentation.to_bytes().unwrap();
+    let directory = f222_temp_directory("save-failure");
+    fs::create_dir_all(&directory).unwrap();
+    let destination = directory.join("existing.odp");
+    fs::write(&destination, b"sentinel ODP destination").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+        assert!(presentation.save_odp(&destination).is_err());
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"sentinel ODP destination");
+    }
+    #[cfg(not(unix))]
+    {
+        let invalid_destination = directory.join("missing").join("output.odp");
+        assert!(presentation.save_odp(invalid_destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"sentinel ODP destination");
+    }
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+fn f222_odp_fixture() -> Vec<u8> {
+    let content = r#"<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" office:version="1.3"><office:body><office:presentation><draw:page draw:name="F-222 slide"><draw:frame svg:x="1cm" svg:y="1cm" svg:width="8cm" svg:height="2cm"><draw:text-box><text:p>F-222 text box</text:p></draw:text-box></draw:frame><draw:custom-shape svg:x="1cm" svg:y="4cm" svg:width="4cm" svg:height="2cm"><text:p>F-222 rectangle</text:p><draw:enhanced-geometry draw:type="rectangle"/></draw:custom-shape><draw:frame svg:x="6cm" svg:y="4cm" svg:width="8cm" svg:height="4cm"><table:table><table:table-row><table:table-cell office:value-type="string"><text:p>row 1, column 1</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>row 1, column 2</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell office:value-type="string"><text:p>row 2, column 1</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>row 2, column 2</text:p></table:table-cell></table:table-row></table:table></draw:frame><draw:frame svg:x="15cm" svg:y="1cm" svg:width="2cm" svg:height="2cm"><draw:image xlink:href="Pictures/source.png" xlink:type="simple"/></draw:frame><presentation:notes><draw:frame svg:x="0cm" svg:y="0cm" svg:width="20cm" svg:height="5cm"><draw:text-box><text:p>F-222 speaker notes</text:p></draw:text-box></draw:frame></presentation:notes></draw:page></office:presentation></office:body></office:document-content>"#;
+    let manifest = r#"<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.presentation"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="Pictures/source.png" manifest:media-type="image/png"/></manifest:manifest>"#;
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut archive = zip::ZipWriter::new(&mut cursor);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        archive.start_file("mimetype", stored).unwrap();
+        std::io::Write::write_all(
+            &mut archive,
+            b"application/vnd.oasis.opendocument.presentation",
+        )
+        .unwrap();
+        archive.start_file("content.xml", deflated).unwrap();
+        std::io::Write::write_all(&mut archive, content.as_bytes()).unwrap();
+        archive.start_file("Pictures/source.png", deflated).unwrap();
+        std::io::Write::write_all(&mut archive, &valid_one_pixel_png()).unwrap();
+        archive
+            .start_file("META-INF/manifest.xml", deflated)
+            .unwrap();
+        std::io::Write::write_all(&mut archive, manifest.as_bytes()).unwrap();
+        archive.finish().unwrap();
+    }
+    cursor.into_inner()
+}
+
+fn f222_minimal_odp(
+    content: &str,
+    extra: Option<(&str, &[u8])>,
+    duplicate_content: bool,
+) -> Vec<u8> {
+    let manifest = r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.presentation"/></manifest:manifest>"#;
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut archive = zip::ZipWriter::new(&mut cursor);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        archive.start_file("mimetype", stored).unwrap();
+        std::io::Write::write_all(
+            &mut archive,
+            b"application/vnd.oasis.opendocument.presentation",
+        )
+        .unwrap();
+        for _ in 0..if duplicate_content { 2 } else { 1 } {
+            archive.start_file("content.xml", deflated).unwrap();
+            std::io::Write::write_all(&mut archive, content.as_bytes()).unwrap();
+        }
+        if let Some((name, bytes)) = extra {
+            archive.start_file(name, deflated).unwrap();
+            std::io::Write::write_all(&mut archive, bytes).unwrap();
+        }
+        archive
+            .start_file("META-INF/manifest.xml", deflated)
+            .unwrap();
+        std::io::Write::write_all(&mut archive, manifest.as_bytes()).unwrap();
+        archive.finish().unwrap();
+    }
+    cursor.into_inner()
+}
+
+fn f222_source_presentation() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(
+            Emu::from_cm(1.0),
+            Emu::from_cm(1.0),
+            Emu::from_cm(8.0),
+            Emu::from_cm(2.0),
+        )
+        .unwrap()
+        .set_text("ODP oracle title")
+        .unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_shape(
+            "rect",
+            Emu::from_cm(1.0),
+            Emu::from_cm(4.0),
+            Emu::from_cm(4.0),
+            Emu::from_cm(2.0),
+        )
+        .unwrap()
+        .set_text("ODP oracle rectangle")
+        .unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_table(
+            2,
+            2,
+            Emu::from_cm(6.0),
+            Emu::from_cm(4.0),
+            Emu::from_cm(8.0),
+            Emu::from_cm(4.0),
+        )
+        .unwrap();
+    presentation
+}
+
+fn f222_temp_directory(label: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let ordinal = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "rpptx-f222-{label}-{}-{ordinal}",
+        std::process::id()
+    ))
+}
+
+fn f222_libreoffice_convert(source: &Path, extension: &str, output: &Path) {
+    let version = Command::new("soffice").arg("--version").output().unwrap();
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap().trim(),
+        LIBREOFFICE_VERSION
+    );
+    let profile = f222_temp_directory("libreoffice-profile");
+    let profile_arg = format!("-env:UserInstallation=file://{}", profile.display());
+    let result = Command::new("soffice")
+        .args([
+            "--headless",
+            &profile_arg,
+            "--convert-to",
+            extension,
+            "--outdir",
+        ])
+        .arg(output)
+        .arg(source)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "LibreOffice conversion failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    if profile.exists() {
+        fs::remove_dir_all(profile).unwrap();
+    }
+}
+
+fn f222_assert_libreoffice_pdf(source: &Path, output: &Path, expected_text: &str) {
+    f222_libreoffice_convert(source, "pdf", output);
+    let pdf = output.join(format!(
+        "{}.pdf",
+        source.file_stem().unwrap().to_string_lossy()
+    ));
+    let info = Command::new("pdfinfo").arg(&pdf).output().unwrap();
+    assert!(info.status.success());
+    assert!(
+        String::from_utf8(info.stdout)
+            .unwrap()
+            .contains("Pages:           1")
+    );
+    let text = Command::new("pdftotext")
+        .args([pdf.to_str().unwrap(), "-"])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    assert!(
+        String::from_utf8(text.stdout)
+            .unwrap()
+            .contains(expected_text)
+    );
+}
+
+#[test]
 fn distinct_ole_ids_in_one_compatibility_frame_fail_closed_atomically() {
     let mut package = embedded_fixture_package(false);
     let slide = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();

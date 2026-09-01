@@ -1970,9 +1970,10 @@ verification matches the trusted certificate fixtures, and mutation never
 leaves a signature falsely reported as valid.
 
 ### F-222, ODP read and write (L)
-Import and export the supported presentation structure, text, tables, images,
-charts, notes, and animation metadata through a declared OpenDocument fidelity
-boundary with stable diagnostics.
+Import and export slides, ordinary rectangles and text boxes, tables, embedded
+images, slide names, and speaker notes through a declared OpenDocument fidelity
+boundary. Charts, transitions, media, animation, SmartArt, and unsupported
+appearance semantics produce stable diagnostics.
 **Depends on**: F-214, F-215, F-217, F-220.
 **Test gate**: differential. Source-built ODP and PPTX conversions match the
 pinned LibreOffice structural and render records in both directions.

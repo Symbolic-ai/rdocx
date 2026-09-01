@@ -933,6 +933,12 @@ per slide. Each row records the positive-extent source leaf count, resolved
 shape count, dropped count, diagnostics, and PNG path. A panic or missing page
 fails the driver.
 
+ODP interchange does not add a rendering path. Imported content enters the
+existing presentation model, and exported content leaves from that model.
+LibreOffice is used only as the pinned two-direction structural and PDF record
+oracle. Existing deterministic presentation rendering and the 49-entry hash
+harness remain unchanged.
+
 The additive timeline path resolves the same slide into a
 `ResolvedTimelineSlide`, which pairs each resolved shape with its stable source
 identity and carries the evaluated frame state. Evaluation accepts only finite

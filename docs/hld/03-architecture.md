@@ -107,6 +107,13 @@ manifest, and image entries. ODT is not OPC, so neither direction enters
 `oxml-opc` or retains an ODT object model. The facade uses the existing
 workspace `zip`, `quick-xml`, and `oxml-media` dependencies for conversion.
 
+**ODP conversion belongs to the `rpptx` facade.** One private module validates
+the complete bounded non-OPC ZIP, parses ODF XML by expanded namespace, and
+projects the supported subset into a fresh `Presentation`. The writer walks
+that same owner and emits deterministic ODF 1.3. It does not retain a second
+presentation model or shell out to LibreOffice. Unsupported safe content is
+represented only by stable diagnostics.
+
 **Outbound EPUB belongs to the `rdocx` facade.** The private writer projects
 the owned Word document through the established outbound HTML semantics, then
 packages deterministic EPUB 3 metadata, navigation, reflowable XHTML, shared

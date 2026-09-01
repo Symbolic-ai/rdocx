@@ -37,6 +37,15 @@ writes, exact whitespace elements, output and diagnostic bounds, stable lossy
 paths, and atomic path replacement. The writer does not use LibreOffice as a
 package-byte oracle.
 
+The ODP differential builds its presentation and ODF package in source. The
+exact pinned LibreOffice 26.2.5.2 build converts both directions in isolated
+profiles, and the gate checks slide count, supported text, successful PDF
+production, page count, and rendered text. Focused tests cover expanded-name
+aliases, schema-position lookalikes, unsafe entries, duplicate expanded
+attributes, archive and output limits, deterministic bytes, exact manifest
+ownership, diagnostic exhaustion, and atomic failure publication. Existing
+presentation hashes must remain 49 of 49 unchanged.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
