@@ -767,6 +767,12 @@ and continue to preserve presentations already edited or transferred through
 the native owner. No production dependency, feature flag, trait, dynamic
 dispatch, generic parameter, or builder is added.
 
+The low-level diagram definitions include doc-hidden read-only layout and
+colour render projections for the native renderer. They expose typed nested
+instruction ownership and typed colour choices with transforms, not raw XML or
+mutation. F-220 adds no facade, binding, `rpptx-layout`, or `rpptx-render`
+public surface.
+
 ## Native PowerPoint executable-content inventory
 
 The published pre-1.0 `rpptx` facade exposes concrete `EmbeddedContentKind`,

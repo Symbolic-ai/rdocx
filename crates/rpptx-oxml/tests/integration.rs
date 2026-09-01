@@ -290,7 +290,10 @@ fn smartart_projections_ignore_same_namespace_lookalikes_outside_schema_position
     assert_eq!(layout.categories, ["list"]);
     assert_eq!(layout.algorithms, ["lin"]);
     assert_eq!(layout.constraints, ["w"]);
-    assert_eq!(layout.family, DiagramLayoutFamily::List);
+    assert_eq!(
+        layout.family,
+        DiagramLayoutFamily::Unsupported("unknown".to_owned())
+    );
 
     let style = CT_DiagramStyleDefinition::from_xml(br#"<d:styleDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><d:styleLbl name="owned"><d:style><a:lnRef idx="2"/><d:extLst><a:fillRef idx="99"/></d:extLst></d:style></d:styleLbl><d:extLst><d:styleLbl name="lookalike"><d:style><a:lnRef idx="99"/></d:style></d:styleLbl></d:extLst></d:styleDef>"#).unwrap();
     assert_eq!(style.labels.len(), 1);
@@ -308,6 +311,194 @@ fn smartart_projections_ignore_same_namespace_lookalikes_outside_schema_position
     let drawing = CT_DiagramDrawing::from_xml(drawing_xml).unwrap();
     assert_eq!(drawing.shape_count, 2);
     assert_eq!(drawing.to_xml(), drawing_xml);
+}
+
+#[test]
+fn smartart_render_projection_reads_only_schema_owned_values_and_preserves_raw_xml() {
+    use oxml_drawing::color::{ColorChoice, ColorTransform};
+    use rpptx_oxml::diagram::{CT_DiagramColorsDefinition, CT_DiagramLayoutDefinition};
+
+    let xml = br#"<d:layoutDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:x="urn:producer" x:keep='A&#x20;B' uniqueId="urn:f220:cycle"><d:layoutNode><d:alg type="cycle" rev="0"><d:param type="stAng" val="90"/><d:param type="spanAng" val="360"/></d:alg><d:constrLst><d:constr type="w" for="ch" val="0.5"/><d:constr type="h" for="ch" fact="0.8"/></d:constrLst><d:ruleLst><d:rule type="maxVal" for="ch" val="6"/></d:ruleLst><d:extLst><d:alg type="pyramid"><d:param type="stAng" val="must-not-project"/></d:alg><d:constrLst><d:constr type="fake" val="99"/></d:constrLst><d:ruleLst><d:rule type="fake" val="99"/></d:ruleLst></d:extLst><x:alg type="foreign"/></d:layoutNode><d:extLst xmlns:d="urn:shadow"><d:layoutNode><d:alg type="shadow"/></d:layoutNode></d:extLst></d:layoutDef>"#;
+    let layout = CT_DiagramLayoutDefinition::from_xml(xml).unwrap();
+
+    assert_eq!(
+        layout.render_projection().algorithms,
+        [(
+            "cycle".to_owned(),
+            vec![
+                ("rev".to_owned(), "0".to_owned()),
+                ("stAng".to_owned(), "90".to_owned()),
+                ("spanAng".to_owned(), "360".to_owned()),
+            ],
+        )]
+    );
+    assert_eq!(
+        layout.render_projection().constraints,
+        [
+            vec![
+                ("type".to_owned(), "w".to_owned()),
+                ("for".to_owned(), "ch".to_owned()),
+                ("val".to_owned(), "0.5".to_owned()),
+            ],
+            vec![
+                ("type".to_owned(), "h".to_owned()),
+                ("for".to_owned(), "ch".to_owned()),
+                ("fact".to_owned(), "0.8".to_owned()),
+            ],
+        ]
+    );
+    assert_eq!(
+        layout.render_projection().rules,
+        [vec![
+            ("type".to_owned(), "maxVal".to_owned()),
+            ("for".to_owned(), "ch".to_owned()),
+            ("val".to_owned(), "6".to_owned()),
+        ]]
+    );
+    assert_eq!(layout.to_xml(), xml);
+
+    let colors_xml = br#"<d:colorsDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a2="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><d:styleLbl name="node"><d:fillClrLst><a2:schemeClr val="accent1"><a2:tint val="25000"/><x:shade val="must-not-project"/><a2:lumMod val="80000"/><a:tint xmlns:a="urn:shadow" val="must-not-project"/></a2:schemeClr><x:srgbClr val="FFFFFF"/></d:fillClrLst><d:linClrLst><a2:srgbClr val="112233"><a2:alpha val="50000"/></a2:srgbClr></d:linClrLst><d:extLst><d:fillClrLst><a2:srgbClr val="AABBCC"/></d:fillClrLst></d:extLst></d:styleLbl></d:colorsDef>"#;
+    let colors = CT_DiagramColorsDefinition::from_xml(colors_xml).unwrap();
+    let projected = &colors.render_projection().labels[0];
+    assert_eq!(projected.name, "node");
+    assert_eq!(projected.fill.len(), 1);
+    let ColorChoice::Scheme {
+        value, transforms, ..
+    } = &projected.fill[0]
+    else {
+        panic!("expected aliased scheme colour")
+    };
+    assert_eq!(value, "accent1");
+    assert!(matches!(
+        transforms.as_slice(),
+        [
+            ColorTransform::Tint(_),
+            ColorTransform::LuminanceModulation(_)
+        ]
+    ));
+    assert_eq!(projected.line.len(), 1);
+    assert!(
+        matches!(&projected.line[0], ColorChoice::Srgb { transforms, .. } if matches!(transforms.as_slice(), [ColorTransform::Alpha(_)]))
+    );
+    assert!(projected.effect.is_empty());
+    assert!(projected.text_fill.is_empty());
+    assert_eq!(colors.to_xml(), colors_xml);
+}
+
+#[test]
+fn smartart_layout_family_requires_one_of_the_six_exact_authentic_identities() {
+    use rpptx_oxml::diagram::{CT_DiagramLayoutDefinition, DiagramLayoutFamily};
+
+    for (identity, expected) in [
+        (
+            "urn:microsoft.com/office/officeart/2005/8/layout/list1",
+            DiagramLayoutFamily::List,
+        ),
+        (
+            "urn:microsoft.com/office/officeart/2005/8/layout/hierarchy1",
+            DiagramLayoutFamily::Hierarchy,
+        ),
+        (
+            "urn:microsoft.com/office/officeart/2005/8/layout/cycle1",
+            DiagramLayoutFamily::Cycle,
+        ),
+        (
+            "urn:microsoft.com/office/officeart/2009/3/layout/CircleRelationship",
+            DiagramLayoutFamily::Relationship,
+        ),
+        (
+            "urn:microsoft.com/office/officeart/2005/8/layout/matrix1",
+            DiagramLayoutFamily::Matrix,
+        ),
+        (
+            "urn:microsoft.com/office/officeart/2005/8/layout/pyramid1",
+            DiagramLayoutFamily::Pyramid,
+        ),
+        (
+            "urn:f220:list",
+            DiagramLayoutFamily::Unsupported("urn:f220:list".to_owned()),
+        ),
+        (
+            "urn:producer:unrelated-list-layout",
+            DiagramLayoutFamily::Unsupported("urn:producer:unrelated-list-layout".to_owned()),
+        ),
+    ] {
+        let xml = format!(
+            r#"<d:layoutDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="{identity}"><d:title val="Authentic identity"/><d:catLst><d:cat type="list"/></d:catLst><d:layoutNode><d:forEach axis="ch"><d:layoutNode><d:alg type="lin"/></d:layoutNode></d:forEach></d:layoutNode></d:layoutDef>"#
+        );
+        let layout = CT_DiagramLayoutDefinition::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(layout.family, expected, "{identity}");
+        assert_eq!(layout.to_xml(), xml.as_bytes());
+    }
+}
+
+#[test]
+fn smartart_render_projection_keeps_nested_instruction_ownership_and_excludes_lookalikes() {
+    use rpptx_oxml::diagram::{CT_DiagramLayoutDefinition, DiagramRenderInstructionKind};
+
+    let xml = br#"<q:layoutDef xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:dgm="urn:shadow" xmlns:x="urn:extension" uniqueId="urn:microsoft.com/office/officeart/2005/8/layout/list1"><q:layoutNode styleLbl="root"><q:forEach axis="ch" ptType="node"><q:layoutNode styleLbl="child"><q:alg type="lin"><q:param type="linDir" val="fromL"/></q:alg><q:shape type="rect"/><q:presOf axis="self" ptType="node"/></q:layoutNode></q:forEach><q:choose name="owned"><q:if func="cnt" op="gte" val="2"><q:layoutNode name="many"><q:shape type="ellipse"/></q:layoutNode></q:if><q:else><q:layoutNode name="one"><q:shape type="rect"/></q:layoutNode></q:else></q:choose><x:forEach axis="must-not-project"><x:alg type="must-not-project"/></x:forEach><q:extLst><q:layoutNode styleLbl="must-not-project"><q:alg type="must-not-project"/></q:layoutNode></q:extLst><dgm:layoutNode styleLbl="shadow"><dgm:alg type="shadow"/></dgm:layoutNode></q:layoutNode></q:layoutDef>"#;
+    let layout = CT_DiagramLayoutDefinition::from_xml(xml).unwrap();
+    let projection = layout.render_projection();
+    let root = projection.root.as_ref().expect("schema-owned layout root");
+    assert_eq!(root.kind, DiagramRenderInstructionKind::LayoutNode);
+    assert_eq!(
+        root.attributes,
+        [("styleLbl".to_owned(), "root".to_owned())]
+    );
+    assert_eq!(
+        root.children
+            .iter()
+            .map(|child| &child.kind)
+            .collect::<Vec<_>>(),
+        [
+            &DiagramRenderInstructionKind::ForEach,
+            &DiagramRenderInstructionKind::Choose,
+        ]
+    );
+    let loop_node = &root.children[0].children[0];
+    assert_eq!(loop_node.kind, DiagramRenderInstructionKind::LayoutNode);
+    assert_eq!(
+        loop_node
+            .children
+            .iter()
+            .map(|child| &child.kind)
+            .collect::<Vec<_>>(),
+        [
+            &DiagramRenderInstructionKind::Algorithm,
+            &DiagramRenderInstructionKind::Shape,
+            &DiagramRenderInstructionKind::PresentationOf,
+        ]
+    );
+    assert_eq!(
+        root.children[1].children[0].kind,
+        DiagramRenderInstructionKind::Condition
+    );
+    assert_eq!(
+        root.children[1].children[1].kind,
+        DiagramRenderInstructionKind::Else
+    );
+    assert_eq!(layout.to_xml(), xml);
+}
+
+#[test]
+fn smartart_render_projection_rejects_excessive_layout_depth() {
+    use rpptx_oxml::diagram::CT_DiagramLayoutDefinition;
+
+    let mut xml = String::from(
+        r#"<d:layoutDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="urn:f220:list">"#,
+    );
+    for _ in 0..66 {
+        xml.push_str("<d:layoutNode>");
+    }
+    xml.push_str(r#"<d:alg type="lin"/>"#);
+    for _ in 0..66 {
+        xml.push_str("</d:layoutNode>");
+    }
+    xml.push_str("</d:layoutDef>");
+    let error = CT_DiagramLayoutDefinition::from_xml(xml.as_bytes())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("depth bound 64"), "{error}");
 }
 
 #[test]
@@ -412,7 +603,10 @@ fn supported_smartart_nodes_remain_editable_after_save_and_reopen() {
     );
 
     let layout = CT_DiagramLayoutDefinition::from_xml(br#"<d:layoutDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="urn:hierarchy4"><d:layoutNode><d:alg type="hierRoot"/></d:layoutNode></d:layoutDef>"#).unwrap();
-    assert_eq!(layout.family, DiagramLayoutFamily::Hierarchy);
+    assert_eq!(
+        layout.family,
+        DiagramLayoutFamily::Unsupported("urn:hierarchy4".to_owned())
+    );
 
     let mut ids = DiagramRelationshipIds::from_xml(br#"<d:relIds xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:x="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="urn:producer" p:keep='A&#x20;B' x:dm="same" x:lo="same-layout" x:qs="same-style" x:cs="same-colors"><p:child x:id="unmapped"/></d:relIds>"#).unwrap();
     ids.drawing = Some("same-drawing".to_owned());

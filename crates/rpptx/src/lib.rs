@@ -16,6 +16,8 @@ use std::io::Cursor;
 use std::path::Path;
 
 #[cfg(feature = "render")]
+use diagram::{DiagramResources, ScopedDiagramResources};
+#[cfg(feature = "render")]
 use oxml_chart::CT_ChartSpace;
 pub use oxml_chart::{ChartData, ChartKind};
 use oxml_core::OxmlError;
@@ -64,7 +66,7 @@ pub use rpptx_layout::timeline::{
 use rpptx_layout::timeline::{ResolvedTimelineSlide, evaluate_media_playback};
 #[cfg(feature = "render")]
 use rpptx_layout::{
-    ChartResource, FlattenedItem, FlattenedSource, ResolveCtx, ResolvedContent,
+    ChartResource, FlattenedItem, FlattenedSource, ResolveCtx, ResolvedContent, ResolvedSlide,
     ScopedChartResources, ScopedHyperlinkTargets, ScopedMediaIds,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
@@ -106,6 +108,8 @@ use thiserror::Error;
 
 #[cfg(feature = "render")]
 mod animation;
+#[cfg(feature = "render")]
+mod diagram;
 #[cfg(feature = "render")]
 pub use animation::{
     AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition,
@@ -2959,7 +2963,7 @@ fn render_prepared_timeline_request(
             (Some(timeline), Some(directions))
         }
     };
-    let incoming_page = layout_timeline_slide_with_font_manager(
+    let mut incoming_page = layout_timeline_slide_with_font_manager(
         &assembly.input,
         request.slide_index,
         &incoming,
@@ -2967,17 +2971,28 @@ fn render_prepared_timeline_request(
         font_manager,
     )
     .map_err(|error| render_failure(error.to_string()))?;
+    apply_smartart_clips(
+        &mut incoming_page,
+        &incoming.slide,
+        &incoming_source.smartart_clips,
+    )?;
     let outgoing_page = match (request.outgoing_slide_index, outgoing.as_ref()) {
-        (Some(index), Some(outgoing)) => Some(
-            layout_timeline_slide_with_font_manager(
+        (Some(index), Some(outgoing)) => {
+            let mut page = layout_timeline_slide_with_font_manager(
                 &assembly.input,
                 index,
                 outgoing,
                 outgoing_directions.as_ref(),
                 font_manager,
             )
-            .map_err(|error| render_failure(error.to_string()))?,
-        ),
+            .map_err(|error| render_failure(error.to_string()))?;
+            let source = assembly
+                .slides
+                .get(index)
+                .ok_or(Error::UnknownSlideIndex { index, slide_count })?;
+            apply_smartart_clips(&mut page, &outgoing.slide, &source.smartart_clips)?;
+            Some(page)
+        }
         _ => None,
     };
     let outgoing_page = outgoing_page.as_ref();
@@ -6239,6 +6254,7 @@ struct PreparedSlideAssembly {
     hyperlinks: ScopedHyperlinkTargets,
     charts: ScopedChartResources,
     media_diagnostics: Vec<oxml_layout::Diagnostic>,
+    smartart_clips: Vec<Option<Rect>>,
 }
 
 #[cfg(feature = "render")]
@@ -6376,20 +6392,21 @@ fn prepare_render_context(
         let layout_part = render_related_part(package, &slide_part, rel_types::SLIDE_LAYOUT)?;
         let master_part = render_related_part(package, &layout_part, rel_types::SLIDE_MASTER)?;
         let theme_part = render_related_part(package, &master_part, rel_types::THEME)?;
-        let slide = CT_Slide::from_xml(required_part(package, &slide_part)?).map_err(|error| {
-            Error::MalformedPart {
-                part_name: slide_part.clone(),
-                message: error.to_string(),
-            }
-        })?;
-        let layout =
+        let mut slide =
+            CT_Slide::from_xml(required_part(package, &slide_part)?).map_err(|error| {
+                Error::MalformedPart {
+                    part_name: slide_part.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+        let mut layout =
             CT_SlideLayout::from_xml(required_part(package, &layout_part)?).map_err(|error| {
                 Error::MalformedPart {
                     part_name: layout_part.clone(),
                     message: error.to_string(),
                 }
             })?;
-        let master =
+        let mut master =
             CT_SlideMaster::from_xml(required_part(package, &master_part)?).map_err(|error| {
                 Error::MalformedPart {
                     part_name: master_part.clone(),
@@ -6402,6 +6419,32 @@ fn prepare_render_context(
                 message: error.to_string(),
             },
         )?;
+        let (slide_media, slide_hyperlinks, slide_charts, slide_diagrams) =
+            render_scoped_resources(
+                package,
+                [&slide_part, &layout_part, &master_part],
+                [
+                    &slide.common_slide_data.shape_tree.children,
+                    &layout.common_slide_data.shape_tree.children,
+                    &master.common_slide_data.shape_tree.children,
+                ],
+                &mut media,
+            )?;
+        let mut slide_expansion = diagram::expand_tree(
+            &mut slide.common_slide_data.shape_tree,
+            &slide_diagrams.slide,
+        );
+        let mut layout_expansion = diagram::expand_tree(
+            &mut layout.common_slide_data.shape_tree,
+            &slide_diagrams.layout,
+        );
+        let mut master_expansion = diagram::expand_tree(
+            &mut master.common_slide_data.shape_tree,
+            &slide_diagrams.master,
+        );
+        let mut smartart_diagnostics = std::mem::take(&mut slide_expansion.diagnostics);
+        smartart_diagnostics.append(&mut layout_expansion.diagnostics);
+        smartart_diagnostics.append(&mut master_expansion.diagnostics);
         let color_map = render_effective_color_map(&master, &layout, &slide);
         let mut context = ResolveCtx::new(
             &theme,
@@ -6414,17 +6457,21 @@ fn prepare_render_context(
         if let Some(styles) = table_styles.as_ref() {
             context = context.with_table_styles(styles);
         }
-        let source_count = context
+        let smartart_source_clips = context
             .flatten()
             .into_iter()
             .filter(|item| render_source_shape_has_bounds(&context, item))
-            .count();
-        let (slide_media, slide_hyperlinks, slide_charts) = render_scoped_resources(
-            package,
-            [&slide_part, &layout_part, &master_part],
-            &mut media,
-        )?;
-        let (resolved, slide_text_directions) = context
+            .map(|item| {
+                render_source_smartart_clip(
+                    &item,
+                    &slide_expansion.clips,
+                    &layout_expansion.clips,
+                    &master_expansion.clips,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let source_count = smartart_source_clips.len();
+        let (mut resolved, slide_text_directions) = context
             .resolve_slide_with_chart_resources_and_text_directions(
                 size,
                 &slide_media,
@@ -6433,6 +6480,7 @@ fn prepare_render_context(
                 &mut font_manager,
             )
             .map_err(|error| render_failure(format!("{slide_part}: {error}")))?;
+        resolved.diagnostics.append(&mut smartart_diagnostics);
 
         let prepared_media_diagnostics = if collect_media_diagnostics {
             let media_infos = media_infos_for_slide(package, slide_index, &slide_part, &slide)?;
@@ -6446,6 +6494,11 @@ fn prepare_render_context(
                 resolved.shapes.len()
             )));
         }
+        for (clip, shape) in smartart_source_clips.iter().zip(&resolved.shapes) {
+            if let Some(clip) = clip {
+                smartart_local_clip(*clip, shape.bounds)?;
+            }
+        }
         resolved_slides.push(resolved);
         text_directions.push(slide_text_directions);
         prepared_slides.push(PreparedSlideAssembly {
@@ -6458,6 +6511,7 @@ fn prepare_render_context(
             hyperlinks: slide_hyperlinks,
             charts: slide_charts,
             media_diagnostics: prepared_media_diagnostics,
+            smartart_clips: smartart_source_clips,
         });
     }
 
@@ -6469,7 +6523,7 @@ fn prepare_render_context(
     };
     #[cfg(test)]
     PREPARED_LAYOUT_COUNT.with(|count| count.set(count.get() + 1));
-    let layout = layout_presentation_with_font_manager_and_text_directions_mut(
+    let mut layout = layout_presentation_with_font_manager_and_text_directions_mut(
         &input,
         &mut font_manager,
         &text_directions,
@@ -6481,6 +6535,18 @@ fn prepare_render_context(
             layout.pages.len(),
             input.slides.len()
         )));
+    }
+    for ((page, slide), prepared) in layout
+        .pages
+        .iter_mut()
+        .zip(&input.slides)
+        .zip(&prepared_slides)
+    {
+        apply_smartart_clips(
+            std::sync::Arc::make_mut(page),
+            slide,
+            &prepared.smartart_clips,
+        )?;
     }
     Ok(PreparedRenderAssembly {
         input,
@@ -6786,11 +6852,17 @@ fn render_table_styles(
 fn render_scoped_resources(
     package: &OpcPackage,
     parts: [&str; 3],
+    shape_trees: [&[ShapeTreeChild]; 3],
     deck_media: &mut HashMap<MediaId, MediaData>,
-) -> Result<(ScopedMediaIds, ScopedHyperlinkTargets, ScopedChartResources)> {
-    let slide = render_part_resources(package, parts[0], deck_media)?;
-    let layout = render_part_resources(package, parts[1], deck_media)?;
-    let master = render_part_resources(package, parts[2], deck_media)?;
+) -> Result<(
+    ScopedMediaIds,
+    ScopedHyperlinkTargets,
+    ScopedChartResources,
+    ScopedDiagramResources,
+)> {
+    let slide = render_part_resources(package, parts[0], shape_trees[0], deck_media)?;
+    let layout = render_part_resources(package, parts[1], shape_trees[1], deck_media)?;
+    let master = render_part_resources(package, parts[2], shape_trees[2], deck_media)?;
     Ok((
         ScopedMediaIds {
             slide: slide.media_ids,
@@ -6811,6 +6883,11 @@ fn render_scoped_resources(
             layout: layout.charts,
             master: master.charts,
         },
+        ScopedDiagramResources {
+            slide: slide.diagrams,
+            layout: layout.diagrams,
+            master: master.diagrams,
+        },
     ))
 }
 
@@ -6819,22 +6896,26 @@ struct RenderPartResources {
     media_ids: HashMap<String, MediaId>,
     hyperlinks: HashMap<String, String>,
     charts: HashMap<String, ChartResource>,
+    diagrams: HashMap<String, DiagramResources>,
 }
 
 #[cfg(feature = "render")]
 fn render_part_resources(
     package: &OpcPackage,
     source_part: &str,
+    shape_tree: &[ShapeTreeChild],
     deck_media: &mut HashMap<MediaId, MediaData>,
 ) -> Result<RenderPartResources> {
     let mut media_ids = HashMap::new();
     let mut hyperlinks = HashMap::new();
     let mut charts = HashMap::new();
+    let diagrams = render_part_diagram_resources(package, source_part, shape_tree);
     let Some(relationships) = package.get_part_rels(source_part) else {
         return Ok(RenderPartResources {
             media_ids,
             hyperlinks,
             charts,
+            diagrams,
         });
     };
     for relationship in &relationships.items {
@@ -6885,7 +6966,84 @@ fn render_part_resources(
         media_ids,
         hyperlinks,
         charts,
+        diagrams,
     })
+}
+
+#[cfg(feature = "render")]
+fn render_part_diagram_resources(
+    package: &OpcPackage,
+    source_part: &str,
+    shape_tree: &[ShapeTreeChild],
+) -> HashMap<String, DiagramResources> {
+    let mut frames = Vec::new();
+    collect_smartart_frames(shape_tree, &mut frames);
+    let mut resources = HashMap::new();
+    for (frame, _) in frames {
+        let GraphicDataPayload::SmartArt(relationship_ids) = frame.graphic_data.payload() else {
+            continue;
+        };
+        let mut relationships = (**relationship_ids).clone();
+        let data_part = resolve_diagram_part(
+            package,
+            source_part,
+            &relationships.data,
+            rel_types::DIAGRAM_DATA,
+            CT_DiagramData::from_xml,
+        );
+        let drawing_id = match &data_part {
+            DiagramPart::Parsed(data) => data.drawing_relationship_id().map(str::to_owned),
+            _ => None,
+        };
+        relationships.drawing = drawing_id.clone();
+        let diagram = DiagramResources {
+            relationships: relationships.clone(),
+            data: diagram_part_result(data_part),
+            layout: diagram_part_result(resolve_diagram_part(
+                package,
+                source_part,
+                &relationships.layout,
+                rel_types::DIAGRAM_LAYOUT,
+                CT_DiagramLayoutDefinition::from_xml,
+            )),
+            style: diagram_part_result(resolve_diagram_part(
+                package,
+                source_part,
+                &relationships.style,
+                rel_types::DIAGRAM_QUICK_STYLE,
+                CT_DiagramStyleDefinition::from_xml,
+            )),
+            colors: diagram_part_result(resolve_diagram_part(
+                package,
+                source_part,
+                &relationships.colors,
+                rel_types::DIAGRAM_COLORS,
+                CT_DiagramColorsDefinition::from_xml,
+            )),
+        };
+        resources
+            .entry(relationships.data.clone())
+            .and_modify(|existing: &mut DiagramResources| {
+                if existing.relationships != relationships {
+                    existing.data = Err(format!(
+                        "conflicting SmartArt relationship sets share data id `{}`",
+                        relationships.data
+                    ));
+                }
+            })
+            .or_insert(diagram);
+    }
+    resources
+}
+
+#[cfg(feature = "render")]
+fn diagram_part_result<T>(part: DiagramPart<T>) -> std::result::Result<Box<T>, String> {
+    match part {
+        DiagramPart::Parsed(value) => Ok(Box::new(value)),
+        DiagramPart::External(target) => Err(format!("external SmartArt target `{target}`")),
+        DiagramPart::MissingTarget(target) => Err(format!("missing SmartArt target `{target}`")),
+        DiagramPart::Invalid(detail) => Err(format!("invalid SmartArt part: {detail}")),
+    }
 }
 
 #[cfg(feature = "render")]
@@ -7065,6 +7223,140 @@ fn render_source_shape_has_bounds(context: &ResolveCtx<'_>, item: &FlattenedItem
             .is_some_and(|frame| render_transform_has_bounds(&frame.transform)),
         ShapeTreeChild::GroupShape(_) => false,
     }
+}
+
+#[cfg(feature = "render")]
+fn render_source_smartart_clip(
+    item: &FlattenedItem<'_>,
+    slide_clips: &HashMap<u32, Rect>,
+    layout_clips: &HashMap<u32, Rect>,
+    master_clips: &HashMap<u32, Rect>,
+) -> Result<Option<Rect>> {
+    let FlattenedItem::Shape {
+        source,
+        child,
+        group_scale,
+        ..
+    } = item
+    else {
+        return Ok(None);
+    };
+    let Some(id) = child.non_visual_id() else {
+        return Ok(None);
+    };
+    let frame = match source {
+        FlattenedSource::Slide => slide_clips.get(&id).copied(),
+        FlattenedSource::Layout => layout_clips.get(&id).copied(),
+        FlattenedSource::Master => master_clips.get(&id).copied(),
+        FlattenedSource::Background => None,
+    };
+    let Some(frame) = frame else {
+        return Ok(None);
+    };
+    let frame = Rect {
+        x: frame.x * group_scale.0,
+        y: frame.y * group_scale.1,
+        width: frame.width * group_scale.0,
+        height: frame.height * group_scale.1,
+    };
+    if ![
+        frame.x,
+        frame.y,
+        frame.width,
+        frame.height,
+        group_scale.0,
+        group_scale.1,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || frame.width <= 0.0
+        || frame.height <= 0.0
+    {
+        return Err(render_failure(
+            "SmartArt parent group has invalid clip scale",
+        ));
+    }
+    Ok(Some(frame))
+}
+
+#[cfg(feature = "render")]
+fn smartart_local_clip(frame: Rect, shape: Rect) -> Result<Rect> {
+    let clip = Rect {
+        x: frame.x - shape.x,
+        y: frame.y - shape.y,
+        width: frame.width,
+        height: frame.height,
+    };
+    if ![
+        clip.x,
+        clip.y,
+        clip.width,
+        clip.height,
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || clip.width <= 0.0
+        || clip.height <= 0.0
+        || shape.width <= 0.0
+        || shape.height <= 0.0
+    {
+        return Err(render_failure(
+            "SmartArt clip has invalid resolved geometry",
+        ));
+    }
+    Ok(clip)
+}
+
+#[cfg(feature = "render")]
+fn apply_smartart_clips(
+    page: &mut PageFrame,
+    slide: &ResolvedSlide,
+    clips: &[Option<Rect>],
+) -> Result<()> {
+    if clips.len() != slide.shapes.len() {
+        return Err(render_failure(format!(
+            "SmartArt clip count {}, resolved shape count {}",
+            clips.len(),
+            slide.shapes.len()
+        )));
+    }
+    let shape_offset = page
+        .elements
+        .len()
+        .checked_sub(slide.shapes.len())
+        .ok_or_else(|| render_failure("rendered page dropped resolved shapes"))?;
+    for ((element, shape), frame) in page.elements[shape_offset..]
+        .iter_mut()
+        .zip(&slide.shapes)
+        .zip(clips)
+    {
+        let Some(frame) = frame else {
+            continue;
+        };
+        let clip = LayoutPath::rect(smartart_local_clip(*frame, shape.bounds)?);
+        let PositionedElement::Group(group) = element else {
+            return Err(render_failure(
+                "SmartArt resolved shape did not lower to a render group",
+            ));
+        };
+        if group.clip.as_ref() == Some(&clip) {
+            continue;
+        }
+        if let Some(existing) = group.clip.replace(clip) {
+            group.children = vec![PositionedElement::Group(GroupElement {
+                transform: Transform::IDENTITY,
+                clip: Some(existing),
+                opacity: 1.0,
+                effects: Vec::new(),
+                children: std::mem::take(&mut group.children),
+            })];
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "render")]

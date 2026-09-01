@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
+use oxml_drawing::color::ColorChoice;
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::text::CT_TextBody;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
@@ -51,6 +52,72 @@ pub enum DiagramLayoutFamily {
     Matrix,
     Pyramid,
     Unsupported(String),
+}
+
+/// Render-only values projected from schema-owned diagram layout positions.
+///
+/// This low-level projection is consumed by `rpptx`. It deliberately
+/// exposes decoded values rather than preserved XML.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DiagramRenderProjection {
+    pub algorithms: Vec<(String, Vec<(String, String)>)>,
+    pub constraints: Vec<Vec<(String, String)>>,
+    pub rules: Vec<Vec<(String, String)>>,
+    pub root: Option<DiagramRenderInstruction>,
+}
+
+/// One schema-owned instruction in a diagram layout program.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiagramRenderInstruction {
+    pub kind: DiagramRenderInstructionKind,
+    pub attributes: Vec<(String, String)>,
+    pub children: Vec<DiagramRenderInstruction>,
+}
+
+/// The bounded instruction kinds exposed to the private diagram evaluator.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DiagramRenderInstructionKind {
+    LayoutNode,
+    Algorithm,
+    Parameter,
+    ConstraintList,
+    Constraint,
+    RuleList,
+    Rule,
+    ForEach,
+    Choose,
+    Condition,
+    Else,
+    Shape,
+    PresentationOf,
+    VariableList,
+    Variable(String),
+    AdjustmentList,
+    Adjustment,
+    Unsupported(String),
+}
+
+const MAX_RENDER_PROJECTION_DEPTH: usize = 64;
+
+/// Render-only typed colour choices from schema-owned diagram positions.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DiagramColorRenderProjection {
+    pub labels: Vec<DiagramColorRenderLabel>,
+}
+
+/// One named set of typed diagram colour lists.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DiagramColorRenderLabel {
+    pub name: String,
+    pub fill: Vec<ColorChoice>,
+    pub line: Vec<ColorChoice>,
+    pub effect: Vec<ColorChoice>,
+    pub text_fill: Vec<ColorChoice>,
 }
 
 /// One data-model point with optional DrawingML text.
@@ -460,6 +527,7 @@ pub struct CT_DiagramLayoutDefinition {
     pub algorithms: Vec<String>,
     pub constraints: Vec<String>,
     pub categories: Vec<String>,
+    render_projection: DiagramRenderProjection,
     raw_xml: Vec<u8>,
 }
 
@@ -480,14 +548,33 @@ impl CT_DiagramLayoutDefinition {
         )?;
         let mut algorithms = Vec::new();
         let mut constraints = Vec::new();
+        let mut render_projection = DiagramRenderProjection::default();
+        let mut render_roots = Vec::new();
+        let mut unsupported_layout = None;
         for raw in direct_children(&children, &namespaces, DGM_NS, b"layoutNode")? {
-            collect_layout_projection(&raw, &namespaces, &mut algorithms, &mut constraints)?;
+            collect_layout_projection(&raw, &namespaces, &mut algorithms, &mut constraints, 0)?;
+            collect_render_projection(
+                &raw,
+                &namespaces,
+                &mut render_projection,
+                &mut unsupported_layout,
+                0,
+            )?;
+            render_roots.push(project_render_instruction(&raw, &namespaces, None, 0)?);
         }
+        render_projection.root = match render_roots.len() {
+            0 => None,
+            1 => render_roots.pop(),
+            _ => Some(DiagramRenderInstruction {
+                kind: DiagramRenderInstructionKind::Unsupported("multiple-layout-roots".to_owned()),
+                attributes: Vec::new(),
+                children: render_roots,
+            }),
+        };
         let family = infer_layout_family(
             unique_id.as_deref(),
-            title.as_deref(),
-            &categories,
             &algorithms,
+            unsupported_layout.as_deref(),
         );
         Ok(Self {
             unique_id,
@@ -496,12 +583,19 @@ impl CT_DiagramLayoutDefinition {
             algorithms,
             constraints,
             categories,
+            render_projection,
             raw_xml: xml.to_vec(),
         })
     }
 
     pub fn to_xml(&self) -> Vec<u8> {
         self.raw_xml.clone()
+    }
+
+    /// Returns ordered render-only values from schema-owned layout positions.
+    #[doc(hidden)]
+    pub fn render_projection(&self) -> &DiagramRenderProjection {
+        &self.render_projection
     }
 }
 
@@ -571,6 +665,7 @@ pub struct DiagramColorLabel {
 pub struct CT_DiagramColorsDefinition {
     pub unique_id: Option<String>,
     pub labels: Vec<DiagramColorLabel>,
+    render_projection: DiagramColorRenderProjection,
     raw_xml: Vec<u8>,
 }
 
@@ -579,8 +674,10 @@ impl CT_DiagramColorsDefinition {
         let (start, children) = root_and_children(xml, b"colorsDef")?;
         let namespaces = NamespaceBindings::default().with_start(&start)?;
         let unique_id = unqualified_attribute(&all_attributes(&start)?, "uniqueId");
-        let labels = named_direct_children(&children, &namespaces, DGM_NS, b"styleLbl")?
-            .into_iter()
+        let named_labels = named_direct_children(&children, &namespaces, DGM_NS, b"styleLbl")?;
+        let labels = named_labels
+            .iter()
+            .cloned()
             .map(|(name, raw, namespaces)| {
                 let fill_colors =
                     colors_in_list(&raw, &namespaces, b"fillClrLst").unwrap_or_default();
@@ -607,15 +704,36 @@ impl CT_DiagramColorsDefinition {
                 }
             })
             .collect();
+        let render_projection = DiagramColorRenderProjection {
+            labels: named_labels
+                .into_iter()
+                .map(|(name, raw, namespaces)| {
+                    Ok(DiagramColorRenderLabel {
+                        name,
+                        fill: render_colors_in_list(&raw, &namespaces, b"fillClrLst")?,
+                        line: render_colors_in_list(&raw, &namespaces, b"linClrLst")?,
+                        effect: render_colors_in_list(&raw, &namespaces, b"effectClrLst")?,
+                        text_fill: render_colors_in_list(&raw, &namespaces, b"txFillClrLst")?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        };
         Ok(Self {
             unique_id,
             labels,
+            render_projection,
             raw_xml: xml.to_vec(),
         })
     }
 
     pub fn to_xml(&self) -> Vec<u8> {
         self.raw_xml.clone()
+    }
+
+    /// Returns typed render-only choices from schema-owned colour lists.
+    #[doc(hidden)]
+    pub fn render_projection(&self) -> &DiagramColorRenderProjection {
+        &self.render_projection
     }
 }
 
@@ -1046,7 +1164,13 @@ fn collect_layout_projection(
     inherited: &NamespaceBindings,
     algorithms: &mut Vec<String>,
     constraints: &mut Vec<String>,
+    depth: usize,
 ) -> Result<()> {
+    if depth > MAX_RENDER_PROJECTION_DEPTH {
+        return Err(OxmlError::InvalidValue(format!(
+            "diagram layout projection exceeds depth bound {MAX_RENDER_PROJECTION_DEPTH}"
+        )));
+    }
     let root = first_local_name(xml)?.ok_or_else(|| missing("diagram layout container"))?;
     let (start, children, _) = root_and_children_impl(xml, &root, Some(DGM_NS), inherited)?;
     let scope = inherited.with_start(&start)?;
@@ -1073,12 +1197,202 @@ fn collect_layout_projection(
             )?),
             Some(b"layoutNode") | Some(b"forEach") | Some(b"choose") | Some(b"if")
             | Some(b"else") => {
-                collect_layout_projection(&raw, &scope, algorithms, constraints)?;
+                collect_layout_projection(&raw, &scope, algorithms, constraints, depth + 1)?;
             }
             _ => {}
         }
     }
     Ok(())
+}
+
+fn collect_render_projection(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    projection: &mut DiagramRenderProjection,
+    unsupported_layout: &mut Option<String>,
+    depth: usize,
+) -> Result<()> {
+    if depth > MAX_RENDER_PROJECTION_DEPTH {
+        return Err(OxmlError::InvalidValue(format!(
+            "diagram render projection exceeds depth bound {MAX_RENDER_PROJECTION_DEPTH}"
+        )));
+    }
+    let root = first_local_name(xml)?.ok_or_else(|| missing("diagram layout container"))?;
+    let (start, children, _) = root_and_children_impl(xml, &root, Some(DGM_NS), inherited)?;
+    let scope = inherited.with_start(&start)?;
+    let owns_algorithm =
+        root == b"layoutNode" && !direct_children(&children, &scope, DGM_NS, b"alg")?.is_empty();
+    let owner_style_label = owns_algorithm
+        .then(|| render_attributes(&start))
+        .transpose()?
+        .and_then(|attributes| {
+            attributes
+                .into_iter()
+                .find_map(|(name, value)| (name == "styleLbl").then_some(value))
+        });
+    if root == b"layoutNode"
+        && !owns_algorithm
+        && (!direct_children(&children, &scope, DGM_NS, b"constrLst")?.is_empty()
+            || !direct_children(&children, &scope, DGM_NS, b"ruleLst")?.is_empty())
+    {
+        unsupported_layout
+            .get_or_insert_with(|| "constraint owner without direct algorithm".to_owned());
+    } else if root == b"forEach" {
+        unsupported_layout.get_or_insert_with(|| "selector ownership".to_owned());
+    }
+    for raw in children {
+        let local = first_local_name(&raw)?;
+        let uri = first_element_uri(&raw, &scope)?;
+        if uri.as_deref() != Some(DGM_NS) {
+            continue;
+        }
+        match local.as_deref() {
+            Some(b"alg") => {
+                let (algorithm, parameters, _) =
+                    root_and_children_impl(&raw, b"alg", Some(DGM_NS), &scope)?;
+                let algorithm_scope = scope.with_start(&algorithm)?;
+                let mut attributes = render_attributes(&algorithm)?;
+                let algorithm_type = take_render_attribute(&mut attributes, "type")
+                    .ok_or_else(|| missing("diagram algorithm type"))?;
+                for parameter in direct_children(&parameters, &algorithm_scope, DGM_NS, b"param")? {
+                    let (parameter, _, _) = root_and_children_impl(
+                        &parameter,
+                        b"param",
+                        Some(DGM_NS),
+                        &algorithm_scope,
+                    )?;
+                    let parameter_attributes = render_attributes(&parameter)?;
+                    let parameter_type = parameter_attributes
+                        .iter()
+                        .find_map(|(name, value)| (name == "type").then_some(value.clone()))
+                        .ok_or_else(|| missing("diagram algorithm parameter type"))?;
+                    let value = parameter_attributes
+                        .iter()
+                        .find_map(|(name, value)| (name == "val").then_some(value.clone()))
+                        .ok_or_else(|| missing("diagram algorithm parameter value"))?;
+                    attributes.push((parameter_type, value));
+                }
+                if let Some(label) = owner_style_label.as_ref() {
+                    attributes.push(("styleLbl".to_owned(), label.clone()));
+                }
+                projection.algorithms.push((algorithm_type, attributes));
+            }
+            Some(b"constrLst") => collect_render_list(
+                &raw,
+                &scope,
+                b"constrLst",
+                b"constr",
+                &mut projection.constraints,
+            )?,
+            Some(b"ruleLst") => {
+                collect_render_list(&raw, &scope, b"ruleLst", b"rule", &mut projection.rules)?
+            }
+            Some(b"layoutNode") if root == b"layoutNode" => {
+                unsupported_layout.get_or_insert_with(|| "nested layoutNode".to_owned());
+            }
+            Some(b"layoutNode") => {
+                collect_render_projection(&raw, &scope, projection, unsupported_layout, depth + 1)?;
+            }
+            Some(b"forEach") => {
+                collect_render_projection(&raw, &scope, projection, unsupported_layout, depth + 1)?;
+            }
+            Some(local @ (b"choose" | b"if" | b"else")) => {
+                unsupported_layout.get_or_insert_with(|| {
+                    format!("conditional {}", String::from_utf8_lossy(local))
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn project_render_instruction(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    parent: Option<&DiagramRenderInstructionKind>,
+    depth: usize,
+) -> Result<DiagramRenderInstruction> {
+    if depth > MAX_RENDER_PROJECTION_DEPTH {
+        return Err(OxmlError::InvalidValue(format!(
+            "diagram render projection exceeds depth bound {MAX_RENDER_PROJECTION_DEPTH}"
+        )));
+    }
+    let root = first_local_name(xml)?.ok_or_else(|| missing("diagram layout instruction"))?;
+    let (start, children, _) = root_and_children_impl(xml, &root, Some(DGM_NS), inherited)?;
+    let scope = inherited.with_start(&start)?;
+    let local = String::from_utf8_lossy(&root).into_owned();
+    let kind = if matches!(parent, Some(DiagramRenderInstructionKind::VariableList)) {
+        DiagramRenderInstructionKind::Variable(local)
+    } else {
+        match root.as_slice() {
+            b"layoutNode" => DiagramRenderInstructionKind::LayoutNode,
+            b"alg" => DiagramRenderInstructionKind::Algorithm,
+            b"param" => DiagramRenderInstructionKind::Parameter,
+            b"constrLst" => DiagramRenderInstructionKind::ConstraintList,
+            b"constr" => DiagramRenderInstructionKind::Constraint,
+            b"ruleLst" => DiagramRenderInstructionKind::RuleList,
+            b"rule" => DiagramRenderInstructionKind::Rule,
+            b"forEach" => DiagramRenderInstructionKind::ForEach,
+            b"choose" => DiagramRenderInstructionKind::Choose,
+            b"if" => DiagramRenderInstructionKind::Condition,
+            b"else" => DiagramRenderInstructionKind::Else,
+            b"shape" => DiagramRenderInstructionKind::Shape,
+            b"presOf" => DiagramRenderInstructionKind::PresentationOf,
+            b"varLst" => DiagramRenderInstructionKind::VariableList,
+            b"adjLst" => DiagramRenderInstructionKind::AdjustmentList,
+            b"adj" => DiagramRenderInstructionKind::Adjustment,
+            _ => DiagramRenderInstructionKind::Unsupported(local),
+        }
+    };
+    let mut projected_children = Vec::new();
+    for raw in children {
+        let Some(child_local) = first_local_name(&raw)? else {
+            continue;
+        };
+        if first_element_uri(&raw, &scope)?.as_deref() != Some(DGM_NS) || child_local == b"extLst" {
+            continue;
+        }
+        projected_children.push(project_render_instruction(
+            &raw,
+            &scope,
+            Some(&kind),
+            depth + 1,
+        )?);
+    }
+    Ok(DiagramRenderInstruction {
+        kind,
+        attributes: render_attributes(&start)?,
+        children: projected_children,
+    })
+}
+
+fn collect_render_list(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    list_name: &[u8],
+    item_name: &[u8],
+    output: &mut Vec<Vec<(String, String)>>,
+) -> Result<()> {
+    let (start, children, _) = root_and_children_impl(xml, list_name, Some(DGM_NS), inherited)?;
+    let scope = inherited.with_start(&start)?;
+    for item in direct_children(&children, &scope, DGM_NS, item_name)? {
+        let (item, _, _) = root_and_children_impl(&item, item_name, Some(DGM_NS), &scope)?;
+        output.push(render_attributes(&item)?);
+    }
+    Ok(())
+}
+
+fn render_attributes(start: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
+    Ok(all_attributes(start)?
+        .into_iter()
+        .filter(|(name, _)| !name.contains(':') && name != "xmlns")
+        .collect())
+}
+
+fn take_render_attribute(attributes: &mut Vec<(String, String)>, wanted: &str) -> Option<String> {
+    let index = attributes.iter().position(|(name, _)| name == wanted)?;
+    Some(attributes.remove(index).1)
 }
 
 fn colors_in_list(
@@ -1116,6 +1430,99 @@ fn colors_in_list(
         }
     }
     Ok(values)
+}
+
+fn render_colors_in_list(
+    xml: &[u8],
+    inherited: &[(String, String)],
+    wanted: &[u8],
+) -> Result<Vec<ColorChoice>> {
+    let inherited = NamespaceBindings::from_entries(inherited);
+    let (start, children, _) = root_and_children_impl(xml, b"styleLbl", Some(DGM_NS), &inherited)?;
+    let scope = inherited.with_start(&start)?;
+    let Some(list) = direct_children(&children, &scope, DGM_NS, wanted)?
+        .into_iter()
+        .next()
+    else {
+        return Ok(Vec::new());
+    };
+    let (list_start, color_children, _) =
+        root_and_children_impl(&list, wanted, Some(DGM_NS), &scope)?;
+    let list_scope = scope.with_start(&list_start)?;
+    let mut choices = Vec::new();
+    for raw in color_children {
+        let Some(local) = first_local_name(&raw)? else {
+            continue;
+        };
+        if !matches!(
+            local.as_slice(),
+            b"srgbClr" | b"schemeClr" | b"sysClr" | b"prstClr"
+        ) || first_element_uri(&raw, &list_scope)?.as_deref() != Some(A_NS)
+        {
+            continue;
+        }
+        let (color_start, color_children, _) =
+            root_and_children_impl(&raw, &local, Some(A_NS), &list_scope)?;
+        let color_scope = list_scope.with_start(&color_start)?;
+        let mut sanitized = Writer::new(Vec::new());
+        sanitized.write_event(Event::Start(color_start.to_owned()))?;
+        for child in color_children {
+            let child_local = first_local_name(&child)?;
+            if child_local.as_deref().is_some_and(is_color_transform_name)
+                && first_element_uri(&child, &color_scope)?.as_deref() == Some(A_NS)
+            {
+                sanitized.get_mut().write_all(&child)?;
+            }
+        }
+        sanitized.write_event(Event::End(BytesEnd::new(String::from_utf8_lossy(
+            color_start.name().as_ref(),
+        ))))?;
+        let bytes = sanitized.into_inner();
+        let mut reader = Reader::from_reader(bytes.as_slice());
+        let mut buffer = Vec::new();
+        let Event::Start(start) = reader.read_event_into(&mut buffer)? else {
+            return Err(unexpected(&color_start));
+        };
+        choices.push(
+            ColorChoice::from_xml(&mut reader, &start)
+                .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
+        );
+    }
+    Ok(choices)
+}
+
+fn is_color_transform_name(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"tint"
+            | b"shade"
+            | b"comp"
+            | b"inv"
+            | b"gray"
+            | b"alpha"
+            | b"alphaOff"
+            | b"alphaMod"
+            | b"hue"
+            | b"hueOff"
+            | b"hueMod"
+            | b"sat"
+            | b"satOff"
+            | b"satMod"
+            | b"lum"
+            | b"lumOff"
+            | b"lumMod"
+            | b"red"
+            | b"redOff"
+            | b"redMod"
+            | b"green"
+            | b"greenOff"
+            | b"greenMod"
+            | b"blue"
+            | b"blueOff"
+            | b"blueMod"
+            | b"gamma"
+            | b"invGamma"
+    )
 }
 
 fn parse_shape_style(
@@ -1548,39 +1955,23 @@ fn connection_kind(value: &str) -> DiagramConnectionKind {
 
 fn infer_layout_family(
     unique_id: Option<&str>,
-    title: Option<&str>,
-    categories: &[String],
-    algorithms: &[String],
+    _algorithms: &[String],
+    _unsupported_layout: Option<&str>,
 ) -> DiagramLayoutFamily {
-    let evidence = std::iter::empty()
-        .chain(unique_id)
-        .chain(title)
-        .chain(categories.iter().map(String::as_str))
-        .chain(algorithms.iter().map(String::as_str))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase();
-    for (needle, family) in [
-        ("hier", DiagramLayoutFamily::Hierarchy),
-        ("cycle", DiagramLayoutFamily::Cycle),
-        ("relationship", DiagramLayoutFamily::Relationship),
-        ("venn", DiagramLayoutFamily::Relationship),
-        ("matrix", DiagramLayoutFamily::Matrix),
-        ("pyramid", DiagramLayoutFamily::Pyramid),
-        ("list", DiagramLayoutFamily::List),
-        ("process", DiagramLayoutFamily::List),
-    ] {
-        if evidence.contains(needle) {
-            return family;
+    let identity = unique_id.unwrap_or("unknown");
+    match identity {
+        "urn:microsoft.com/office/officeart/2005/8/layout/list1" => DiagramLayoutFamily::List,
+        "urn:microsoft.com/office/officeart/2005/8/layout/hierarchy1" => {
+            DiagramLayoutFamily::Hierarchy
         }
+        "urn:microsoft.com/office/officeart/2005/8/layout/cycle1" => DiagramLayoutFamily::Cycle,
+        "urn:microsoft.com/office/officeart/2009/3/layout/CircleRelationship" => {
+            DiagramLayoutFamily::Relationship
+        }
+        "urn:microsoft.com/office/officeart/2005/8/layout/matrix1" => DiagramLayoutFamily::Matrix,
+        "urn:microsoft.com/office/officeart/2005/8/layout/pyramid1" => DiagramLayoutFamily::Pyramid,
+        _ => DiagramLayoutFamily::Unsupported(identity.to_owned()),
     }
-    DiagramLayoutFamily::Unsupported(
-        unique_id
-            .or(title)
-            .or_else(|| algorithms.first().map(String::as_str))
-            .unwrap_or("unknown")
-            .to_owned(),
-    )
 }
 
 fn local_name(name: &[u8]) -> &[u8] {

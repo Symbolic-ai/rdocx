@@ -814,6 +814,16 @@ edits, and copies the bounded owned graph for duplication or explicitly
 layout-bound cross-presentation transfer. No diagram model depends back on the
 facade, layout resolver, or renderer.
 
+For rendering, the same facade projects the six exact pinned authentic layout
+resources into transient ordinary PresentationML groups in the producing
+slide, layout, or master clone. A bounded private evaluator consumes the typed,
+doc-hidden layout and colour render data from `rpptx-oxml`, validates the
+authoritative data and presentation graphs, and fails closed for every other
+instruction program. The unchanged layout resolver and renderers then apply
+their shared geometry, text, paint, effect, clipping, timeline, and media
+paths. No cached drawing becomes authoritative and no persistent second
+diagram model is created.
+
 The facade also owns package-to-render-input assembly. Its deterministic render
 entry points resolve the current package once and return either the shared
 render input and layout or a complete PDF. The corpus example and

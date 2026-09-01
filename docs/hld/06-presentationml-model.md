@@ -547,6 +547,16 @@ data, layout, quick-style, and colour relationships while retaining the exact
 `CT_DiagramDrawing`. Readers are prefix-tolerant and namespace-aware. Untouched
 parts serialize from their original bytes.
 
+`CT_DiagramLayoutDefinition` and `CT_DiagramColorsDefinition` also expose
+doc-hidden read-only render projections. The layout projection retains the
+schema-owned nested instruction order and ownership for layout nodes,
+iteration, choices, conditions, shapes, presentation mappings, algorithms,
+parameters, constraints, and rules. The colour projection retains the
+schema-owned colour choice kind, value, and ordered transforms. Parsing is
+namespace-aware and schema-position-specific. Prefix aliases are accepted,
+while namespace shadows and extension lookalikes remain opaque. These
+projections do not expose raw XML or add a mutable object tree.
+
 The data model exposes points, connections, supported node text, optional
 background XML, and the schema-position-owned cached drawing id. Dirty writes
 retain ordered raw events and unmodelled attributes while emitting `ptLst`,

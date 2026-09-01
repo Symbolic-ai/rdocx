@@ -10769,3 +10769,53 @@ reported zero defects, zero smells, and zero nitpicks.
 boundaries, and account for every current and pending cache class under the one
 aggregate limit with checked arithmetic. Keep source-level safety conservative.
 Rendered output alone is not proof that a restart record owns every effect.
+
+### F-220, SmartArt layout and rendering
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native presentation rendering now supports the six pinned
+authentic list, hierarchy, cycle, relationship, matrix, and pyramid SmartArt
+programs. Namespace-aware OXML projections retain bounded instruction, style,
+and colour semantics. A private evaluator validates exact ownership, order,
+cardinality, attributes, parameters, and total work before transiently lowering
+the diagram into the existing DrawingML geometry, paint, and text paths.
+
+**Non-obvious choices.** Five families use readable exact semantic profiles
+after the field and ownership validators. The three-node PowerPoint 16.104
+cycle1 resource has a private identity, raw SHA-256, instruction, and node-count
+compatibility boundary because its producer curve solve is not specified by
+OOXML. Unsupported or changed programs fail closed and remain preserved. The
+same resolved group serves static, timeline, media, and animation output.
+
+**Deviations from the design plan.** None. The implementation remains private
+to the presentation facade and doc-hidden OXML projections. It adds no facade,
+binding, layout, or renderer public API.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/06-presentationml-model.md`,
+`docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The common-source PowerPoint 16.104 corpus proves exact ownership,
+diagnostics, and provenance, shape edges within 1 point, ordered owner-centred
+text metrics within 3 points, and symmetric text-masked non-text SSIM of at
+least 0.90 for every family. Sensitivity rejects a 1.01-point displacement and
+a calibrated decorative mutation. Adversarial tests cover unsupported trees,
+excess work, changed identities and hashes, node counts, same-kind reorders,
+tuple substitutions, duplicate semantic replacements, and wrong owners. The
+integrated full presentation test binary, workspace tests, Clippy, no-default
+fonts, WASM, rustdoc, README inventories, package dry-run, archive limit, and
+supply-chain checks passed. Microscope pass 12 reported zero defects, zero
+smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the OXML projection as the only diagram
+model. Any newly supported authentic program needs an explicit bounded semantic
+profile and external common-source evidence. Do not infer plausible geometry
+from an unknown program or weaken the cycle1 identity boundary.

@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicU64;
 
 #[test]
 fn embedded_inventory_reports_exact_hashes_relationships_and_signature_state() {
@@ -1561,6 +1562,1502 @@ fn unsupported_smartart_algorithms_and_parts_remain_byte_preserved_after_unrelat
 }
 
 #[test]
+fn smartart_rendering_uses_producing_scope_and_updates_after_node_edit() {
+    if !pinned_smartart_resources_available() {
+        eprintln!(
+            "authentic SmartArt rendering skipped because pinned PowerPoint resources are absent"
+        );
+        return;
+    }
+    let mut package = smartart_fixture_package();
+    make_smartart_renderable(&mut package);
+    wrap_slide_smartart_in_scaled_group(&mut package);
+    package.set_part(
+        "/custom/diagrams/two/layout1.xml",
+        read_pinned_smartart_resource(
+            smartart_layout_resource("list").0,
+            smartart_layout_resource("list").1,
+        ),
+    );
+    package.set_part(
+        "/custom/diagrams/two/colors1.xml",
+        read_pinned_smartart_resource(SMARTART_COLOR_RESOURCE.0, SMARTART_COLOR_RESOURCE.1),
+    );
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let (before, before_layout) = presentation.render_deterministic().unwrap();
+    let smartart_shape_index = before.slides[0]
+        .shapes
+        .iter()
+        .position(|shape| resolved_content_text(&shape.content) == "Two")
+        .expect("supported SmartArt ordinary shape");
+    let smartart_shape = &before.slides[0].shapes[smartart_shape_index];
+    let ResolvedContent::Text(body) = &smartart_shape.content else {
+        panic!("SmartArt node did not enter the shared text engine")
+    };
+    assert_eq!(body.anchor, rpptx_layout::TextAnchor::Center);
+    assert_eq!(body.insets.left, 15.3);
+    let ResolvedTextRun::Text { style, .. } = &body.paragraphs[0].runs[0] else {
+        panic!("SmartArt run was not preserved")
+    };
+    assert!(style.bold && style.italic);
+    assert_eq!(style.font_size, Some(34.0));
+    let Some(Paint::Solid(fill)) = smartart_shape.fill.as_ref() else {
+        panic!("SmartArt colour did not use the shared DrawingML fill resolver")
+    };
+    assert!((fill.r - 1.0).abs() < 1.0e-9, "{fill:?}");
+    assert!((fill.g - 1.0).abs() < 1.0e-9, "{fill:?}");
+    assert!((fill.b - 1.0).abs() < 1.0e-9, "{fill:?}");
+    assert!((fill.a - 1.0).abs() < 1.0e-9, "{fill:?}");
+    assert_smartart_frame_clip(
+        &before_layout.pages[0],
+        &before.slides[0],
+        smartart_shape_index,
+        Rect {
+            x: 20.0,
+            y: 40.0,
+            width: 400.0,
+            height: 200.0,
+        },
+    );
+    assert!(
+        before.slides[0]
+            .shapes
+            .iter()
+            .any(|shape| resolved_content_text(&shape.content) == "Two"),
+        "supported producing-scope SmartArt still resolves to a fallback: {:?}",
+        before.slides[0].diagnostics
+    );
+    let animation_segment = [rpptx::AnimationSegment {
+        slide_index: 0,
+        duration_ms: 100,
+        click_count: 0,
+        transition: rpptx::AnimationTransition::None,
+    }];
+    let animation_options = rpptx::AnimationExportOptions {
+        frame_rate: 10,
+        width_px: 96,
+        height_px: 54,
+        format: rpptx::AnimationFormat::Gif {
+            loop_behavior: rpptx::GifLoopBehavior::Once,
+        },
+        media_fallback: MediaFallbackPolicy::PosterFrame,
+    };
+    let animation_before = presentation
+        .export_animation_deterministic(&animation_segment, animation_options)
+        .unwrap();
+
+    presentation
+        .set_smart_art_node_text(0, 42, "n1", "Edited through render path")
+        .unwrap();
+    let (after, _) = presentation.render_deterministic().unwrap();
+    assert!(
+        after.slides[0]
+            .shapes
+            .iter()
+            .any(|shape| { resolved_content_text(&shape.content) == "Edited through render path" })
+    );
+    let timeline = presentation
+        .render_timeline_deterministic(0, TimelinePosition::default(), None)
+        .unwrap();
+    let edited_shape_index = after.slides[0]
+        .shapes
+        .iter()
+        .position(|shape| resolved_content_text(&shape.content) == "Edited through render path")
+        .unwrap();
+    let scaled_frame = Rect {
+        x: 20.0,
+        y: 40.0,
+        width: 400.0,
+        height: 200.0,
+    };
+    assert_smartart_frame_clip(
+        &timeline.page,
+        &after.slides[0],
+        edited_shape_index,
+        scaled_frame,
+    );
+    assert!(
+        page_text(&timeline.page)
+            .concat()
+            .contains("Edited through render path"),
+        "timeline text {:?}, diagnostics {:?}",
+        page_text(&timeline.page),
+        timeline.diagnostics
+    );
+    let media = presentation
+        .render_media_timeline_deterministic(
+            0,
+            TimelinePosition::default(),
+            None,
+            MediaFallbackPolicy::PosterFrame,
+        )
+        .unwrap();
+    assert!(
+        page_text(&media.frame.page)
+            .concat()
+            .contains("Edited through render path")
+    );
+    assert_smartart_frame_clip(
+        &media.frame.page,
+        &after.slides[0],
+        edited_shape_index,
+        scaled_frame,
+    );
+    let animation_after = presentation
+        .export_animation_deterministic(&animation_segment, animation_options)
+        .unwrap();
+    assert!(animation_after.bytes.starts_with(b"GIF89a"));
+    assert_ne!(
+        animation_before.bytes, animation_after.bytes,
+        "the animation path must consume the same edited SmartArt expansion"
+    );
+    assert!(
+        animation_after
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("unsupported SmartArt")),
+        "animation diagnostics {:?}",
+        animation_after.diagnostics
+    );
+}
+
+fn assert_smartart_frame_clip(
+    page: &PageFrame,
+    slide: &ResolvedSlide,
+    shape_index: usize,
+    frame: Rect,
+) {
+    let shape_offset = page.elements.len() - slide.shapes.len();
+    let PositionedElement::Group(group) = &page.elements[shape_offset + shape_index] else {
+        panic!("SmartArt resolved shape did not lower to a group")
+    };
+    let clip = group.clip.as_ref().expect("authoritative SmartArt clip");
+    let actual = clip.bounds().expect("rectangular SmartArt clip bounds");
+    let shape = &slide.shapes[shape_index];
+    let expected = Rect {
+        x: frame.x - shape.bounds.x,
+        y: frame.y - shape.bounds.y,
+        width: frame.width,
+        height: frame.height,
+    };
+    for (actual, expected) in [
+        (actual.x, expected.x),
+        (actual.y, expected.y),
+        (actual.width, expected.width),
+        (actual.height, expected.height),
+    ] {
+        assert!((actual - expected).abs() < 1.0e-9, "{actual} != {expected}");
+    }
+}
+
+#[test]
+fn supported_native_smartart_ignores_a_malformed_optional_cached_drawing() {
+    if !pinned_smartart_resources_available() {
+        eprintln!(
+            "authentic SmartArt cached-drawing regression skipped because pinned PowerPoint resources are absent"
+        );
+        return;
+    }
+    let mut package = smartart_fixture_package();
+    make_smartart_renderable(&mut package);
+    package.set_part(
+        "/custom/diagrams/two/layout1.xml",
+        read_pinned_smartart_resource(
+            smartart_layout_resource("list").0,
+            smartart_layout_resource("list").1,
+        ),
+    );
+    package.set_part(
+        "/custom/diagrams/two/drawing1.xml",
+        b"<malformed optional cache".to_vec(),
+    );
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let (resolved, _) = presentation.render_deterministic().unwrap();
+    assert!(
+        resolved.slides[0]
+            .shapes
+            .iter()
+            .any(|shape| resolved_content_text(&shape.content) == "Two"),
+        "native SmartArt layout must not depend on its optional cached drawing: {:?}",
+        resolved.slides[0].diagnostics
+    );
+}
+
+#[test]
+fn supported_smartart_corpus_matches_pinned_powerpoint_geometry_and_ssim() {
+    let oracle_dir = std::env::var_os("RDOCX_PPTX_SMARTART_ORACLE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("corpus/pptx-smartart-oracle"));
+    let expected_families = smartart_cases()
+        .iter()
+        .map(|case| case.family)
+        .collect::<HashSet<_>>();
+    assert_eq!(expected_families.len(), 6);
+    let manifest_path = oracle_dir.join("f220-smartart-oracle.tsv");
+    let manifest = match fs::read_to_string(&manifest_path) {
+        Ok(manifest) => manifest,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            assert!(
+                std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+                "required PowerPoint SmartArt oracle manifest is missing at {}",
+                manifest_path.display()
+            );
+            eprintln!(
+                "PowerPoint SmartArt oracle skipped because {} is absent",
+                manifest_path.display()
+            );
+            return;
+        }
+        Err(error) => panic!("read {}: {error}", manifest_path.display()),
+    };
+    let rows = smartart_oracle_rows(&manifest);
+    assert_eq!(rows.len(), 6);
+    let artifacts_present = rows.iter().all(|row| {
+        [&row.source, &row.oracle_pdf, &row.oracle_png]
+            .into_iter()
+            .all(|artifact| oracle_dir.join(artifact).is_file())
+    });
+    if !artifacts_present {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required PowerPoint SmartArt oracle artifacts are missing at {}",
+            oracle_dir.display()
+        );
+    }
+    let mut families = HashSet::new();
+    let mut divergences = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        assert!(families.insert(row.family.as_str()));
+        let case = smartart_cases()
+            .iter()
+            .find(|case| case.family == row.family)
+            .expect("known SmartArt oracle family");
+        assert_eq!(row.case, case.case);
+        assert_eq!(row.source, case.source);
+        assert_eq!(row.slide, case.slide);
+        assert_eq!(row.node_texts, case.node_texts);
+        assert_eq!(row.oracle_pdf, format!("{}-powerpoint.pdf", case.case));
+        assert_eq!(row.oracle_png, format!("{}-powerpoint.png", case.case));
+        if !artifacts_present {
+            continue;
+        }
+        let source = oracle_dir.join(&row.source);
+        let pdf = oracle_dir.join(&row.oracle_pdf);
+        let oracle = oracle_dir.join(&row.oracle_png);
+        assert_eq!(sha256(&source), row.source_sha256);
+        assert_eq!(sha256(&pdf), row.oracle_pdf_sha256);
+        assert_eq!(sha256(&oracle), row.oracle_sha256);
+        let generated = fs::read(&source).unwrap();
+        let presentation = Presentation::from_bytes(&generated).unwrap();
+        let (input, layout) = presentation.render_deterministic().unwrap();
+        let slide_index = row.slide.checked_sub(1).expect("one-based SmartArt slide");
+        let slide = input
+            .slides
+            .get(slide_index)
+            .expect("manifest SmartArt slide");
+        let actual_ownership = smartart_shape_ownership(slide);
+        assert_eq!(
+            actual_ownership, row.shape_ownership,
+            "{} ownership",
+            row.case
+        );
+        let actual_bounds = slide
+            .shapes
+            .iter()
+            .map(|shape| shape.bounds)
+            .collect::<Vec<_>>();
+        let actual_diagnostics = if slide.diagnostics.is_empty() {
+            "-".to_owned()
+        } else {
+            slide
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+        if actual_diagnostics != row.expected_diagnostics {
+            divergences.push(format!(
+                "{} diagnostics: actual `{actual_diagnostics}`, expected `{}`",
+                row.case, row.expected_diagnostics
+            ));
+        }
+        let rust_png = oxml_pdf::render_page_to_png(&layout, slide_index, 150.0).unwrap();
+        let rust_pixmap = tiny_skia::Pixmap::decode_png(&rust_png).unwrap();
+        assert_eq!(
+            (rust_pixmap.width(), rust_pixmap.height()),
+            (row.width, row.height),
+            "{} Rust dimensions",
+            row.case
+        );
+        let normalized_oracle =
+            normalize_smartart_oracle_png(&oracle, row.width, row.height, index);
+        let oracle_pixmap = tiny_skia::Pixmap::decode_png(&normalized_oracle).unwrap();
+        assert_eq!(
+            (oracle_pixmap.width(), oracle_pixmap.height()),
+            (row.width, row.height),
+            "{} normalized PowerPoint dimensions",
+            row.case
+        );
+        let expected_bounds = parse_smartart_bounds(&row.shape_bounds_pt);
+        let comparison = compare_smartart_geometry_and_png(
+            &actual_bounds,
+            &expected_bounds,
+            &rust_png,
+            &normalized_oracle,
+        );
+        let text_owner_bounds = expected_bounds
+            .iter()
+            .zip(row.shape_ownership.split('|'))
+            .filter_map(|(bounds, owner)| owner.starts_with("text:").then_some(*bounds))
+            .collect::<Vec<_>>();
+        let raster = smartart_raster_comparison(&rust_png, &normalized_oracle, &text_owner_bounds);
+        eprintln!(
+            "{}: geometry_error_pt={:.6}, non_text_ssim={:.9}, full_ssim={:.9}, text_edge_error_pt={:.6}, text_width_error_pt={:.6}",
+            row.case,
+            comparison.geometry_error,
+            raster.non_text_ssim,
+            raster.full_ssim,
+            raster.max_ink_edge_error_pt,
+            raster.max_line_width_error_pt
+        );
+        if comparison.geometry_error > 1.0 {
+            divergences.push(format!(
+                "{} geometry error {} pt exceeds 1 pt",
+                row.case, comparison.geometry_error
+            ));
+        }
+        if raster.non_text_ssim < 0.90 {
+            divergences.push(format!(
+                "{} symmetric text-masked non-text SSIM {} is below 0.90",
+                row.case, raster.non_text_ssim
+            ));
+        }
+        if raster.actual_line_counts != row.text_line_counts
+            || raster.expected_line_counts != row.text_line_counts
+        {
+            divergences.push(format!(
+                "{} ordered text line counts differ: Rust {:?}, PowerPoint {:?}, expected {:?}",
+                row.case,
+                raster.actual_line_counts,
+                raster.expected_line_counts,
+                row.text_line_counts
+            ));
+        }
+        if raster.max_ink_edge_error_pt > 3.0 {
+            divergences.push(format!(
+                "{} owner-centered text ink edge error {} pt exceeds 3 pt",
+                row.case, raster.max_ink_edge_error_pt
+            ));
+        }
+        if raster.max_line_width_error_pt > 3.0 {
+            divergences.push(format!(
+                "{} text line ink width error {} pt exceeds 3 pt",
+                row.case, raster.max_line_width_error_pt
+            ));
+        }
+    }
+    assert_eq!(
+        families,
+        [
+            "list",
+            "hierarchy",
+            "cycle",
+            "relationship",
+            "matrix",
+            "pyramid"
+        ]
+        .into_iter()
+        .collect()
+    );
+    if !artifacts_present {
+        eprintln!(
+            "PowerPoint SmartArt oracle skipped because an artifact is absent at {}",
+            oracle_dir.display()
+        );
+    }
+    assert!(
+        divergences.is_empty(),
+        "PowerPoint SmartArt divergences:\n{}",
+        divergences.join("\n")
+    );
+}
+
+#[derive(Clone, Debug)]
+struct SmartartOracleRow {
+    case: String,
+    family: String,
+    source: String,
+    source_sha256: String,
+    slide: usize,
+    oracle_pdf: String,
+    oracle_pdf_sha256: String,
+    oracle_png: String,
+    oracle_sha256: String,
+    width: u32,
+    height: u32,
+    node_texts: String,
+    shape_ownership: String,
+    shape_bounds_pt: String,
+    text_line_counts: Vec<usize>,
+    expected_diagnostics: String,
+}
+
+fn smartart_oracle_rows(manifest: &str) -> Vec<SmartartOracleRow> {
+    let lines = manifest.lines().collect::<Vec<_>>();
+    for expected in [
+        "application\tMicrosoft PowerPoint",
+        &format!("version\t{POWERPOINT_VERSION}"),
+        &format!("bundle_build\t{POWERPOINT_BUILD}"),
+        &format!("app_build\t{POWERPOINT_APP_BUILD}"),
+        "dpi\t150",
+        "geometry_tolerance_pt\t1",
+        "non_text_ssim_threshold\t0.90",
+        "text_ink_tolerance_pt\t3",
+        "full_image_ssim\tdiagnostic_only",
+    ] {
+        assert!(
+            lines.contains(&expected),
+            "missing external SmartArt pin `{expected}`"
+        );
+    }
+    let header = "case\tfamily\tsource\tsource_sha256\tslide\toracle_pdf\toracle_pdf_sha256\toracle_png\toracle_sha256\twidth\theight\tnode_texts\tshape_ownership\tshape_bounds_pt\ttext_line_counts\texpected_diagnostics\tclassification";
+    let start = lines
+        .iter()
+        .position(|line| *line == header)
+        .expect("external SmartArt header");
+    lines[start + 1..]
+        .iter()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            assert_eq!(fields.len(), 17, "external SmartArt row `{line}`");
+            assert_eq!(fields[16], "PowerPoint reference, no divergence allowed");
+            assert!(
+                fields[12]
+                    .split('|')
+                    .any(|owner| owner.starts_with("decorative:")),
+                "external SmartArt row omits decorative ownership `{line}`"
+            );
+            assert_eq!(
+                fields[12].split('|').count(),
+                fields[13].split('|').count(),
+                "external SmartArt ownership and geometry count `{line}`"
+            );
+            let text_owner_count = fields[12]
+                .split('|')
+                .filter(|owner| owner.starts_with("text:"))
+                .count();
+            assert_eq!(
+                fields[14].split('|').count(),
+                text_owner_count,
+                "external SmartArt text owner and line-count cardinality `{line}`"
+            );
+            assert!(
+                fields[14]
+                    .split('|')
+                    .all(|count| count.parse::<usize>().is_ok_and(|count| count > 0)),
+                "external SmartArt line counts must be positive in `{line}`"
+            );
+            for index in [3usize, 6, 8] {
+                assert_eq!(fields[index].len(), 64);
+                assert!(
+                    fields[index]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                );
+                assert!(
+                    fields[index].bytes().any(|byte| byte != b'0'),
+                    "external SmartArt hash must not be a placeholder in `{line}`"
+                );
+            }
+            SmartartOracleRow {
+                case: fields[0].to_owned(),
+                family: fields[1].to_owned(),
+                source: fields[2].to_owned(),
+                source_sha256: fields[3].to_owned(),
+                slide: fields[4].parse().unwrap(),
+                oracle_pdf: fields[5].to_owned(),
+                oracle_pdf_sha256: fields[6].to_owned(),
+                oracle_png: fields[7].to_owned(),
+                oracle_sha256: fields[8].to_owned(),
+                width: fields[9].parse().unwrap(),
+                height: fields[10].parse().unwrap(),
+                node_texts: fields[11].to_owned(),
+                shape_ownership: fields[12].to_owned(),
+                shape_bounds_pt: fields[13].to_owned(),
+                text_line_counts: fields[14]
+                    .split('|')
+                    .map(|count| count.parse().unwrap())
+                    .collect(),
+                expected_diagnostics: fields[15].to_owned(),
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SmartartCase {
+    case: &'static str,
+    family: &'static str,
+    source: &'static str,
+    slide: usize,
+    node_texts: &'static str,
+}
+
+fn smartart_cases() -> &'static [SmartartCase; 6] {
+    &[
+        SmartartCase {
+            case: "f220-list",
+            family: "list",
+            source: "f220-list.pptx",
+            slide: 1,
+            node_texts: "F220 list 1|F220 list 2|F220 list 3",
+        },
+        SmartartCase {
+            case: "f220-hierarchy",
+            family: "hierarchy",
+            source: "f220-hierarchy.pptx",
+            slide: 1,
+            node_texts: "F220 hierarchy 1|F220 hierarchy 2|F220 hierarchy 3",
+        },
+        SmartartCase {
+            case: "f220-cycle",
+            family: "cycle",
+            source: "f220-cycle.pptx",
+            slide: 1,
+            node_texts: "F220 cycle 1|F220 cycle 2|F220 cycle 3",
+        },
+        SmartartCase {
+            case: "f220-relationship",
+            family: "relationship",
+            source: "f220-relationship.pptx",
+            slide: 1,
+            node_texts: "F220 relationship 1",
+        },
+        SmartartCase {
+            case: "f220-matrix",
+            family: "matrix",
+            source: "f220-matrix.pptx",
+            slide: 1,
+            node_texts: "F220 matrix 1",
+        },
+        SmartartCase {
+            case: "f220-pyramid",
+            family: "pyramid",
+            source: "f220-pyramid.pptx",
+            slide: 1,
+            node_texts: "F220 pyramid 1|F220 pyramid 2|F220 pyramid 3",
+        },
+    ]
+}
+
+const SMARTART_RESOURCE_ROOT: &str = "/Applications/Microsoft PowerPoint.app/Contents/Frameworks/SmartArt.framework/Versions/A/Resources";
+const SMARTART_STYLE_RESOURCE: (&str, &str) = (
+    "qs/simple1.gqs",
+    "213edbaedea282b8d13dc85a874c9494e66b90546118e40e32614d939a704bd1",
+);
+const SMARTART_COLOR_RESOURCE: (&str, &str) = (
+    "cs/accent1_1.gcs",
+    "dc0a610ca9a665158d3afaff8612e29320e009f151990f74a265197a4e96f9a4",
+);
+
+fn pinned_smartart_resources_available() -> bool {
+    [
+        SMARTART_STYLE_RESOURCE.0,
+        SMARTART_COLOR_RESOURCE.0,
+        "lo/list1.glo",
+        "lo/hierarchy1.glo",
+        "lo/cycle1.glo",
+        "lo/circlerelationship.glo",
+        "lo/matrix1.glo",
+        "lo/pyramid1.glo",
+    ]
+    .iter()
+    .all(|relative| Path::new(SMARTART_RESOURCE_ROOT).join(relative).is_file())
+}
+
+fn smartart_layout_resource(family: &str) -> (&'static str, &'static str) {
+    match family {
+        "list" => (
+            "lo/list1.glo",
+            "e0e143896ab59ea7bf1e5bcf88151467271e0baad2f998c2e3e663384b985dee",
+        ),
+        "hierarchy" => (
+            "lo/hierarchy1.glo",
+            "92d8fd7ff62d662670cbe4aa723f0565b98d577e18d3e9a26c3901a64f68bf31",
+        ),
+        "cycle" => (
+            "lo/cycle1.glo",
+            "8a7e35b9099cff9fd646490ab9b36f8349d82e2568c92354f871f90315301461",
+        ),
+        "relationship" => (
+            "lo/circlerelationship.glo",
+            "0de1977f023d64027ebac0bb5ea27522690423b504a9ff577e381a727585bcd6",
+        ),
+        "matrix" => (
+            "lo/matrix1.glo",
+            "19a09a8304e33a88048fe66ba1d9e0488da1c4d6d0ea694f18279879612e1255",
+        ),
+        "pyramid" => (
+            "lo/pyramid1.glo",
+            "5cb535131a8ee862690c56455f7c56d75a68ccac7c2f7ee81da638de1af6eba2",
+        ),
+        other => panic!("unsupported authentic SmartArt family `{other}`"),
+    }
+}
+
+fn read_pinned_smartart_resource(relative: &str, expected_sha256: &str) -> Vec<u8> {
+    let path = Path::new(SMARTART_RESOURCE_ROOT).join(relative);
+    let bytes = fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    assert_eq!(
+        sha256_bytes(&bytes),
+        expected_sha256,
+        "installed SmartArt resource drift at {}",
+        path.display()
+    );
+    bytes
+}
+
+fn authentic_smartart_data_model(family: &str) -> Vec<u8> {
+    let points = (1..=3)
+        .map(|ordinal| {
+            format!(
+                r#"<dgm:pt modelId="{ordinal}"><dgm:prSet/><dgm:t><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:r><a:rPr sz="1600"/><a:t>F220 {family} {ordinal}</a:t></a:r></a:p></dgm:t></dgm:pt>"#
+            )
+        })
+        .collect::<String>();
+    let connections = if family == "hierarchy" {
+        r#"<dgm:cxn modelId="4" srcId="0" destId="1" srcOrd="0" destOrd="0" type="parOf"/><dgm:cxn modelId="5" srcId="1" destId="2" srcOrd="0" destOrd="0" type="parOf"/><dgm:cxn modelId="6" srcId="1" destId="3" srcOrd="1" destOrd="0" type="parOf"/>"#
+    } else {
+        r#"<dgm:cxn modelId="4" srcId="0" destId="1" srcOrd="0" destOrd="0" type="parOf"/><dgm:cxn modelId="5" srcId="0" destId="2" srcOrd="1" destOrd="0" type="parOf"/><dgm:cxn modelId="6" srcId="0" destId="3" srcOrd="2" destOrd="0" type="parOf"/>"#
+    };
+    format!(
+        r#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="{A_NS}"><dgm:ptLst><dgm:pt modelId="0" type="doc"><dgm:prSet/></dgm:pt>{points}</dgm:ptLst><dgm:cxnLst>{connections}</dgm:cxnLst><dgm:bg/><dgm:whole/></dgm:dataModel>"#
+    )
+    .into_bytes()
+}
+
+fn authentic_smartart_oracle_source_bytes(family: &str) -> Vec<u8> {
+    let (layout_path, layout_sha256) = smartart_layout_resource(family);
+    let mut package =
+        OpcPackage::from_reader(Cursor::new(smartart_rust_source_bytes(family))).unwrap();
+    package.set_part(
+        "/ppt/diagrams/data1.xml",
+        authentic_smartart_data_model(family),
+    );
+    package.set_part(
+        "/ppt/diagrams/layout1.xml",
+        read_pinned_smartart_resource(layout_path, layout_sha256),
+    );
+    package.set_part(
+        "/ppt/diagrams/quickStyle1.xml",
+        read_pinned_smartart_resource(SMARTART_STYLE_RESOURCE.0, SMARTART_STYLE_RESOURCE.1),
+    );
+    package.set_part(
+        "/ppt/diagrams/colors1.xml",
+        read_pinned_smartart_resource(SMARTART_COLOR_RESOURCE.0, SMARTART_COLOR_RESOURCE.1),
+    );
+    package_bytes(package)
+}
+
+fn assert_authentic_smartart_oracle_source(family: &str, bytes: &[u8]) {
+    let mut baseline = Presentation::new().unwrap();
+    baseline.add_slide(0).unwrap();
+    let baseline_package =
+        OpcPackage::from_reader(Cursor::new(baseline.to_bytes().unwrap())).unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+    assert_eq!(
+        package.parts.len(),
+        baseline_package.parts.len() + 4,
+        "{family} must add exactly four diagram parts to the standard template"
+    );
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/diagrams/"))
+            .map(String::as_str)
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            "/ppt/diagrams/data1.xml",
+            "/ppt/diagrams/layout1.xml",
+            "/ppt/diagrams/quickStyle1.xml",
+            "/ppt/diagrams/colors1.xml",
+        ])
+    );
+    let (layout_path, layout_sha256) = smartart_layout_resource(family);
+    assert_eq!(
+        package.get_part("/ppt/diagrams/layout1.xml").unwrap(),
+        read_pinned_smartart_resource(layout_path, layout_sha256)
+    );
+    assert_eq!(
+        package.get_part("/ppt/diagrams/quickStyle1.xml").unwrap(),
+        read_pinned_smartart_resource(SMARTART_STYLE_RESOURCE.0, SMARTART_STYLE_RESOURCE.1)
+    );
+    assert_eq!(
+        package.get_part("/ppt/diagrams/colors1.xml").unwrap(),
+        read_pinned_smartart_resource(SMARTART_COLOR_RESOURCE.0, SMARTART_COLOR_RESOURCE.1)
+    );
+    let data_xml = package.get_part("/ppt/diagrams/data1.xml").unwrap();
+    let data = rpptx::CT_DiagramData::from_xml(data_xml).unwrap();
+    assert_eq!(data.points().len(), 4, "{family} data-only point count");
+    assert_eq!(
+        data.connections().len(),
+        3,
+        "{family} data-only connection count"
+    );
+    assert!(
+        !String::from_utf8_lossy(data_xml).contains(r#"type="pres""#),
+        "{family} authentic source must not pre-author a presentation graph"
+    );
+    let presentation_part = package.main_document_part().unwrap();
+    let presentation_model =
+        CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    assert_eq!(presentation_model.slide_ids.len(), 1);
+    assert_eq!(presentation_model.slide_master_ids.len(), 1);
+    let presentation_relationships = package.get_part_rels(&presentation_part).unwrap();
+    let slide_relationship = presentation_relationships
+        .get_by_id(&presentation_model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    let slide_relationships = package.get_part_rels(&slide_part).unwrap();
+    for relationship_type in [
+        rel_types::DIAGRAM_DATA,
+        rel_types::DIAGRAM_LAYOUT,
+        rel_types::DIAGRAM_QUICK_STYLE,
+        rel_types::DIAGRAM_COLORS,
+    ] {
+        assert_eq!(
+            slide_relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == relationship_type)
+                .count(),
+            1,
+            "{family} role {relationship_type}"
+        );
+    }
+    assert!(
+        slide_relationships
+            .items
+            .iter()
+            .all(|relationship| relationship.rel_type != rel_types::DIAGRAM_DRAWING),
+        "{family} authentic source must not contain a cached drawing relationship"
+    );
+    let facade = Presentation::from_bytes(bytes).unwrap();
+    let infos = facade.smart_art(0).unwrap();
+    assert_eq!(infos.len(), 1, "{family} SmartArt frame count");
+    let info = &infos[0];
+    assert_eq!(info.relationships.data, "smart-data");
+    assert_eq!(info.relationships.layout, "smart-layout");
+    assert_eq!(info.relationships.style, "smart-style");
+    assert_eq!(info.relationships.colors, "smart-colors");
+    assert!(info.relationships.drawing.is_none());
+    assert!(matches!(info.data, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(info.layout, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(info.style, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(info.colors, rpptx::DiagramPart::Parsed(_)));
+    assert!(info.drawing.is_none());
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SmartartComparison {
+    geometry_error: f64,
+    ssim: f64,
+}
+
+fn compare_smartart_geometry_and_png(
+    actual_bounds: &[Rect],
+    expected_bounds: &[Rect],
+    actual_png: &[u8],
+    expected_png: &[u8],
+) -> SmartartComparison {
+    assert_eq!(actual_bounds.len(), expected_bounds.len());
+    let geometry_error = actual_bounds
+        .iter()
+        .zip(expected_bounds)
+        .flat_map(|(actual, expected)| {
+            [
+                (actual.x - expected.x).abs(),
+                (actual.y - expected.y).abs(),
+                (actual.width - expected.width).abs(),
+                (actual.height - expected.height).abs(),
+            ]
+        })
+        .fold(0.0_f64, f64::max);
+    SmartartComparison {
+        geometry_error,
+        ssim: smartart_png_ssim(actual_png, expected_png),
+    }
+}
+
+fn smartart_shape_ownership(slide: &ResolvedSlide) -> String {
+    let mut decorative = 0usize;
+    slide
+        .shapes
+        .iter()
+        .map(|shape| {
+            let text = resolved_content_text(&shape.content);
+            if text.is_empty() {
+                decorative += 1;
+                format!("decorative:{decorative}")
+            } else {
+                format!("text:{text}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn smartart_png_ssim(left: &[u8], right: &[u8]) -> f64 {
+    static NEXT_SSIM_PATH: AtomicU64 = AtomicU64::new(0);
+    let prefix = format!(
+        "rpptx-f220-{}-{}",
+        std::process::id(),
+        NEXT_SSIM_PATH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let left_path = std::env::temp_dir().join(format!("{prefix}-left.png"));
+    let right_path = std::env::temp_dir().join(format!("{prefix}-right.png"));
+    fs::write(&left_path, left).unwrap();
+    fs::write(&right_path, right).unwrap();
+    let output = Command::new("python3")
+        .args(["-c", "from pathlib import Path; import sys; sys.path.insert(0, sys.argv[1]); from pptx_ssim_harness import decode_png, structural_similarity; print(structural_similarity(decode_png(Path(sys.argv[2])), decode_png(Path(sys.argv[3]))))"])
+        .arg(workspace_root().join("scripts"))
+        .arg(&left_path)
+        .arg(&right_path)
+        .output()
+        .unwrap();
+    fs::remove_file(&left_path).unwrap();
+    fs::remove_file(&right_path).unwrap();
+    assert!(
+        output.status.success(),
+        "SmartArt SSIM helper: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn smartart_ssim_temp_paths_are_unique_under_concurrency() {
+    const WORKERS: usize = 8;
+    let png = valid_one_pixel_png();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(WORKERS));
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(WORKERS);
+        for _ in 0..WORKERS {
+            let barrier = barrier.clone();
+            let png = &png;
+            handles.push(scope.spawn(move || {
+                barrier.wait();
+                smartart_png_ssim(png, png)
+            }));
+        }
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), 1.0);
+        }
+    });
+}
+
+#[derive(Clone, Debug)]
+struct SmartartRasterComparison {
+    full_ssim: f64,
+    non_text_ssim: f64,
+    actual_line_counts: Vec<usize>,
+    expected_line_counts: Vec<usize>,
+    max_ink_edge_error_pt: f64,
+    max_line_width_error_pt: f64,
+}
+
+fn smartart_raster_comparison(
+    actual_png: &[u8],
+    expected_png: &[u8],
+    text_owner_bounds: &[Rect],
+) -> SmartartRasterComparison {
+    static NEXT_COMPARISON_PATH: AtomicU64 = AtomicU64::new(0);
+    let sequence = NEXT_COMPARISON_PATH.fetch_add(1, Ordering::Relaxed);
+    let prefix = format!("rpptx-f220-raster-{}-{sequence}", std::process::id());
+    let actual_path = std::env::temp_dir().join(format!("{prefix}-actual.png"));
+    let expected_path = std::env::temp_dir().join(format!("{prefix}-expected.png"));
+    fs::write(&actual_path, actual_png).unwrap();
+    fs::write(&expected_path, expected_png).unwrap();
+    let bounds = text_owner_bounds
+        .iter()
+        .map(|bounds| {
+            format!(
+                "{},{},{},{}",
+                bounds.x, bounds.y, bounds.width, bounds.height
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    let script = r#"
+from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[1])
+from pptx_ssim_harness import decode_png, structural_similarity
+
+DPI = 150
+POINTS_PER_INCH = 72
+actual = decode_png(Path(sys.argv[2]))
+expected = decode_png(Path(sys.argv[3]))
+if actual[:2] != expected[:2]:
+    raise ValueError(f'image dimensions differ: {actual[:2]} != {expected[:2]}')
+width, height = actual[:2]
+
+def owner_rect(value):
+    x, y, w, h = (float(field) for field in value.split(','))
+    left = max(0, int(x * DPI / POINTS_PER_INCH) - 2)
+    top = max(0, int(y * DPI / POINTS_PER_INCH) - 2)
+    right = min(width - 1, int((x + w) * DPI / POINTS_PER_INCH + 0.999999) + 2)
+    bottom = min(height - 1, int((y + h) * DPI / POINTS_PER_INCH + 0.999999) + 2)
+    return left, top, right, bottom
+
+owners = [owner_rect(value) for value in sys.argv[4].split('|') if value]
+if not owners:
+    raise ValueError('SmartArt comparison has no text owners')
+
+def is_ink(rgba):
+    red, green, blue, alpha = rgba
+    return alpha > 200 and max(red, green, blue) < 80
+
+def line_boxes(image, owner):
+    left, top, right, bottom = owner
+    rgba = image[2]
+    rows = []
+    for y in range(top, bottom + 1):
+        count = 0
+        for x in range(left, right + 1):
+            offset = (y * width + x) * 4
+            if is_ink(rgba[offset:offset + 4]):
+                count += 1
+        if count >= 3:
+            rows.append(y)
+    groups = []
+    for y in rows:
+        if not groups or y > groups[-1][-1] + 1:
+            groups.append([y])
+        else:
+            groups[-1].append(y)
+    boxes = []
+    for group in groups:
+        columns = []
+        for y in group:
+            for x in range(left, right + 1):
+                offset = (y * width + x) * 4
+                if is_ink(rgba[offset:offset + 4]):
+                    columns.append(x)
+        if columns:
+            boxes.append((min(columns), group[0], max(columns), group[-1]))
+    if not boxes:
+        raise ValueError(f'text owner {owner} has no detected ink lines')
+    return boxes
+
+actual_owners = [line_boxes(actual, owner) for owner in owners]
+expected_owners = [line_boxes(expected, owner) for owner in owners]
+actual_counts = [len(lines) for lines in actual_owners]
+expected_counts = [len(lines) for lines in expected_owners]
+if actual_counts != expected_counts:
+    raise ValueError(f'text line counts differ: {actual_counts} != {expected_counts}')
+
+edge_error_pixels = 0.0
+width_error_pixels = 0.0
+mask_boxes = []
+for actual_lines, expected_lines in zip(actual_owners, expected_owners):
+    for actual_box, expected_box in zip(actual_lines, expected_lines):
+        actual_width = actual_box[2] - actual_box[0] + 1
+        expected_width = expected_box[2] - expected_box[0] + 1
+        width_error_pixels = max(width_error_pixels, abs(actual_width - expected_width))
+        edge_error_pixels = max(
+            edge_error_pixels,
+            abs(actual_box[1] - expected_box[1]),
+            abs(actual_box[3] - expected_box[3]),
+            abs(actual_width - expected_width) / 2,
+        )
+        mask_boxes.append((
+            max(0, min(actual_box[0], expected_box[0]) - 4),
+            max(0, min(actual_box[1], expected_box[1]) - 4),
+            min(width - 1, max(actual_box[2], expected_box[2]) + 4),
+            min(height - 1, max(actual_box[3], expected_box[3]) + 4),
+        ))
+
+def without_text(image):
+    rgba = bytearray(image[2])
+    for left, top, right, bottom in mask_boxes:
+        for y in range(top, bottom + 1):
+            for x in range(left, right + 1):
+                offset = (y * width + x) * 4
+                rgba[offset:offset + 4] = b'\xff\xff\xff\xff'
+    return width, height, bytes(rgba)
+
+print(
+    structural_similarity(actual, expected),
+    structural_similarity(without_text(actual), without_text(expected)),
+    '|'.join(str(value) for value in actual_counts),
+    '|'.join(str(value) for value in expected_counts),
+    edge_error_pixels * POINTS_PER_INCH / DPI,
+    width_error_pixels * POINTS_PER_INCH / DPI,
+    sep='\t',
+)
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .arg(workspace_root().join("scripts"))
+        .arg(&actual_path)
+        .arg(&expected_path)
+        .arg(bounds)
+        .output()
+        .unwrap();
+    fs::remove_file(actual_path).unwrap();
+    fs::remove_file(expected_path).unwrap();
+    assert!(
+        output.status.success(),
+        "SmartArt raster comparator: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let fields = stdout.trim().split('\t').collect::<Vec<_>>();
+    assert_eq!(fields.len(), 6, "SmartArt raster metrics `{stdout}`");
+    SmartartRasterComparison {
+        full_ssim: fields[0].parse().unwrap(),
+        non_text_ssim: fields[1].parse().unwrap(),
+        actual_line_counts: fields[2]
+            .split('|')
+            .map(|value| value.parse().unwrap())
+            .collect(),
+        expected_line_counts: fields[3]
+            .split('|')
+            .map(|value| value.parse().unwrap())
+            .collect(),
+        max_ink_edge_error_pt: fields[4].parse().unwrap(),
+        max_line_width_error_pt: fields[5].parse().unwrap(),
+    }
+}
+
+fn normalize_smartart_oracle_png(path: &Path, width: u32, height: u32, index: usize) -> Vec<u8> {
+    let output = std::env::temp_dir().join(format!(
+        "rpptx-f220-normalized-{}-{index}.png",
+        std::process::id()
+    ));
+    let result = Command::new("sips")
+        .args(["-z", &height.to_string(), &width.to_string()])
+        .arg(path)
+        .args(["--out"])
+        .arg(&output)
+        .output()
+        .expect("normalize PowerPoint SmartArt PNG");
+    assert!(
+        result.status.success(),
+        "sips: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let bytes = fs::read(&output).unwrap();
+    fs::remove_file(output).unwrap();
+    bytes
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    static NEXT_SHA_PATH: AtomicU64 = AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "rpptx-f220-sha-{}-{}",
+        std::process::id(),
+        NEXT_SHA_PATH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    fs::write(&path, bytes).unwrap();
+    let digest = sha256(&path);
+    fs::remove_file(path).unwrap();
+    digest
+}
+
+fn smartart_rust_source_bytes(family: &str) -> Vec<u8> {
+    let (algorithm, parameters) = match family {
+        "list" => ("lin", r#"<dgm:param type="linDir" val="fromL"/>"#),
+        "hierarchy" => ("hierRoot", ""),
+        "cycle" => (
+            "cycle",
+            r#"<dgm:param type="stAng" val="-90"/><dgm:param type="spanAng" val="240"/>"#,
+        ),
+        "relationship" => ("cycle", ""),
+        "matrix" => (
+            "composite",
+            r#"<dgm:param type="stElem" val="node"/><dgm:param type="bkpt" val="2"/>"#,
+        ),
+        "pyramid" => ("pyra", r#"<dgm:param type="pyraLvlNode" val="1,2,3"/>"#),
+        other => panic!("unsupported SmartArt oracle family `{other}`"),
+    };
+    let kinds = if family == "hierarchy" {
+        ["node", "node", "asst"]
+    } else {
+        ["node", "node", "node"]
+    };
+    let points = (0..3)
+        .map(|index| {
+            let point_type = if kinds[index] == "node" {
+                String::new()
+            } else {
+                format!(r#" type="{}""#, kinds[index])
+            };
+            let ordinal = index + 1;
+            let presentation_id = 100 + ordinal;
+            format!(
+                r#"<dgm:pt modelId="{ordinal}"{point_type}><dgm:prSet/><dgm:t><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:r><a:rPr sz="1600"/><a:t>F220 {family} {ordinal}</a:t></a:r></a:p></dgm:t></dgm:pt><dgm:pt modelId="{presentation_id}" type="pres"><dgm:prSet/></dgm:pt>"#
+            )
+        })
+        .collect::<String>();
+    let ownership = (1..=3)
+        .map(|index| {
+            let presentation_id = 100 + index;
+            let connection_id = 201 + index;
+            format!(
+                r#"<dgm:cxn modelId="{connection_id}" srcId="{index}" destId="{presentation_id}" srcOrd="0" destOrd="0" type="presOf"/>"#
+            )
+        })
+        .collect::<String>();
+    let topology = r#"<dgm:cxn modelId="205" srcId="1" destId="2" srcOrd="0" destOrd="0" type="parOf"/><dgm:cxn modelId="206" srcId="1" destId="3" srcOrd="1" destOrd="0" type="parOf"/>"#;
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let mut package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let presentation_part = package.main_document_part().unwrap();
+    let presentation_model =
+        CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    assert_eq!(presentation_model.slide_ids.len(), 1);
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&presentation_model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    package.set_part(
+        &slide_part,
+        format!(r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="2" name="F220 {family} SmartArt"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="914400" y="914400"/><a:ext cx="7315200" cy="4572000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="smart-data" r:lo="smart-layout" r:qs="smart-style" r:cs="smart-colors"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>"#).into_bytes(),
+    );
+    package.set_part(
+        "/ppt/diagrams/data1.xml",
+        format!(r#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="{A_NS}"><dgm:ptLst><dgm:pt modelId="0" type="doc"><dgm:prSet/></dgm:pt>{points}</dgm:ptLst><dgm:cxnLst><dgm:cxn modelId="201" srcId="0" destId="1" srcOrd="0" destOrd="0" type="parOf"/>{ownership}{topology}</dgm:cxnLst><dgm:bg/><dgm:whole/></dgm:dataModel>"#).into_bytes(),
+    );
+    package.set_part(
+        "/ppt/diagrams/layout1.xml",
+        format!(r#"<dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="urn:f220:{family}"><dgm:layoutNode styleLbl="node0"><dgm:alg type="{algorithm}">{parameters}</dgm:alg></dgm:layoutNode></dgm:layoutDef>"#).into_bytes(),
+    );
+    package.set_part(
+        "/ppt/diagrams/quickStyle1.xml",
+        br#"<dgm:styleDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" uniqueId="urn:f220:style"><dgm:styleLbl name="node0"><dgm:style><a:lnRef idx="1"/><a:fillRef idx="1"/><a:effectRef idx="1"/><a:fontRef idx="minor"/></dgm:style></dgm:styleLbl></dgm:styleDef>"#.to_vec(),
+    );
+    package.set_part(
+        "/ppt/diagrams/colors1.xml",
+        br#"<dgm:colorsDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" uniqueId="urn:f220:colors"><dgm:styleLbl name="node0"><dgm:fillClrLst><a:schemeClr val="accent1"/></dgm:fillClrLst><dgm:linClrLst><a:schemeClr val="accent2"/></dgm:linClrLst><dgm:effectClrLst><a:schemeClr val="accent3"/></dgm:effectClrLst><dgm:txFillClrLst><a:schemeClr val="tx1"/></dgm:txFillClrLst></dgm:styleLbl></dgm:colorsDef>"#.to_vec(),
+    );
+    for (part, content_type) in [
+        (
+            "/ppt/diagrams/data1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml",
+        ),
+        (
+            "/ppt/diagrams/layout1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
+        ),
+        (
+            "/ppt/diagrams/quickStyle1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
+        ),
+        (
+            "/ppt/diagrams/colors1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml",
+        ),
+    ] {
+        package.content_types.add_override(part, content_type);
+    }
+    let relationships = package.get_or_create_part_rels(&slide_part);
+    relationships.add_with_id(
+        "smart-data",
+        rel_types::DIAGRAM_DATA,
+        "../diagrams/data1.xml",
+    );
+    relationships.add_with_id(
+        "smart-layout",
+        rel_types::DIAGRAM_LAYOUT,
+        "../diagrams/layout1.xml",
+    );
+    relationships.add_with_id(
+        "smart-style",
+        rel_types::DIAGRAM_QUICK_STYLE,
+        "../diagrams/quickStyle1.xml",
+    );
+    relationships.add_with_id(
+        "smart-colors",
+        rel_types::DIAGRAM_COLORS,
+        "../diagrams/colors1.xml",
+    );
+    package_bytes(package)
+}
+
+#[test]
+#[ignore = "writes deterministic SmartArt sources and Rust geometry outside the repository"]
+fn generate_smartart_oracle_sources_and_rust_geometry() {
+    let oracle_dir = PathBuf::from(
+        std::env::var_os("RDOCX_PPTX_SMARTART_ORACLE_DIR")
+            .expect("RDOCX_PPTX_SMARTART_ORACLE_DIR is required"),
+    );
+    fs::create_dir_all(&oracle_dir).unwrap();
+    for row in smartart_cases() {
+        let source = authentic_smartart_oracle_source_bytes(row.family);
+        assert_authentic_smartart_oracle_source(row.family, &source);
+        fs::write(oracle_dir.join(row.source), &source).unwrap();
+        let presentation = Presentation::from_bytes(&source).unwrap();
+        let (input, layout) = presentation.render_deterministic().unwrap();
+        let slide_index = row.slide - 1;
+        let slide = &input.slides[slide_index];
+        for text in row.node_texts.split('|') {
+            assert!(
+                slide
+                    .shapes
+                    .iter()
+                    .any(|shape| resolved_content_text(&shape.content) == text),
+                "{} missing owned text `{text}`",
+                row.case
+            );
+        }
+        let ownership = smartart_shape_ownership(slide);
+        assert!(
+            ownership.contains("decorative:"),
+            "{} decorative ownership",
+            row.case
+        );
+        let bounds = slide
+            .shapes
+            .iter()
+            .map(|shape| {
+                let bounds = shape.bounds;
+                format!(
+                    "{},{},{},{}",
+                    bounds.x, bounds.y, bounds.width, bounds.height
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        let diagnostics = if slide.diagnostics.is_empty() {
+            "-".to_owned()
+        } else {
+            slide
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+        let rust_png = oxml_pdf::render_page_to_png(&layout, slide_index, 150.0).unwrap();
+        fs::write(
+            oracle_dir.join(format!("{}-rust.png", row.family)),
+            &rust_png,
+        )
+        .unwrap();
+        let rust_pixmap = tiny_skia::Pixmap::decode_png(&rust_png).unwrap();
+        let (width, height) = (rust_pixmap.width(), rust_pixmap.height());
+        eprintln!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            row.case,
+            sha256_bytes(&source),
+            width,
+            height,
+            ownership,
+            bounds,
+            diagnostics
+        );
+    }
+}
+
+fn smartart_renderer_ceiling_source(with_text: bool) -> Vec<u8> {
+    fn emu(points: f64) -> i64 {
+        (points * 12_700.0).round() as i64
+    }
+    fn shape(
+        id: u32,
+        rect: (f64, f64, f64, f64),
+        preset: &str,
+        fill: &str,
+        line: &str,
+        text: Option<&str>,
+    ) -> String {
+        let (x, y, width, height) = rect;
+        let text = text.map_or_else(String::new, |value| {
+            format!(
+                r#"<p:txBody><a:bodyPr anchor="ctr" lIns="194310" tIns="38100" rIns="194310" bIns="12700"/><a:lstStyle/><a:p><a:r><a:rPr sz="3400"><a:latin typeface="Calibri"/></a:rPr><a:t>{value}</a:t></a:r><a:endParaRPr sz="3400"><a:latin typeface="Calibri"/></a:endParaRPr></a:p></p:txBody>"#
+            )
+        });
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="Ceiling {id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{}" y="{}"/><a:ext cx="{}" cy="{}"/></a:xfrm><a:prstGeom prst="{preset}"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="{fill}"/></a:solidFill><a:ln w="25400"><a:solidFill><a:srgbClr val="{line}"/></a:solidFill><a:prstDash val="solid"/><a:round/></a:ln></p:spPr>{text}</p:sp>"#,
+            emu(x),
+            emu(y),
+            emu(width),
+            emu(height),
+        )
+    }
+
+    let mut shapes = String::new();
+    for index in 0..3 {
+        let y = 116.590 + index as f64 * 121.433;
+        shapes.push_str(&shape(
+            2 + index as u32 * 2,
+            (72.0, y, 576.0, 67.465),
+            "rect",
+            "D4DBEA",
+            "4F81BD",
+            None,
+        ));
+        shapes.push_str(&shape(
+            3 + index as u32 * 2,
+            (100.801, y - 39.516, 403.199, 79.032),
+            "roundRect",
+            "FFFFFF",
+            "4774AB",
+            with_text.then(|| ["F220 list 1", "F220 list 2", "F220 list 3"][index]),
+        ));
+    }
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let mut package =
+        OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let relationships = package.get_part_rels(&presentation_part).unwrap();
+    let slide_relationship = relationships
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    package.set_part(
+        &slide_part,
+        format!(
+            r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{shapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"#
+        )
+        .into_bytes(),
+    );
+    package_bytes(package)
+}
+
+#[test]
+#[ignore = "writes ordinary-shape renderer ceiling controls outside the repository"]
+fn generate_smartart_renderer_ceiling_controls() {
+    let oracle_dir = PathBuf::from(
+        std::env::var_os("RDOCX_PPTX_SMARTART_ORACLE_DIR")
+            .expect("RDOCX_PPTX_SMARTART_ORACLE_DIR is required"),
+    );
+    fs::create_dir_all(&oracle_dir).unwrap();
+    for (name, with_text) in [("shapes", false), ("text", true)] {
+        let source = smartart_renderer_ceiling_source(with_text);
+        let source_path = oracle_dir.join(format!("f220-render-ceiling-{name}.pptx"));
+        fs::write(&source_path, &source).unwrap();
+        let presentation = Presentation::from_bytes(&source).unwrap();
+        let (input, layout) = presentation.render_deterministic().unwrap();
+        assert_eq!(input.slides[0].shapes.len(), 6);
+        assert!(input.slides[0].diagnostics.is_empty());
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 150.0).unwrap();
+        let png_path = oracle_dir.join(format!("f220-render-ceiling-{name}-rust.png"));
+        fs::write(&png_path, &png).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        eprintln!(
+            "{name}\t{}\t{}\t{}\t{}",
+            sha256_bytes(&source),
+            pixmap.width(),
+            pixmap.height(),
+            png_path.display()
+        );
+    }
+}
+
+#[test]
+fn smartart_differential_rejects_geometry_and_pixel_perturbations() {
+    if !pinned_smartart_resources_available() {
+        eprintln!(
+            "SmartArt differential sensitivity skipped because pinned PowerPoint resources are absent"
+        );
+        return;
+    }
+    let source = authentic_smartart_oracle_source_bytes("list");
+    let presentation = Presentation::from_bytes(&source).unwrap();
+    let (mut input, baseline_layout) = presentation.render_deterministic().unwrap();
+
+    let smartart_index = input.slides[0]
+        .shapes
+        .iter()
+        .position(|shape| resolved_content_text(&shape.content) == "F220 list 1")
+        .expect("expected supported SmartArt ordinary shape");
+    let text_owner_bounds = input.slides[0]
+        .shapes
+        .iter()
+        .filter_map(|shape| {
+            (!resolved_content_text(&shape.content).is_empty()).then_some(shape.bounds)
+        })
+        .collect::<Vec<_>>();
+    let original = input.slides[0].shapes[smartart_index].bounds;
+    let baseline_png = oxml_pdf::render_page_to_png(&baseline_layout, 0, 150.0).unwrap();
+    let perturbed = Rect {
+        x: original.x + 1.01,
+        ..original
+    };
+    let geometry_comparison =
+        compare_smartart_geometry_and_png(&[perturbed], &[original], &baseline_png, &baseline_png);
+    assert!(
+        geometry_comparison.geometry_error > 1.0,
+        "one-point threshold must reject a 1.01-point displacement"
+    );
+    let decorative_index = input.slides[0]
+        .shapes
+        .iter()
+        .position(|shape| resolved_content_text(&shape.content).is_empty())
+        .expect("expected supported SmartArt decorative shape");
+    input.slides[0].shapes[decorative_index].fill =
+        Some(oxml_layout::Paint::Solid(oxml_layout::Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        }));
+    input.slides[0].shapes[decorative_index].bounds.width *= 3.0;
+    input.slides[0].shapes[decorative_index].bounds.height *= 3.0;
+    let mutated_layout = rpptx_render::layout_presentation_deterministic(&input).unwrap();
+    let mutated_png = oxml_pdf::render_page_to_png(&mutated_layout, 0, 150.0).unwrap();
+    let pixel_comparison =
+        compare_smartart_geometry_and_png(&[original], &[original], &mutated_png, &baseline_png);
+    let raster_comparison =
+        smartart_raster_comparison(&mutated_png, &baseline_png, &text_owner_bounds);
+    assert_eq!(pixel_comparison.geometry_error, 0.0);
+    assert!(
+        raster_comparison.non_text_ssim < 0.90,
+        "calibrated rendered SmartArt mutation must fail the non-text PNG gate: {}",
+        raster_comparison.non_text_ssim
+    );
+    eprintln!(
+        "SmartArt sensitivity: geometry_error_pt={:.6}, mutated_non_text_ssim={:.9}, mutated_full_ssim={:.9}",
+        geometry_comparison.geometry_error, raster_comparison.non_text_ssim, pixel_comparison.ssim
+    );
+}
+
+fn parse_smartart_bounds(value: &str) -> Vec<Rect> {
+    value
+        .split('|')
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            let fields = value
+                .split(',')
+                .map(|field| field.parse::<f64>().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(fields.len(), 4);
+            Rect {
+                x: fields[0],
+                y: fields[1],
+                width: fields[2],
+                height: fields[3],
+            }
+        })
+        .collect()
+}
+
+#[test]
 fn smartart_relationships_resolve_only_in_their_producing_scope() {
     let presentation =
         Presentation::from_bytes(&package_bytes(smartart_fixture_package())).unwrap();
@@ -2311,6 +3808,55 @@ fn smartart_fixture_package() -> OpcPackage {
     package
 }
 
+fn make_smartart_renderable(package: &mut OpcPackage) {
+    let master_part = "/custom/masters/scope.xml";
+    let theme_part = "/custom/theme/theme1.xml";
+    package.set_part(
+        theme_part,
+        CT_OfficeStyleSheet::office_default().to_xml().unwrap(),
+    );
+    package
+        .content_types
+        .add_override(theme_part, content_types::THEME);
+    package
+        .get_or_create_part_rels(master_part)
+        .add(rel_types::THEME, "../theme/theme1.xml");
+    for scope in ["one", "two", "layout-scope", "master-scope"] {
+        package.set_part(
+            &format!("/custom/diagrams/{scope}/style1.xml"),
+            read_pinned_smartart_resource(SMARTART_STYLE_RESOURCE.0, SMARTART_STYLE_RESOURCE.1),
+        );
+        package.set_part(
+            &format!("/custom/diagrams/{scope}/colors1.xml"),
+            read_pinned_smartart_resource(SMARTART_COLOR_RESOURCE.0, SMARTART_COLOR_RESOURCE.1),
+        );
+    }
+    package.set_part(
+        "/custom/diagrams/two/data1.xml",
+        format!(r#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="{A_NS}" xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram"><dgm:ptLst><dgm:pt modelId="0" type="doc"><dgm:prSet/></dgm:pt><dgm:pt modelId="n1"><dgm:prSet/><dgm:t><a:bodyPr anchor="ctr" lIns="50800"/><a:lstStyle/><a:p><a:r><a:rPr b="1" i="1" sz="1600"><a:solidFill><a:schemeClr val="accent4"/></a:solidFill><a:latin typeface="+mn-lt"/></a:rPr><a:t>Two</a:t></a:r></a:p></dgm:t></dgm:pt><dgm:pt modelId="n2"><dgm:prSet/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1600"/><a:t>Two child 2</a:t></a:r></a:p></dgm:t></dgm:pt><dgm:pt modelId="n3"><dgm:prSet/><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1600"/><a:t>Two child 3</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst><dgm:cxnLst><dgm:cxn modelId="m1" srcId="0" destId="n1" srcOrd="0" destOrd="0" type="parOf"/><dgm:cxn modelId="m2" srcId="0" destId="n2" srcOrd="1" destOrd="0" type="parOf"/><dgm:cxn modelId="m3" srcId="0" destId="n3" srcOrd="2" destOrd="0" type="parOf"/></dgm:cxnLst><dgm:extLst><a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt relId="drawing-link" minVer="http://schemas.openxmlformats.org/drawingml/2006/diagram"/></a:ext></dgm:extLst></dgm:dataModel>"#).into_bytes(),
+    );
+}
+
+fn wrap_slide_smartart_in_scaled_group(package: &mut OpcPackage) {
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let frame_start = xml.find("<p:graphicFrame>").unwrap();
+    let frame_end = frame_start
+        + xml[frame_start..].find("</p:graphicFrame>").unwrap()
+        + "</p:graphicFrame>".len();
+    let frame = xml[frame_start..frame_end].replacen(
+        r#"<a:off x="0" y="0"/><a:ext cx="5080000" cy="2540000"/>"#,
+        r#"<a:off x="127000" y="254000"/><a:ext cx="2540000" cy="1270000"/>"#,
+        1,
+    );
+    assert!(frame.contains(r#"<a:off x="127000" y="254000"/>"#));
+    let group = format!(
+        r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="420" name="Scaled SmartArt owner"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10160000" cy="5080000"/><a:chOff x="0" y="0"/><a:chExt cx="5080000" cy="2540000"/></a:xfrm></p:grpSpPr>{frame}</p:grpSp>"#
+    );
+    let mut grouped = xml;
+    grouped.replace_range(frame_start..frame_end, &group);
+    package.set_part(SLIDE_TWO_PART, grouped.into_bytes());
+}
+
 fn smartart_transfer_source_package() -> OpcPackage {
     let mut package = smartart_fixture_package();
     package
@@ -2425,7 +3971,7 @@ fn add_smartart_scope(package: &mut OpcPackage, owner_part: &str, scope: &str, t
 }
 
 fn smartart_slide_xml() -> Vec<u8> {
-    format!(r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="42" name="SmartArt"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="smart-data" r:lo="smart-layout" r:qs="smart-style" r:cs="smart-colors"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>"#).into_bytes()
+    format!(r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="42" name="SmartArt"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="5080000" cy="2540000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="smart-data" r:lo="smart-layout" r:qs="smart-style" r:cs="smart-colors"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>"#).into_bytes()
 }
 
 fn smartart_layout_xml() -> Vec<u8> {
@@ -2442,7 +3988,7 @@ fn smartart_master_xml() -> Vec<u8> {
 }
 
 fn smartart_owned_root_xml(root: &str, shape_id: u32, name: &str, tail: &str) -> Vec<u8> {
-    format!(r#"<p:{root} xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="smart-data" r:lo="smart-layout" r:qs="smart-style" r:cs="smart-colors"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld>{tail}</p:{root}>"#).into_bytes()
+    format!(r#"<p:{root} xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="5080000" cy="2540000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="smart-data" r:lo="smart-layout" r:qs="smart-style" r:cs="smart-colors"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld>{tail}</p:{root}>"#).into_bytes()
 }
 
 fn smartart_data_xml(text: &str) -> Vec<u8> {
@@ -4745,7 +6291,7 @@ fn duplicated_media_slides_rewrite_every_retained_relationship_id() {
 use oxml_chart::{AxisData, CT_ChartSpace};
 use oxml_drawing::color::ColorMap;
 use oxml_drawing::theme::CT_OfficeStyleSheet;
-use oxml_layout::{MediaId, PageFrame, PositionedElement, Rect, walk};
+use oxml_layout::{MediaId, PageFrame, Paint, PositionedElement, Rect, walk};
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
@@ -10030,6 +11576,168 @@ fn timeline_fixture_bytes() -> Vec<u8> {
             .into_bytes(),
     );
     package_bytes(package)
+}
+
+#[test]
+fn smartart_oracle_sources_preserve_the_valid_default_presentation_graph() {
+    if !pinned_smartart_resources_available() {
+        eprintln!(
+            "authentic SmartArt source structure skipped because pinned PowerPoint resources are absent"
+        );
+        return;
+    }
+    for family in [
+        "list",
+        "hierarchy",
+        "cycle",
+        "relationship",
+        "matrix",
+        "pyramid",
+    ] {
+        let bytes = authentic_smartart_oracle_source_bytes(family);
+        let package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        assert!(!package.parts.keys().any(|part| part.ends_with(".png")));
+        assert!(!package.content_types.defaults.contains_key("png"));
+        assert_eq!(
+            package
+                .parts
+                .keys()
+                .filter(|part| part.starts_with("/ppt/diagrams/"))
+                .map(String::as_str)
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "/ppt/diagrams/data1.xml",
+                "/ppt/diagrams/layout1.xml",
+                "/ppt/diagrams/quickStyle1.xml",
+                "/ppt/diagrams/colors1.xml",
+            ])
+        );
+        let presentation_part = package.main_document_part().unwrap();
+        let presentation =
+            CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+        assert_eq!(presentation.slide_ids.len(), 1, "{family} slide count");
+        assert_eq!(
+            presentation.slide_master_ids.len(),
+            1,
+            "{family} master count"
+        );
+        assert!(presentation.slide_size.is_some(), "{family} slide size");
+        let presentation_relationships = package.get_part_rels(&presentation_part).unwrap();
+        let master_relationship = presentation_relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::SLIDE_MASTER)
+            .expect("presentation master relationship");
+        let master_part =
+            OpcPackage::resolve_rel_target(&presentation_part, &master_relationship.target);
+        let slide_relationship = presentation_relationships
+            .get_by_id(&presentation.slide_ids[0].relationship_id)
+            .unwrap();
+        let slide_part =
+            OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+        let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+        assert_eq!(slide.common_slide_data.shape_tree.children.len(), 1);
+        let slide_relationships = package.get_part_rels(&slide_part).unwrap();
+        assert_eq!(
+            slide_relationships
+                .items
+                .iter()
+                .map(|relationship| relationship.rel_type.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                rel_types::SLIDE_LAYOUT,
+                rel_types::DIAGRAM_DATA,
+                rel_types::DIAGRAM_LAYOUT,
+                rel_types::DIAGRAM_QUICK_STYLE,
+                rel_types::DIAGRAM_COLORS,
+            ])
+        );
+        let data_relationship = slide_relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::DIAGRAM_DATA)
+            .unwrap();
+        let data_part = OpcPackage::resolve_rel_target(&slide_part, &data_relationship.target);
+        let data_xml = String::from_utf8(package.get_part(&data_part).unwrap().to_vec()).unwrap();
+        let data = rpptx::CT_DiagramData::from_xml(data_xml.as_bytes()).unwrap();
+        assert_eq!(data.points().len(), 4, "{family} point count");
+        assert_eq!(data.connections().len(), 3, "{family} connection count");
+        assert!(data.points().iter().all(|point| {
+            !point.model_id.is_empty() && point.model_id.chars().all(|value| value.is_ascii_digit())
+        }));
+        assert!(data.connections().iter().all(|connection| {
+            connection
+                .model_id
+                .chars()
+                .all(|value| value.is_ascii_digit())
+                && connection
+                    .source_id
+                    .chars()
+                    .all(|value| value.is_ascii_digit())
+                && connection
+                    .destination_id
+                    .chars()
+                    .all(|value| value.is_ascii_digit())
+        }));
+        assert_eq!(data_xml.matches(" srcOrd=").count(), 3);
+        assert_eq!(data_xml.matches(" destOrd=").count(), 3);
+        assert!(data_xml.contains(r#"modelId="0" type="doc""#));
+        assert!(data_xml.contains(r#"srcId="0" destId="1""#));
+        let layout_relationship = slide_relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::DIAGRAM_LAYOUT)
+            .unwrap();
+        let diagram_layout_part =
+            OpcPackage::resolve_rel_target(&slide_part, &layout_relationship.target);
+        let diagram_layout_xml =
+            String::from_utf8(package.get_part(&diagram_layout_part).unwrap().to_vec()).unwrap();
+        for invalid_token in [r#"type="titleBand""#, r#"type="cols""#, r#"type="weights""#] {
+            assert!(
+                !diagram_layout_xml.contains(invalid_token),
+                "{family} contained non-schema DiagramML token {invalid_token}"
+            );
+        }
+        let layout_relationship = slide_relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::SLIDE_LAYOUT)
+            .unwrap();
+        let layout_part = OpcPackage::resolve_rel_target(&slide_part, &layout_relationship.target);
+        CT_SlideLayout::from_xml(package.get_part(&layout_part).unwrap()).unwrap();
+        assert!(
+            package
+                .get_part_rels(&layout_part)
+                .unwrap()
+                .items
+                .iter()
+                .any(
+                    |relationship| relationship.rel_type == rel_types::SLIDE_MASTER
+                        && OpcPackage::resolve_rel_target(&layout_part, &relationship.target)
+                            == master_part
+                )
+        );
+        CT_SlideMaster::from_xml(package.get_part(&master_part).unwrap()).unwrap();
+        let master_relationships = package.get_part_rels(&master_part).unwrap();
+        assert!(
+            master_relationships
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::THEME)
+        );
+        assert!(
+            master_relationships
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type == rel_types::SLIDE_LAYOUT)
+        );
+        assert!(
+            Presentation::from_bytes(&bytes)
+                .unwrap()
+                .validate()
+                .is_empty()
+        );
+    }
 }
 
 fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {

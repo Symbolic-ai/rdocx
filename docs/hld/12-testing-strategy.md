@@ -810,6 +810,28 @@ Eight gates run against it:
    requires exactly two layout owners and one master owner and proves each
    reported payload extracts to the reported byte length.
 
+The native SmartArt render differential uses six one-slide source decks built
+from exact SHA-256-pinned PowerPoint 16.104 layout, quick-style, and colour
+resources. The same source deck feeds PowerPoint and the native facade. The
+manifest binds the source, PowerPoint PDF, normalized PNG, exact shape and text
+ownership, bounds, diagnostics, dimensions, and ordered text line counts.
+Every shape edge must remain within 1 point. Symmetric text-masked non-text
+SSIM must be at least 0.90. Owner-centered horizontal ink edges, raw vertical
+ink edges, and line widths must remain within 3 points. Full-image SSIM is a
+diagnostic because the oracle uses Calibri and deterministic mode uses the
+bundled metric-compatible Carlito font. A 1.01-point displacement and a
+calibrated decorative paint and size mutation prove the thresholds reject
+material divergence. Required-corpus mode fails when any manifest artifact or
+provenance hash is absent.
+
+Five supported layout programs use the bounded typed instruction evaluator.
+The exact three-node `cycle1` resource uses one private PowerPoint 16.104
+compatibility profile because its producer diameter and curved-connector solve
+is not specified by OOXML or the resource program. Production rendering
+requires the exact layout identity and resource SHA-256. A changed identity,
+resource byte, instruction, or node count fails closed. This exception adds no
+facade, binding, layout, or renderer API.
+
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
 `placeholder-layout-color.pptx`, and
 `bug58144-headers-footers-2007.pptx` for native visual acceptance. Its

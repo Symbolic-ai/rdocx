@@ -80,6 +80,16 @@ passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does
 not have to write.
 
+The `rpptx` facade expands the six exact pinned authentic SmartArt layout
+programs into transient ordinary PresentationML groups before the shared
+resolver runs. Authoritative data-node text, layout-owned decorative shapes,
+quick styles, colours, connector paths, and the graphic-frame transform flow
+through the same text, paint, effect, geometry, group, and clipping machinery
+as ordinary shapes. Static, timeline, media, and animation entry points reuse
+that resolved group. Unsupported or invalid programs retain a visible bounds
+fallback and a stable diagnostic. The renderer never reads diagram XML or
+treats a cached diagram drawing as authoritative.
+
 `Group` recursively emits a saved graphics state, its local matrix, optional
 clip and opacity, its children, and a matching restore. `Path` emits geometry,
 solid fill and solid stroke operators. The font, image, and link collection

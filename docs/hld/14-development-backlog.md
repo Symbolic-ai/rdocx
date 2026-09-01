@@ -1949,11 +1949,16 @@ the bounded SmartArt corpus while preserving unsupported algorithms.
 diagram parts remain byte-preserved after unrelated mutations.
 
 ### F-220, SmartArt layout and rendering (L)
-Resolve supported list, hierarchy, cycle, relationship, matrix, and pyramid
-layouts through the shared DrawingML and text engines.
+Resolve the six pinned authentic list, hierarchy, cycle, relationship, matrix,
+and pyramid programs through bounded private instruction evaluation and the
+shared DrawingML paint and text engines. The exact three-node `cycle1` resource
+uses a private PowerPoint 16.104 compatibility profile that rejects any
+identity, resource SHA-256, instruction, or node-count variation.
 **Depends on**: F-219.
-**Test gate**: differential. The supported corpus renders within the declared
-PowerPoint geometry and SSIM thresholds.
+**Test gate**: differential. The common-source PowerPoint corpus retains exact
+ownership, diagnostics, dimensions, and provenance, stays within 1 point for
+shape bounds and 3 points for ordered text ink metrics, and reaches at least
+0.90 symmetric text-masked non-text SSIM for every family.
 
 ### F-221, Presentation encryption and signatures (M)
 Expose password-based read and write plus signature inspection, verification,
