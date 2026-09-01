@@ -151,6 +151,15 @@ position state. The facade admits only poster images to renderer media, freezes
 an unresolved poster as a deterministic labelled group when policy permits,
 and never offers audio or video payload bytes to a renderer or codec decoder.
 
+Presentation executable-content editing uses the same package seam.
+`oxml-opc` owns the Transitional and Strict OLE, control, ActiveX, VBA, and
+signature relationship constants. `rpptx` owns producing-scope discovery,
+relationship-graph validation, opaque payload hashing and extraction, and
+transactional replacement or removal. OLE owner XML remains in the slide,
+layout, or master model, while ActiveX and VBA ownership is resolved through
+their package relationships. No OLE, ActiveX, or VBA decoder enters an
+`oxml-*`, layout, renderer, binding, WASM, or CLI crate.
+
 Deterministic animation export also belongs to the `rpptx` facade. It validates
 and samples explicit segments, prepares the package, resolver, font, chart,
 picture, and media state once, then evaluates and lowers one timeline sample at

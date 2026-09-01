@@ -767,6 +767,26 @@ and continue to preserve presentations already edited or transferred through
 the native owner. No production dependency, feature flag, trait, dynamic
 dispatch, generic parameter, or builder is added.
 
+## Native PowerPoint executable-content inventory
+
+The published pre-1.0 `rpptx` facade exposes concrete `EmbeddedContentKind`,
+`EmbeddedSignatureState`, `EmbeddedMutationPolicy`, and
+`EmbeddedContentInfo` values. `Presentation::embedded_content` inventories
+relationship-owned OLE, ActiveX, and VBA payloads without parsing or executing
+them. `extract_embedded_content` returns exact stored bytes.
+`replace_embedded_content` and `remove_embedded_content` use the normalized
+source part and relationship id as identity and commit only a validated staged
+package. The explicit mutation policy either retains invalidated package and
+VBA signature evidence or removes only its validated infrastructure.
+
+The published pre-1.0 `oxml-opc` crate adds Transitional and Strict OLE and
+control relationship constants plus ActiveX binary, VBA project, and legacy and
+Agile VBA signature constants. These are additive native Rust APIs. Python,
+WASM, and CLI consumers gain no executable-content methods and continue to
+preserve these payloads through the existing presentation owner. No feature,
+trait, generic parameter, dynamic dispatch, wrapper identifier, crate, or
+binary fixture is added.
+
 ## Native PowerPoint media model
 
 The published pre-1.0 `rpptx` facade exposes concrete native Rust media values:

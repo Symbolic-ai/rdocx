@@ -6,6 +6,1442 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[test]
+fn embedded_inventory_reports_exact_hashes_relationships_and_signature_state() {
+    let mut package = embedded_fixture_package(true);
+    let slide = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    package.set_part(
+        SLIDE_TWO_PART,
+        slide
+            .replacen(
+                "</a:graphicData>",
+                r#"<x:opaque xmlns:x="urn:f218:opaque"><p:oleObj r:id="lookalike-rel"/></x:opaque></a:graphicData>"#,
+                1,
+            )
+            .into_bytes(),
+    );
+    package.set_part(
+        "/custom/embeddings/lookalike.bin",
+        b"same-namespace-lookalike".to_vec(),
+    );
+    package.content_types.add_override(
+        "/custom/embeddings/lookalike.bin",
+        "application/vnd.openxmlformats-officedocument.oleObject",
+    );
+    package.get_or_create_part_rels(SLIDE_TWO_PART).add_with_id(
+        "lookalike-rel",
+        rel_types::OLE_OBJECT,
+        "../embeddings/lookalike.bin",
+    );
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let inventory = presentation.embedded_content().unwrap();
+    assert_eq!(inventory.len(), 3);
+    assert_eq!(
+        inventory
+            .iter()
+            .map(|info| (
+                info.kind,
+                info.source_part.as_str(),
+                info.relationship_id.as_str(),
+                info.target_part.as_str(),
+                info.content_type.as_str(),
+                info.byte_len,
+                hex32(info.sha256),
+                info.signature_state,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                EmbeddedContentKind::ActiveXControl,
+                "/custom/activeX/activeX1.xml",
+                "binary-rel",
+                "/custom/activeX/activeX1.bin",
+                "application/vnd.ms-office.activeX",
+                18,
+                "15061d052ad086ca4077fa026fd53c13e8481df7671727c37d4d30566219996a".to_owned(),
+                EmbeddedSignatureState::Present,
+            ),
+            (
+                EmbeddedContentKind::VbaProject,
+                PRESENTATION_PART,
+                "vba-rel",
+                "/custom/vbaProject.bin",
+                "application/vnd.ms-office.vbaProject",
+                14,
+                "7b20cff9b07d570e5f0513f47ddc73236cdfa8951c0229fe16f6eff1086ac0b1".to_owned(),
+                EmbeddedSignatureState::Present,
+            ),
+            (
+                EmbeddedContentKind::OleObject,
+                SLIDE_TWO_PART,
+                "ole-rel",
+                "/custom/embeddings/object1.bin",
+                "application/vnd.openxmlformats-officedocument.oleObject",
+                14,
+                "bdd4fcc46a30a68034bba88743518dc0e815c348d33ea4024bfa1c5e8134581f".to_owned(),
+                EmbeddedSignatureState::Present,
+            ),
+        ]
+    );
+}
+
+#[test]
+fn distinct_ole_ids_in_one_compatibility_frame_fail_closed_atomically() {
+    let mut package = embedded_fixture_package(false);
+    let slide = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let first = r#"<p:oleObj r:id="ole-rel" name="opaque"><p:embed/><x:producer xmlns:x="urn:f218" marker="kept"/></p:oleObj>"#;
+    let second = r#"<p:oleObj r:id="alternate-ole-rel" name="opaque"><p:embed/><x:producer xmlns:x="urn:f218" marker="alternate"/></p:oleObj>"#;
+    let compatibility = format!(
+        r#"<mc:AlternateContent xmlns:mc="{MC_NS}"><mc:Choice Requires="p">{first}</mc:Choice><mc:Fallback>{second}</mc:Fallback></mc:AlternateContent>"#
+    );
+    assert!(slide.contains(first));
+    package.set_part(
+        SLIDE_TWO_PART,
+        slide.replacen(first, &compatibility, 1).into_bytes(),
+    );
+    package.set_part(
+        "/custom/embeddings/alternate.bin",
+        b"alternate-ole-executable".to_vec(),
+    );
+    package.content_types.add_override(
+        "/custom/embeddings/alternate.bin",
+        "application/vnd.openxmlformats-officedocument.oleObject",
+    );
+    package.get_or_create_part_rels(SLIDE_TWO_PART).add_with_id(
+        "alternate-ole-rel",
+        rel_types::OLE_OBJECT,
+        "../embeddings/alternate.bin",
+    );
+
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(presentation.embedded_content().is_err());
+    for relationship_id in ["ole-rel", "alternate-ole-rel"] {
+        assert!(
+            presentation
+                .remove_embedded_content(
+                    SLIDE_TWO_PART,
+                    relationship_id,
+                    EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+                )
+                .is_err(),
+            "{relationship_id}"
+        );
+        assert_eq!(
+            presentation.to_bytes().unwrap(),
+            before,
+            "{relationship_id}"
+        );
+    }
+}
+
+#[test]
+fn ole_inventory_and_mutation_use_layout_and_master_producing_scopes() {
+    let mut presentation =
+        Presentation::from_bytes(&package_bytes(embedded_layout_and_master_fixture_package()))
+            .unwrap();
+    let inventory = presentation.embedded_content().unwrap();
+    assert_eq!(
+        inventory
+            .iter()
+            .filter(|info| info.kind == EmbeddedContentKind::OleObject)
+            .map(|info| (
+                info.source_part.as_str(),
+                info.relationship_id.as_str(),
+                info.target_part.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "/custom/layouts/validation.xml",
+                "layout-ole",
+                "/custom/embeddings/layout.bin",
+            ),
+            (
+                "/custom/masters/embedded.xml",
+                "master-ole",
+                "/custom/embeddings/master.bin",
+            ),
+            (SLIDE_TWO_PART, "ole-rel", "/custom/embeddings/object1.bin",),
+        ]
+    );
+    assert_eq!(
+        presentation
+            .extract_embedded_content("/custom/layouts/validation.xml", "layout-ole")
+            .unwrap(),
+        b"layout-owned-ole"
+    );
+    assert_eq!(
+        presentation
+            .extract_embedded_content("/custom/masters/embedded.xml", "master-ole")
+            .unwrap(),
+        b"master-owned-ole"
+    );
+
+    let replaced = presentation
+        .replace_embedded_content(
+            "/custom/layouts/validation.xml",
+            "layout-ole",
+            b"layout replacement",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert_eq!(replaced.source_part, "/custom/layouts/validation.xml");
+    assert_eq!(replaced.relationship_id, "layout-ole");
+    presentation
+        .remove_embedded_content(
+            "/custom/layouts/validation.xml",
+            "layout-ole",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    presentation
+        .remove_embedded_content(
+            "/custom/masters/embedded.xml",
+            "master-ole",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let saved = open_opc(&bytes, "F-218 layout and master OLE removal");
+    for part in [
+        "/custom/layouts/validation.xml",
+        "/custom/masters/embedded.xml",
+    ] {
+        let xml = String::from_utf8(saved.get_part(part).unwrap().to_vec()).unwrap();
+        assert!(xml.contains("producer-boundary"), "{part}");
+        assert!(!xml.contains("oleObj"), "{part}");
+    }
+    assert!(!saved.parts.contains_key("/custom/embeddings/layout.bin"));
+    assert!(!saved.parts.contains_key("/custom/embeddings/master.bin"));
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+#[test]
+fn tracked_ole_corpus_exposes_layout_and_master_producing_scopes() {
+    let path = corpus_dir().join("alterman_security.pptx");
+    if !path.is_file() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required F-218 OLE corpus deck is missing: {}",
+            path.display()
+        );
+        return;
+    }
+    let presentation = Presentation::open(&path).unwrap();
+    let inventory = presentation.embedded_content().unwrap();
+    let layout_ole = inventory
+        .iter()
+        .filter(|info| {
+            info.kind == EmbeddedContentKind::OleObject
+                && info.source_part.contains("slideLayouts/")
+        })
+        .count();
+    let master_ole = inventory
+        .iter()
+        .filter(|info| {
+            info.kind == EmbeddedContentKind::OleObject
+                && info.source_part.contains("slideMasters/")
+        })
+        .count();
+    assert_eq!(layout_ole, 2);
+    assert_eq!(master_ole, 1);
+    for info in inventory.iter().filter(|info| {
+        info.kind == EmbeddedContentKind::OleObject
+            && (info.source_part.contains("slideLayouts/")
+                || info.source_part.contains("slideMasters/"))
+    }) {
+        assert_eq!(
+            presentation
+                .extract_embedded_content(&info.source_part, &info.relationship_id)
+                .unwrap()
+                .len(),
+            info.byte_len
+        );
+    }
+}
+
+#[test]
+fn embedded_extract_replace_and_remove_are_atomic_and_never_execute_payloads() {
+    let mut presentation =
+        Presentation::from_bytes(&package_bytes(embedded_fixture_package(false))).unwrap();
+    let before_ole_xml = open_opc(&presentation.to_bytes().unwrap(), "F-218 OLE source")
+        .get_part(SLIDE_TWO_PART)
+        .unwrap()
+        .to_vec();
+    let before_ole_frame = capture_exact_subtree(
+        &before_ole_xml,
+        br#"<p:oleObj r:id="ole-rel""#,
+        b"</p:oleObj>",
+    );
+    assert_eq!(
+        presentation
+            .extract_embedded_content(SLIDE_TWO_PART, "ole-rel")
+            .unwrap(),
+        b"ole-executable"
+    );
+    presentation
+        .replace_embedded_content(
+            SLIDE_TWO_PART,
+            "ole-rel",
+            b"opaque replacement, not a compound file",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    let after_ole_xml = open_opc(&presentation.to_bytes().unwrap(), "F-218 OLE replacement")
+        .get_part(SLIDE_TWO_PART)
+        .unwrap()
+        .to_vec();
+    assert_eq!(
+        capture_exact_subtree(
+            &after_ole_xml,
+            br#"<p:oleObj r:id="ole-rel""#,
+            b"</p:oleObj>",
+        ),
+        before_ole_frame
+    );
+    let replacement = presentation
+        .replace_embedded_content(
+            "/custom/activeX/activeX1.xml",
+            "binary-rel",
+            b"replacement-bytes",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert_eq!(replacement.relationship_id, "binary-rel");
+    assert_eq!(replacement.target_part, "/custom/activeX/activeX1.bin");
+    assert_eq!(
+        hex32(replacement.sha256),
+        "70bf69c13743b7193ffd7a3718caab18522b61d4643fe13ac80caa5301e2345a"
+    );
+    assert_eq!(
+        presentation
+            .extract_embedded_content("/custom/activeX/activeX1.xml", "binary-rel")
+            .unwrap(),
+        b"replacement-bytes"
+    );
+
+    presentation
+        .remove_embedded_content(
+            "/custom/activeX/activeX1.xml",
+            "binary-rel",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    let saved = presentation.to_bytes().unwrap();
+    let package = open_opc(&saved, "F-218 ActiveX removal");
+    assert!(!package.parts.contains_key("/custom/activeX/activeX1.xml"));
+    assert!(!package.parts.contains_key("/custom/activeX/activeX1.bin"));
+    assert!(
+        !package
+            .content_types
+            .overrides
+            .contains_key("/custom/activeX/activeX1.xml")
+    );
+    assert!(
+        !String::from_utf8_lossy(package.get_part(SLIDE_TWO_PART).unwrap()).contains("control-rel")
+    );
+    assert!(
+        Presentation::from_bytes(&saved)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+
+    presentation
+        .remove_embedded_content(
+            SLIDE_TWO_PART,
+            "ole-rel",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    presentation
+        .remove_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert!(presentation.embedded_content().unwrap().is_empty());
+    let fully_removed = open_opc(&presentation.to_bytes().unwrap(), "F-218 all removals");
+    assert!(
+        !fully_removed
+            .parts
+            .contains_key("/custom/embeddings/object1.bin")
+    );
+    assert!(!fully_removed.parts.contains_key("/custom/vbaProject.bin"));
+    assert!(fully_removed.parts.contains_key("/custom/vbaSignature.bin"));
+
+    let before_failure = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .replace_embedded_content(
+                SLIDE_TWO_PART,
+                "missing",
+                b"must-not-land",
+                EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before_failure);
+}
+
+#[test]
+fn ordinary_presentation_edits_preserve_every_retained_executable_payload_byte() {
+    let package = embedded_fixture_package(true);
+    let retained = [
+        "/custom/embeddings/object1.bin",
+        "/custom/activeX/activeX1.bin",
+        "/custom/vbaProject.bin",
+        "/custom/vbaSignature.bin",
+        "/_xmlsignatures/origin.sigs",
+        "/_xmlsignatures/sig1.xml",
+    ]
+    .map(|part| (part, package.get_part(part).unwrap().to_vec()));
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_name("ordinary mutation")
+        .unwrap();
+    let saved = open_opc(&presentation.to_bytes().unwrap(), "F-218 ordinary mutation");
+    for (part, expected) in retained {
+        assert_eq!(saved.get_part(part).unwrap(), expected, "retained {part}");
+    }
+    assert!(
+        presentation
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Invalidated)
+    );
+}
+
+#[cfg(feature = "digital-signatures")]
+#[test]
+fn ordinary_transactional_edit_and_fresh_reopen_report_retained_signature_invalidated() {
+    let (private_key, certificate) = f221_signing_material();
+    let mut package = embedded_fixture_package(false);
+    let report = package.sign(&private_key, &certificate).unwrap();
+    assert!(report.cryptographically_valid);
+    assert!(report.coverage_complete);
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(
+        presentation
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Present)
+    );
+
+    presentation.remove_slide(0).unwrap();
+    assert!(
+        presentation
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Invalidated)
+    );
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert!(
+        reopened
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Invalidated)
+    );
+}
+
+#[test]
+fn fresh_reopen_detects_a_retained_signature_reference_to_a_removed_part() {
+    let mut package = embedded_fixture_package(true);
+    let model = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let removed_slide_relationship = &model.slide_ids[0].relationship_id;
+    package.set_part(
+        "/_xmlsignatures/sig1.xml",
+        format!(
+            r#"<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:mdssi="http://schemas.openxmlformats.org/package/2006/digital-signature"><ds:Object><ds:Manifest><ds:Reference URI="/custom/_rels/presentation-main.xml.rels?ContentType=application/vnd.openxmlformats-package.relationships+xml"><ds:Transforms><ds:Transform><mdssi:RelationshipReference SourceId="{removed_slide_relationship}"/></ds:Transform></ds:Transforms></ds:Reference></ds:Manifest></ds:Object></ds:Signature>"#
+        )
+        .into_bytes(),
+    );
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(
+        presentation
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Present)
+    );
+
+    presentation.remove_slide(0).unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(
+        reopened
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Invalidated)
+    );
+}
+
+#[test]
+fn fresh_reopen_marks_a_same_topology_signed_shape_edit_invalidated() {
+    let bytes = package_bytes(embedded_fixture_package(true));
+    let mut presentation = Presentation::from_bytes(&bytes).unwrap();
+    assert!(
+        presentation
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Present)
+    );
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_name("signed topology unchanged")
+        .unwrap();
+    let saved_bytes = presentation.to_bytes().unwrap();
+    let saved = open_opc(&saved_bytes, "F-218 default signature invalidation marker");
+    assert!(saved.parts.contains_key("/_xmlsignatures/origin.sigs"));
+    assert!(saved.parts.contains_key("/_xmlsignatures/sig1.xml"));
+    assert_eq!(
+        saved
+            .package_rels
+            .items
+            .iter()
+            .filter(|relationship| { relationship.rel_type == rel_types::DIGITAL_SIGNATURE_ORIGIN })
+            .count(),
+        1
+    );
+    assert_eq!(
+        saved
+            .get_part_rels("/_xmlsignatures/origin.sigs")
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| relationship.rel_type == rel_types::DIGITAL_SIGNATURE)
+            .count(),
+        1
+    );
+    let reopened = Presentation::from_bytes(&saved_bytes).unwrap();
+    assert!(
+        reopened
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|info| info.signature_state == EmbeddedSignatureState::Invalidated)
+    );
+}
+
+#[test]
+fn embedded_removal_deletes_only_relationship_owned_unreachable_candidates() {
+    let mut package = embedded_fixture_package(false);
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    package.set_part(
+        SLIDE_TWO_PART,
+        xml.replacen(
+            "</p:spTree>",
+            &format!("{}</p:spTree>", ole_frame_xml(902, "ole-shared")),
+            1,
+        )
+        .into_bytes(),
+    );
+    package.get_or_create_part_rels(SLIDE_TWO_PART).add_with_id(
+        "ole-shared",
+        rel_types::OLE_OBJECT,
+        "../embeddings/object1.bin",
+    );
+    let orphan = package
+        .get_part("/custom/embeddings/orphan.bin")
+        .unwrap()
+        .to_vec();
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .remove_embedded_content(
+            SLIDE_TWO_PART,
+            "ole-rel",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    let saved = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-218 shared target removal",
+    );
+    assert_eq!(
+        saved.get_part("/custom/embeddings/object1.bin").unwrap(),
+        b"ole-executable"
+    );
+    assert_eq!(
+        saved.get_part("/custom/embeddings/orphan.bin").unwrap(),
+        orphan
+    );
+    assert!(
+        presentation
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .any(|info| info.relationship_id == "ole-shared")
+    );
+    assert!(
+        !presentation
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .any(|info| info.relationship_id == "ole-rel")
+    );
+}
+
+#[test]
+fn embedded_mutation_policy_preserves_or_removes_invalidated_signature_evidence() {
+    let bytes = package_bytes(embedded_fixture_package(true));
+    let mut preserving = Presentation::from_bytes(&bytes).unwrap();
+    let preserved = preserving
+        .replace_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            b"changed vba",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert_eq!(
+        preserved.signature_state,
+        EmbeddedSignatureState::Invalidated
+    );
+    let preserved_package = open_opc(&preserving.to_bytes().unwrap(), "F-218 preserve signatures");
+    assert!(
+        preserved_package
+            .parts
+            .contains_key("/custom/vbaSignature.bin")
+    );
+    assert!(
+        preserved_package
+            .parts
+            .contains_key("/_xmlsignatures/sig1.xml")
+    );
+
+    let mut removing = Presentation::from_bytes(&bytes).unwrap();
+    let unsigned = removing
+        .replace_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            b"changed vba",
+            EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert_eq!(unsigned.signature_state, EmbeddedSignatureState::Absent);
+    let unsigned_package = open_opc(&removing.to_bytes().unwrap(), "F-218 remove signatures");
+    assert!(
+        !unsigned_package
+            .parts
+            .contains_key("/custom/vbaSignature.bin")
+    );
+    assert!(
+        !unsigned_package
+            .parts
+            .contains_key("/_xmlsignatures/origin.sigs")
+    );
+    assert!(
+        !unsigned_package
+            .parts
+            .contains_key("/_xmlsignatures/sig1.xml")
+    );
+    assert!(
+        unsigned_package
+            .package_rels
+            .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+            .is_none()
+    );
+}
+
+#[test]
+fn preserved_vba_signature_invalidation_survives_a_fresh_reopen() {
+    let bytes = package_bytes(embedded_fixture_package(false));
+    let original = open_opc(&bytes, "F-218 original VBA signature");
+    let signature_bytes = original
+        .get_part("/custom/vbaSignature.bin")
+        .unwrap()
+        .to_vec();
+    let mut presentation = Presentation::from_bytes(&bytes).unwrap();
+    let replaced = presentation
+        .replace_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            b"changed VBA without a package signature",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert_eq!(
+        replaced.signature_state,
+        EmbeddedSignatureState::Invalidated
+    );
+    let saved_bytes = presentation.to_bytes().unwrap();
+    let saved = open_opc(&saved_bytes, "F-218 persisted VBA invalidation");
+    assert_eq!(
+        saved.get_part("/custom/vbaSignature.bin").unwrap(),
+        signature_bytes
+    );
+    assert!(
+        saved
+            .get_part_rels("/custom/vbaProject.bin")
+            .unwrap()
+            .items
+            .iter()
+            .any(|relationship| relationship.rel_type == rel_types::VBA_PROJECT_SIGNATURE)
+    );
+    let mut reopened = Presentation::from_bytes(&saved_bytes).unwrap();
+    let reopened_vba = reopened
+        .embedded_content()
+        .unwrap()
+        .into_iter()
+        .find(|info| info.kind == EmbeddedContentKind::VbaProject)
+        .unwrap();
+    assert_eq!(
+        reopened_vba.signature_state,
+        EmbeddedSignatureState::Invalidated
+    );
+    reopened
+        .replace_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            b"changed again",
+            EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+        )
+        .unwrap();
+    let unsigned = open_opc(
+        &reopened.to_bytes().unwrap(),
+        "F-218 remove persisted VBA invalidation",
+    );
+    assert!(!unsigned.parts.contains_key("/custom/vbaSignature.bin"));
+    assert!(
+        unsigned
+            .get_part_rels("/custom/vbaProject.bin")
+            .unwrap()
+            .items
+            .iter()
+            .all(|relationship| {
+                relationship.rel_type != rel_types::VBA_PROJECT_SIGNATURE
+                    && !relationship
+                        .rel_type
+                        .contains("invalidated-vba-project-signature")
+            })
+    );
+}
+
+#[test]
+fn external_and_traversal_embedded_targets_fail_closed() {
+    for (label, target, external) in [
+        ("external", "https://example.com/object.bin", true),
+        ("traversal", "../../../../outside.bin", false),
+        ("absolute traversal", "/../../outside.bin", false),
+    ] {
+        let mut package = embedded_fixture_package(false);
+        let relationship = package
+            .get_or_create_part_rels(SLIDE_TWO_PART)
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == "ole-rel")
+            .unwrap();
+        relationship.target = target.to_owned();
+        relationship.target_mode = external.then(|| "External".to_owned());
+        let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let before = format!("{presentation:?}");
+        assert!(
+            presentation.embedded_content().is_err(),
+            "{label} inventory"
+        );
+        assert!(
+            presentation
+                .extract_embedded_content(SLIDE_TWO_PART, "ole-rel")
+                .is_err(),
+            "{label} extraction"
+        );
+        assert!(
+            presentation
+                .replace_embedded_content(
+                    SLIDE_TWO_PART,
+                    "ole-rel",
+                    b"must-not-land",
+                    EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+                )
+                .is_err(),
+            "{label} replacement"
+        );
+        assert!(
+            presentation
+                .remove_embedded_content(
+                    SLIDE_TWO_PART,
+                    "ole-rel",
+                    EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+                )
+                .is_err(),
+            "{label} removal"
+        );
+        assert_eq!(format!("{presentation:?}"), before, "{label} atomicity");
+    }
+
+    let mut wrong_type = embedded_fixture_package(false);
+    wrong_type
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "ole-rel")
+        .unwrap()
+        .rel_type = rel_types::IMAGE.to_owned();
+    let mut wrong_type = Presentation::from_bytes(&package_bytes(wrong_type)).unwrap();
+    let before = format!("{wrong_type:?}");
+    assert!(wrong_type.embedded_content().is_err());
+    assert!(
+        wrong_type
+            .remove_embedded_content(
+                SLIDE_TWO_PART,
+                "ole-rel",
+                EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+            )
+            .is_err()
+    );
+    assert_eq!(format!("{wrong_type:?}"), before);
+
+    let mut malformed_control = embedded_fixture_package(false);
+    malformed_control.set_part(
+        "/custom/activeX/activeX1.xml",
+        format!(
+            r#"<ax:ocx xmlns:ax="http://schemas.microsoft.com/office/2006/activeX" xmlns:r="{R_NS}" r:id="binary-rel"></ax:ocx><ax:ocx xmlns:ax="http://schemas.microsoft.com/office/2006/activeX"/>"#
+        )
+        .into_bytes(),
+    );
+    assert!(
+        Presentation::from_bytes(&package_bytes(malformed_control))
+            .unwrap()
+            .embedded_content()
+            .is_err()
+    );
+
+    let mut missing_signature = embedded_fixture_package(false);
+    missing_signature.parts.remove("/custom/vbaSignature.bin");
+    assert!(
+        Presentation::from_bytes(&package_bytes(missing_signature))
+            .unwrap()
+            .embedded_content()
+            .is_err()
+    );
+
+    let mut strict = embedded_fixture_package(false);
+    let strict_relationship_namespace = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+    let slide = String::from_utf8(strict.get_part(SLIDE_TWO_PART).unwrap().to_vec())
+        .unwrap()
+        .replace(R_NS, strict_relationship_namespace);
+    strict.set_part(SLIDE_TWO_PART, slide.into_bytes());
+    let control = String::from_utf8(
+        strict
+            .get_part("/custom/activeX/activeX1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replace(R_NS, strict_relationship_namespace);
+    strict.set_part("/custom/activeX/activeX1.xml", control.into_bytes());
+    for relationship in &mut strict.get_or_create_part_rels(SLIDE_TWO_PART).items {
+        relationship.rel_type = match relationship.rel_type.as_str() {
+            rel_types::OLE_OBJECT => rel_types::STRICT_OLE_OBJECT.to_owned(),
+            rel_types::CONTROL => rel_types::STRICT_CONTROL.to_owned(),
+            _ => relationship.rel_type.clone(),
+        };
+    }
+    assert_eq!(
+        Presentation::from_bytes(&package_bytes(strict))
+            .unwrap()
+            .embedded_content()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn agile_vba_signatures_are_classified_and_follow_both_mutation_policies() {
+    let agile_fixture = || {
+        let mut package = embedded_fixture_package(true);
+        let signature = package
+            .get_or_create_part_rels("/custom/vbaProject.bin")
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == "vba-signature-rel")
+            .unwrap();
+        signature.rel_type = rel_types::VBA_PROJECT_SIGNATURE_AGILE.to_owned();
+        package.content_types.add_override(
+            "/custom/vbaSignature.bin",
+            "application/vnd.ms-office.vbaProjectSignatureAgile",
+        );
+        package_bytes(package)
+    };
+
+    let mut preserving = Presentation::from_bytes(&agile_fixture()).unwrap();
+    let vba = preserving
+        .embedded_content()
+        .unwrap()
+        .into_iter()
+        .find(|info| info.kind == EmbeddedContentKind::VbaProject)
+        .unwrap();
+    assert_eq!(vba.signature_state, EmbeddedSignatureState::Present);
+    let replaced = preserving
+        .replace_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            b"changed agile vba",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert_eq!(
+        replaced.signature_state,
+        EmbeddedSignatureState::Invalidated
+    );
+    let preserved = open_opc(&preserving.to_bytes().unwrap(), "F-218 agile preserve");
+    assert!(preserved.parts.contains_key("/custom/vbaSignature.bin"));
+    assert!(
+        preserved
+            .get_part_rels("/custom/vbaProject.bin")
+            .unwrap()
+            .items
+            .iter()
+            .any(|relationship| relationship.rel_type == rel_types::VBA_PROJECT_SIGNATURE_AGILE)
+    );
+
+    let mut removing = Presentation::from_bytes(&agile_fixture()).unwrap();
+    let replaced = removing
+        .replace_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            b"changed agile vba",
+            EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+        )
+        .unwrap();
+    assert_eq!(replaced.signature_state, EmbeddedSignatureState::Absent);
+    assert!(
+        !open_opc(&removing.to_bytes().unwrap(), "F-218 agile remove")
+            .parts
+            .contains_key("/custom/vbaSignature.bin")
+    );
+}
+
+#[test]
+fn malformed_package_signature_graphs_fail_closed_before_mutation() {
+    let mut cases = Vec::new();
+
+    let mut external_origin = embedded_fixture_package(true);
+    external_origin
+        .package_rels
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "package-signature-origin")
+        .unwrap()
+        .target_mode = Some("External".to_owned());
+    cases.push(("external origin", external_origin));
+
+    let mut traversal_origin = embedded_fixture_package(true);
+    traversal_origin
+        .package_rels
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "package-signature-origin")
+        .unwrap()
+        .target = "../../outside.sigs".to_owned();
+    cases.push(("traversal origin", traversal_origin));
+
+    let mut missing_origin = embedded_fixture_package(true);
+    missing_origin.parts.remove("/_xmlsignatures/origin.sigs");
+    cases.push(("missing origin part", missing_origin));
+
+    let mut missing_origin_relationships = embedded_fixture_package(true);
+    missing_origin_relationships
+        .part_rels
+        .remove("/_xmlsignatures/origin.sigs");
+    cases.push((
+        "missing origin relationship set",
+        missing_origin_relationships,
+    ));
+
+    let mut missing_signature = embedded_fixture_package(true);
+    missing_signature.parts.remove("/_xmlsignatures/sig1.xml");
+    cases.push(("missing signature part", missing_signature));
+
+    let mut external_signature = embedded_fixture_package(true);
+    external_signature
+        .get_or_create_part_rels("/_xmlsignatures/origin.sigs")
+        .items[0]
+        .target_mode = Some("External".to_owned());
+    cases.push(("external signature", external_signature));
+
+    let mut traversal_signature = embedded_fixture_package(true);
+    traversal_signature
+        .get_or_create_part_rels("/_xmlsignatures/origin.sigs")
+        .items[0]
+        .target = "../../../outside.xml".to_owned();
+    cases.push(("traversal signature", traversal_signature));
+
+    let mut unrelated_internal_origin_relationship = embedded_fixture_package(true);
+    unrelated_internal_origin_relationship
+        .get_or_create_part_rels("/_xmlsignatures/origin.sigs")
+        .add_with_id(
+            "unrelated-internal",
+            rel_types::IMAGE,
+            "../custom/embeddings/orphan.bin",
+        );
+    cases.push((
+        "unrelated internal origin relationship",
+        unrelated_internal_origin_relationship,
+    ));
+
+    let mut unrelated_external_origin_relationship = embedded_fixture_package(true);
+    unrelated_external_origin_relationship
+        .get_or_create_part_rels("/_xmlsignatures/origin.sigs")
+        .add_external(rel_types::HYPERLINK, "https://example.com/unrelated");
+    cases.push((
+        "unrelated external origin relationship",
+        unrelated_external_origin_relationship,
+    ));
+
+    let mut duplicate_origin = embedded_fixture_package(true);
+    duplicate_origin.set_part("/custom/second-origin.sigs", Vec::new());
+    duplicate_origin.set_part(
+        "/custom/second-signature.xml",
+        b"second signature evidence".to_vec(),
+    );
+    duplicate_origin.content_types.add_override(
+        "/custom/second-origin.sigs",
+        "application/vnd.openxmlformats-package.digital-signature-origin",
+    );
+    duplicate_origin.content_types.add_override(
+        "/custom/second-signature.xml",
+        "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml",
+    );
+    duplicate_origin.package_rels.add_with_id(
+        "second-origin",
+        rel_types::DIGITAL_SIGNATURE_ORIGIN,
+        "custom/second-origin.sigs",
+    );
+    duplicate_origin
+        .get_or_create_part_rels("/custom/second-origin.sigs")
+        .add_with_id(
+            "second-signature",
+            rel_types::DIGITAL_SIGNATURE,
+            "second-signature.xml",
+        );
+    cases.push(("duplicate origin", duplicate_origin));
+
+    let mut root_signature = embedded_fixture_package(true);
+    root_signature.package_rels.add_with_id(
+        "misplaced-root-signature",
+        rel_types::DIGITAL_SIGNATURE,
+        "_xmlsignatures/sig1.xml",
+    );
+    cases.push(("root signature relationship", root_signature));
+
+    let mut misplaced_signature = embedded_fixture_package(true);
+    misplaced_signature
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .add_with_id(
+            "misplaced-signature",
+            rel_types::DIGITAL_SIGNATURE,
+            "../../_xmlsignatures/sig1.xml",
+        );
+    cases.push(("ordinary-part signature relationship", misplaced_signature));
+
+    let mut misplaced_origin = embedded_fixture_package(true);
+    misplaced_origin
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .add_with_id(
+            "misplaced-origin",
+            rel_types::DIGITAL_SIGNATURE_ORIGIN,
+            "../../_xmlsignatures/origin.sigs",
+        );
+    cases.push(("ordinary-part origin relationship", misplaced_origin));
+
+    for (label, package) in cases {
+        let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let before = format!("{presentation:?}");
+        assert!(
+            presentation.embedded_content().is_err(),
+            "{label} inventory"
+        );
+        assert!(
+            presentation
+                .replace_embedded_content(
+                    SLIDE_TWO_PART,
+                    "ole-rel",
+                    b"must-not-land",
+                    EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+                )
+                .is_err(),
+            "{label} replacement"
+        );
+        assert_eq!(format!("{presentation:?}"), before, "{label} atomicity");
+    }
+}
+
+#[test]
+fn duplicate_relationship_ids_and_semantic_attributes_fail_closed() {
+    let mut duplicate_relationship = embedded_fixture_package(false);
+    duplicate_relationship
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .push(oxml_opc::relationship::Relationship {
+            id: "ole-rel".to_owned(),
+            rel_type: rel_types::IMAGE.to_owned(),
+            target: "https://example.com/ambiguous".to_owned(),
+            target_mode: Some("External".to_owned()),
+        });
+    let mut presentation =
+        Presentation::from_bytes(&package_bytes(duplicate_relationship)).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(presentation.embedded_content().is_err());
+    assert!(
+        presentation
+            .remove_embedded_content(
+                SLIDE_TWO_PART,
+                "ole-rel",
+                EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let mut duplicate_vba_signature = embedded_fixture_package(false);
+    duplicate_vba_signature
+        .get_or_create_part_rels("/custom/vbaProject.bin")
+        .items
+        .push(oxml_opc::relationship::Relationship {
+            id: "vba-signature-rel".to_owned(),
+            rel_type: rel_types::IMAGE.to_owned(),
+            target: "https://example.com/ambiguous-signature-id".to_owned(),
+            target_mode: Some("External".to_owned()),
+        });
+    let mut presentation =
+        Presentation::from_bytes(&package_bytes(duplicate_vba_signature)).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(presentation.embedded_content().is_err());
+    assert!(
+        presentation
+            .replace_embedded_content(
+                PRESENTATION_PART,
+                "vba-rel",
+                b"must-not-land",
+                EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+            )
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    for (label, part, needle, duplicate_namespace) in [
+        (
+            "OLE",
+            SLIDE_TWO_PART,
+            r#"r:id="ole-rel""#,
+            "http://purl.oclc.org/ooxml/officeDocument/relationships",
+        ),
+        ("control", SLIDE_TWO_PART, r#"q:id="control-rel""#, R_NS),
+        (
+            "ActiveX",
+            "/custom/activeX/activeX1.xml",
+            r#"q:id="binary-rel""#,
+            R_NS,
+        ),
+    ] {
+        let mut package = embedded_fixture_package(false);
+        let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        let duplicate = format!(r#"{needle} xmlns:dup="{duplicate_namespace}" dup:id="ambiguous""#);
+        assert!(xml.contains(needle), "{label} fixture needle");
+        package.set_part(part, xml.replacen(needle, &duplicate, 1).into_bytes());
+        let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        assert!(
+            presentation.embedded_content().is_err(),
+            "{label} duplicate attribute"
+        );
+    }
+}
+
+#[test]
+fn nested_same_namespace_ole_and_control_lookalikes_never_acquire_ownership() {
+    let mut package = embedded_fixture_package(false);
+    let slide = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let ole = ole_frame_xml(901, "ole-rel");
+    let nested_ole = ole
+        .replacen(
+            r#"<a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole">"#,
+            r#"<a:graphicData uri="urn:f218:unrelated"><x:opaque xmlns:x="urn:f218:nested"><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole">"#,
+            1,
+        )
+        .replacen(
+            "</a:graphicData></a:graphic>",
+            "</a:graphicData></x:opaque></a:graphicData></a:graphic>",
+            1,
+        );
+    let slide = slide
+        .replacen(&ole, &nested_ole, 1)
+        .replacen(
+            r#"<p:controls xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#,
+            r#"<p:extLst><p:ext uri="{F218-NESTED-CONTROLS}"><p:controls xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#,
+            1,
+        )
+        .replacen("</p:control></p:controls>", "</p:control></p:controls></p:ext></p:extLst>", 1);
+    package.set_part(SLIDE_TWO_PART, slide.into_bytes());
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let inventory = presentation.embedded_content().unwrap();
+    assert_eq!(inventory.len(), 1);
+    assert_eq!(inventory[0].kind, EmbeddedContentKind::VbaProject);
+    let before = presentation.to_bytes().unwrap();
+    for (source, relationship) in [
+        (SLIDE_TWO_PART, "ole-rel"),
+        ("/custom/activeX/activeX1.xml", "binary-rel"),
+    ] {
+        assert!(
+            presentation
+                .remove_embedded_content(
+                    source,
+                    relationship,
+                    EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
+                )
+                .is_err()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+    }
+}
+
+fn embedded_fixture_package(with_signatures: bool) -> OpcPackage {
+    let mut package = fixture_package();
+    let slide = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let slide = slide
+        .replacen(
+            "</p:spTree>",
+            &format!("{}</p:spTree>", ole_frame_xml(901, "ole-rel")),
+            1,
+        )
+        .replacen(
+            "</p:cSld>",
+            &format!(
+                r#"<p:controls xmlns:q="{R_NS}" xmlns:x="urn:f218"><p:control q:id="control-rel" name="opaque"><p:extLst><x:producer marker="kept"/></p:extLst></p:control></p:controls></p:cSld>"#
+            ),
+            1,
+        );
+    package.set_part(SLIDE_TWO_PART, slide.into_bytes());
+    package.set_part("/custom/embeddings/object1.bin", b"ole-executable".to_vec());
+    package.set_part("/custom/embeddings/orphan.bin", b"producer-orphan".to_vec());
+    package.set_part(
+        "/custom/activeX/activeX1.xml",
+        format!(
+            r#"<?xml version="1.0"?><ax:ocx xmlns:ax="http://schemas.microsoft.com/office/2006/activeX" xmlns:q="{R_NS}" q:id="binary-rel" classid="opaque" persistence="persistStream"><ax:ocxPr ax:name="producer" ax:value="kept"/></ax:ocx>"#
+        )
+        .into_bytes(),
+    );
+    package.set_part(
+        "/custom/activeX/activeX1.bin",
+        b"activex-executable".to_vec(),
+    );
+    package.set_part("/custom/vbaProject.bin", b"vba-executable".to_vec());
+    package.set_part(
+        "/custom/vbaSignature.bin",
+        b"vba-signature-evidence".to_vec(),
+    );
+    for (part, content_type) in [
+        (
+            "/custom/embeddings/object1.bin",
+            "application/vnd.openxmlformats-officedocument.oleObject",
+        ),
+        (
+            "/custom/embeddings/orphan.bin",
+            "application/vnd.openxmlformats-officedocument.oleObject",
+        ),
+        (
+            "/custom/activeX/activeX1.xml",
+            "application/vnd.ms-office.activeX+xml",
+        ),
+        (
+            "/custom/activeX/activeX1.bin",
+            "application/vnd.ms-office.activeX",
+        ),
+        (
+            "/custom/vbaProject.bin",
+            "application/vnd.ms-office.vbaProject",
+        ),
+        (
+            "/custom/vbaSignature.bin",
+            "application/vnd.ms-office.vbaProjectSignature",
+        ),
+    ] {
+        package.content_types.add_override(part, content_type);
+    }
+    package.get_or_create_part_rels(SLIDE_TWO_PART).add_with_id(
+        "ole-rel",
+        rel_types::OLE_OBJECT,
+        "../embeddings/object1.bin",
+    );
+    package.get_or_create_part_rels(SLIDE_TWO_PART).add_with_id(
+        "control-rel",
+        rel_types::CONTROL,
+        "../activeX/activeX1.xml",
+    );
+    package
+        .get_or_create_part_rels("/custom/activeX/activeX1.xml")
+        .add_with_id(
+            "binary-rel",
+            rel_types::ACTIVEX_CONTROL_BINARY,
+            "activeX1.bin",
+        );
+    package
+        .get_or_create_part_rels(PRESENTATION_PART)
+        .add_with_id(
+            "vba-rel",
+            rel_types::VBA_PROJECT,
+            "../custom/vbaProject.bin",
+        );
+    package
+        .get_or_create_part_rels("/custom/vbaProject.bin")
+        .add_with_id(
+            "vba-signature-rel",
+            rel_types::VBA_PROJECT_SIGNATURE,
+            "vbaSignature.bin",
+        );
+    if with_signatures {
+        package.set_part("/_xmlsignatures/origin.sigs", Vec::new());
+        package.set_part(
+            "/_xmlsignatures/sig1.xml",
+            b"package-signature-evidence".to_vec(),
+        );
+        package.content_types.add_override(
+            "/_xmlsignatures/origin.sigs",
+            "application/vnd.openxmlformats-package.digital-signature-origin",
+        );
+        package.content_types.add_override(
+            "/_xmlsignatures/sig1.xml",
+            "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml",
+        );
+        package.package_rels.add_with_id(
+            "package-signature-origin",
+            rel_types::DIGITAL_SIGNATURE_ORIGIN,
+            "_xmlsignatures/origin.sigs",
+        );
+        package
+            .get_or_create_part_rels("/_xmlsignatures/origin.sigs")
+            .add_with_id(
+                "package-signature",
+                rel_types::DIGITAL_SIGNATURE,
+                "sig1.xml",
+            );
+    }
+    package
+}
+
+fn embedded_layout_and_master_fixture_package() -> OpcPackage {
+    let mut package = embedded_fixture_package(false);
+    let master_part = "/custom/masters/embedded.xml";
+    let presentation =
+        String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec()).unwrap();
+    package.set_part(
+        PRESENTATION_PART,
+        presentation
+            .replacen(
+                "<p:sldIdLst>",
+                r#"<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="embedded-master"/></p:sldMasterIdLst><p:sldIdLst>"#,
+                1,
+            )
+            .into_bytes(),
+    );
+    package.set_part(
+        LAYOUT_PART,
+        embedded_ole_scope_xml("sldLayout", 911, "layout-ole", ""),
+    );
+    package.set_part(
+        master_part,
+        embedded_ole_scope_xml(
+            "sldMaster",
+            912,
+            "master-ole",
+            r#"<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst/><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>"#,
+        ),
+    );
+    package.set_part(
+        "/custom/embeddings/layout.bin",
+        b"layout-owned-ole".to_vec(),
+    );
+    package.set_part(
+        "/custom/embeddings/master.bin",
+        b"master-owned-ole".to_vec(),
+    );
+    package.set_part(
+        "/custom/theme/theme1.xml",
+        format!(
+            r#"<a:theme xmlns:a="{A_NS}" name="F-218"><a:themeElements><a:clrScheme name="F-218"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1></a:clrScheme><a:fontScheme name="F-218"><a:majorFont/><a:minorFont/></a:fontScheme><a:fmtScheme name="F-218"><a:fillStyleLst/><a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst/></a:fmtScheme></a:themeElements></a:theme>"#
+        )
+        .into_bytes(),
+    );
+    package
+        .content_types
+        .add_override(master_part, content_types::SLIDE_MASTER);
+    package
+        .content_types
+        .add_override("/custom/theme/theme1.xml", content_types::THEME);
+    for part in [
+        "/custom/embeddings/layout.bin",
+        "/custom/embeddings/master.bin",
+    ] {
+        package.content_types.add_override(
+            part,
+            "application/vnd.openxmlformats-officedocument.oleObject",
+        );
+    }
+    package
+        .get_or_create_part_rels(PRESENTATION_PART)
+        .add_with_id(
+            "embedded-master",
+            rel_types::SLIDE_MASTER,
+            "masters/embedded.xml",
+        );
+    package
+        .get_or_create_part_rels(master_part)
+        .add(rel_types::SLIDE_LAYOUT, "../layouts/validation.xml");
+    package
+        .get_or_create_part_rels(master_part)
+        .add(rel_types::THEME, "../theme/theme1.xml");
+    package.get_or_create_part_rels(master_part).add_with_id(
+        "master-ole",
+        rel_types::OLE_OBJECT,
+        "../embeddings/master.bin",
+    );
+    package.get_or_create_part_rels(LAYOUT_PART).add_with_id(
+        "layout-ole",
+        rel_types::OLE_OBJECT,
+        "../embeddings/layout.bin",
+    );
+    package
+}
+
+fn embedded_ole_scope_xml(root: &str, shape_id: u32, relationship_id: &str, tail: &str) -> Vec<u8> {
+    format!(
+        r#"<p:{root} xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:x="urn:f218"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><x:producer-boundary scope="{root}"/>{}</p:spTree></p:cSld>{tail}</p:{root}>"#,
+        ole_frame_xml(shape_id, relationship_id)
+    )
+    .into_bytes()
+}
+
+fn ole_frame_xml(shape_id: u32, relationship_id: &str) -> String {
+    format!(
+        r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{shape_id}" name="OLE {shape_id}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj r:id="{relationship_id}" name="opaque"><p:embed/><x:producer xmlns:x="urn:f218" marker="kept"/></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>"#
+    )
+}
+
+fn hex32(bytes: [u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[test]
 fn slide_transitions_and_morph_metadata_survive_mutation_save_and_reopen() {
     use rpptx_oxml::slide_parts::CT_Slide;
     use rpptx_oxml::timing::{TransitionEffect, TransitionSpeed};
@@ -3314,10 +4750,11 @@ use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
     Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, ChartData,
-    ChartKind, ConnectorType, EmbeddedMediaInput, Emu, Error, Fill, MediaDiagnostic,
-    MediaFallbackPolicy, MediaKind, MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster,
-    MediaSourceInput, Presentation, ShapeKind, ShapeRef, TextBullet, TextBulletCharacter,
-    TextBulletChoice, TextFont, TimelinePosition,
+    ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput, EmbeddedMutationPolicy,
+    EmbeddedSignatureState, Emu, Error, Fill, MediaDiagnostic, MediaFallbackPolicy, MediaKind,
+    MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster, MediaSourceInput, Presentation,
+    ShapeKind, ShapeRef, TextBullet, TextBulletCharacter, TextBulletChoice, TextFont,
+    TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,

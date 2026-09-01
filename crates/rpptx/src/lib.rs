@@ -5,6 +5,12 @@
 //! changed to 12,192,000 by 6,858,000 EMU, the size kind was changed to
 //! `screen16x9`, and python-pptx generated the notes-master infrastructure.
 
+mod embedded;
+
+pub use embedded::{
+    EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
+};
+
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
@@ -366,6 +372,12 @@ pub enum Error {
         message: String,
     },
 
+    #[error("{operation} failed: {message}")]
+    InvalidEmbeddedMutation {
+        operation: &'static str,
+        message: String,
+    },
+
     #[error("adjustment {name} requires a finite value")]
     NonFiniteAdjustmentValue { name: String },
 
@@ -441,6 +453,8 @@ pub struct Presentation {
     handout_master_part: Option<String>,
     handout_master: Option<Box<CT_HandoutMaster>>,
     handout_master_dirty: bool,
+    embedded_invalidated_signatures: HashSet<(String, String)>,
+    package_signatures_invalidated: bool,
     layouts: Vec<LayoutRecord>,
     slides: Vec<SlideRecord>,
 }
@@ -762,6 +776,8 @@ impl Presentation {
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
+        let package_signatures_invalidated =
+            embedded::known_invalid_package_signature_on_open(&package);
         let media_store = MediaStore::scan(&package);
         let main_relationship = package
             .package_rels
@@ -853,6 +869,8 @@ impl Presentation {
             handout_master_part,
             handout_master,
             handout_master_dirty: false,
+            embedded_invalidated_signatures: HashSet::new(),
+            package_signatures_invalidated,
             layouts,
             slides,
         })
@@ -870,7 +888,13 @@ impl Presentation {
             .package_rels
             .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
             .is_some();
-        let package = self.staged_package(preserve_signed_parts)?;
+        let package_signatures_invalidated = self.package_signatures_invalidated
+            || self.retained_package_signature_would_be_invalidated()?;
+        let mut package = self.staged_package(preserve_signed_parts)?;
+        embedded::persist_invalidated_package_signature(
+            &mut package,
+            package_signatures_invalidated,
+        )?;
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         Ok(output.into_inner())
@@ -879,7 +903,13 @@ impl Presentation {
     /// Serialises the current presentation through the fixed Agile write profile.
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
-        let package = self.staged_package(true)?;
+        let package_signatures_invalidated = self.package_signatures_invalidated
+            || self.retained_package_signature_would_be_invalidated()?;
+        let mut package = self.staged_package(true)?;
+        embedded::persist_invalidated_package_signature(
+            &mut package,
+            package_signatures_invalidated,
+        )?;
         let mut output = Vec::new();
         package.write_encrypted_to(&mut output, password)?;
         Ok(output)
@@ -1773,10 +1803,19 @@ impl Presentation {
     }
 
     fn commit_candidate(&mut self, staged: Self) -> Result<()> {
-        let package = staged.staged_package(false)?;
+        let embedded_invalidated_signatures = staged.embedded_invalidated_signatures.clone();
+        let package_signatures_invalidated = staged.package_signatures_invalidated
+            || staged.retained_package_signature_would_be_invalidated()?;
+        let mut package = staged.staged_package(false)?;
+        embedded::persist_invalidated_package_signature(
+            &mut package,
+            package_signatures_invalidated,
+        )?;
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
-        let reopened = Self::from_bytes(output.get_ref())?;
+        let mut reopened = Self::from_bytes(output.get_ref())?;
+        reopened.embedded_invalidated_signatures = embedded_invalidated_signatures;
+        reopened.package_signatures_invalidated = package_signatures_invalidated;
         *self = reopened;
         Ok(())
     }

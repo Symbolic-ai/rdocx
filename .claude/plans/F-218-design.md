@@ -1,6 +1,6 @@
 # F-218, Embedded object and macro inventory
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S62
 **Size**: L
 **Depends on**: none
@@ -199,16 +199,16 @@ Any ordinary sample delta is unexplained and blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add relationship constants and strict internal-target classification.
-- [ ] Add the approved private embedded-content module and public values.
-- [ ] Inventory OLE, ActiveX, VBA, and their signature relationships exactly
+- [x] Add relationship constants and strict internal-target classification.
+- [x] Add the approved private embedded-content module and public values.
+- [x] Inventory OLE, ActiveX, VBA, and their signature relationships exactly
   once in stable order.
-- [ ] Implement byte-exact safe extraction without decoding or execution.
-- [ ] Implement staged replacement and ownership-aware removal.
-- [ ] Apply both explicit signature mutation policies without false validity.
-- [ ] Preserve unrelated payloads, previews, raw XML, shared parts, and orphans.
-- [ ] Add source-built and corpus regression cases to existing test targets.
-- [ ] Run focused `oxml-opc`, `rpptx-oxml`, and `rpptx` checks plus every rider.
+- [x] Implement byte-exact safe extraction without decoding or execution.
+- [x] Implement staged replacement and ownership-aware removal.
+- [x] Apply both explicit signature mutation policies without false validity.
+- [x] Preserve unrelated payloads, previews, raw XML, shared parts, and orphans.
+- [x] Add source-built and corpus regression cases to existing test targets.
+- [x] Run focused `oxml-opc`, `rpptx-oxml`, and `rpptx` checks plus every rider.
 
 ## Open questions
 

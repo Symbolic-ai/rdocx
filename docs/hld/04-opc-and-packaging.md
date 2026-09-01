@@ -126,6 +126,9 @@ CUSTOM_PROPERTIES     // docProps/custom.xml
 COMMENTS              // Word comments part
 DIAGRAM_DATA, DIAGRAM_LAYOUT, DIAGRAM_QUICK_STYLE, DIAGRAM_COLORS
 DIAGRAM_DRAWING       // Microsoft 2007 cached diagram drawing
+OLE_OBJECT, CONTROL, STRICT_OLE_OBJECT, STRICT_CONTROL
+ACTIVEX_CONTROL_BINARY, VBA_PROJECT
+VBA_PROJECT_SIGNATURE, VBA_PROJECT_SIGNATURE_AGILE
 
 // PresentationML
 SLIDE, SLIDE_LAYOUT, SLIDE_MASTER, NOTES_SLIDE, NOTES_MASTER,
@@ -457,6 +460,16 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+Executable presentation payloads are selected only through normalized internal
+relationships with the exact expected type. OLE, control, ActiveX binary, VBA
+project, and VBA signature targets reject external or root-escaping paths,
+duplicate relationship identities, missing parts, and wrong relationship
+types before inventory or mutation. Package-signature inventory requires one
+internal origin whose relationship set contains only one or more internal
+digital-signature relationships with distinct existing targets. Unrelated,
+misplaced, duplicate, external, missing, or traversal-shaped signature graph
+edges fail closed before signature evidence can be retained or removed.
 
 The bounded SmartArt copy graph accepts only the five diagram relationship
 types and internal images whose parts own no relationships. Traversal has cycle

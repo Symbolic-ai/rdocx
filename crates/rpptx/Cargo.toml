@@ -48,6 +48,8 @@ oxml-chart.workspace = true
 rpptx-layout = { workspace = true, optional = true }
 rpptx-oxml.workspace = true
 rpptx-render = { workspace = true, default-features = false, optional = true }
+quick-xml.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tiny-skia = { workspace = true, optional = true }
 

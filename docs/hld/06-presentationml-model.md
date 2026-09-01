@@ -114,6 +114,17 @@ exact linked target, poster relationship identity, bounded
 mutate the complete owned package graph atomically. Linked media is never
 fetched.
 
+Native executable-content access is keyed by normalized source part and
+relationship id. `EmbeddedContentInfo` reports OLE object, ActiveX control, or
+VBA project kind, source and target parts, relationship identity, content type,
+byte length, SHA-256, and absent, present, or invalidated signature state.
+`Presentation::embedded_content` inventories the producing relationship graph
+in stable order. `extract_embedded_content` returns exact stored bytes.
+`replace_embedded_content` retains part identity and metadata, while
+`remove_embedded_content` removes only the selected owner and newly unreachable
+owned candidates. Both mutations require an explicit preserve-or-remove policy
+for invalidated package and VBA signature evidence.
+
 Callers supply GUIDs and RFC 3339 timestamps. Mutation validates identities,
 authors, indices, section membership, relationship ownership, and occupied
 part paths before committing a serialized and reopened candidate. Moving a
@@ -608,7 +619,11 @@ through `oxml_core::raw_xml::capture_element`.
 
 Preserved as opaque bytes in v1: `p:custShowLst`, legacy comments, ink,
 `p:contentPart`, unsupported SmartArt algorithms and unmodelled diagram
-content, OLE and ActiveX.
+content, and unmodelled OLE and ActiveX owner XML. The executable payload API
+changes only relationship-owned package bytes or the complete validated owner
+range. Untouched owner XML, previews, shared payloads, unrelated producer
+orphans, comments, processing instructions, namespace bindings, and attribute
+spellings remain exact.
 
 Slide, layout, and master roots expose optional typed `p:timing` and
 `p:transition` values. The timing projection covers parallel and sequence
@@ -682,6 +697,15 @@ exact signed part bytes, including lexical choices and namespace prefixes.
 Relevant typed mutation stages new bytes without deleting retained signature
 parts, so verification reports the preserved signature evidence as invalid for
 the current presentation.
+
+Executable-content mutations consolidate current typed roots into a staged
+package before selecting ownership. OLE discovery accepts only schema-position
+graphic frames in slides, loaded layouts, and presentation-listed masters.
+ActiveX discovery follows a schema-position control reference through its
+properties part to one binary relationship, and VBA discovery starts at the
+presentation relationship. Compatibility paths that repeat one OLE
+relationship collapse to one logical owner. Distinct relationship ids sharing
+one graphic-frame removal range reject as ambiguous.
 
 ## Relationship remapping
 
@@ -787,6 +811,13 @@ and MIME grammar, known container signatures, relationship kind and target
 mode, schema-owned source locations, and staged structural reparse. Any failure
 leaves the live package, slide model, relationships, and payload bytes
 unchanged.
+
+Executable-content mutation validates normalized source identity, unique
+relationship ids and namespace-resolved owner attributes, exact relationship
+types, internal targets, required parts and content types, complete signature
+topology, schema-owned producer positions, and structural reparse. It commits
+only after the staged presentation validates. Every inventory or mutation
+failure leaves the live presentation and package bytes unchanged.
 
 Mapped to the symptoms they prevent:
 

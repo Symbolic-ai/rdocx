@@ -1591,9 +1591,11 @@ dependencies = [
  "oxml-opc",
  "oxml-pdf",
  "oxml-sml",
+ "quick-xml",
  "rpptx-layout",
  "rpptx-oxml",
  "rpptx-render",
+ "sha2",
  "thiserror",
  "tiny-skia",
 ]

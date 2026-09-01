@@ -60,6 +60,17 @@ comment parts, occupied conventional paths, and unserializable staged changes
 without mutating the opened package. All fixtures remain source-built in the
 two existing integration binaries.
 
+The Presentation executable-content regression gate is
+`embedded_inventory_reports_exact_hashes_relationships_and_signature_state`.
+It constructs OLE, ActiveX, VBA, package-signature, and VBA-signature graphs in
+the existing `rpptx` integration binary and requires stable kind, source,
+relationship, target, content type, byte length, SHA-256, and signature state.
+Adjacent source-built tests prove exact extraction, transactional replacement
+and removal, ownership-aware reachability, retained raw XML and signature
+evidence, producing-scope selection, namespace and compatibility handling,
+malformed graph rejection, and byte-for-byte failure atomicity. No payload is
+decoded or executed.
+
 The Presentation timing round-trip gate is
 `the_corpus_timeline_preserves_every_unsupported_sibling`. It walks every
 slide, layout, and master in the 50-deck corpus. The gate requires nonzero
@@ -743,7 +754,7 @@ slide text, and optional speaker-note text. Empty python-pptx names and shape
 text capability without a stored `p:txBody` are normalized to the facade's
 explicit `Option` contract.
 
-Seven gates run against it:
+Eight gates run against it:
 
 1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
    serialises and reparses to a structurally equal value. The pinned corpus has
@@ -782,6 +793,11 @@ Seven gates run against it:
    editing, complete graph remapping, schema-position sensitivity, and failure
    atomicity. The gate requires nonzero coverage for all five part families
    when the pinned corpus is required.
+8. **Executable-content producing scopes**: the tracked
+   `alterman_security.pptx` deck inventories relationship-owned OLE objects in
+   slides, layouts, and masters without interpreting their payloads. The gate
+   requires exactly two layout owners and one master owner and proves each
+   reported payload extracts to the reported byte length.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
 `placeholder-layout-color.pptx`, and
