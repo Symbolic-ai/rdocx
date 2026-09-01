@@ -32,7 +32,7 @@ compatibility.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-224 | HTML slide content import | L | in-progress | codex |
-| F-225 | PDF page content import | L | pending | - |
+| F-225 | PDF page content import | L | in-progress | codex |
 
 ## Sequencing note
 
