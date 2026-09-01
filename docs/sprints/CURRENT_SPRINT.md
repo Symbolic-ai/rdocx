@@ -47,7 +47,7 @@ the existing aggregate cache budget.
 | F-223 | Modern presentation package variants | M | pending | - |
 | F-226 | Notes and handout export | M | pending | - |
 | F-X072 | Keep paragraph caching across note references | M | done | - |
-| F-X073 | Restart ordinary-prose pagination within the aggregate cache | L | pending | - |
+| F-X073 | Restart ordinary-prose pagination within the aggregate cache | L | in-progress | codex |
 
 ## Sequencing note
 
