@@ -1979,9 +1979,12 @@ appearance semantics produce stable diagnostics.
 pinned LibreOffice structural and render records in both directions.
 
 ### F-223, Modern presentation package variants (M)
-Support macro-enabled presentations and templates, ordinary templates, and
-slide-show packages without collapsing their content types or startup mode.
-Binary `.ppt` remains out of scope.
+The native facade maps the six exact PPTX, PPTM, POTX, POTM, PPSX, and PPSM
+main-part content types to `PresentationPackageClass`. Ordinary saves retain
+the opened class. Output-specific conversion changes only the staged main
+override, preserves opaque executable payloads and relationships, and records
+retained package signatures as invalidated. Binary `.ppt` remains out of
+scope.
 **Depends on**: F-218.
 **Test gate**: round-trip. PPTM, POTX, POTM, PPSX, and PPSM fixtures reopen in
 their original package class with preserved executable payloads.

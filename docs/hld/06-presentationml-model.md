@@ -80,6 +80,9 @@ Presentation::set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()>;
 Presentation::core_properties(&self) -> Option<&CoreProperties>;
 Presentation::core_properties_mut(&mut self) -> &mut CoreProperties;
 Presentation::replace_text(&mut self, placeholder: &str, value: &str) -> usize;
+Presentation::package_class(&self) -> Result<PresentationPackageClass>;
+Presentation::to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<u8>>;
+Presentation::save_as_package_class(&self, path: impl AsRef<Path>, class: PresentationPackageClass) -> Result<()>;
 Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
 SlideRef::hidden(&self) -> bool;
 SlideRef::has_explicit_background(&self) -> bool;
@@ -405,11 +408,14 @@ retaining unsupported attributes, direct events, descendants, and raw
 boundaries. A clear that would strand direct raw list payload fails before
 mutation instead of publishing invalid XML.
 
-The `.pptx` versus `.ppsx` distinction lives entirely in this part's content
-type: `presentationml.presentation.main+xml` against
-`presentationml.slideshow.main+xml`. `Presentation::save_as_show()` changes
-only the staged output package's main content type. It does not store slideshow
-mode on the facade or affect later ordinary saves.
+The PPTX, PPTM, POTX, POTM, PPSX, and PPSM distinction lives entirely in this
+part's exact main content type. `PresentationPackageClass` maps those six
+values without inspecting a path extension. Ordinary `save` and `to_bytes`
+retain the opened class. `to_bytes_as` and `save_as_package_class` change only
+the staged output override and leave the live facade unchanged.
+`Presentation::save_as_show()` remains a compatibility wrapper for ordinary
+PPSX output. A class conversion preserves executable payloads and relationships
+and records retained package signature evidence as invalidated.
 
 ## Notes parts
 

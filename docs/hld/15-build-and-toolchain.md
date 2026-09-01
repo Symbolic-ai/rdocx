@@ -146,6 +146,11 @@ an explicit ignored acceptance gate that runs with an isolated user profile.
 Publish dry runs and the 10 MiB archive ceiling cover the additive native API
 and private converter module.
 
+Modern presentation package classes add no dependency, feature, module, or
+asset. The additive pre-1.0 `rpptx` enum and methods plus the new `oxml-opc`
+content-type constants require rustdoc, README inventory, patched publish
+dry-run, archive-size, and release review before publication.
+
 ## Feature flags
 
 | Crate | Feature | Default | Notes |

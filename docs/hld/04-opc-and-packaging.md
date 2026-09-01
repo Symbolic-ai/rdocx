@@ -21,6 +21,13 @@ essentially unchanged from `rdocx-opc`.
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.
 
+Modern presentation package identity is the main presentation part's exact
+content type. `oxml-opc` names the ordinary presentation, macro-enabled
+presentation, ordinary template, macro-enabled template, ordinary slideshow,
+and macro-enabled slideshow values. `rpptx` accepts only those six values.
+Changing an output class replaces only that override in a staged package.
+Executable and unrelated parts remain opaque and byte-preserved.
+
 ODT is a ZIP package but not an OPC package. The private `rdocx` ODT reader
 therefore indexes it directly with the workspace `zip` dependency and does not
 create an `OpcPackage`. The index rejects unsafe or duplicate names, non-files,

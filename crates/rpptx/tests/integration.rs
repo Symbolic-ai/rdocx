@@ -6701,8 +6701,8 @@ use rpptx::{
     ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput, EmbeddedMutationPolicy,
     EmbeddedSignatureState, Emu, Error, Fill, MediaDiagnostic, MediaFallbackPolicy, MediaKind,
     MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster, MediaSourceInput, Presentation,
-    ShapeKind, ShapeRef, TextBullet, TextBulletCharacter, TextBulletChoice, TextFont,
-    TimelinePosition,
+    PresentationPackageClass, ShapeKind, ShapeRef, TextBullet, TextBulletCharacter,
+    TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -8347,6 +8347,212 @@ fn occupied_conventional_core_part_is_not_overwritten_without_relationship() {
             .get_by_type(rel_types::CORE_PROPERTIES)
             .is_none()
     );
+}
+
+#[test]
+fn modern_presentation_package_variants_reopen_with_original_class_and_payloads() {
+    for class in f223_variant_classes() {
+        let source = f223_fixture_package(class);
+        let source_parts = source.parts.clone();
+        let source_relationships = source.part_rels.clone();
+        let opened = Presentation::from_bytes(&package_bytes(source)).unwrap();
+        assert_eq!(opened.package_class().unwrap(), class);
+
+        let saved = opened.to_bytes().unwrap();
+        let package = open_opc(&saved, "F-223 saved variant");
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.package_class().unwrap(), class);
+        for (part, bytes) in &source_parts {
+            if part.ends_with(".bin") {
+                assert_eq!(
+                    package.get_part(part),
+                    Some(bytes.as_slice()),
+                    "{class:?}: {part}"
+                );
+            }
+        }
+        assert_f223_relationships_equal(&package.part_rels, &source_relationships, class);
+        if matches!(
+            class,
+            PresentationPackageClass::MacroEnabledPresentation
+                | PresentationPackageClass::MacroEnabledTemplate
+                | PresentationPackageClass::MacroEnabledSlideshow
+        ) {
+            assert_eq!(
+                reopened
+                    .extract_embedded_content(PRESENTATION_PART, "vba-rel")
+                    .unwrap(),
+                b"vba-executable"
+            );
+        }
+    }
+}
+
+#[test]
+fn package_class_conversion_changes_only_the_main_content_type() {
+    let presentation =
+        Presentation::from_bytes(&package_bytes(embedded_fixture_package(false))).unwrap();
+    let original = presentation.to_bytes().unwrap();
+    let original_package = open_opc(&original, "F-223 original class");
+
+    for class in [
+        PresentationPackageClass::Presentation,
+        PresentationPackageClass::MacroEnabledPresentation,
+        PresentationPackageClass::Template,
+        PresentationPackageClass::MacroEnabledTemplate,
+        PresentationPackageClass::Slideshow,
+        PresentationPackageClass::MacroEnabledSlideshow,
+    ] {
+        let converted = presentation.to_bytes_as(class).unwrap();
+        let package = open_opc(&converted, "F-223 converted class");
+        assert_eq!(
+            Presentation::from_bytes(&converted)
+                .unwrap()
+                .package_class()
+                .unwrap(),
+            class
+        );
+        assert_eq!(package.parts, original_package.parts, "{class:?}");
+        assert_eq!(
+            package.package_rels.items, original_package.package_rels.items,
+            "{class:?}"
+        );
+        assert_f223_relationships_equal(&package.part_rels, &original_package.part_rels, class);
+        let mut expected = original_package.content_types.clone();
+        expected.overrides.insert(
+            PRESENTATION_PART.to_owned(),
+            f223_content_type(class).to_owned(),
+        );
+        assert_eq!(package.content_types, expected, "{class:?}");
+    }
+    assert_eq!(
+        presentation.package_class().unwrap(),
+        PresentationPackageClass::Presentation
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), original);
+}
+
+#[test]
+fn ordinary_save_preserves_opened_template_and_macro_classes() {
+    for class in f223_variant_classes() {
+        let presentation =
+            Presentation::from_bytes(&package_bytes(f223_fixture_package(class))).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("rpptx-f223-{}-{:?}.bin", std::process::id(), class));
+        presentation.save(&path).unwrap();
+        let reopened = Presentation::open(&path).unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(reopened.package_class().unwrap(), class);
+    }
+}
+
+#[test]
+fn package_class_conversion_preserves_and_invalidates_signature_evidence() {
+    let presentation =
+        Presentation::from_bytes(&package_bytes(embedded_fixture_package(true))).unwrap();
+    let converted = presentation
+        .to_bytes_as(PresentationPackageClass::MacroEnabledTemplate)
+        .unwrap();
+    let reopened = Presentation::from_bytes(&converted).unwrap();
+    assert_eq!(
+        reopened.package_class().unwrap(),
+        PresentationPackageClass::MacroEnabledTemplate
+    );
+    let inventory = reopened.embedded_content().unwrap();
+    assert_eq!(inventory.len(), 3);
+    assert!(inventory.iter().all(|item| {
+        item.signature_state == EmbeddedSignatureState::Invalidated
+            && reopened
+                .extract_embedded_content(&item.source_part, &item.relationship_id)
+                .is_ok()
+    }));
+    let package = open_opc(&converted, "F-223 signed class conversion");
+    assert_eq!(
+        package.get_part("/_xmlsignatures/sig1.xml"),
+        Some(b"package-signature-evidence".as_slice())
+    );
+    assert_eq!(
+        package.get_part("/custom/vbaSignature.bin"),
+        Some(b"vba-signature-evidence".as_slice())
+    );
+}
+
+#[test]
+fn unknown_presentation_main_content_type_fails_closed() {
+    let mut package = fixture_package();
+    package.content_types.add_override(
+        PRESENTATION_PART,
+        "application/vnd.example.presentation.unknown.main+xml",
+    );
+    assert!(matches!(
+        Presentation::from_bytes(&package_bytes(package)),
+        Err(Error::UnsupportedPackageClass {
+            content_type: Some(content_type)
+        }) if content_type == "application/vnd.example.presentation.unknown.main+xml"
+    ));
+}
+
+fn f223_variant_classes() -> [PresentationPackageClass; 5] {
+    [
+        PresentationPackageClass::MacroEnabledPresentation,
+        PresentationPackageClass::Template,
+        PresentationPackageClass::MacroEnabledTemplate,
+        PresentationPackageClass::Slideshow,
+        PresentationPackageClass::MacroEnabledSlideshow,
+    ]
+}
+
+fn f223_fixture_package(class: PresentationPackageClass) -> OpcPackage {
+    let mut package = if matches!(
+        class,
+        PresentationPackageClass::MacroEnabledPresentation
+            | PresentationPackageClass::MacroEnabledTemplate
+            | PresentationPackageClass::MacroEnabledSlideshow
+    ) {
+        embedded_fixture_package(false)
+    } else {
+        let mut package = fixture_package();
+        package.set_part("/custom/variant-opaque.bin", b"variant-opaque".to_vec());
+        package.content_types.add_override(
+            "/custom/variant-opaque.bin",
+            "application/vnd.example.variant-opaque",
+        );
+        package
+    };
+    package
+        .content_types
+        .add_override(PRESENTATION_PART, f223_content_type(class));
+    package
+}
+
+fn f223_content_type(class: PresentationPackageClass) -> &'static str {
+    match class {
+        PresentationPackageClass::Presentation => content_types::PRESENTATION,
+        PresentationPackageClass::MacroEnabledPresentation => {
+            content_types::PRESENTATION_MACRO_ENABLED
+        }
+        PresentationPackageClass::Template => content_types::PRESENTATION_TEMPLATE,
+        PresentationPackageClass::MacroEnabledTemplate => {
+            content_types::PRESENTATION_TEMPLATE_MACRO_ENABLED
+        }
+        PresentationPackageClass::Slideshow => content_types::SLIDESHOW,
+        PresentationPackageClass::MacroEnabledSlideshow => content_types::SLIDESHOW_MACRO_ENABLED,
+    }
+}
+
+fn assert_f223_relationships_equal(
+    actual: &std::collections::HashMap<String, oxml_opc::Relationships>,
+    expected: &std::collections::HashMap<String, oxml_opc::Relationships>,
+    class: PresentationPackageClass,
+) {
+    assert_eq!(actual.len(), expected.len(), "{class:?}");
+    for (part, relationships) in expected {
+        assert_eq!(
+            actual.get(part).map(|actual| &actual.items),
+            Some(&relationships.items),
+            "{class:?}: {part}"
+        );
+    }
 }
 
 #[test]

@@ -649,6 +649,13 @@ contiguous regular runs in ordinary shapes, nested groups, and table cells.
 Fields, breaks, and selected alternate-content fallbacks remain traversal
 boundaries so the facade preserves their unmodelled or separately typed XML.
 
+The facade also owns modern PresentationML package identity. The exact main
+part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Normal
+serialization preserves that source class. An explicit output conversion
+changes only a staged content-type override, retains opaque executable parts
+and relationships, and invalidates retained package signature evidence when
+the signed table changes. Binary `.ppt` never enters this OPC path.
+
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
 workspace values say `["docx", "word"]` which would be wrong on a presentation
 crate. Once publication is approved, the rpptx family uses its own pre-1.0

@@ -35,6 +35,7 @@ its cost is recorded in `00-vision.md`.
 | Modern comments, authors and threaded replies | Native Rust read and write. Legacy comments remain opaque |
 | Slide background, follow-master-background | |
 | Hidden slides | Skipped when rendering, preserved on save |
+| Modern package classes | Native Rust reads, preserves, inspects, and output-selects PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Binary `.ppt` remains out of scope |
 | OLE, ActiveX, and VBA executable payloads | Native Rust relationship-owned inventory, byte-exact extraction and replacement, and ownership-aware removal. Payloads remain opaque and are never executed. OLE renders from its stored preview image |
 | OpenDocument Presentation interchange | Native Rust bounded read and deterministic write for slides, ordinary rectangles and text boxes, tables, embedded images, and speaker notes. Other safe content is reported through stable diagnostics |
 

@@ -10869,3 +10869,47 @@ nitpicks.
 classify nodes by expanded name and schema position. Add a construct to the
 editable subset only when both directions have a pinned differential. Every
 safe unsupported direct object must produce one stable diagnostic.
+
+### F-223, Modern presentation package variants
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native presentation facade now identifies and writes
+ordinary presentations, macro-enabled presentations, ordinary templates,
+macro-enabled templates, ordinary slide shows, and macro-enabled slide shows.
+Ordinary saves retain the opened class. Output-only conversion changes only
+the presentation main-part content type on a staged package copy.
+
+**Non-obvious choices.** Package identity comes from the exact main-part
+content type rather than the filename extension. Class conversion preserves
+VBA, OLE, ActiveX, relationships, signatures, and unrelated content types. A
+class change records package-signature invalidation because it changes the
+signed content-type table. Unknown main-part content types fail closed.
+
+**Deviations from the design plan.** None. The implementation stays in the
+existing presentation facade, adds no module or dependency, and keeps the
+existing `save_as_show` API as a delegating compatibility method. The native
+pre-1.0 enum and methods are intentional additive public API.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built regressions cover all five newly supported classes,
+ordinary save retention, all-class conversion, exact executable payload and
+relationship preservation, package-signature invalidation, unknown-class
+rejection, and the established slide-show method. Full workspace tests,
+Clippy, no-default fonts, both WASM facades, rustdoc, README inventories,
+dependency direction, package dry-runs, and archive limits passed. Microscope
+pass 1 reported zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat the main-part content type as the only
+authoritative package class. Keep conversions output-only and preserve every
+opaque executable part and relationship. Any additional class requires an
+exact registered content type and a source-built round-trip.

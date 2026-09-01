@@ -996,6 +996,14 @@ LibreOffice checks and validates all four SHA-bound evidence rows. It does not
 replace the Keynote or Google human-action evidence with unsupported UI
 automation.
 
+The modern package-class gate builds PPTM, POTX, POTM, PPSX, and PPSM packages
+from one valid PresentationML graph. Every class reopens with its exact main
+content type. Macro classes retain the relationship-owned VBA project and
+signature bytes, ordinary classes retain opaque producer parts, and all
+relationship scopes remain equal. A six-way conversion comparison proves the
+main override is the only package difference. A signed conversion separately
+proves evidence is retained and reported invalidated.
+
 The evidence bound to the reviewed SHA is:
 
 | Viewer | Version or date | Build | Result |

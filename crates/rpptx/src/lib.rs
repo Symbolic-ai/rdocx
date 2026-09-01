@@ -281,6 +281,9 @@ pub enum Error {
     #[error("presentation package has no officeDocument relationship")]
     MissingMainDocument,
 
+    #[error("unsupported presentation main content type: {content_type:?}")]
+    UnsupportedPackageClass { content_type: Option<String> },
+
     #[error("{source_part}: relationship {relationship_id} is missing")]
     MissingRelationship {
         source_part: String,
@@ -400,6 +403,42 @@ pub enum Error {
     #[cfg(feature = "render")]
     #[error("presentation render failed: {message}")]
     Render { message: String },
+}
+
+/// The startup and macro class carried by a modern PresentationML package.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PresentationPackageClass {
+    Presentation,
+    MacroEnabledPresentation,
+    Template,
+    MacroEnabledTemplate,
+    Slideshow,
+    MacroEnabledSlideshow,
+}
+
+impl PresentationPackageClass {
+    fn from_content_type(content_type: &str) -> Option<Self> {
+        match content_type {
+            content_types::PRESENTATION => Some(Self::Presentation),
+            content_types::PRESENTATION_MACRO_ENABLED => Some(Self::MacroEnabledPresentation),
+            content_types::PRESENTATION_TEMPLATE => Some(Self::Template),
+            content_types::PRESENTATION_TEMPLATE_MACRO_ENABLED => Some(Self::MacroEnabledTemplate),
+            content_types::SLIDESHOW => Some(Self::Slideshow),
+            content_types::SLIDESHOW_MACRO_ENABLED => Some(Self::MacroEnabledSlideshow),
+            _ => None,
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Presentation => content_types::PRESENTATION,
+            Self::MacroEnabledPresentation => content_types::PRESENTATION_MACRO_ENABLED,
+            Self::Template => content_types::PRESENTATION_TEMPLATE,
+            Self::MacroEnabledTemplate => content_types::PRESENTATION_TEMPLATE_MACRO_ENABLED,
+            Self::Slideshow => content_types::SLIDESHOW,
+            Self::MacroEnabledSlideshow => content_types::SLIDESHOW_MACRO_ENABLED,
+        }
+    }
 }
 
 /// A package or presentation invariant that would make a saved deck unsafe.
@@ -801,6 +840,14 @@ impl Presentation {
             .ok_or(Error::MissingMainDocument)?;
         reject_external("/", main_relationship)?;
         let presentation_part = OpcPackage::resolve_rel_target("/", &main_relationship.target);
+        let main_content_type = package
+            .content_types
+            .content_type_for(&presentation_part)
+            .map(str::to_owned);
+        PresentationPackageClass::from_content_type(main_content_type.as_deref().unwrap_or(""))
+            .ok_or(Error::UnsupportedPackageClass {
+                content_type: main_content_type,
+            })?;
         let presentation_xml = required_part(&package, &presentation_part)?;
         let presentation =
             CT_Presentation::from_xml(presentation_xml).map_err(|error| Error::MalformedPart {
@@ -907,6 +954,49 @@ impl Presentation {
         let package_signatures_invalidated = self.package_signatures_invalidated
             || self.retained_package_signature_would_be_invalidated()?;
         let mut package = self.staged_package(preserve_signed_parts)?;
+        embedded::persist_invalidated_package_signature(
+            &mut package,
+            package_signatures_invalidated,
+        )?;
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output)?;
+        Ok(output.into_inner())
+    }
+
+    /// Returns the exact modern package class carried by the main part.
+    pub fn package_class(&self) -> Result<PresentationPackageClass> {
+        let content_type = self
+            .package
+            .content_types
+            .content_type_for(&self.presentation_part)
+            .map(str::to_owned);
+        PresentationPackageClass::from_content_type(content_type.as_deref().unwrap_or(""))
+            .ok_or(Error::UnsupportedPackageClass { content_type })
+    }
+
+    /// Serialises an output copy with the selected package class.
+    ///
+    /// Executable payloads and every unrelated part and relationship remain
+    /// byte-preserved. The live presentation keeps its original class.
+    pub fn to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<u8>> {
+        debug_assert!(
+            self.validate().is_empty(),
+            "invalid presentation at package-class save boundary: {:?}",
+            self.validate()
+        );
+        let class_changed = self.package_class()? != class;
+        let preserve_signed_parts = self
+            .package
+            .package_rels
+            .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+            .is_some();
+        let package_signatures_invalidated = self.package_signatures_invalidated
+            || self.retained_package_signature_would_be_invalidated()?
+            || (class_changed && preserve_signed_parts);
+        let mut package = self.staged_package(preserve_signed_parts)?;
+        package
+            .content_types
+            .add_override(&self.presentation_part, class.content_type());
         embedded::persist_invalidated_package_signature(
             &mut package,
             package_signatures_invalidated,
@@ -1228,16 +1318,16 @@ impl Presentation {
 
     /// Saves a slideshow package without changing later ordinary saves.
     pub fn save_as_show<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        debug_assert!(
-            self.validate().is_empty(),
-            "invalid presentation at slideshow save boundary: {:?}",
-            self.validate()
-        );
-        let mut package = self.staged_package(false)?;
-        package
-            .content_types
-            .add_override(&self.presentation_part, content_types::SLIDESHOW);
-        package.save(path)?;
+        self.save_as_package_class(path, PresentationPackageClass::Slideshow)
+    }
+
+    /// Saves an output copy with the selected modern package class.
+    pub fn save_as_package_class<P: AsRef<Path>>(
+        &self,
+        path: P,
+        class: PresentationPackageClass,
+    ) -> Result<()> {
+        std::fs::write(path, self.to_bytes_as(class)?).map_err(OpcError::from)?;
         Ok(())
     }
 

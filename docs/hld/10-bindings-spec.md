@@ -1097,6 +1097,11 @@ profile exposes the constructor, `fromBytes`, `toBytes`, `slideCount`, and
 backend, rasteriser, or host font discovery. The `render` feature adds only
 `toPdf` and selects the facade's deterministic renderer. The optimized default
 artifact must remain below 1,000,000 bytes after deterministic gzip.
+
+Modern presentation package-class inspection and output selection remain
+native Rust APIs. Python, WASM, and CLI callers continue to preserve the
+source main content type through their existing byte or path save operations,
+but they gain no package-class selector in this milestone.
 Pull-request CI target-checks the default wrapper with the locked workspace
 graph and runs its package-preserving inline test in Node.
 
