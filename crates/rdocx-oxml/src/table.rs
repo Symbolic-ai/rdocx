@@ -939,8 +939,8 @@ pub struct CT_TrPr {
     pub cnf_style: Option<String>,
     /// Contextual row insertion and deletion markers in schema order.
     pub revision_markers: Vec<CT_Revision>,
-    /// Malformed row markers retained at their insertion or deletion schema slot.
-    pub revision_xml: Vec<(usize, Vec<u8>)>,
+    /// Malformed row markers retained verbatim.
+    pub revision_xml: Vec<Vec<u8>>,
     /// Other row properties retained at their schema insertion slots.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
 }
@@ -1012,18 +1012,16 @@ impl CT_TrPr {
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             pr.revision_markers.push(revision);
                         } else {
-                            pr.revision_xml.push((at, raw));
+                            pr.revision_xml.push(raw);
                         }
                     } else if matches_local_name(name.as_ref(), b"ins")
                         || matches_local_name(name.as_ref(), b"del")
                     {
-                        pr.revision_xml.push((
-                            row_revision_boundary(name.as_ref()),
-                            crate::text::raw_with_external_bindings(
+                        pr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
                                 &capture_empty_element(e)?,
                                 owner_bindings,
-                            )?,
-                        ));
+                            )?);
                     } else {
                         pr.extra_xml.push((
                             at,
@@ -1048,18 +1046,16 @@ impl CT_TrPr {
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             pr.revision_markers.push(revision);
                         } else {
-                            pr.revision_xml.push((at, raw));
+                            pr.revision_xml.push(raw);
                         }
                     } else if matches_local_name(e.name().as_ref(), b"ins")
                         || matches_local_name(e.name().as_ref(), b"del")
                     {
-                        pr.revision_xml.push((
-                            row_revision_boundary(e.name().as_ref()),
-                            crate::text::raw_with_external_bindings(
+                        pr.revision_xml
+                            .push(crate::text::raw_with_external_bindings(
                                 &capture_element(reader, e)?,
                                 owner_bindings,
-                            )?,
-                        ));
+                            )?);
                     } else {
                         pr.extra_xml.push((
                             at,
@@ -1178,8 +1174,10 @@ impl CT_TrPr {
         {
             revision.write_xml(writer)?;
         }
-        for (_, raw) in self.revision_xml.iter().filter(|(at, _)| *at == boundary) {
-            writer.get_mut().write_all(raw)?;
+        for raw in &self.revision_xml {
+            if row_revision_raw_boundary(raw)? == boundary {
+                writer.get_mut().write_all(raw)?;
+            }
         }
         Ok(())
     }
@@ -1198,11 +1196,24 @@ impl CT_TrPr {
     }
 }
 
-fn row_revision_boundary(name: &[u8]) -> usize {
-    if matches_local_name(name, b"ins") {
-        12
-    } else {
-        13
+fn row_revision_raw_boundary(raw: &[u8]) -> Result<usize> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) | Event::Empty(element) => {
+                return Ok(if matches_local_name(element.name().as_ref(), b"ins") {
+                    12
+                } else {
+                    13
+                });
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement("row revision marker".to_owned()));
+            }
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 
@@ -3132,7 +3143,7 @@ mod tests {
         let properties = table.rows[0].properties.as_ref().unwrap();
         assert_eq!(
             properties.revision_xml,
-            vec![(12, br#"<w:ins w:id="1"/>"#.to_vec())]
+            vec![br#"<w:ins w:id="1"/>"#.to_vec()]
         );
         assert_eq!(properties.revision_markers.len(), 1);
         assert_eq!(
