@@ -2846,9 +2846,9 @@ impl Document {
 
     /// Resolve the public reader projection for one numbering level.
     ///
-    /// `has_unmodeled_properties` reports retained XML or attributes attached
-    /// to this numbering instance, definition, or level. Modeled producer
-    /// metadata that this projection does not expose is not reported here.
+    /// `has_unmodeled_properties` reports extra XML or attributes attached to
+    /// this numbering instance, definition, or level. Modeled producer metadata
+    /// and raw preservation overlays for level properties are not reported.
     pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
         if num_id == 0 {
             return None;
@@ -2881,9 +2881,7 @@ impl Document {
                 || !definition.extra_xml.is_empty()
                 || !definition.extra_attributes.is_empty()
                 || !level.extra_xml.is_empty()
-                || !level.extra_attributes.is_empty()
-                || level.ppr_raw.is_some()
-                || level.rpr_raw.is_some(),
+                || !level.extra_attributes.is_empty(),
             has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
                 Self::has_list_paragraph_presentation(level.ilvl, properties)
             }),
@@ -10954,17 +10952,17 @@ mod tests {
     }
 
     #[test]
-    fn numbering_level_distinguishes_modeled_metadata_from_retained_raw_facts() {
+    fn numbering_level_unmodeled_fact_contract_is_limited_to_extras() {
         let mut doc = Document::new();
         let definition_metadata_id = doc.add_list_definition(&[ListLevel::decimal()]);
-        let raw_level_properties_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let retained_extra_id = doc.add_list_definition(&[ListLevel::decimal()]);
 
         let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[0];
         definition.nsid = Some("12345678".to_owned());
         definition.tmpl = Some("87654321".to_owned());
         definition.multi_level_type = Some("hybridMultilevel".to_owned());
 
-        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0];
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
         level.ppr_raw = Some((
             CT_PPr::default(),
             b"<w:pPr><producer:property/></w:pPr>".to_vec(),
@@ -10975,6 +10973,9 @@ mod tests {
             b"<w:rPr><producer:property/></w:rPr>".to_vec(),
             vec!["producer".to_owned()],
         ));
+        doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0]
+            .extra_xml
+            .push((0, b"<w:lvlRestart w:val=\"0\"/>".to_vec()));
 
         assert!(
             !doc.numbering_level(definition_metadata_id, 0)
@@ -10982,8 +10983,8 @@ mod tests {
                 .has_unmodeled_properties
         );
         assert!(
-            doc.numbering_level(raw_level_properties_id, 0)
-                .expect("raw properties level")
+            doc.numbering_level(retained_extra_id, 0)
+                .expect("retained extra level")
                 .has_unmodeled_properties
         );
     }
