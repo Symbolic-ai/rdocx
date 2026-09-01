@@ -5,8 +5,8 @@
 **Goal**: model the two major opaque PresentationML surfaces without executing
 untrusted content, and integrate the four reviewed Word reader contributions.
 The sprint adds safe OLE, ActiveX, and VBA inventory and mutation, gives the
-bounded SmartArt corpus typed editing and deterministic rendering, and exposes
-the contributed reader safety facts without weakening XML preservation.
+bounded SmartArt corpus typed inspection and editing, and exposes the
+contributed reader safety facts without weakening XML preservation.
 
 ## Spec references
 

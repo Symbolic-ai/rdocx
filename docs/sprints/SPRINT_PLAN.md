@@ -1157,8 +1157,8 @@ untrusted content.
 | F-X071 | Integrate PRs 61 through 64 | L |
 
 OLE, ActiveX, and VBA remain inventory, extraction, replacement, removal, and
-preservation surfaces. SmartArt gains typed editing and rendering only for the
-bounded corpus algorithms. F-X071 independently adopts the reviewed Word
+preservation surfaces. SmartArt gains typed inspection and editing. F-X071
+independently adopts the reviewed Word
 reader contributions from PRs 61 through 64 and hardens namespace, schema-order,
 and effective-style edge cases before integration.
 

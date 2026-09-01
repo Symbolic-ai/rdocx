@@ -76,6 +76,7 @@ defended.
 | S59 | M21 | 2 | 2 | 0 | 6 | 1 | Opened M21 with editable comments, replies, sections, notes and handout metadata, plus native password and signature operations with current-state invalidation. Pinned PowerPoint opened the encrypted candidate with the correct password and rejected a wrong password. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 3 clean. M21 continues in S60 with animation and transitions |
 | S60 | M21 | 2 | 2 | 0 | 8 | 2 | Added a typed timing and transition model, deterministic timeline evaluation, ordinary transition rendering, and bounded explicit-name morph composition without changing static output. The nine-case PowerPoint differential passed within 0.96 point and 0.997866 SSIM, while the full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 2 clean. M21 continues in S61 with media playback and animated export |
 | S61 | M21 | 3 | 3 | 0 | 10 | 1 | Added relationship-safe audio and video package mutation, deterministic poster and playback state, and bounded animated GIF and Motion JPEG AVI export. The macOS and Linux arm64 manifests matched exactly. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and close-boundary sprint review pass 7 clean. M21 continues in S62 with embedded objects and SmartArt |
+| S62 | M21, X | 4 | 3 | 1 | 16 | 1 | Added relationship-safe OLE, ActiveX, and VBA inventory and mutation, a bounded typed SmartArt inspection and editing model, and hardened outcomes from PRs 61 through 64. F-220 carries to S63 after the ten-pass microscope bound found two remaining exact fail-closed SmartArt validator gaps. Its worker and evidence remain intact, and F-222 waits for its clean completion. The full close gate passed with all 49 hashes unchanged and every package archive below 10 MiB |
 
 ## Completed features
 
@@ -436,6 +437,7 @@ five working days.
 | S59 | 2 | 1 | 10.00 |
 | S60 | 2 | 2 | 5.00 |
 | S61 | 3 | 1 | 15.00 |
+| S62 | 3 | 1 | 15.00 |
 
 ## Escalation record
 
@@ -500,3 +502,4 @@ was done about it. Empty is the expected state.
 | 2026-08-30 | Sprint estimate variance exceeded 30 percent | S59 | Record 1 actual day against 6 estimated. Two isolated workers reused the established PresentationML preservation model and shared package-security implementation, while the bounded reviews concentrated interaction corrections into the same integrated facade. The resulting 10.00 stories per week is not a sustainable rate, so retain the dependency-defined S60 boundary |
 | 2026-08-31 | Sprint estimate variance exceeded 30 percent | S60 | Record 2 actual days against 8 estimated. The strict dependency let F-214 reuse the completed F-213 model, while the user-supplied PowerPoint export and bounded review loop concentrated oracle calibration in one integrated path. The resulting 5.00 stories per week matches the long-run delivery velocity, so retain the dependency-defined S61 boundary |
 | 2026-08-31 | Sprint estimate variance exceeded 30 percent | S61 | Record 1 actual day against 10 estimated. Three strict dependency waves reused the completed timing, package, and rendering foundations, while the bounded reviews concentrated interaction corrections in one integrated facade and encoder path. The resulting 15.00 stories per week is not a sustainable forecast, so retain the dependency-defined S62 boundary |
+| 2026-09-01 | Sprint estimate variance exceeded 30 percent | S62 | Record 1 actual day against 16 estimated. Three isolated workers and the contribution-integration path allowed completed work to overlap, while F-220 reached the ten-pass review bound and carried with its worker intact. The resulting 15.00 stories per week is not a sustainable forecast, so retain the dependency-defined S63 boundary and complete F-220 before F-222 |
