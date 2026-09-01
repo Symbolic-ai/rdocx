@@ -10913,3 +10913,49 @@ pass 1 reported zero defects, zero smells, and zero nitpicks.
 authoritative package class. Keep conversions output-only and preserve every
 opaque executable part and relationship. Any additional class requires an
 exact registered content type and a source-built round-trip.
+
+### F-226, Notes and handout export
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native presentation facade now exports one
+deterministic notes page per source slide and all six audience handout layouts
+to PDF and PNG. Notes pages include vector slide thumbnails, speaker text,
+stored metadata, and master content. Handouts preserve the master below
+aspect-fitted, clipped, bordered, and numbered thumbnails, with writing rules
+for the three-slide layout.
+
+**Non-obvious choices.** Notes-master and notes-slide relationships are remapped
+into one collision-free transient owner scope before the shared resolver runs.
+This preserves distinct media when both source scopes use the same relationship
+id. Placeholder overlay matches explicit index first and compatible type
+second, consumes each owner once, and fails on missing or ambiguous ownership.
+
+**Deviations from the design plan.** None. The implementation remains in the
+existing facade, reuses the existing deterministic layout and rendering stack,
+and adds no module, dependency, feature, binding, or renderer API.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/06-presentationml-model.md`,
+`docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The six named source-built integration gates cover notes geometry,
+all handout layouts, deterministic PDF and PNG dimensions, noncanonical
+relationship targets, malformed graphs, invalid DPI, and package-byte
+preservation. Additional regressions cover exact placeholder ambiguity,
+cross-scope relationship id collisions, master z-order, and rejection of a
+1.01-point geometry displacement. Full workspace verification and public
+package riders passed. Microscope pass 4 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep notes and handout composition in the
+facade-owned package assembly stage. Do not resolve notes-slide media in the
+notes-master relationship scope, and do not replace vector thumbnails with a
+raster intermediate.

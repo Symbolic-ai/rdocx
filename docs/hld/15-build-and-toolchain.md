@@ -124,6 +124,13 @@ whole presentation. It shares page lowering with
 font files from `RenderInput`. The `rpptx` corpus example is an unpublished
 development target and does not change any crate publication setting.
 
+Native notes and handout export is available only with the existing `render`
+feature and adds no dependency, feature flag, module, binding package, or
+published crate. Its public pre-1.0 `rpptx` API requires rustdoc with warnings
+denied, both WASM checks, dependency-direction validation, the patched
+workspace publish dry run, archive-size enforcement, and separate release
+review before publication.
+
 The `oxml-layout` `--no-default-features` path disables host system font
 discovery while retaining bundled fonts for deterministic construction. This is
 also the same font-isolation path the WASM build needs.

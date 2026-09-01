@@ -818,6 +818,17 @@ Eight gates run against it:
    slides, layouts, and masters without interpreting their payloads. The gate
    requires exactly two layout owners and one master owner and proves each
    reported payload extracts to the reported byte length.
+9. **Notes and handout deterministic export**: a source-built package uses
+   noncanonical notes-master, handout-master, notes-slide, theme, and media
+   targets. PDF and PNG checks cover page order, `notesSz`, exact slide-image
+   edges, header and footer metadata, a slide without notes, all six handout
+   grids, master-behind-thumbnail z-order, three-up note rules, and package-byte
+   preservation. Relationship negatives cover missing, external, duplicate,
+   wrong-type, malformed, and equal-id cross-scope cases. Placeholder cases
+   prove index-first and type-fallback matching, ambiguity rejection, and
+   unmatched rejection. The geometry unit gate covers exact targets, clipping,
+   five rules, and rejection of a 1.01-point displacement. The 49-entry render
+   hash manifest remains unchanged.
 
 The native SmartArt render differential uses six one-slide source decks built
 from exact SHA-256-pinned PowerPoint 16.104 layout, quick-style, and colour

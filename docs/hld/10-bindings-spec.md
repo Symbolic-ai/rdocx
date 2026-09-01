@@ -780,6 +780,29 @@ instruction ownership and typed colour choices with transforms, not raw XML or
 mutation. F-220 adds no facade, binding, `rpptx-layout`, or `rpptx-render`
 public surface.
 
+## Native PowerPoint notes and handout export
+
+The published pre-1.0 `rpptx` facade exposes `HandoutLayout::{One, Two, Three,
+Four, Six, Nine}` and four render-feature methods:
+
+```rust
+Presentation::to_notes_pdf_deterministic(&self) -> Result<Vec<u8>>;
+Presentation::notes_page_pngs_deterministic(&self, dpi: f64)
+    -> Result<Vec<Vec<u8>>>;
+Presentation::to_handout_pdf_deterministic(&self, layout: HandoutLayout)
+    -> Result<Vec<u8>>;
+Presentation::handout_page_pngs_deterministic(
+    &self,
+    layout: HandoutLayout,
+    dpi: f64,
+) -> Result<Vec<Vec<u8>>>;
+```
+
+These additions are native Rust APIs only. Python, WASM, and CLI surfaces add
+no notes or handout methods and continue to preserve the underlying parts. No
+new public surface is added to `rpptx-layout`, `rpptx-render`, or the OXML
+crates. The additive facade API is reviewed through the pre-1.0 release gate.
+
 ## Native PowerPoint executable-content inventory
 
 The published pre-1.0 `rpptx` facade exposes concrete `EmbeddedContentKind`,

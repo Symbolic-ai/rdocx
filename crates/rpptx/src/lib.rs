@@ -44,8 +44,8 @@ use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
 #[cfg(feature = "render")]
 use oxml_layout::{
-    Color, FontManager, GlyphRun, GroupElement, LayoutResult, PageFrame, Path as LayoutPath, Point,
-    PositionedElement, Rect, Transform,
+    Color, FontManager, GlyphRun, GroupElement, LayoutResult, PageFrame, Path as LayoutPath,
+    PathElement, Point, PositionedElement, Rect, Transform,
 };
 use oxml_media::{
     ImageFormat, MediaNamer, audio_video_signature_matches, is_safe_content_type, probe, resolve,
@@ -82,6 +82,8 @@ use rpptx_oxml::namespace::P_NS;
 use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
 pub use rpptx_oxml::picture::MediaKind;
 use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, PictureMedia};
+#[cfg(feature = "render")]
+use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 pub use rpptx_oxml::presentation::Section;
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
@@ -89,6 +91,8 @@ use rpptx_oxml::relmap::{relationship_ids, rewrite_exact_rel_ids, rewrite_rel_id
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
+#[cfg(feature = "render")]
+use rpptx_oxml::slide_parts::CT_CommonSlideData;
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::ColorMapOverrideKind;
 use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout, CT_SlideMaster};
@@ -140,6 +144,32 @@ pub enum MediaFallbackPolicy {
     PosterFrame,
     DeterministicPlaceholder,
     Fail,
+}
+
+/// An audience-handout slide arrangement.
+#[cfg(feature = "render")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HandoutLayout {
+    One,
+    Two,
+    Three,
+    Four,
+    Six,
+    Nine,
+}
+
+#[cfg(feature = "render")]
+impl HandoutLayout {
+    const fn slides_per_page(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+            Self::Four => 4,
+            Self::Six => 6,
+            Self::Nine => 9,
+        }
+    }
 }
 
 /// One deterministic page and its synchronized media playback state.
@@ -1131,6 +1161,42 @@ impl Presentation {
             &layout,
             oxml_pdf::PdfOptions::new(profile),
         )?)
+    }
+
+    /// Renders one deterministic speaker-notes page per source slide.
+    #[cfg(feature = "render")]
+    pub fn to_notes_pdf_deterministic(&self) -> Result<Vec<u8>> {
+        let package = self.staged_package(false)?;
+        let layout = render_notes_pages(&package)?;
+        Ok(oxml_pdf::render_to_pdf(&layout))
+    }
+
+    /// Renders one deterministic PNG per speaker-notes page at `dpi`.
+    #[cfg(feature = "render")]
+    pub fn notes_page_pngs_deterministic(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
+        let package = self.staged_package(false)?;
+        let layout = render_notes_pages(&package)?;
+        render_export_pngs(&layout, dpi)
+    }
+
+    /// Renders deterministic audience handouts in the selected arrangement.
+    #[cfg(feature = "render")]
+    pub fn to_handout_pdf_deterministic(&self, layout: HandoutLayout) -> Result<Vec<u8>> {
+        let package = self.staged_package(false)?;
+        let layout = render_handout_pages(&package, layout)?;
+        Ok(oxml_pdf::render_to_pdf(&layout))
+    }
+
+    /// Renders one deterministic PNG per audience-handout page at `dpi`.
+    #[cfg(feature = "render")]
+    pub fn handout_page_pngs_deterministic(
+        &self,
+        layout: HandoutLayout,
+        dpi: f64,
+    ) -> Result<Vec<Vec<u8>>> {
+        let package = self.staged_package(false)?;
+        let layout = render_handout_pages(&package, layout)?;
+        render_export_pngs(&layout, dpi)
     }
 
     fn staged_package(&self, preserve_unchanged_modelled_parts: bool) -> Result<OpcPackage> {
@@ -6337,6 +6403,967 @@ fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutRes
 }
 
 #[cfg(feature = "render")]
+const MAX_PRESENTATION_EXPORT_DPI: f64 = 600.0;
+#[cfg(feature = "render")]
+const MAX_PRESENTATION_EXPORT_RASTER_BYTES: u64 = 256 * 1024 * 1024;
+
+#[cfg(feature = "render")]
+fn render_export_pngs(layout: &LayoutResult, dpi: f64) -> Result<Vec<Vec<u8>>> {
+    if !dpi.is_finite() || dpi <= 0.0 || dpi > MAX_PRESENTATION_EXPORT_DPI {
+        return Err(render_failure(format!(
+            "raster DPI must be finite and in 0..={MAX_PRESENTATION_EXPORT_DPI}, found {dpi}"
+        )));
+    }
+    let scale = dpi / 72.0;
+    let estimated = layout.pages.iter().try_fold(0u64, |total, page| {
+        let width = (page.width * scale).ceil();
+        let height = (page.height * scale).ceil();
+        if !width.is_finite() || !height.is_finite() || width < 1.0 || height < 1.0 {
+            return None;
+        }
+        let page_bytes = (width as u64).checked_mul(height as u64)?.checked_mul(4)?;
+        total.checked_add(page_bytes)
+    });
+    if estimated.is_none_or(|bytes| bytes > MAX_PRESENTATION_EXPORT_RASTER_BYTES) {
+        return Err(render_failure(format!(
+            "raster export exceeds the {} byte decoded-output limit",
+            MAX_PRESENTATION_EXPORT_RASTER_BYTES
+        )));
+    }
+    (0..layout.pages.len())
+        .map(|index| {
+            oxml_pdf::render_page_to_png(layout, index, dpi).ok_or_else(|| {
+                render_failure(format!("could not rasterize export page {}", index + 1))
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "render")]
+fn render_notes_pages(package: &OpcPackage) -> Result<LayoutResult> {
+    let mut assembly = prepare_render_context(package, false)?;
+    if assembly.slides.is_empty() {
+        return Ok(LayoutResult::new(
+            Vec::new(),
+            assembly.font_manager.all_font_data(),
+            assembly.input.metadata.clone(),
+            Vec::new(),
+        ));
+    }
+    let presentation_part = package
+        .main_document_part()
+        .ok_or(Error::MissingMainDocument)?;
+    let presentation = CT_Presentation::from_xml(required_part(package, &presentation_part)?)
+        .map_err(|error| Error::MalformedPart {
+            part_name: presentation_part.clone(),
+            message: error.to_string(),
+        })?;
+    let notes_size = export_page_size(&presentation);
+    let notes_master_part = render_exact_related_part(
+        package,
+        &presentation_part,
+        rel_types::NOTES_MASTER,
+        content_types::NOTES_MASTER,
+    )?;
+    let notes_master = CT_NotesMaster::from_xml(required_part(package, &notes_master_part)?)
+        .map_err(|error| Error::MalformedPart {
+            part_name: notes_master_part.clone(),
+            message: error.to_string(),
+        })?;
+    let theme_part = render_exact_related_part(
+        package,
+        &notes_master_part,
+        rel_types::THEME,
+        content_types::THEME,
+    )?;
+    let theme =
+        CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?).map_err(|error| {
+            Error::MalformedPart {
+                part_name: theme_part,
+                message: error.to_string(),
+            }
+        })?;
+    let default_text_style = notes_master
+        .notes_style
+        .clone()
+        .or(presentation.default_text_style.clone())
+        .unwrap_or_default();
+    let shell_layout = assembly.slides[0].layout.clone();
+    let shell_master = assembly.slides[0].master.clone();
+    let mut export_package = package.clone();
+    let mut pages = Vec::with_capacity(assembly.slides.len());
+    let mut diagnostics = assembly.layout.diagnostics.clone();
+    for (slide_index, prepared) in assembly.slides.iter().enumerate() {
+        let notes = resolve_notes(package, &prepared.slide_part)?;
+        if let Some(notes) = &notes {
+            validate_notes_export_graph(
+                package,
+                &prepared.slide_part,
+                &notes.part_name,
+                &notes_master_part,
+            )?;
+        }
+        let (page_source, page_master, page_notes) = remap_notes_export_scope(
+            &mut export_package,
+            &notes_master_part,
+            &notes_master,
+            notes.as_ref(),
+        )?;
+        let common = compose_notes_common(&page_master, page_notes.as_ref(), slide_index + 1)?;
+        let preview = assembly.layout.pages[slide_index].as_ref();
+        let mut page = render_export_surface(
+            &export_package,
+            &page_source,
+            common,
+            page_master.color_map.clone(),
+            &default_text_style,
+            &theme,
+            notes_size,
+            slide_index + 1,
+            Some(preview),
+            &shell_layout,
+            &shell_master,
+            &mut assembly.input.media,
+            &mut assembly.font_manager,
+            assembly.table_styles.as_ref(),
+        )?;
+        diagnostics.append(&mut page.1);
+        pages.push(std::sync::Arc::new(page.0));
+    }
+    let mut result = LayoutResult::new(
+        pages,
+        assembly.font_manager.all_font_data(),
+        assembly.input.metadata.clone(),
+        Vec::new(),
+    );
+    result.diagnostics = diagnostics;
+    Ok(result)
+}
+
+#[cfg(feature = "render")]
+fn remap_notes_export_scope(
+    package: &mut OpcPackage,
+    master_part: &str,
+    master: &CT_NotesMaster,
+    notes: Option<&NotesRecord>,
+) -> Result<(String, CT_NotesMaster, Option<CT_NotesSlide>)> {
+    const SCOPE_PART: &str = "/ppt/rdocx-notes-export.xml";
+
+    let mut relationships = Vec::new();
+    let master_map =
+        copy_export_relationship_scope(package, master_part, "rdocxMaster", &mut relationships)?;
+    let master_xml = master.to_xml().map_err(|error| Error::MalformedPart {
+        part_name: master_part.to_owned(),
+        message: error.to_string(),
+    })?;
+    let master_xml =
+        rewrite_exact_rel_ids(&master_xml, &master_map).map_err(|error| Error::MalformedPart {
+            part_name: master_part.to_owned(),
+            message: error.to_string(),
+        })?;
+    let remapped_master =
+        CT_NotesMaster::from_xml(&master_xml).map_err(|error| Error::MalformedPart {
+            part_name: master_part.to_owned(),
+            message: error.to_string(),
+        })?;
+
+    let remapped_notes = notes
+        .map(|record| {
+            let notes_map = copy_export_relationship_scope(
+                package,
+                &record.part_name,
+                "rdocxNotes",
+                &mut relationships,
+            )?;
+            let notes_xml = record
+                .notes
+                .to_xml()
+                .map_err(|error| Error::MalformedPart {
+                    part_name: record.part_name.clone(),
+                    message: error.to_string(),
+                })?;
+            let notes_xml = rewrite_exact_rel_ids(&notes_xml, &notes_map).map_err(|error| {
+                Error::MalformedPart {
+                    part_name: record.part_name.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            CT_NotesSlide::from_xml(&notes_xml).map_err(|error| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: error.to_string(),
+            })
+        })
+        .transpose()?;
+
+    package.get_or_create_part_rels(SCOPE_PART).items = relationships;
+    Ok((SCOPE_PART.to_owned(), remapped_master, remapped_notes))
+}
+
+#[cfg(feature = "render")]
+fn copy_export_relationship_scope(
+    package: &OpcPackage,
+    source_part: &str,
+    prefix: &str,
+    output: &mut Vec<Relationship>,
+) -> Result<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    let Some(source) = package.get_part_rels(source_part) else {
+        return Ok(map);
+    };
+    for (index, relationship) in source.items.iter().enumerate() {
+        let id = format!("{prefix}{}", index + 1);
+        if map.insert(relationship.id.clone(), id.clone()).is_some() {
+            return Err(render_failure(format!(
+                "{source_part}: duplicate relationship id {}",
+                relationship.id
+            )));
+        }
+        let external = relationship
+            .target_mode
+            .as_deref()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("external"));
+        output.push(Relationship {
+            id,
+            rel_type: relationship.rel_type.clone(),
+            target: if external {
+                relationship.target.clone()
+            } else {
+                OpcPackage::resolve_rel_target(source_part, &relationship.target)
+            },
+            target_mode: relationship.target_mode.clone(),
+        });
+    }
+    Ok(map)
+}
+
+#[cfg(feature = "render")]
+fn render_handout_pages(
+    package: &OpcPackage,
+    handout_layout: HandoutLayout,
+) -> Result<LayoutResult> {
+    let mut assembly = prepare_render_context(package, false)?;
+    if assembly.slides.is_empty() {
+        return Ok(LayoutResult::new(
+            Vec::new(),
+            assembly.font_manager.all_font_data(),
+            assembly.input.metadata.clone(),
+            Vec::new(),
+        ));
+    }
+    let presentation_part = package
+        .main_document_part()
+        .ok_or(Error::MissingMainDocument)?;
+    let presentation = CT_Presentation::from_xml(required_part(package, &presentation_part)?)
+        .map_err(|error| Error::MalformedPart {
+            part_name: presentation_part.clone(),
+            message: error.to_string(),
+        })?;
+    let page_size = export_page_size(&presentation);
+    let handout_master_part = render_exact_related_part(
+        package,
+        &presentation_part,
+        rel_types::HANDOUT_MASTER,
+        content_types::HANDOUT_MASTER,
+    )?;
+    let handout_master = CT_HandoutMaster::from_xml(required_part(package, &handout_master_part)?)
+        .map_err(|error| Error::MalformedPart {
+            part_name: handout_master_part.clone(),
+            message: error.to_string(),
+        })?;
+    let theme_part = render_exact_related_part(
+        package,
+        &handout_master_part,
+        rel_types::THEME,
+        content_types::THEME,
+    )?;
+    let theme =
+        CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?).map_err(|error| {
+            Error::MalformedPart {
+                part_name: theme_part,
+                message: error.to_string(),
+            }
+        })?;
+    let default_text_style = presentation.default_text_style.clone().unwrap_or_default();
+    let shell_layout = assembly.slides[0].layout.clone();
+    let shell_master = assembly.slides[0].master.clone();
+    let capacity = handout_layout.slides_per_page();
+    let page_count = assembly.layout.pages.len().div_ceil(capacity);
+    let mut pages = Vec::with_capacity(page_count);
+    let mut diagnostics = assembly.layout.diagnostics.clone();
+    for page_index in 0..page_count {
+        let common = compose_handout_common(&handout_master, page_index + 1)?;
+        let (mut base, mut page_diagnostics) = render_export_surface(
+            package,
+            &handout_master_part,
+            common,
+            handout_master.color_map.clone(),
+            &default_text_style,
+            &theme,
+            page_size,
+            page_index + 1,
+            None,
+            &shell_layout,
+            &shell_master,
+            &mut assembly.input.media,
+            &mut assembly.font_manager,
+            assembly.table_styles.as_ref(),
+        )?;
+        diagnostics.append(&mut page_diagnostics);
+        let start = page_index * capacity;
+        let end = (start + capacity).min(assembly.layout.pages.len());
+        let mut elements = std::mem::take(&mut base.elements);
+        let mut thumbnails = handout_thumbnail_elements(
+            &assembly.layout.pages[start..end],
+            start,
+            handout_layout,
+            page_size,
+            &mut assembly.font_manager,
+        )?;
+        elements.append(&mut thumbnails);
+        base.elements = elements;
+        pages.push(std::sync::Arc::new(base));
+    }
+    let mut result = LayoutResult::new(
+        pages,
+        assembly.font_manager.all_font_data(),
+        assembly.input.metadata.clone(),
+        Vec::new(),
+    );
+    result.diagnostics = diagnostics;
+    Ok(result)
+}
+
+#[cfg(feature = "render")]
+fn export_page_size(presentation: &CT_Presentation) -> (f64, f64) {
+    (
+        presentation.notes_size.cx.0 as f64 / 12_700.0,
+        presentation.notes_size.cy.0 as f64 / 12_700.0,
+    )
+}
+
+#[cfg(feature = "render")]
+fn render_exact_related_part(
+    package: &OpcPackage,
+    source_part: &str,
+    relationship_type: &str,
+    content_type: &str,
+) -> Result<String> {
+    let matches = package
+        .get_part_rels(source_part)
+        .map(|relationships| relationships.get_all_by_type(relationship_type))
+        .unwrap_or_default();
+    if matches.len() != 1 {
+        return Err(render_failure(format!(
+            "{source_part}: found {} relationships of type {relationship_type}, expected exactly one",
+            matches.len()
+        )));
+    }
+    let relationship = matches[0];
+    reject_external(source_part, relationship)?;
+    let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+    required_part(package, &target)?;
+    let actual = package.content_types.content_type_for(&target);
+    if actual != Some(content_type) {
+        return Err(render_failure(format!(
+            "{source_part}: relationship {} targets {target} with content type {:?}, expected {content_type}",
+            relationship.id, actual
+        )));
+    }
+    Ok(target)
+}
+
+#[cfg(feature = "render")]
+fn validate_notes_export_graph(
+    package: &OpcPackage,
+    slide_part: &str,
+    notes_part: &str,
+    notes_master_part: &str,
+) -> Result<()> {
+    if package.content_types.content_type_for(notes_part) != Some(content_types::NOTES_SLIDE) {
+        return Err(render_failure(format!(
+            "{notes_part}: expected notes-slide content type"
+        )));
+    }
+    let master = render_exact_related_part(
+        package,
+        notes_part,
+        rel_types::NOTES_MASTER,
+        content_types::NOTES_MASTER,
+    )?;
+    if master != notes_master_part {
+        return Err(render_failure(format!(
+            "{notes_part}: notes master {master} differs from presentation master {notes_master_part}"
+        )));
+    }
+    let slide =
+        render_exact_related_part(package, notes_part, rel_types::SLIDE, content_types::SLIDE)?;
+    if slide != slide_part {
+        return Err(render_failure(format!(
+            "{notes_part}: source slide {slide} differs from owner {slide_part}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn compose_notes_common(
+    master: &CT_NotesMaster,
+    notes: Option<&CT_NotesSlide>,
+    slide_number: usize,
+) -> Result<CT_CommonSlideData> {
+    let mut common = master.common_slide_data.clone();
+    if let Some(notes) = notes {
+        let mut overlays = Vec::new();
+        collect_export_placeholder_shapes(
+            &notes.common_slide_data.shape_tree.children,
+            &mut overlays,
+        )?;
+        let mut consumed = HashSet::new();
+        apply_export_placeholder_overlays(
+            &mut common.shape_tree.children,
+            &overlays,
+            &mut consumed,
+        )?;
+        if let Some((unmatched, _)) = overlays
+            .iter()
+            .enumerate()
+            .find(|(index, _)| !consumed.contains(index))
+            .map(|(_, overlay)| overlay)
+        {
+            return Err(render_failure(format!(
+                "notes slide placeholder {unmatched:?} has no matching notes-master placeholder"
+            )));
+        }
+        for child in &notes.common_slide_data.shape_tree.children {
+            if child_export_placeholder(child).is_none() {
+                common.shape_tree.children.push(child.clone());
+            }
+        }
+    }
+    filter_export_master_shapes(
+        &mut common.shape_tree.children,
+        master.header_footer.as_ref(),
+        notes.is_some(),
+        slide_number,
+    );
+    let slide_images = count_export_placeholders(&common.shape_tree.children, |kind| {
+        kind == &PhType::SlideImage
+    });
+    if slide_images != 1 {
+        return Err(render_failure(format!(
+            "notes master has {slide_images} visible slide-image placeholders, expected exactly one"
+        )));
+    }
+    Ok(common)
+}
+
+#[cfg(feature = "render")]
+fn compose_handout_common(
+    master: &CT_HandoutMaster,
+    page_number: usize,
+) -> Result<CT_CommonSlideData> {
+    let mut common = master.common_slide_data.clone();
+    filter_export_master_shapes(
+        &mut common.shape_tree.children,
+        master.header_footer.as_ref(),
+        false,
+        page_number,
+    );
+    Ok(common)
+}
+
+#[cfg(feature = "render")]
+fn collect_export_placeholder_shapes(
+    children: &[ShapeTreeChild],
+    output: &mut Vec<(PlaceholderKey, CT_Shape)>,
+) -> Result<()> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) => {
+                if let Some(placeholder) = shape.placeholder.as_ref() {
+                    let key = placeholder.key();
+                    if output.iter().any(|(existing, _)| existing.matches(&key)) {
+                        return Err(render_failure(format!(
+                            "notes slide has ambiguous placeholder {key:?}"
+                        )));
+                    }
+                    output.push((key, shape.clone()));
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                collect_export_placeholder_shapes(&group.children, output)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn apply_export_placeholder_overlays(
+    children: &mut [ShapeTreeChild],
+    overlays: &[(PlaceholderKey, CT_Shape)],
+    consumed: &mut HashSet<usize>,
+) -> Result<()> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) => {
+                let Some(placeholder) = shape.placeholder.as_ref() else {
+                    continue;
+                };
+                let key = placeholder.key();
+                let mut matches = overlays
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (overlay_key, _))| key.matches(overlay_key));
+                let Some((overlay_index, (_, overlay))) = matches.next() else {
+                    continue;
+                };
+                if matches.next().is_some() {
+                    return Err(render_failure(format!(
+                        "notes master placeholder {key:?} matches multiple notes-slide placeholders"
+                    )));
+                }
+                if !consumed.insert(overlay_index) {
+                    return Err(render_failure(format!(
+                        "notes master has duplicate placeholder {key:?}"
+                    )));
+                }
+                if let Some(transform) = overlay.shape_properties.transform.clone() {
+                    shape.shape_properties.transform = Some(transform);
+                }
+                if let Some(text) = overlay.text_body.clone() {
+                    shape.text_body = Some(text);
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                apply_export_placeholder_overlays(&mut group.children, overlays, consumed)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn child_export_placeholder(child: &ShapeTreeChild) -> Option<PhType> {
+    match child {
+        ShapeTreeChild::Shape(shape) => shape
+            .placeholder
+            .as_ref()
+            .map(CT_Placeholder::effective_type),
+        ShapeTreeChild::Picture(picture) => picture
+            .placeholder
+            .as_ref()
+            .map(CT_Placeholder::effective_type),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "render")]
+fn filter_export_master_shapes(
+    children: &mut Vec<ShapeTreeChild>,
+    header_footer: Option<&CT_HeaderFooter>,
+    keep_body: bool,
+    page_number: usize,
+) {
+    children.retain_mut(|child| {
+        if let ShapeTreeChild::GroupShape(group) = child {
+            filter_export_master_shapes(&mut group.children, header_footer, keep_body, page_number);
+            return true;
+        }
+        let Some(kind) = child_export_placeholder(child) else {
+            return true;
+        };
+        let enabled = match kind {
+            PhType::DateTime => header_footer.is_none_or(CT_HeaderFooter::date_time_enabled),
+            PhType::Header => header_footer.is_none_or(CT_HeaderFooter::header_enabled),
+            PhType::Footer => header_footer.is_none_or(CT_HeaderFooter::footer_enabled),
+            PhType::SlideNumber => header_footer.is_none_or(CT_HeaderFooter::slide_number_enabled),
+            PhType::Body => keep_body,
+            _ => true,
+        };
+        if enabled
+            && kind == PhType::SlideNumber
+            && let ShapeTreeChild::Shape(shape) = child
+        {
+            if let Some(placeholder) = shape.placeholder.as_mut() {
+                placeholder.ph_type = Some(PhType::Other("exportPageNumber".to_owned()));
+            }
+            if let Some(body) = shape.text_body.as_mut() {
+                body.set_text(&page_number.to_string());
+            }
+        }
+        if enabled
+            && kind == PhType::Body
+            && let ShapeTreeChild::Shape(shape) = child
+            && shape
+                .text_body
+                .as_ref()
+                .is_none_or(|body| body.plain_text().trim().is_empty())
+        {
+            return false;
+        }
+        enabled
+    });
+}
+
+#[cfg(feature = "render")]
+fn count_export_placeholders(
+    children: &[ShapeTreeChild],
+    predicate: impl Copy + Fn(&PhType) -> bool,
+) -> usize {
+    children
+        .iter()
+        .map(|child| match child {
+            ShapeTreeChild::GroupShape(group) => {
+                count_export_placeholders(&group.children, predicate)
+            }
+            _ => child_export_placeholder(child)
+                .as_ref()
+                .is_some_and(predicate) as usize,
+        })
+        .sum()
+}
+
+#[cfg(feature = "render")]
+#[allow(clippy::too_many_arguments)]
+fn render_export_surface(
+    package: &OpcPackage,
+    source_part: &str,
+    common: CT_CommonSlideData,
+    color_map: ColorMap,
+    default_text_style: &CT_TextListStyle,
+    theme: &CT_OfficeStyleSheet,
+    size: (f64, f64),
+    page_number: usize,
+    preview: Option<&PageFrame>,
+    shell_layout: &CT_SlideLayout,
+    shell_master: &CT_SlideMaster,
+    deck_media: &mut HashMap<MediaId, MediaData>,
+    font_manager: &mut FontManager,
+    table_styles: Option<&CT_TableStyleList>,
+) -> Result<(PageFrame, Vec<oxml_layout::Diagnostic>)> {
+    let mut slide = CT_Slide::new(CT_ShapeTree::new());
+    slide.common_slide_data = common;
+    let mut layout = shell_layout.clone();
+    layout.common_slide_data.background = None;
+    layout.common_slide_data.shape_tree = CT_ShapeTree::new();
+    layout.header_footer = None;
+    let mut master = shell_master.clone();
+    master.common_slide_data.background = None;
+    master.common_slide_data.shape_tree = CT_ShapeTree::new();
+    master.color_map = color_map.clone();
+    master.text_styles = None;
+    master.header_footer = None;
+    let empty: &[ShapeTreeChild] = &[];
+    let (media, hyperlinks, charts, diagrams) = render_scoped_resources(
+        package,
+        [source_part, source_part, source_part],
+        [&slide.common_slide_data.shape_tree.children, empty, empty],
+        deck_media,
+    )?;
+    let expansion = diagram::expand_tree(&mut slide.common_slide_data.shape_tree, &diagrams.slide);
+    let mut context = ResolveCtx::new(
+        theme,
+        color_map,
+        &master,
+        &layout,
+        &slide,
+        default_text_style,
+    );
+    if let Some(styles) = table_styles {
+        context = context.with_table_styles(styles);
+    }
+    let mut preview_index = None;
+    let mut source_index = 0usize;
+    for item in context.flatten() {
+        if !render_source_shape_has_bounds(&context, &item) {
+            continue;
+        }
+        if let FlattenedItem::Shape { child, .. } = &item
+            && child_export_placeholder(child) == Some(PhType::SlideImage)
+            && preview_index.replace(source_index).is_some()
+        {
+            return Err(render_failure(
+                "notes surface has multiple bounded slide-image placeholders",
+            ));
+        }
+        source_index += 1;
+    }
+    if preview.is_some() != preview_index.is_some() {
+        return Err(render_failure(
+            "notes surface and slide-image placeholder do not correspond",
+        ));
+    }
+    let (mut resolved, directions) = context
+        .resolve_slide_with_chart_resources_and_text_directions(
+            size,
+            &media,
+            &hyperlinks,
+            &charts,
+            font_manager,
+        )
+        .map_err(|error| render_failure(format!("{source_part}: {error}")))?;
+    resolved.diagnostics.extend(expansion.diagnostics);
+    if let (Some(preview), Some(index)) = (preview, preview_index) {
+        let shape = resolved.shapes.get_mut(index).ok_or_else(|| {
+            render_failure("notes slide-image placeholder was dropped during resolution")
+        })?;
+        let target = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: shape.bounds.width,
+            height: shape.bounds.height,
+        };
+        shape.content = ResolvedContent::Group(page_thumbnail_group(preview, target).0);
+    }
+    let diagnostics = resolved.diagnostics.clone();
+    let input = RenderInput {
+        slides: vec![resolved],
+        media: deck_media.clone(),
+        fonts: Vec::new(),
+        metadata: None,
+    };
+    let layout_result = layout_presentation_with_font_manager_and_text_directions_mut(
+        &input,
+        font_manager,
+        &[directions],
+    )
+    .map_err(|error| render_failure(error.to_string()))?;
+    let mut page = layout_result
+        .pages
+        .first()
+        .map(|page| page.as_ref().clone())
+        .ok_or_else(|| render_failure("export surface produced no page"))?;
+    page.page_number = page_number;
+    Ok((page, diagnostics))
+}
+
+#[cfg(feature = "render")]
+fn page_thumbnail_group(page: &PageFrame, target: Rect) -> (GroupElement, Rect) {
+    let scale = (target.width / page.width).min(target.height / page.height);
+    let fitted = Rect {
+        x: target.x + (target.width - page.width * scale) / 2.0,
+        y: target.y + (target.height - page.height * scale) / 2.0,
+        width: page.width * scale,
+        height: page.height * scale,
+    };
+    let mut children = vec![PositionedElement::FilledRect {
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: page.width,
+            height: page.height,
+        },
+        color: Color::WHITE,
+    }];
+    if let Some(background) = &page.background {
+        children.push(PositionedElement::Path(PathElement {
+            path: LayoutPath::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: page.width,
+                height: page.height,
+            }),
+            fill: Some(background.clone()),
+            stroke: None,
+        }));
+    }
+    children.extend(page.elements.clone());
+    (
+        GroupElement {
+            transform: Transform {
+                a: scale,
+                b: 0.0,
+                c: 0.0,
+                d: scale,
+                e: fitted.x,
+                f: fitted.y,
+            },
+            clip: Some(LayoutPath::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: page.width,
+                height: page.height,
+            })),
+            opacity: 1.0,
+            effects: Vec::new(),
+            children,
+        },
+        fitted,
+    )
+}
+
+#[cfg(feature = "render")]
+fn handout_thumbnail_elements(
+    pages: &[std::sync::Arc<PageFrame>],
+    source_start: usize,
+    layout: HandoutLayout,
+    page_size: (f64, f64),
+    font_manager: &mut FontManager,
+) -> Result<Vec<PositionedElement>> {
+    let targets = handout_targets(layout, page_size);
+    let mut elements = Vec::new();
+    for (offset, page) in pages.iter().enumerate() {
+        let target = targets[offset];
+        let (thumbnail, fitted) = page_thumbnail_group(page, target);
+        elements.push(PositionedElement::Group(thumbnail));
+        push_thumbnail_border(&mut elements, fitted);
+        elements.push(handout_slide_number(
+            source_start + offset + 1,
+            fitted,
+            font_manager,
+        )?);
+        if layout == HandoutLayout::Three {
+            push_three_up_note_rules(&mut elements, target, page_size.0);
+        }
+    }
+    Ok(elements)
+}
+
+#[cfg(feature = "render")]
+fn handout_targets(layout: HandoutLayout, page_size: (f64, f64)) -> Vec<Rect> {
+    let margin_x = 36.0;
+    let margin_y = 54.0;
+    let gap = 18.0;
+    let label_height = 14.0;
+    let usable_width = (page_size.0 - 2.0 * margin_x).max(1.0);
+    let usable_height = (page_size.1 - 2.0 * margin_y).max(1.0);
+    let (columns, rows, width_fraction) = match layout {
+        HandoutLayout::One => (1, 1, 1.0),
+        HandoutLayout::Two => (1, 2, 1.0),
+        HandoutLayout::Three => (1, 3, 0.46),
+        HandoutLayout::Four => (2, 2, 1.0),
+        HandoutLayout::Six => (2, 3, 1.0),
+        HandoutLayout::Nine => (3, 3, 1.0),
+    };
+    let cell_width = (usable_width - gap * (columns - 1) as f64) / columns as f64;
+    let cell_height = (usable_height - gap * (rows - 1) as f64) / rows as f64;
+    (0..layout.slides_per_page())
+        .map(|index| {
+            let row = index / columns;
+            let column = index % columns;
+            Rect {
+                x: margin_x + column as f64 * (cell_width + gap),
+                y: margin_y + row as f64 * (cell_height + gap),
+                width: cell_width * width_fraction,
+                height: (cell_height - label_height).max(1.0),
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "render")]
+fn push_thumbnail_border(elements: &mut Vec<PositionedElement>, rect: Rect) {
+    for (start, end) in [
+        (
+            Point {
+                x: rect.x,
+                y: rect.y,
+            },
+            Point {
+                x: rect.x + rect.width,
+                y: rect.y,
+            },
+        ),
+        (
+            Point {
+                x: rect.x + rect.width,
+                y: rect.y,
+            },
+            Point {
+                x: rect.x + rect.width,
+                y: rect.y + rect.height,
+            },
+        ),
+        (
+            Point {
+                x: rect.x + rect.width,
+                y: rect.y + rect.height,
+            },
+            Point {
+                x: rect.x,
+                y: rect.y + rect.height,
+            },
+        ),
+        (
+            Point {
+                x: rect.x,
+                y: rect.y + rect.height,
+            },
+            Point {
+                x: rect.x,
+                y: rect.y,
+            },
+        ),
+    ] {
+        elements.push(PositionedElement::Line {
+            start,
+            end,
+            width: 0.75,
+            color: Color::BLACK,
+            dash_pattern: None,
+        });
+    }
+}
+
+#[cfg(feature = "render")]
+fn handout_slide_number(
+    number: usize,
+    thumbnail: Rect,
+    font_manager: &mut FontManager,
+) -> Result<PositionedElement> {
+    let text = number.to_string();
+    let font_id = font_manager
+        .resolve_font_for_text(Some("Carlito"), false, false, &text)
+        .map_err(|error| render_failure(format!("handout slide number font: {error}")))?;
+    let shaped = font_manager
+        .shape_text(font_id, &text, 9.0)
+        .map_err(|error| render_failure(format!("handout slide number shaping: {error}")))?;
+    Ok(PositionedElement::Text(GlyphRun {
+        origin: Point {
+            x: thumbnail.x,
+            y: thumbnail.y + thumbnail.height + 11.0,
+        },
+        font_id,
+        font_size: 9.0,
+        glyph_ids: shaped.glyph_ids,
+        advances: shaped.advances,
+        text,
+        source: None,
+        color: Color::BLACK,
+        bold: false,
+        italic: false,
+        field_kind: None,
+        note: None,
+    }))
+}
+
+#[cfg(feature = "render")]
+fn push_three_up_note_rules(
+    elements: &mut Vec<PositionedElement>,
+    thumbnail: Rect,
+    page_width: f64,
+) {
+    let start_x = thumbnail.x + thumbnail.width + 18.0;
+    let end_x = page_width - 36.0;
+    if end_x <= start_x {
+        return;
+    }
+    for line in 1..=5 {
+        let y = thumbnail.y + thumbnail.height * line as f64 / 6.0;
+        elements.push(PositionedElement::Line {
+            start: Point { x: start_x, y },
+            end: Point { x: end_x, y },
+            width: 0.5,
+            color: Color::BLACK,
+            dash_pattern: None,
+        });
+    }
+}
+
+#[cfg(feature = "render")]
 #[derive(Clone, Copy)]
 struct TimelineRequest {
     slide_index: usize,
@@ -7531,6 +8558,123 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn handout_geometry_is_exact_clipped_and_one_point_sensitive() {
+        let page_size = (540.0, 720.0);
+        let cases = [
+            (
+                HandoutLayout::One,
+                1,
+                Rect {
+                    x: 36.0,
+                    y: 54.0,
+                    width: 468.0,
+                    height: 598.0,
+                },
+            ),
+            (
+                HandoutLayout::Two,
+                2,
+                Rect {
+                    x: 36.0,
+                    y: 369.0,
+                    width: 468.0,
+                    height: 283.0,
+                },
+            ),
+            (
+                HandoutLayout::Three,
+                3,
+                Rect {
+                    x: 36.0,
+                    y: 474.0,
+                    width: 215.28,
+                    height: 178.0,
+                },
+            ),
+            (
+                HandoutLayout::Four,
+                4,
+                Rect {
+                    x: 279.0,
+                    y: 369.0,
+                    width: 225.0,
+                    height: 283.0,
+                },
+            ),
+            (
+                HandoutLayout::Six,
+                6,
+                Rect {
+                    x: 279.0,
+                    y: 474.0,
+                    width: 225.0,
+                    height: 178.0,
+                },
+            ),
+            (
+                HandoutLayout::Nine,
+                9,
+                Rect {
+                    x: 360.0,
+                    y: 474.0,
+                    width: 144.0,
+                    height: 178.0,
+                },
+            ),
+        ];
+        for (layout, count, expected_last) in cases {
+            let targets = handout_targets(layout, page_size);
+            assert_eq!(targets.len(), count);
+            assert_eq!(targets[0].x, 36.0);
+            assert_eq!(targets[0].y, 54.0);
+            assert_eq!(*targets.last().unwrap(), expected_last);
+            assert!(targets.iter().all(|target| {
+                target.x >= 0.0
+                    && target.y >= 0.0
+                    && target.x + target.width <= page_size.0
+                    && target.y + target.height <= page_size.1
+            }));
+        }
+
+        let page = PageFrame::new(1, 720.0, 540.0, Vec::new());
+        let target = handout_targets(HandoutLayout::One, page_size)[0];
+        let (thumbnail, fitted) = page_thumbnail_group(&page, target);
+        assert_eq!(
+            fitted,
+            Rect {
+                x: 36.0,
+                y: 177.5,
+                width: 468.0,
+                height: 351.0,
+            }
+        );
+        assert!(thumbnail.clip.is_some());
+
+        let mut rules = Vec::new();
+        let three_up = handout_targets(HandoutLayout::Three, page_size)[0];
+        push_three_up_note_rules(&mut rules, three_up, page_size.0);
+        assert_eq!(rules.len(), 5);
+        assert!(
+            rules
+                .iter()
+                .all(|element| matches!(element, PositionedElement::Line { .. }))
+        );
+
+        let mut shifted = fitted;
+        shifted.x += 1.01;
+        let maximum_edge_error = [
+            (shifted.x - fitted.x).abs(),
+            (shifted.y - fitted.y).abs(),
+            ((shifted.x + shifted.width) - (fitted.x + fitted.width)).abs(),
+            ((shifted.y + shifted.height) - (fitted.y + fitted.height)).abs(),
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
+        assert!(maximum_edge_error > 1.0);
+    }
 
     #[test]
     fn two_dimensional_merge_encodes_origins_and_continuations() {

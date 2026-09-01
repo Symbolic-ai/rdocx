@@ -6699,9 +6699,9 @@ use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
     Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, ChartData,
     ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput, EmbeddedMutationPolicy,
-    EmbeddedSignatureState, Emu, Error, Fill, MediaDiagnostic, MediaFallbackPolicy, MediaKind,
-    MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster, MediaSourceInput, Presentation,
-    PresentationPackageClass, ShapeKind, ShapeRef, TextBullet, TextBulletCharacter,
+    EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout, MediaDiagnostic, MediaFallbackPolicy,
+    MediaKind, MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster, MediaSourceInput,
+    Presentation, PresentationPackageClass, ShapeKind, ShapeRef, TextBullet, TextBulletCharacter,
     TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
@@ -6836,6 +6836,567 @@ fn f221_signing_material() -> (Vec<u8>, Vec<u8>) {
         decode_base64_fixture(F221_PRIVATE_KEY_PKCS8_BASE64),
         decode_base64_fixture(F221_CERTIFICATE_DER_BASE64),
     )
+}
+
+fn f226_shape(
+    id: u32,
+    name: &str,
+    kind: &str,
+    idx: u32,
+    bounds: (i64, i64, i64, i64),
+    text: &str,
+) -> String {
+    let (x, y, cx, cy) = bounds;
+    format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="{name}"/><p:cNvSpPr/><p:nvPr><p:ph type="{kind}" idx="{idx}"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr sz="1200"/></a:lvl1pPr></a:lstStyle><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"#
+    )
+}
+
+fn f226_background_shape(id: u32) -> String {
+    format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="Master background"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="6858000" cy="9144000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr></p:sp>"#
+    )
+}
+
+fn f226_picture(id: u32, relationship_id: &str, bounds: (i64, i64, i64, i64)) -> String {
+    let (x, y, cx, cy) = bounds;
+    format!(
+        r#"<p:pic><p:nvPicPr><p:cNvPr id="{id}" name="Master image"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{relationship_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
+    )
+}
+
+fn f226_notes_master_xml() -> Vec<u8> {
+    let shapes = [
+        f226_background_shape(1),
+        f226_picture(8, "image", (3_200_400, 152_400, 304_800, 304_800)),
+        f226_shape(
+            2,
+            "Header",
+            "hdr",
+            0,
+            (0, 0, 2_971_800, 457_200),
+            "F-226 header",
+        ),
+        f226_shape(
+            3,
+            "Date",
+            "dt",
+            1,
+            (3_884_613, 0, 2_971_800, 457_200),
+            "2030-01-02",
+        ),
+        f226_shape(
+            4,
+            "Slide",
+            "sldImg",
+            2,
+            (1_143_000, 685_800, 4_572_000, 3_429_000),
+            "",
+        ),
+        f226_shape(
+            5,
+            "Notes",
+            "body",
+            3,
+            (685_800, 4_343_400, 5_486_400, 3_657_600),
+            "Master prompt",
+        ),
+        f226_shape(
+            6,
+            "Footer",
+            "ftr",
+            4,
+            (0, 8_685_213, 2_971_800, 457_200),
+            "F-226 footer",
+        ),
+        f226_shape(
+            7,
+            "Number",
+            "sldNum",
+            5,
+            (3_884_613, 8_685_213, 2_971_800, 457_200),
+            "stored",
+        ),
+    ]
+    .join("");
+    format!(
+        r#"<p:notesMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{shapes}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf dt="1" hdr="1" ftr="1" sldNum="1"/><p:notesStyle><a:lvl1pPr><a:defRPr sz="1400"/></a:lvl1pPr></p:notesStyle></p:notesMaster>"#
+    )
+    .into_bytes()
+}
+
+fn f226_handout_master_xml() -> Vec<u8> {
+    let shapes = [
+        f226_background_shape(1),
+        f226_picture(6, "image", (3_200_400, 152_400, 304_800, 304_800)),
+        f226_shape(
+            2,
+            "Header",
+            "hdr",
+            0,
+            (0, 0, 2_971_800, 457_200),
+            "F-226 handout header",
+        ),
+        f226_shape(
+            3,
+            "Date",
+            "dt",
+            1,
+            (3_884_613, 0, 2_971_800, 457_200),
+            "2030-01-02",
+        ),
+        f226_shape(
+            4,
+            "Footer",
+            "ftr",
+            2,
+            (0, 8_685_213, 2_971_800, 457_200),
+            "F-226 handout footer",
+        ),
+        f226_shape(
+            5,
+            "Number",
+            "sldNum",
+            3,
+            (3_884_613, 8_685_213, 2_971_800, 457_200),
+            "stored",
+        ),
+    ]
+    .join("");
+    format!(
+        r#"<p:handoutMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{shapes}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf dt="1" hdr="1" ftr="1" sldNum="1"/></p:handoutMaster>"#
+    )
+    .into_bytes()
+}
+
+fn f226_notes_slide_xml(text: &str) -> Vec<u8> {
+    let body = format!(
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="3"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>{text}</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>"#
+    );
+    let picture = f226_picture(3, "image", (3_657_600, 152_400, 304_800, 304_800));
+    format!(
+        r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{body}{picture}</p:spTree></p:cSld></p:notes>"#
+    )
+    .into_bytes()
+}
+
+fn f226_blue_pixel_png() -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::new(1, 1).unwrap();
+    pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 255, 255));
+    pixmap.encode_png().unwrap()
+}
+
+fn f226_fixture_bytes() -> Vec<u8> {
+    let mut source = Presentation::new().unwrap();
+    for (index, text) in ["F-226 slide one", "F-226 slide two"]
+        .into_iter()
+        .enumerate()
+    {
+        source.add_slide(0).unwrap();
+        source
+            .slide_mut(index)
+            .unwrap()
+            .add_textbox(Emu(914_400), Emu(914_400), Emu(4_572_000), Emu(914_400))
+            .unwrap()
+            .set_text(text)
+            .unwrap();
+    }
+    let mut package = open_opc(&source.to_bytes().unwrap(), "F-226 source fixture");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let presentation_relationships = package.get_part_rels(&presentation_part).unwrap().clone();
+    let slide_parts = model
+        .slide_ids
+        .iter()
+        .map(|slide| {
+            let relationship = presentation_relationships
+                .get_by_id(&slide.relationship_id)
+                .unwrap();
+            OpcPackage::resolve_rel_target(&presentation_part, &relationship.target)
+        })
+        .collect::<Vec<_>>();
+    let notes_master_relationship = package
+        .get_or_create_part_rels(&presentation_part)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::NOTES_MASTER)
+        .unwrap();
+    notes_master_relationship.target = "../custom/masters/notes.xml".to_owned();
+    let notes_master_part = "/custom/masters/notes.xml";
+    package.set_part(notes_master_part, f226_notes_master_xml());
+    package
+        .content_types
+        .add_override(notes_master_part, content_types::NOTES_MASTER);
+    package
+        .get_or_create_part_rels(notes_master_part)
+        .add_with_id("theme", rel_types::THEME, "../../ppt/theme/theme2.xml");
+    package
+        .get_or_create_part_rels(notes_master_part)
+        .add_with_id("image", rel_types::IMAGE, "../media/master.png");
+    let handout_master_part = "/custom/handouts/master.xml";
+    package.set_part(handout_master_part, f226_handout_master_xml());
+    package
+        .content_types
+        .add_override(handout_master_part, content_types::HANDOUT_MASTER);
+    package
+        .get_or_create_part_rels(handout_master_part)
+        .add_with_id("theme", rel_types::THEME, "../../ppt/theme/theme2.xml");
+    package
+        .get_or_create_part_rels(handout_master_part)
+        .add_with_id("image", rel_types::IMAGE, "../media/master.png");
+    package.set_part("/custom/media/master.png", valid_one_pixel_png());
+    package.content_types.add_default("png", "image/png");
+    package
+        .get_or_create_part_rels(&presentation_part)
+        .add_with_id(
+            "handout",
+            rel_types::HANDOUT_MASTER,
+            "../custom/handouts/master.xml",
+        );
+    for (index, slide_part) in slide_parts.iter().enumerate() {
+        let notes_part = format!("/custom/notes/notes{}.xml", index + 1);
+        package.set_part(
+            &notes_part,
+            f226_notes_slide_xml(&format!("F-226 speaker note {}", index + 1)),
+        );
+        package
+            .content_types
+            .add_override(&notes_part, content_types::NOTES_SLIDE);
+        package.get_or_create_part_rels(slide_part).add_with_id(
+            &format!("notes-{}", index + 1),
+            rel_types::NOTES_SLIDE,
+            &format!("../../custom/notes/notes{}.xml", index + 1),
+        );
+        package.get_or_create_part_rels(&notes_part).add_with_id(
+            "master",
+            rel_types::NOTES_MASTER,
+            "../masters/notes.xml",
+        );
+        package.get_or_create_part_rels(&notes_part).add_with_id(
+            "slide",
+            rel_types::SLIDE,
+            &format!("../../{}", slide_part.trim_start_matches('/')),
+        );
+        package.get_or_create_part_rels(&notes_part).add_with_id(
+            "image",
+            rel_types::IMAGE,
+            "../media/notes.png",
+        );
+    }
+    package.set_part("/custom/media/notes.png", f226_blue_pixel_png());
+    package_bytes(package)
+}
+
+fn f226_pdf_text(pdf: &[u8], label: &str) -> String {
+    let path = std::env::temp_dir().join(format!("rpptx-f226-{label}-{}.pdf", std::process::id()));
+    fs::write(&path, pdf).unwrap();
+    let output = Command::new("pdftotext")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .unwrap();
+    fs::remove_file(path).unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn f226_pdf_page_count(pdf: &[u8], label: &str) -> usize {
+    let path = std::env::temp_dir().join(format!(
+        "rpptx-f226-{label}-pages-{}.pdf",
+        std::process::id()
+    ));
+    fs::write(&path, pdf).unwrap();
+    let output = Command::new("pdfinfo").arg(&path).output().unwrap();
+    fs::remove_file(path).unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+fn f226_png_dimensions(png: &[u8]) -> (u32, u32) {
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    (
+        u32::from_be_bytes(png[16..20].try_into().unwrap()),
+        u32::from_be_bytes(png[20..24].try_into().unwrap()),
+    )
+}
+
+#[test]
+fn notes_pages_follow_master_geometry_text_metadata_and_slide_order() {
+    let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    let pdf = presentation.to_notes_pdf_deterministic().unwrap();
+    assert_eq!(f226_pdf_page_count(&pdf, "notes-golden"), 2);
+    let text = f226_pdf_text(&pdf, "notes-golden");
+    let pages = text
+        .split('\u{c}')
+        .filter(|page| !page.trim().is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(pages.len(), 2, "unexpected extracted pages: {text:?}");
+    for (page, slide_word, page_number) in [(pages[0], "one", "1"), (pages[1], "two", "2")] {
+        let words = page.split_whitespace().collect::<Vec<_>>();
+        for expected in [
+            slide_word,
+            "speaker",
+            "note",
+            page_number,
+            "header",
+            "footer",
+            "2030-01-02",
+        ] {
+            assert!(
+                words.contains(&expected),
+                "missing {expected:?} in {page:?}"
+            );
+        }
+    }
+    let pngs = presentation.notes_page_pngs_deterministic(72.0).unwrap();
+    let page = tiny_skia::Pixmap::decode_png(&pngs[0]).unwrap();
+    let outside = page.pixel(88, 100).unwrap();
+    assert_eq!(
+        (outside.red(), outside.green(), outside.blue()),
+        (255, 0, 0)
+    );
+    let inside = page.pixel(92, 100).unwrap();
+    assert_eq!(
+        (inside.red(), inside.green(), inside.blue()),
+        (255, 255, 255),
+        "the source thumbnail must start at the notes-master slide-image edge"
+    );
+}
+
+#[test]
+fn handouts_follow_master_metadata_and_all_six_audience_layouts() {
+    let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    for (layout, pages) in [
+        (HandoutLayout::One, 2),
+        (HandoutLayout::Two, 1),
+        (HandoutLayout::Three, 1),
+        (HandoutLayout::Four, 1),
+        (HandoutLayout::Six, 1),
+        (HandoutLayout::Nine, 1),
+    ] {
+        let pdf = presentation.to_handout_pdf_deterministic(layout).unwrap();
+        assert_eq!(f226_pdf_page_count(&pdf, "handout-golden"), pages);
+        let text = f226_pdf_text(&pdf, "handout-golden");
+        let words = text.split_whitespace().collect::<Vec<_>>();
+        for expected in [
+            "one", "two", "handout", "header", "footer", "2030", "01", "02",
+        ] {
+            assert!(
+                words.contains(&expected),
+                "missing {expected:?} in {text:?}"
+            );
+        }
+    }
+    let pngs = presentation
+        .handout_page_pngs_deterministic(HandoutLayout::One, 72.0)
+        .unwrap();
+    let page = tiny_skia::Pixmap::decode_png(&pngs[0]).unwrap();
+    let background = page.pixel(12, 100).unwrap();
+    assert_eq!(
+        (background.red(), background.green(), background.blue()),
+        (255, 0, 0)
+    );
+    let thumbnail = page.pixel(270, 353).unwrap();
+    assert_eq!(
+        (thumbnail.red(), thumbnail.green(), thumbnail.blue()),
+        (255, 255, 255),
+        "the master background must remain below the source thumbnail"
+    );
+}
+
+#[test]
+fn notes_and_handouts_export_pdf_and_png_with_deterministic_dimensions() {
+    let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    assert_eq!(
+        presentation.to_notes_pdf_deterministic().unwrap(),
+        presentation.to_notes_pdf_deterministic().unwrap()
+    );
+    let notes = presentation.notes_page_pngs_deterministic(144.0).unwrap();
+    let notes_again = presentation.notes_page_pngs_deterministic(144.0).unwrap();
+    assert_eq!(notes, notes_again);
+    assert_eq!(notes.len(), 2);
+    assert!(
+        notes
+            .iter()
+            .all(|png| f226_png_dimensions(png) == (1080, 1440))
+    );
+    let handouts = presentation
+        .handout_page_pngs_deterministic(HandoutLayout::Six, 144.0)
+        .unwrap();
+    assert_eq!(handouts.len(), 1);
+    assert_eq!(f226_png_dimensions(&handouts[0]), (1080, 1440));
+}
+
+#[test]
+fn notes_and_handout_export_resolve_noncanonical_master_theme_and_media_targets() {
+    let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    assert!(
+        presentation
+            .to_notes_pdf_deterministic()
+            .unwrap()
+            .starts_with(b"%PDF")
+    );
+    assert!(
+        presentation
+            .to_handout_pdf_deterministic(HandoutLayout::Three)
+            .unwrap()
+            .starts_with(b"%PDF")
+    );
+    let notes = presentation.notes_page_pngs_deterministic(72.0).unwrap();
+    let page = tiny_skia::Pixmap::decode_png(&notes[0]).unwrap();
+    let image = page.pixel(264, 24).unwrap();
+    assert_eq!((image.red(), image.green(), image.blue()), (255, 0, 0));
+    let notes_image = page.pixel(300, 24).unwrap();
+    assert_eq!(
+        (notes_image.red(), notes_image.green(), notes_image.blue()),
+        (0, 0, 255),
+        "the notes-slide image must not alias the master's same-id relationship"
+    );
+
+    let mut package = open_opc(&f226_fixture_bytes(), "F-226 fallback placeholder");
+    let notes_part = "/custom/notes/notes1.xml";
+    let notes = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+    assert!(notes.contains("type=\"body\" idx=\"3\""));
+    package.set_part(
+        notes_part,
+        notes
+            .replacen("type=\"body\" idx=\"3\"", "type=\"body\"", 1)
+            .into_bytes(),
+    );
+    let fallback = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(
+        f226_pdf_text(&fallback.to_notes_pdf_deterministic().unwrap(), "fallback")
+            .contains("speaker")
+    );
+}
+
+#[test]
+fn notes_and_handout_export_fail_closed_for_broken_hierarchy_and_invalid_dpi() {
+    let bytes = f226_fixture_bytes();
+    let presentation = Presentation::from_bytes(&bytes).unwrap();
+    for dpi in [-1.0, 0.0, f64::NAN, f64::INFINITY, 601.0] {
+        assert!(presentation.notes_page_pngs_deterministic(dpi).is_err());
+    }
+    let rejects_notes =
+        |package: OpcPackage| match Presentation::from_bytes(&package_bytes(package)) {
+            Ok(presentation) => presentation.to_notes_pdf_deterministic().is_err(),
+            Err(_) => true,
+        };
+    let rejects_handout =
+        |package: OpcPackage| match Presentation::from_bytes(&package_bytes(package)) {
+            Ok(presentation) => presentation
+                .to_handout_pdf_deterministic(HandoutLayout::Three)
+                .is_err(),
+            Err(_) => true,
+        };
+
+    let mut package = open_opc(&bytes, "external F-226 theme");
+    package
+        .get_or_create_part_rels("/custom/masters/notes.xml")
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::THEME)
+        .unwrap()
+        .target_mode = Some("External".to_owned());
+    assert!(rejects_notes(package));
+
+    let mut package = open_opc(&bytes, "duplicate F-226 theme");
+    package
+        .get_or_create_part_rels("/custom/masters/notes.xml")
+        .add_with_id("theme-two", rel_types::THEME, "../../ppt/theme/theme2.xml");
+    assert!(rejects_notes(package));
+
+    let mut package = open_opc(&bytes, "wrong-type F-226 theme");
+    package
+        .get_or_create_part_rels("/custom/masters/notes.xml")
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::THEME)
+        .unwrap()
+        .rel_type = rel_types::IMAGE.to_owned();
+    assert!(rejects_notes(package));
+
+    let mut package = open_opc(&bytes, "missing F-226 theme");
+    package
+        .get_or_create_part_rels("/custom/masters/notes.xml")
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::THEME)
+        .unwrap()
+        .target = "../missing/theme.xml".to_owned();
+    assert!(rejects_notes(package));
+
+    let mut package = open_opc(&bytes, "malformed F-226 master");
+    package.set_part("/custom/masters/notes.xml", b"<p:notesMaster".to_vec());
+    assert!(rejects_notes(package));
+
+    let mut package = open_opc(&bytes, "unmatched F-226 placeholder");
+    let notes_part = "/custom/notes/notes1.xml";
+    let notes = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+    assert!(notes.contains("type=\"body\" idx=\"3\""));
+    package.set_part(
+        notes_part,
+        notes
+            .replacen("type=\"body\" idx=\"3\"", "type=\"body\" idx=\"99\"", 1)
+            .into_bytes(),
+    );
+    assert!(rejects_notes(package));
+
+    let mut package = open_opc(&bytes, "ambiguous F-226 placeholder");
+    let notes_part = "/custom/notes/notes1.xml";
+    let notes = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
+    let extra = r#"<p:sp><p:nvSpPr><p:cNvPr id="9" name="Ambiguous notes"/><p:cNvSpPr/><p:nvPr><p:ph type="body"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>ambiguous</a:t></a:r></a:p></p:txBody></p:sp>"#;
+    assert!(notes.contains("</p:spTree>"));
+    package.set_part(
+        notes_part,
+        notes
+            .replacen("</p:spTree>", &format!("{extra}</p:spTree>"), 1)
+            .into_bytes(),
+    );
+    assert!(rejects_notes(package));
+
+    let mut package = open_opc(&bytes, "duplicate F-226 handout master");
+    let presentation_part = package.main_document_part().unwrap();
+    package
+        .get_or_create_part_rels(&presentation_part)
+        .add_with_id(
+            "handout-two",
+            rel_types::HANDOUT_MASTER,
+            "../custom/handouts/master.xml",
+        );
+    assert!(rejects_handout(package));
+
+    let mut package = open_opc(&bytes, "external F-226 handout master");
+    let presentation_part = package.main_document_part().unwrap();
+    package
+        .get_or_create_part_rels(&presentation_part)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::HANDOUT_MASTER)
+        .unwrap()
+        .target_mode = Some("External".to_owned());
+    assert!(rejects_handout(package));
+}
+
+#[test]
+fn notes_and_handout_export_leave_the_opened_package_byte_identical() {
+    let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    presentation.to_notes_pdf_deterministic().unwrap();
+    presentation
+        .to_handout_pdf_deterministic(HandoutLayout::Nine)
+        .unwrap();
+    presentation.notes_page_pngs_deterministic(72.0).unwrap();
+    presentation
+        .handout_page_pngs_deterministic(HandoutLayout::Two, 72.0)
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), before);
 }
 
 #[cfg(feature = "agile-encryption")]

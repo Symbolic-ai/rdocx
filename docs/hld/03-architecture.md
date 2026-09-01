@@ -838,6 +838,14 @@ their shared geometry, text, paint, effect, clipping, timeline, and media
 paths. No cached drawing becomes authoritative and no persistent second
 diagram model is created.
 
+Notes-page and audience-handout export follow the same facade-owned assembly
+boundary. `rpptx` resolves the notes slide, notes master, handout master, and
+their themes from the OPC relationship graph, remaps notes-master and
+notes-slide relationship scopes into one collision-free transient package
+scope, and composes ordinary `PageFrame` values. The existing layout and render
+crates consume those frames without a notes-specific parser, renderer, public
+type, or dependency.
+
 The facade also owns package-to-render-input assembly. Its deterministic render
 entry points resolve the current package once and return either the shared
 render input and layout or a complete PDF. The corpus example and

@@ -246,6 +246,14 @@ shape continues to diagnose the independent rotation policy. Unsupported
 circle, rectangle, and shape path gradients, tile rectangles, and each
 non-none flip variant retain distinct diagnostic categories.
 
+Notes export resolves the notes master before the notes slide overlay. Master
+elements therefore remain behind slide thumbnails, metadata, and speaker-note
+content. Placeholder inheritance uses the same index-first and compatible-type
+fallback rule as PresentationML, but rejects multiple candidates or a source
+placeholder with no unique master owner. Notes-master and notes-slide
+relationships retain their original owners through transient id remapping, so
+equal relationship ids cannot resolve media from the wrong scope.
+
 **Freeze this contract when the resolver lands, or the resolver and renderer
 tracks diverge.** It is versioned with the crate.
 

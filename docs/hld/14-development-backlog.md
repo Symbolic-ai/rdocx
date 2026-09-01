@@ -2006,11 +2006,18 @@ operators remain explicit diagnostics.
 the source render, while the editable subset retains text and link mappings.
 
 ### F-226, Notes and handout export (M)
-Render speaker notes, notes pages, audience handouts, slide numbers, dates, and
-headers or footers to PDF and images using the declared master hierarchy.
+Render relationship-resolved speaker notes and all six audience handout grids
+to deterministic PDF and PNG. Notes pages use `notesSz`, master-first overlay,
+vector slide thumbnails, exact placeholder ownership, and typed slide numbers,
+dates, headers, and footers. Handouts preserve the handout master below
+aspect-fitted, clipped, bordered, and numbered thumbnails. The three-up layout
+adds ruled writing space.
 **Depends on**: F-217.
-**Test gate**: golden. Notes and handout pages match the pinned PowerPoint
-export in order, geometry, text, and repeated metadata.
+**Test gate**: source-built deterministic regression. Noncanonical relationship
+targets, cross-scope id collisions, absent notes, placeholder ambiguity, all six
+layouts, exact vector geometry, PDF text and page count, PNG dimensions and
+pixels, 1.01-point sensitivity, and source-byte preservation pass. The 49-entry
+render hash manifest remains unchanged.
 
 ### F-227, Animated GIF and video export (L)
 Sample deterministic timeline states into animated GIF and a bounded video

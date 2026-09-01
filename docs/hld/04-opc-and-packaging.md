@@ -287,6 +287,15 @@ commit. A matching MIME type does not make an unlinked conventional part safe
 to overwrite. The notes-master and handout-master roots are likewise resolved
 from the presentation relationship graph without assuming their filenames.
 
+Notes and handout export requires exactly one internal relationship of the
+expected type and content type at each required edge. This includes
+presentation to master, master to theme, notes slide to notes master, and notes
+slide back to its source slide. Noncanonical internal part names remain valid.
+Before layout, notes-master and notes-slide relationship scopes are copied into
+a collision-free transient owner scope with absolute normalized targets and
+rewritten relationship ids. This keeps equal source ids independent and never
+changes the opened package.
+
 Content-control data binding follows the existing package graph rather than a
 conventional filename. The main document's custom XML relationship resolves an
 item part. That item's custom XML properties relationship resolves the

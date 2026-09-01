@@ -90,6 +90,19 @@ that resolved group. Unsupported or invalid programs retain a visible bounds
 fallback and a stable diagnostic. The renderer never reads diagram XML or
 treats a cached diagram drawing as authoritative.
 
+The native notes and handout entry points compose ordinary presentation page
+frames and then call the existing deterministic PDF and raster backends. Notes
+pages use `notesSz`, master-first z-order, vector source-slide thumbnails, and
+typed header, footer, date, slide-number, and speaker-note content. Handouts use
+the six fixed one, two, three, four, six, and nine-up grids. Thumbnails preserve
+aspect ratio, clip to their assigned cells, carry a one-point border and slide
+label, and the three-up layout adds five note rules per slide.
+
+Raster notes and handout output accepts finite positive DPI up to 600 and
+rejects a decoded output estimate above 256 MiB before allocation. Deterministic
+font mode, shared paint and geometry resolution, PDF assembly, and PNG encoding
+are unchanged.
+
 `Group` recursively emits a saved graphics state, its local matrix, optional
 clip and opacity, its children, and a matching restore. `Path` emits geometry,
 solid fill and solid stroke operators. The font, image, and link collection

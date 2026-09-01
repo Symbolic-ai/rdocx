@@ -464,6 +464,21 @@ equivalence between `body`, `subTitle`, and `obj` does not broaden extraction.
 Slide-image, slide-number, date, footer, header, and notes-master prompt text is
 excluded.
 
+Native notes-page export uses the presentation `p:notesSz` as the page size and
+emits one page for every source slide, including a slide without a notes part.
+Notes-master shapes form the page base. Notes-slide placeholders then match
+their master placeholders by explicit index first and compatible type second.
+Each match must be unique and consumed once. Missing, unmatched, or ambiguous
+ownership fails before output. Slide-image placeholders receive the source
+slide as a vector subtree. Header, footer, date, and slide-number placeholders
+obey the typed master flags and stored text.
+
+Audience handouts use the same relationship-resolved handout master and expose
+the six fixed `HandoutLayout` choices: one, two, three, four, six, and nine
+slides per page. The master remains below the slide thumbnails. Each thumbnail
+is aspect-fitted, clipped, bordered, and numbered. The three-slide layout adds
+five ruled note lines beside each thumbnail.
+
 Each included `p:txBody` contributes run and field text in document order.
 `a:br` contributes a newline and paragraph boundaries contribute a newline.
 Empty bodies are skipped, and multiple nonempty body placeholders are joined

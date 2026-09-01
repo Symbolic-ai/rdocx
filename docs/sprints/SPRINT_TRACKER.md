@@ -366,6 +366,7 @@ defended.
 | F-220 | S63 | L | 5 | 1 | 2026-09-01 | Rendered six pinned authentic SmartArt families through bounded typed instruction evaluation and shared DrawingML paths, with an exact guarded cycle1 compatibility profile |
 | F-222 | S63 | L | 5 | 1 | 2026-09-01 | Added bounded namespace-aware ODP import and deterministic export for slides, text, rectangles, tables, images, names, and notes with explicit lossy diagnostics |
 | F-223 | S63 | M | 2 | 1 | 2026-09-01 | Preserved six modern PresentationML package classes and added staged output-only conversion without changing executable payloads or relationships |
+| F-226 | S63 | M | 2 | 1 | 2026-09-01 | Exported relationship-resolved notes pages and all six audience handout layouts through deterministic PDF and PNG paths |
 
 ## Velocity
 

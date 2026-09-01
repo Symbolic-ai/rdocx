@@ -45,7 +45,7 @@ the existing aggregate cache budget.
 | F-220 | SmartArt layout and rendering | L | done | - |
 | F-222 | ODP read and write | L | done | - |
 | F-223 | Modern presentation package variants | M | done | - |
-| F-226 | Notes and handout export | M | pending | - |
+| F-226 | Notes and handout export | M | done | - |
 | F-X072 | Keep paragraph caching across note references | M | done | - |
 | F-X073 | Restart ordinary-prose pagination within the aggregate cache | L | done | - |
 
