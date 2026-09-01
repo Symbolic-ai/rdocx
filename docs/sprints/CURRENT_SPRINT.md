@@ -1,63 +1,83 @@
-# Current Sprint, S61
+# Current Sprint, S62
 
 **Milestone**: M21 Presentation depth.
 
-**Goal**: complete the media timeline from package relationships to output.
-The sprint adds relationship-safe audio and video mutation, deterministic poster
-and playback state, and bounded animated GIF and video export. Unsupported
-codecs stay packaged, extractable, visible through fallbacks, and diagnosed.
+**Goal**: model the two major opaque PresentationML surfaces without executing
+untrusted content, and integrate the four reviewed Word reader contributions.
+The sprint adds safe OLE, ActiveX, and VBA inventory and mutation, gives the
+bounded SmartArt corpus typed inspection and editing, and exposes the
+contributed reader safety facts without weakening XML preservation.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for the bounded audio and video policy,
-  poster-frame static behavior, and explicit diagnostics for reduced fidelity.
-- `docs/hld/03-architecture.md`, for the leaf `oxml-media` boundary and the
-  model, layout, renderer, and facade separation used by timeline execution.
-- `docs/hld/04-opc-and-packaging.md`, for content-sniffed media identity,
-  relationship ownership, content types, deduplication, and atomic package
-  mutation.
-- `docs/hld/06-presentationml-model.md`, for opaque media preservation,
-  relationship-id remapping inside retained XML, and the typed timing model
-  that carries playback triggers.
-- `docs/hld/08-rendering-spec.md`, for format-neutral page frames, resolved
-  media fallbacks, timeline sampling, and the requirement that static entry
-  points remain independent.
-- `docs/hld/10-bindings-spec.md`, for additive native Rust timeline surfaces
-  and the rule that unsupported behavior does not acquire an implicit binding.
+- `docs/hld/02-scope-and-non-goals.md`, for the bounded SmartArt, OLE, and
+  ActiveX policy and the rule that executable content remains unexecuted.
+- `docs/hld/03-architecture.md`, for the package, model, resolver, layout, and
+  renderer boundaries and prefix-tolerant XML ownership.
+- `docs/hld/04-opc-and-packaging.md`, for relationship, content-type, payload,
+  signature, and atomic package-mutation ownership.
+- `docs/hld/06-presentationml-model.md`, for graphic-frame dispatch, SmartArt
+  and embedded-object relationships, raw serialization, and copied-part id
+  remapping.
+- `docs/hld/07-inheritance-and-resolution.md`, for source-scoped preview and
+  diagram resolution plus visible deterministic fallbacks and diagnostics.
+- `docs/hld/08-rendering-spec.md`, for shared DrawingML and text lowering,
+  deterministic page geometry, OLE previews, and bounded SmartArt rendering.
+- `docs/hld/10-bindings-spec.md`, for additive native PowerPoint facade
+  surfaces without implicit Python, WASM, or CLI exposure.
 - `docs/hld/12-testing-strategy.md`, for the pinned presentation corpus,
-  deterministic fonts, source-built oracles, exact artifact identity, and
-  declared geometry and pixel boundaries.
-- `docs/hld/14-development-backlog.md`, for the F-215, F-216, and F-227
-  acceptance gates, their dependency chain, and the still-open M21
-  representative-deck gate.
+  exact package preservation, source-built fixtures, and declared PowerPoint
+  geometry and SSIM differentials.
+- `docs/hld/14-development-backlog.md`, for the F-218, F-219, and F-220
+  acceptance gates, dependency order, and the still-open M21 representative
+  deck gate.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-215 | Audio and video package model | L | done | - |
-| F-216 | Media poster and playback rendering | M | done | - |
-| F-227 | Animated GIF and video export | L | done | - |
+| F-218 | Embedded object and macro inventory | L | done | - |
+| F-219 | SmartArt typed model | L | done | - |
+| F-220 | SmartArt layout and rendering | L | pending | codex |
+| F-X071 | Integrate PRs 61 through 64 | L | done | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-215 owns media parts, relationships, settings, and playback triggers. F-216
-depends on that model and the completed F-214 timeline path before it can
-resolve poster frames and synchronized playback state. F-227 then samples the
-completed F-214 and F-216 behavior into bounded animated outputs.
+F-218 owns safe OLE, ActiveX, and VBA package inventory and can proceed
+independently of the SmartArt model. F-219 owns diagram parts, relationships,
+typed editing, and unsupported-algorithm preservation. F-220 depends on F-219
+and must consume that completed model through the existing resolver, DrawingML,
+text, layout, and renderer boundaries rather than create a second diagram
+projection.
+
+F-X071 is independent of the PresentationML wave. It adopts the four Word
+reader contributions at their reviewed source SHAs, preserves contributor
+credit, and hardens the two incomplete submissions before integration.
+
+## Carry record
+
+F-220 is carried to S63 with its worker branch and worktree retained. Ten
+microscope passes completed, but the final review still found two actionable
+fail-closed validator gaps around same-kind instruction ordering and exact
+owner-path semantics. The reviewed F-220 source is not part of S62. S63 must
+finish those gaps and obtain a clean microscope pass before F-222 begins.
 
 ## Definition of done for this sprint
 
-- Linked and embedded audio and video survive add, replace, extract, remove,
-  save, and reopen with exact relationships, settings, poster ownership, and
-  unsupported payload bytes.
-- Static poster frames and timestamped playback events match source-built
-  golden fixtures without silently decoding an unsupported codec.
-- Animated GIF and the approved video backend produce the reviewed frame
-  hashes, timestamps, loop behavior, duration, and dimensions on two machines.
-- Media failures retain a visible deterministic fallback and stable diagnostic
-  rather than dropping content or changing unrelated timeline siblings.
-- Full verification passes with every deterministic hash explained, all
-  package archives below 10 MiB, and the bounded sprint review clean.
+- OLE objects, ActiveX controls, and VBA projects report exact payload hashes,
+  relationships, and signature state without executing content.
+- Embedded content can be extracted, replaced, and removed atomically, while
+  ordinary edits preserve retained payload bytes and relationships exactly.
+- Supported SmartArt data, layout, style, colour, text, and relationship
+  ownership remain editable, and unsupported diagram algorithms remain
+  byte-preserved through unrelated mutations.
+- SmartArt rendering remains assigned to F-220 and is carried to S63. S62 does
+  not claim its PowerPoint geometry and SSIM gate.
+- Missing previews and unsupported diagram behavior remain visible through
+  deterministic fallbacks and stable diagnostics rather than disappearing.
+- Hyperlink, drawing, table, numbering, revision, and field reader facts retain
+  namespace identity, schema order, and effective-style semantics.
+- Full verification passes with every deterministic hash explained, every
+  package archive below 10 MiB, and the bounded sprint review clean.

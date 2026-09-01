@@ -56,8 +56,34 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
     pub const CHART: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+    pub const DIAGRAM_DATA: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData";
+    pub const DIAGRAM_LAYOUT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout";
+    pub const DIAGRAM_QUICK_STYLE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle";
+    pub const DIAGRAM_COLORS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors";
+    pub const DIAGRAM_DRAWING: &str =
+        "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing";
     pub const PACKAGE: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package";
+    pub const OLE_OBJECT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject";
+    pub const CONTROL: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/control";
+    pub const STRICT_OLE_OBJECT: &str =
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/oleObject";
+    pub const STRICT_CONTROL: &str =
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/control";
+    pub const ACTIVEX_CONTROL_BINARY: &str =
+        "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary";
+    pub const VBA_PROJECT: &str =
+        "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
+    pub const VBA_PROJECT_SIGNATURE: &str =
+        "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature";
+    pub const VBA_PROJECT_SIGNATURE_AGILE: &str =
+        "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignatureAgile";
 
     // SpreadsheetML relationships.
     pub const WORKSHEET: &str =
@@ -331,7 +357,13 @@ mod tests {
             rel_types::FOOTNOTES,
             rel_types::ENDNOTES,
             rel_types::CHART,
+            rel_types::DIAGRAM_DATA,
+            rel_types::DIAGRAM_LAYOUT,
+            rel_types::DIAGRAM_QUICK_STYLE,
+            rel_types::DIAGRAM_COLORS,
             rel_types::PACKAGE,
+            rel_types::OLE_OBJECT,
+            rel_types::CONTROL,
             rel_types::WORKSHEET,
             rel_types::SHARED_STRINGS,
             rel_types::EXTENDED_PROPERTIES,
@@ -346,6 +378,13 @@ mod tests {
             rel_types::TABLE_STYLES,
             rel_types::HANDOUT_MASTER,
         ];
+        let strict_relationships = [rel_types::STRICT_OLE_OBJECT, rel_types::STRICT_CONTROL];
+        let microsoft_relationships = [
+            rel_types::ACTIVEX_CONTROL_BINARY,
+            rel_types::VBA_PROJECT,
+            rel_types::VBA_PROJECT_SIGNATURE,
+            rel_types::VBA_PROJECT_SIGNATURE_AGILE,
+        ];
 
         let mut relationship_values = std::collections::HashSet::new();
         for value in package_relationships {
@@ -358,9 +397,20 @@ mod tests {
             assert!(!value.chars().any(char::is_whitespace));
             assert!(relationship_values.insert(value));
         }
+        for value in strict_relationships {
+            assert!(value.starts_with("http://purl.oclc.org/ooxml/officeDocument/relationships/"));
+            assert!(!value.chars().any(char::is_whitespace));
+            assert!(relationship_values.insert(value));
+        }
+        for value in microsoft_relationships {
+            assert!(value.starts_with("http://schemas.microsoft.com/office/2006/relationships/"));
+            assert!(!value.chars().any(char::is_whitespace));
+            assert!(relationship_values.insert(value));
+        }
         for value in [
             rel_types::POWERPOINT_COMMENTS,
             rel_types::POWERPOINT_AUTHORS,
+            rel_types::DIAGRAM_DRAWING,
         ] {
             assert!(value.starts_with("http://schemas.microsoft.com/office/"));
             assert!(!value.chars().any(char::is_whitespace));

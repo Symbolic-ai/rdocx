@@ -1478,6 +1478,8 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
                     ilvl: level.ilvl,
                     start: level.start,
                     num_fmt: level.num_fmt.clone(),
+                    p_style: None,
+                    p_style_raw: None,
                     suffix: level.suffix,
                     lvl_text: None,
                     lvl_jc: level.lvl_jc,
@@ -1489,7 +1491,11 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
                     rpr_raw: None,
                 })
                 .collect(),
+            nsid: None,
+            nsid_raw: None,
             multi_level_type: None,
+            tmpl: None,
+            tmpl_raw: None,
             extra_xml: Vec::new(),
             extra_attributes: Vec::new(),
         })
@@ -2314,6 +2320,8 @@ fn render_paragraph_projection(paragraph: &CT_P) -> CT_P {
             .map(|hyperlink| HyperlinkSpan {
                 rel_id: hyperlink.rel_id.clone(),
                 anchor: hyperlink.anchor.clone(),
+                tooltip: hyperlink.tooltip.clone(),
+                doc_location: hyperlink.doc_location.clone(),
                 run_start: hyperlink.run_start,
                 run_end: hyperlink.run_end,
                 extra_attributes: Vec::new(),
@@ -2446,6 +2454,7 @@ fn render_drawing_projection(drawing: &CT_Drawing) -> CT_Drawing {
         extent_cx,
         extent_cy,
         embed_id: embed_id.to_owned(),
+        link_id: None,
         chart_rel_id: chart_rel_id.cloned(),
         description: description.cloned(),
         name: None,
@@ -2468,6 +2477,7 @@ fn render_table_projection(table: &CT_Tbl) -> CT_Tbl {
             .rows
             .iter()
             .map(|row| CT_Row {
+                table_property_exception: None,
                 properties: None,
                 cells: row
                     .cells
@@ -4181,6 +4191,8 @@ mod tests {
         paragraph.hyperlinks.push(HyperlinkSpan {
             rel_id: Some("rId1".to_owned()),
             anchor: None,
+            tooltip: None,
+            doc_location: None,
             run_start: 0,
             run_end: usize::MAX,
             extra_attributes: Vec::new(),
@@ -4795,6 +4807,8 @@ mod tests {
         paragraph.inner.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("bookmark".to_owned()),
+            tooltip: None,
+            doc_location: None,
             run_start: internal_start,
             run_end: internal_start + 1,
             extra_attributes: Vec::new(),

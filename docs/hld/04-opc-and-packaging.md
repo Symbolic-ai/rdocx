@@ -124,12 +124,24 @@ CORE_PROPERTIES, THUMBNAIL, DIGITAL_SIGNATURE_ORIGIN, DIGITAL_SIGNATURE
 EXTENDED_PROPERTIES   // docProps/app.xml
 CUSTOM_PROPERTIES     // docProps/custom.xml
 COMMENTS              // Word comments part
+DIAGRAM_DATA, DIAGRAM_LAYOUT, DIAGRAM_QUICK_STYLE, DIAGRAM_COLORS
+DIAGRAM_DRAWING       // Microsoft 2007 cached diagram drawing
+OLE_OBJECT, CONTROL, STRICT_OLE_OBJECT, STRICT_CONTROL
+ACTIVEX_CONTROL_BINARY, VBA_PROJECT
+VBA_PROJECT_SIGNATURE, VBA_PROJECT_SIGNATURE_AGILE
 
 // PresentationML
 SLIDE, SLIDE_LAYOUT, SLIDE_MASTER, NOTES_SLIDE, NOTES_MASTER,
 PRES_PROPS, VIEW_PROPS, TABLE_STYLES, HANDOUT_MASTER,
 POWERPOINT_COMMENTS, POWERPOINT_AUTHORS, AUDIO, VIDEO, POWERPOINT_MEDIA
 ```
+
+The four `dgm:relIds` values resolve only in the relationship scope that owns
+their graphic frame. A schema-position-owned `dsp:dataModelExt/@relId`, when
+present, resolves in that same scope through the Microsoft 2007
+`diagramDrawing` relationship. Checked node editing and cross-presentation
+transfer require every present role to be internal and to have its exact
+relationship type before staging package changes.
 
 A `content_types` constants module is added alongside, so neither format crate
 hand-types the long MIME strings. It includes the modern PowerPoint comments
@@ -176,6 +188,22 @@ rewriting the raw subtree bytes. Prefix aliases, nested shadows, and ordinary
 namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
+
+Logical owner identity includes exact normalized raw marker multiplicity and
+the resolved namespace facts of owner-dependent element and attribute uses.
+A same-URI declaration already local to a retained subtree remains independent
+and does not inflate the owner marker set. Candidate replay promotes only the
+captured marker multiset, including when preservation made an inherited use
+self-contained. Same-URI and different-URI decoys, duplicate owners, fixed
+prefix shadows, and undeclared nested prefixes remain fail-closed.
+
+Word table readers carry ancestor bindings through tables, rows, cells,
+content controls, borders, and raw properties. Their writers retain unknown
+table, row, and cell facts at insertion-aware schema boundaries and keep
+malformed row revision markers in their original slots. Drawing relationship
+projection requires the direct WordprocessingML and DrawingML picture path and
+the Office relationships namespace. Foreign attributes, descendant
+lookalikes, ambiguous pictures, and ambiguous blips remain opaque.
 
 Raw Word run children receive semantic classification only at the OXML parse
 boundary. A WordprocessingML `pict` is classified as a legacy horizontal rule
@@ -291,6 +319,13 @@ docx                      pptx
                           /ppt/authors.xml
                           /ppt/comments/commentN.xml
 ```
+
+Diagram parts retain producer-selected names while they remain owned by their
+original scope. Slide duplication and bounded SmartArt transfer allocate a
+fresh positive suffix beside each source diagram part when its resolved target
+would collide in the destination. Equal image bytes may reuse a compatible
+destination media part, but diagram XML parts never alias an unrelated
+destination part merely because their names or bytes match.
 
 Word comment part creation uses the conventional names when free and scans
 numbered alternatives when either path is occupied. It never overwrites an
@@ -425,6 +460,23 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+Executable presentation payloads are selected only through normalized internal
+relationships with the exact expected type. OLE, control, ActiveX binary, VBA
+project, and VBA signature targets reject external or root-escaping paths,
+duplicate relationship identities, missing parts, and wrong relationship
+types before inventory or mutation. Package-signature inventory requires one
+internal origin whose relationship set contains only one or more internal
+digital-signature relationships with distinct existing targets. Unrelated,
+misplaced, duplicate, external, missing, or traversal-shaped signature graph
+edges fail closed before signature evidence can be retained or removed.
+
+The bounded SmartArt copy graph accepts only the five diagram relationship
+types and internal images whose parts own no relationships. Traversal has cycle
+protection and a shared 128-part ceiling in preflight and copy. Unsupported
+internal charts, packages, media, OLE, custom parts, missing targets, and
+external slide layouts reject before any destination part or relationship is
+published.
 
 Word table widths, cell widths, table indents, and default cell margins share
 one exact signed-integer projection. The parser accepts integer lexical forms

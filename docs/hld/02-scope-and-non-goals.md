@@ -35,6 +35,7 @@ its cost is recorded in `00-vision.md`.
 | Modern comments, authors and threaded replies | Native Rust read and write. Legacy comments remain opaque |
 | Slide background, follow-master-background | |
 | Hidden slides | Skipped when rendering, preserved on save |
+| OLE, ActiveX, and VBA executable payloads | Native Rust relationship-owned inventory, byte-exact extraction and replacement, and ownership-aware removal. Payloads remain opaque and are never executed. OLE renders from its stored preview image |
 
 ### Shapes
 
@@ -49,6 +50,7 @@ its cost is recorded in `00-vision.md`.
 | Placeholders by index and by type | |
 | Picture crop and intrinsic size | Via `oxml-media` |
 | Image deduplication by content hash on insert | |
+| SmartArt inspection and bounded node-text editing | Data, layout, style, colour, cached drawing, and relationship ownership are typed. Unsupported algorithms and unmodelled XML remain preserved |
 
 ### Text
 
@@ -92,8 +94,7 @@ causes data loss, only reduced fidelity when rendering.
 | Area | v1 behaviour |
 |---|---|
 | Animations, transitions, `p:timing` | Preserved, irrelevant to static rendering |
-| SmartArt, `dgm:` | Preserved. Rendered from its drawing fallback part, else its cached picture, else its bounding box |
-| OLE objects, ActiveX | Preserved, rendered as the stored preview image |
+| Unsupported SmartArt algorithms and unmodelled `dgm:` content | Preserved. Rendering uses the drawing fallback part, else its cached picture, else its bounding box until the supported layout renderer is available |
 | Video and audio | Preserved, rendered as the poster frame |
 | 3-D, `a:scene3d` and `a:sp3d` | Preserved, rendered flat |
 | Blur on shadows, glow, reflection, soft edges | Shadow renders as a hard offset silhouette. The rest are dropped |

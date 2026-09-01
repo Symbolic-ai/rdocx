@@ -5,6 +5,12 @@
 //! changed to 12,192,000 by 6,858,000 EMU, the size kind was changed to
 //! `screen16x9`, and python-pptx generated the notes-master infrastructure.
 
+mod embedded;
+
+pub use embedded::{
+    EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
+};
+
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
@@ -64,6 +70,11 @@ use rpptx_layout::{
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
 use rpptx_oxml::comments::{CommentAuthorList, CommentList};
 use rpptx_oxml::connector::CT_ConnectionShape;
+pub use rpptx_oxml::diagram::{
+    CT_DiagramColorsDefinition, CT_DiagramData, CT_DiagramDrawing, CT_DiagramLayoutDefinition,
+    CT_DiagramStyleDefinition, DiagramConnection, DiagramConnectionKind, DiagramLayoutFamily,
+    DiagramPoint, DiagramPointKind, DiagramRelationshipIds, DiagramShapeStyle,
+};
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
 use rpptx_oxml::namespace::P_NS;
 use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
@@ -76,9 +87,9 @@ use rpptx_oxml::relmap::{relationship_ids, rewrite_exact_rel_ids, rewrite_rel_id
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
-use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout};
 #[cfg(feature = "render")]
-use rpptx_oxml::slide_parts::{CT_SlideMaster, ColorMapOverrideKind};
+use rpptx_oxml::slide_parts::ColorMapOverrideKind;
+use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout, CT_SlideMaster};
 pub use rpptx_oxml::timing::MediaPlaybackTrigger;
 use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
 #[cfg(feature = "render")]
@@ -132,9 +143,32 @@ pub struct DeterministicMediaTimelineFrame {
 }
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
+const MAX_SMARTART_TRANSFER_DIAGRAM_PARTS: usize = 128;
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// One relationship-resolved diagram part.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiagramPart<T> {
+    Parsed(T),
+    External(String),
+    MissingTarget(String),
+    Invalid(String),
+}
+
+/// One SmartArt frame and the diagram resources owned by its relationship scope.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SmartArtInfo {
+    pub slide_index: usize,
+    pub shape_id: u32,
+    pub relationships: DiagramRelationshipIds,
+    pub data: DiagramPart<CT_DiagramData>,
+    pub layout: DiagramPart<CT_DiagramLayoutDefinition>,
+    pub style: DiagramPart<CT_DiagramStyleDefinition>,
+    pub colors: DiagramPart<CT_DiagramColorsDefinition>,
+    pub drawing: Option<DiagramPart<CT_DiagramDrawing>>,
+}
 
 /// One inspected media source resolved through the slide relationship scope.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -338,6 +372,12 @@ pub enum Error {
         message: String,
     },
 
+    #[error("{operation} failed: {message}")]
+    InvalidEmbeddedMutation {
+        operation: &'static str,
+        message: String,
+    },
+
     #[error("adjustment {name} requires a finite value")]
     NonFiniteAdjustmentValue { name: String },
 
@@ -413,6 +453,8 @@ pub struct Presentation {
     handout_master_part: Option<String>,
     handout_master: Option<Box<CT_HandoutMaster>>,
     handout_master_dirty: bool,
+    embedded_invalidated_signatures: HashSet<(String, String)>,
+    package_signatures_invalidated: bool,
     layouts: Vec<LayoutRecord>,
     slides: Vec<SlideRecord>,
 }
@@ -734,6 +776,8 @@ impl Presentation {
     }
 
     fn from_package(package: OpcPackage) -> Result<Self> {
+        let package_signatures_invalidated =
+            embedded::known_invalid_package_signature_on_open(&package);
         let media_store = MediaStore::scan(&package);
         let main_relationship = package
             .package_rels
@@ -825,6 +869,8 @@ impl Presentation {
             handout_master_part,
             handout_master,
             handout_master_dirty: false,
+            embedded_invalidated_signatures: HashSet::new(),
+            package_signatures_invalidated,
             layouts,
             slides,
         })
@@ -842,7 +888,13 @@ impl Presentation {
             .package_rels
             .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
             .is_some();
-        let package = self.staged_package(preserve_signed_parts)?;
+        let package_signatures_invalidated = self.package_signatures_invalidated
+            || self.retained_package_signature_would_be_invalidated()?;
+        let mut package = self.staged_package(preserve_signed_parts)?;
+        embedded::persist_invalidated_package_signature(
+            &mut package,
+            package_signatures_invalidated,
+        )?;
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         Ok(output.into_inner())
@@ -851,7 +903,13 @@ impl Presentation {
     /// Serialises the current presentation through the fixed Agile write profile.
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
-        let package = self.staged_package(true)?;
+        let package_signatures_invalidated = self.package_signatures_invalidated
+            || self.retained_package_signature_would_be_invalidated()?;
+        let mut package = self.staged_package(true)?;
+        embedded::persist_invalidated_package_signature(
+            &mut package,
+            package_signatures_invalidated,
+        )?;
         let mut output = Vec::new();
         package.write_encrypted_to(&mut output, password)?;
         Ok(output)
@@ -1745,10 +1803,19 @@ impl Presentation {
     }
 
     fn commit_candidate(&mut self, staged: Self) -> Result<()> {
-        let package = staged.staged_package(false)?;
+        let embedded_invalidated_signatures = staged.embedded_invalidated_signatures.clone();
+        let package_signatures_invalidated = staged.package_signatures_invalidated
+            || staged.retained_package_signature_would_be_invalidated()?;
+        let mut package = staged.staged_package(false)?;
+        embedded::persist_invalidated_package_signature(
+            &mut package,
+            package_signatures_invalidated,
+        )?;
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
-        let reopened = Self::from_bytes(output.get_ref())?;
+        let mut reopened = Self::from_bytes(output.get_ref())?;
+        reopened.embedded_invalidated_signatures = embedded_invalidated_signatures;
+        reopened.package_signatures_invalidated = package_signatures_invalidated;
         *self = reopened;
         Ok(())
     }
@@ -1811,6 +1878,56 @@ impl Presentation {
             })
     }
 
+    /// Copies one placeholder-free SmartArt slide from another presentation.
+    ///
+    /// `destination_layout_index` explicitly selects the destination-owned layout.
+    /// Internal relationships are limited to that layout, images, and the five
+    /// SmartArt diagram types. Internal images must not own relationships, and the
+    /// copied diagram graph is limited to 128 parts. Slides with placeholders,
+    /// external layouts, notes, comments, charts, embedded media, OLE objects, or
+    /// other internal dependencies anywhere in the copied diagram graph are
+    /// rejected without mutation.
+    pub fn transfer_smartart_slide_from(
+        &mut self,
+        source: &Presentation,
+        index: usize,
+        destination_layout_index: usize,
+    ) -> Result<SlideRef<'_>> {
+        if index >= source.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index,
+                slide_count: source.slides.len(),
+            });
+        }
+        let destination_layout = self
+            .layouts
+            .get(destination_layout_index)
+            .ok_or(Error::UnknownLayoutIndex {
+                index: destination_layout_index,
+                layout_count: self.layouts.len(),
+            })?
+            .part_name
+            .clone();
+        preflight_cross_presentation_transfer(&source.package, &source.slides[index])?;
+        let mut staged = self.clone();
+        let inserted = staged.slides.len();
+        staged.copy_slide_from_in_place(
+            &source.package,
+            source.slides[index].clone(),
+            inserted,
+            "transfer SmartArt slide",
+            Some(&destination_layout),
+        )?;
+        self.commit_candidate(staged)?;
+        self.slides
+            .get(inserted)
+            .map(slide_ref)
+            .ok_or(Error::UnknownSlideIndex {
+                index: inserted,
+                slide_count: self.slides.len(),
+            })
+    }
+
     fn remove_slide_in_place(&mut self, index: usize) -> Result<()> {
         let record = self.slides[index].clone();
         self.presentation.remove_slide_from_sections(record.id);
@@ -1861,10 +1978,22 @@ impl Presentation {
     }
 
     fn duplicate_slide_in_place(&mut self, index: usize) -> Result<usize> {
+        let source_package = self.package.clone();
         let source = self.slides[index].clone();
+        self.copy_slide_from_in_place(&source_package, source, index + 1, "duplicate slide", None)
+    }
+
+    fn copy_slide_from_in_place(
+        &mut self,
+        source_package: &OpcPackage,
+        source: SlideRecord,
+        inserted: usize,
+        operation: &'static str,
+        layout_target: Option<&str>,
+    ) -> Result<usize> {
         if source.comments.is_some() {
             return Err(Error::InvalidPresentationMutation {
-                operation: "duplicate slide",
+                operation,
                 message: "slides with modern comments require caller-supplied fresh comment ids"
                     .to_owned(),
             });
@@ -1895,19 +2024,22 @@ impl Presentation {
             .next_part_name("xml")
         });
         let notes = if let (Some(source_notes), Some(notes_part)) = (&source.notes, &notes_part) {
-            let source_relationships = self
-                .package
+            let source_relationships = source_package
                 .get_part_rels(&source_notes.part_name)
                 .cloned()
                 .unwrap_or_default();
             let (mut relationships, mut relationship_map) = duplicate_relationship_scope(
+                source_package,
                 &mut self.package,
                 &mut self.media_store,
                 &source_notes.part_name,
                 notes_part,
                 &source_relationships,
-                Some(&slide_part),
-                None,
+                RelationshipScopeTargets {
+                    slide: Some(&slide_part),
+                    notes: None,
+                    layout: None,
+                },
             )?;
             relationships
                 .items
@@ -1966,19 +2098,22 @@ impl Presentation {
             None
         };
 
-        let source_relationships = self
-            .package
+        let source_relationships = source_package
             .get_part_rels(&source.part_name)
             .cloned()
             .unwrap_or_default();
         let (slide_relationships, relationship_map) = duplicate_relationship_scope(
+            source_package,
             &mut self.package,
             &mut self.media_store,
             &source.part_name,
             &slide_part,
             &source_relationships,
-            None,
-            notes_part.as_deref(),
+            RelationshipScopeTargets {
+                slide: None,
+                notes: notes_part.as_deref(),
+                layout: layout_target,
+            },
         )?;
         let slide_xml = source
             .slide
@@ -2028,7 +2163,6 @@ impl Presentation {
             .content_types
             .add_override(&slide_part, content_types::SLIDE);
 
-        let inserted = index + 1;
         self.presentation.slide_ids.insert(inserted, slide_id);
         self.slides.insert(
             inserted,
@@ -2211,6 +2345,115 @@ impl Presentation {
         Ok(shape_ref(
             tree.append_child(ShapeTreeChild::Picture(picture)),
         ))
+    }
+
+    /// Inspects slide, layout, and master SmartArt in producing-scope order.
+    pub fn smart_art(&self, slide_index: usize) -> Result<Vec<SmartArtInfo>> {
+        let record = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let mut infos = Vec::new();
+        collect_smartart_infos(
+            &self.package,
+            slide_index,
+            &record.part_name,
+            &record.slide.common_slide_data.shape_tree.children,
+            &mut infos,
+        );
+        let Some(layout_part) =
+            related_internal_part(&self.package, &record.part_name, rel_types::SLIDE_LAYOUT)?
+        else {
+            return Ok(infos);
+        };
+        let layout = CT_SlideLayout::from_xml(required_part(&self.package, &layout_part)?)
+            .map_err(|error| Error::MalformedPart {
+                part_name: layout_part.clone(),
+                message: error.to_string(),
+            })?;
+        collect_smartart_infos(
+            &self.package,
+            slide_index,
+            &layout_part,
+            &layout.common_slide_data.shape_tree.children,
+            &mut infos,
+        );
+        let Some(master_part) =
+            related_internal_part(&self.package, &layout_part, rel_types::SLIDE_MASTER)?
+        else {
+            return Ok(infos);
+        };
+        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
+            .map_err(|error| Error::MalformedPart {
+                part_name: master_part.clone(),
+                message: error.to_string(),
+            })?;
+        collect_smartart_infos(
+            &self.package,
+            slide_index,
+            &master_part,
+            &master.common_slide_data.shape_tree.children,
+            &mut infos,
+        );
+        Ok(infos)
+    }
+
+    /// Replaces one supported SmartArt node's text atomically.
+    pub fn set_smart_art_node_text(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        model_id: &str,
+        text: &str,
+    ) -> Result<()> {
+        let record = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let relationships = find_smartart_relationships(
+            &record.slide.common_slide_data.shape_tree.children,
+            shape_id,
+        )
+        .ok_or_else(|| Error::InvalidPresentationMutation {
+            operation: "set SmartArt node text",
+            message: format!("shape {shape_id} is not a SmartArt frame"),
+        })?
+        .clone();
+        let slide_part = record.part_name.clone();
+        let (data_part, mut data) =
+            validate_smartart_relationship_roles(&self.package, &slide_part, &relationships)?;
+        data.set_node_text(model_id, text)
+            .map_err(|error| Error::InvalidPresentationMutation {
+                operation: "set SmartArt node text",
+                message: error.to_string(),
+            })?;
+        let xml = data.to_xml().map_err(|error| Error::MalformedPart {
+            part_name: data_part.clone(),
+            message: error.to_string(),
+        })?;
+        CT_DiagramData::from_xml(&xml).map_err(|error| Error::MalformedPart {
+            part_name: data_part.clone(),
+            message: error.to_string(),
+        })?;
+
+        let mut staged = self.clone();
+        staged.package.set_part(&data_part, xml);
+        let issues = staged.validate();
+        if !issues.is_empty() {
+            return Err(Error::InvalidPresentationMutation {
+                operation: "set SmartArt node text",
+                message: format!("staged diagram graph is invalid: {issues:?}"),
+            });
+        }
+        let reopened = Self::from_bytes(&staged.to_bytes()?)?;
+        *self = reopened;
+        Ok(())
     }
 
     /// Inspects the media pictures on one slide in z-order.
@@ -3113,33 +3356,217 @@ fn add_media_relationships(
     }
 }
 
+struct RelationshipScopeTargets<'a> {
+    slide: Option<&'a str>,
+    notes: Option<&'a str>,
+    layout: Option<&'a str>,
+}
+
+fn preflight_cross_presentation_transfer(
+    source_package: &OpcPackage,
+    source: &SlideRecord,
+) -> Result<()> {
+    if source
+        .slide
+        .contains_placeholder()
+        .map_err(|error| Error::MalformedPart {
+            part_name: source.part_name.clone(),
+            message: error.to_string(),
+        })?
+    {
+        return Err(invalid_presentation_mutation(
+            "transfer SmartArt slide",
+            "placeholders require cross-presentation index reconciliation and are outside the bounded SmartArt transfer".to_owned(),
+        ));
+    }
+    if source.comments.is_some() {
+        return Err(invalid_presentation_mutation(
+            "transfer SmartArt slide",
+            "modern comments are outside the bounded cross-presentation transfer graph".to_owned(),
+        ));
+    }
+    if source.notes.is_some() {
+        return Err(invalid_presentation_mutation(
+            "transfer SmartArt slide",
+            "notes are outside the bounded cross-presentation transfer graph".to_owned(),
+        ));
+    }
+    let relationships = source_package
+        .get_part_rels(&source.part_name)
+        .cloned()
+        .unwrap_or_default();
+    let external_layout_count = relationships
+        .items
+        .iter()
+        .filter(|relationship| {
+            relationship.rel_type == rel_types::SLIDE_LAYOUT
+                && relationship_is_external(relationship)
+        })
+        .count();
+    if external_layout_count != 0 {
+        return Err(invalid_presentation_mutation(
+            "transfer SmartArt slide",
+            "an external slide-layout relationship cannot be replaced by the selected destination layout".to_owned(),
+        ));
+    }
+    let internal_layout_count = relationships
+        .items
+        .iter()
+        .filter(|relationship| {
+            relationship.rel_type == rel_types::SLIDE_LAYOUT
+                && !relationship_is_external(relationship)
+        })
+        .count();
+    if internal_layout_count != 1 {
+        return Err(invalid_presentation_mutation(
+            "transfer SmartArt slide",
+            format!(
+                "source slide must own exactly one internal slide-layout relationship, found {internal_layout_count}"
+            ),
+        ));
+    }
+    let mut smartart_frames = Vec::new();
+    collect_smartart_frames(
+        &source.slide.common_slide_data.shape_tree.children,
+        &mut smartart_frames,
+    );
+    for (frame, _) in smartart_frames {
+        if let GraphicDataPayload::SmartArt(relationship_ids) = frame.graphic_data.payload() {
+            validate_smartart_relationship_roles(
+                source_package,
+                &source.part_name,
+                relationship_ids,
+            )?;
+        }
+    }
+    let mut visited_diagram_parts = HashSet::new();
+    for relationship in &relationships.items {
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        if relationship.rel_type != rel_types::SLIDE_LAYOUT
+            && relationship.rel_type != rel_types::IMAGE
+            && !is_diagram_relationship(&relationship.rel_type)
+        {
+            return Err(invalid_presentation_mutation(
+                "transfer SmartArt slide",
+                format!(
+                    "internal relationship type {} is outside the bounded cross-presentation transfer graph",
+                    relationship.rel_type
+                ),
+            ));
+        }
+        let resolved = OpcPackage::resolve_rel_target(&source.part_name, &relationship.target);
+        required_part(source_package, &resolved)?;
+        if relationship.rel_type == rel_types::IMAGE {
+            preflight_internal_transfer_image(source_package, &resolved)?;
+        } else if is_diagram_relationship(&relationship.rel_type) {
+            preflight_diagram_part_graph(source_package, &resolved, &mut visited_diagram_parts)?;
+        }
+    }
+    Ok(())
+}
+
+fn preflight_internal_transfer_image(source_package: &OpcPackage, image_part: &str) -> Result<()> {
+    required_part(source_package, image_part)?;
+    if source_package
+        .get_part_rels(image_part)
+        .is_some_and(|relationships| !relationships.items.is_empty())
+    {
+        return Err(invalid_presentation_mutation(
+            "transfer SmartArt slide",
+            format!(
+                "image part {image_part} owns relationships outside the bounded SmartArt transfer"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn preflight_diagram_part_graph(
+    source_package: &OpcPackage,
+    source_part: &str,
+    visited: &mut HashSet<String>,
+) -> Result<()> {
+    if visited.contains(source_part) {
+        return Ok(());
+    }
+    if visited.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
+        return Err(invalid_presentation_mutation(
+            "transfer SmartArt slide",
+            format!(
+                "diagram graph exceeds the {MAX_SMARTART_TRANSFER_DIAGRAM_PARTS}-part transfer bound"
+            ),
+        ));
+    }
+    visited.insert(source_part.to_owned());
+    required_part(source_package, source_part)?;
+    let relationships = source_package
+        .get_part_rels(source_part)
+        .cloned()
+        .unwrap_or_default();
+    for relationship in &relationships.items {
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        let resolved = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+        required_part(source_package, &resolved)?;
+        if relationship.rel_type == rel_types::IMAGE {
+            preflight_internal_transfer_image(source_package, &resolved)?;
+        } else if is_diagram_relationship(&relationship.rel_type) {
+            preflight_diagram_part_graph(source_package, &resolved, visited)?;
+        } else {
+            return Err(invalid_presentation_mutation(
+                "transfer SmartArt slide",
+                format!(
+                    "diagram part {source_part} owns internal relationship type {} outside the bounded SmartArt transfer",
+                    relationship.rel_type
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn duplicate_relationship_scope(
-    package: &mut OpcPackage,
+    source_package: &OpcPackage,
+    destination_package: &mut OpcPackage,
     media_store: &mut MediaStore,
     source_part: &str,
     destination_part: &str,
     source_relationships: &Relationships,
-    slide_target: Option<&str>,
-    notes_target: Option<&str>,
+    targets: RelationshipScopeTargets<'_>,
 ) -> Result<(Relationships, HashMap<String, String>)> {
     let mut destination = Relationships::new();
     let mut relationship_map = HashMap::new();
+    let mut diagram_copies = HashMap::new();
     for relationship in &source_relationships.items {
         let target = if relationship_is_external(relationship) {
             relationship.target.clone()
         } else {
             let resolved = match relationship.rel_type.as_str() {
-                rel_types::SLIDE => slide_target.map(str::to_owned).unwrap_or_else(|| {
+                rel_types::SLIDE => targets.slide.map(str::to_owned).unwrap_or_else(|| {
                     OpcPackage::resolve_rel_target(source_part, &relationship.target)
                 }),
-                rel_types::NOTES_SLIDE => notes_target.map(str::to_owned).unwrap_or_else(|| {
+                rel_types::NOTES_SLIDE => targets.notes.map(str::to_owned).unwrap_or_else(|| {
+                    OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                }),
+                rel_types::SLIDE_LAYOUT => targets.layout.map(str::to_owned).unwrap_or_else(|| {
                     OpcPackage::resolve_rel_target(source_part, &relationship.target)
                 }),
                 _ => OpcPackage::resolve_rel_target(source_part, &relationship.target),
             };
             let resolved = if relationship.rel_type == rel_types::IMAGE {
-                let bytes = required_part(package, &resolved)?.to_vec();
-                media_store.insert(package, &bytes, &resolved)
+                let bytes = required_part(source_package, &resolved)?.to_vec();
+                media_store.insert(destination_package, &bytes, &resolved)
+            } else if is_diagram_relationship(&relationship.rel_type) {
+                duplicate_diagram_part_graph(
+                    source_package,
+                    destination_package,
+                    media_store,
+                    &resolved,
+                    &mut diagram_copies,
+                )?
             } else {
                 resolved
             };
@@ -3160,7 +3587,385 @@ fn duplicate_relationship_scope(
         }
         relationship_map.insert(relationship.id.clone(), new_id);
     }
+    for relationship in source_relationships.items.iter().filter(|relationship| {
+        relationship.rel_type == rel_types::DIAGRAM_DATA && !relationship_is_external(relationship)
+    }) {
+        let source_data = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+        let Some(copied_data) = diagram_copies.get(&source_data) else {
+            continue;
+        };
+        let mut data = CT_DiagramData::from_xml(required_part(destination_package, copied_data)?)
+            .map_err(|error| Error::MalformedPart {
+            part_name: copied_data.clone(),
+            message: error.to_string(),
+        })?;
+        data.remap_drawing_relationship(&relationship_map)
+            .map_err(|error| Error::MalformedPart {
+                part_name: copied_data.clone(),
+                message: error.to_string(),
+            })?;
+        destination_package.set_part(
+            copied_data,
+            data.to_xml().map_err(|error| Error::MalformedPart {
+                part_name: copied_data.clone(),
+                message: error.to_string(),
+            })?,
+        );
+    }
     Ok((destination, relationship_map))
+}
+
+fn duplicate_diagram_part_graph(
+    source_package: &OpcPackage,
+    destination_package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    source_part: &str,
+    copies: &mut HashMap<String, String>,
+) -> Result<String> {
+    if let Some(existing) = copies.get(source_part) {
+        return Ok(existing.clone());
+    }
+    if copies.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
+        return Err(invalid_presentation_mutation(
+            "copy SmartArt diagram graph",
+            format!(
+                "diagram graph exceeds the {MAX_SMARTART_TRANSFER_DIAGRAM_PARTS}-part copy bound"
+            ),
+        ));
+    }
+    let source_xml = required_part(source_package, source_part)?.to_vec();
+    let destination_part = fresh_related_part_name(destination_package, source_part);
+    copies.insert(source_part.to_owned(), destination_part.clone());
+    destination_package.set_part(&destination_part, source_xml.clone());
+    if let Some(content_type) = source_package
+        .content_types
+        .content_type_for(source_part)
+        .map(str::to_owned)
+    {
+        destination_package
+            .content_types
+            .add_override(&destination_part, &content_type);
+    }
+
+    let source_relationships = source_package
+        .get_part_rels(source_part)
+        .cloned()
+        .unwrap_or_default();
+    let mut destination_relationships = Relationships::new();
+    let mut relationship_map = HashMap::new();
+    for relationship in &source_relationships.items {
+        let target = if relationship_is_external(relationship) {
+            relationship.target.clone()
+        } else {
+            let resolved = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+            let copied = if relationship.rel_type == rel_types::IMAGE {
+                let bytes = required_part(source_package, &resolved)?.to_vec();
+                media_store.insert(destination_package, &bytes, &resolved)
+            } else if is_diagram_relationship(&relationship.rel_type) {
+                duplicate_diagram_part_graph(
+                    source_package,
+                    destination_package,
+                    media_store,
+                    &resolved,
+                    copies,
+                )?
+            } else {
+                resolved
+            };
+            relative_part_target(&destination_part, &copied)
+        };
+        let id = destination_relationships.add(&relationship.rel_type, &target);
+        if let Some(inserted) = destination_relationships.items.last_mut() {
+            inserted.target_mode = relationship.target_mode.clone();
+        }
+        relationship_map.insert(relationship.id.clone(), id);
+    }
+    let rewritten =
+        rewrite_rel_ids(&source_xml, &relationship_map).map_err(|error| Error::MalformedPart {
+            part_name: source_part.to_owned(),
+            message: error.to_string(),
+        })?;
+    let rewritten = rewrite_exact_rel_ids(&rewritten, &relationship_map).map_err(|error| {
+        Error::MalformedPart {
+            part_name: source_part.to_owned(),
+            message: error.to_string(),
+        }
+    })?;
+    destination_package.set_part(&destination_part, rewritten);
+    if !destination_relationships.items.is_empty() {
+        destination_package
+            .part_rels
+            .insert(destination_part.clone(), destination_relationships);
+    }
+    Ok(destination_part)
+}
+
+fn fresh_related_part_name(package: &OpcPackage, source_part: &str) -> String {
+    let (directory, filename) = source_part.rsplit_once('/').unwrap_or(("", source_part));
+    let (stem_with_suffix, extension) = filename.rsplit_once('.').unwrap_or((filename, "xml"));
+    let stem = stem_with_suffix.trim_end_matches(|character: char| character.is_ascii_digit());
+    MediaNamer::scan(
+        &format!("/{}", directory.trim_start_matches('/')),
+        if stem.is_empty() { "part" } else { stem },
+        package.parts.keys().map(String::as_str),
+    )
+    .next_part_name(extension)
+}
+
+fn is_diagram_relationship(relationship_type: &str) -> bool {
+    matches!(
+        relationship_type,
+        rel_types::DIAGRAM_DATA
+            | rel_types::DIAGRAM_LAYOUT
+            | rel_types::DIAGRAM_QUICK_STYLE
+            | rel_types::DIAGRAM_COLORS
+            | rel_types::DIAGRAM_DRAWING
+    )
+}
+
+fn collect_smartart_infos(
+    package: &OpcPackage,
+    slide_index: usize,
+    source_part: &str,
+    children: &[ShapeTreeChild],
+    infos: &mut Vec<SmartArtInfo>,
+) {
+    let mut frames = Vec::new();
+    collect_smartart_frames(children, &mut frames);
+    for (frame, shape_id) in frames {
+        let GraphicDataPayload::SmartArt(relationship_ids) = frame.graphic_data.payload() else {
+            continue;
+        };
+        let mut relationships = (**relationship_ids).clone();
+        let data = resolve_diagram_part(
+            package,
+            source_part,
+            &relationships.data,
+            rel_types::DIAGRAM_DATA,
+            CT_DiagramData::from_xml,
+        );
+        let layout = resolve_diagram_part(
+            package,
+            source_part,
+            &relationships.layout,
+            rel_types::DIAGRAM_LAYOUT,
+            CT_DiagramLayoutDefinition::from_xml,
+        );
+        let style = resolve_diagram_part(
+            package,
+            source_part,
+            &relationships.style,
+            rel_types::DIAGRAM_QUICK_STYLE,
+            CT_DiagramStyleDefinition::from_xml,
+        );
+        let colors = resolve_diagram_part(
+            package,
+            source_part,
+            &relationships.colors,
+            rel_types::DIAGRAM_COLORS,
+            CT_DiagramColorsDefinition::from_xml,
+        );
+        let drawing_id = match &data {
+            DiagramPart::Parsed(data) => data.drawing_relationship_id().map(str::to_owned),
+            _ => None,
+        };
+        relationships.drawing = drawing_id.clone();
+        let drawing = drawing_id.map(|relationship_id| {
+            resolve_diagram_part(
+                package,
+                source_part,
+                &relationship_id,
+                rel_types::DIAGRAM_DRAWING,
+                CT_DiagramDrawing::from_xml,
+            )
+        });
+        infos.push(SmartArtInfo {
+            slide_index,
+            shape_id,
+            relationships,
+            data,
+            layout,
+            style,
+            colors,
+            drawing,
+        });
+    }
+}
+
+fn collect_smartart_frames<'a>(
+    children: &'a [ShapeTreeChild],
+    frames: &mut Vec<(&'a CT_GraphicFrame, u32)>,
+) {
+    for child in children {
+        match child {
+            ShapeTreeChild::GraphicFrame(frame)
+                if matches!(
+                    frame.graphic_data.payload(),
+                    GraphicDataPayload::SmartArt(_)
+                ) =>
+            {
+                if let Some(shape_id) = child.non_visual_id() {
+                    frames.push((frame, shape_id));
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                collect_smartart_frames(&group.children, frames);
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                if let Some(fallback) = alternate.selected_fallback() {
+                    collect_smartart_frames(fallback, frames);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn find_smartart_relationships(
+    children: &[ShapeTreeChild],
+    shape_id: u32,
+) -> Option<DiagramRelationshipIds> {
+    for child in children {
+        if child.non_visual_id() == Some(shape_id)
+            && let ShapeTreeChild::GraphicFrame(frame) = child
+            && let GraphicDataPayload::SmartArt(relationships) = frame.graphic_data.payload()
+        {
+            return Some((**relationships).clone());
+        }
+        match child {
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(found) = find_smartart_relationships(&group.children, shape_id) {
+                    return Some(found);
+                }
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                if let Some(found) = alternate
+                    .selected_fallback()
+                    .and_then(|children| find_smartart_relationships(children, shape_id))
+                {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn validate_smartart_relationship_roles(
+    package: &OpcPackage,
+    source_part: &str,
+    relationship_ids: &DiagramRelationshipIds,
+) -> Result<(String, CT_DiagramData)> {
+    let data_part = require_internal_related_part(
+        package,
+        source_part,
+        &relationship_ids.data,
+        rel_types::DIAGRAM_DATA,
+    )?;
+    require_internal_related_part(
+        package,
+        source_part,
+        &relationship_ids.layout,
+        rel_types::DIAGRAM_LAYOUT,
+    )?;
+    require_internal_related_part(
+        package,
+        source_part,
+        &relationship_ids.style,
+        rel_types::DIAGRAM_QUICK_STYLE,
+    )?;
+    require_internal_related_part(
+        package,
+        source_part,
+        &relationship_ids.colors,
+        rel_types::DIAGRAM_COLORS,
+    )?;
+    let data = CT_DiagramData::from_xml(required_part(package, &data_part)?).map_err(|error| {
+        Error::MalformedPart {
+            part_name: data_part.clone(),
+            message: error.to_string(),
+        }
+    })?;
+    if let Some(drawing_id) = data.drawing_relationship_id() {
+        require_internal_related_part(
+            package,
+            source_part,
+            drawing_id,
+            rel_types::DIAGRAM_DRAWING,
+        )?;
+    }
+    Ok((data_part, data))
+}
+
+fn require_internal_related_part(
+    package: &OpcPackage,
+    source_part: &str,
+    relationship_id: &str,
+    expected_type: &'static str,
+) -> Result<String> {
+    let relationship = package
+        .get_part_rels(source_part)
+        .and_then(|items| items.get_by_id(relationship_id))
+        .ok_or_else(|| Error::MissingRelationship {
+            source_part: source_part.to_owned(),
+            relationship_id: relationship_id.to_owned(),
+        })?;
+    require_relationship_type(source_part, relationship, expected_type)?;
+    reject_external(source_part, relationship)?;
+    let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+    required_part(package, &target)?;
+    Ok(target)
+}
+
+fn resolve_diagram_part<T>(
+    package: &OpcPackage,
+    source_part: &str,
+    relationship_id: &str,
+    expected_type: &'static str,
+    parse: fn(&[u8]) -> std::result::Result<T, OxmlError>,
+) -> DiagramPart<T> {
+    let Some(relationship) = package
+        .get_part_rels(source_part)
+        .and_then(|items| items.get_by_id(relationship_id))
+    else {
+        return DiagramPart::MissingTarget(relationship_id.to_owned());
+    };
+    if relationship.rel_type != expected_type {
+        return DiagramPart::Invalid(format!(
+            "relationship {relationship_id} has type {}, expected {expected_type}",
+            relationship.rel_type
+        ));
+    }
+    if relationship_is_external(relationship) {
+        return DiagramPart::External(relationship.target.clone());
+    }
+    let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+    let Some(xml) = package.parts.get(&target) else {
+        return DiagramPart::MissingTarget(target);
+    };
+    match parse(xml) {
+        Ok(part) => DiagramPart::Parsed(part),
+        Err(error) => DiagramPart::Invalid(format!("{target}: {error}")),
+    }
+}
+
+fn related_internal_part(
+    package: &OpcPackage,
+    source_part: &str,
+    relationship_type: &str,
+) -> Result<Option<String>> {
+    let Some(relationship) = package
+        .get_part_rels(source_part)
+        .and_then(|relationships| relationships.get_by_type(relationship_type))
+    else {
+        return Ok(None);
+    };
+    reject_external(source_part, relationship)?;
+    Ok(Some(OpcPackage::resolve_rel_target(
+        source_part,
+        &relationship.target,
+    )))
 }
 
 fn collect_media_targets(package: &OpcPackage, source_part: &str, targets: &mut HashSet<String>) {

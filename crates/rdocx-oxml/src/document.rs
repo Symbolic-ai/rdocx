@@ -7,7 +7,7 @@ use crate::content_control::CT_Sdt;
 use crate::error::Result;
 use crate::header_footer::{HdrFtrRef, HdrFtrType};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::{local_namespace_overrides, word_prefixes_at};
+use crate::numbering::{local_namespace_overrides, merged_owner_bindings, word_prefixes_at};
 use crate::properties::{get_word_val_attr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
@@ -702,12 +702,13 @@ impl CT_Body {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &["w".to_string()])
+        Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_string()], &[])
     }
 
-    fn from_xml_with_prefixes(
+    fn from_xml_with_prefixes_and_owner_bindings(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
+        owner_bindings: &[(String, String)],
     ) -> Result<Self> {
         let mut content = Vec::new();
         let mut sect_pr = None;
@@ -723,26 +724,42 @@ impl CT_Body {
                             reader, &prefixes,
                         )?));
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
-                        content.push(BodyContent::Table(CT_Tbl::from_xml_with_prefixes(
-                            reader, &prefixes,
-                        )?));
+                        let local_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        let table_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
+                        content.push(BodyContent::Table(
+                            CT_Tbl::from_xml_with_prefixes_and_owner_bindings(
+                                reader,
+                                &prefixes,
+                                &table_bindings,
+                            )?,
+                        ));
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
-                        let raw = capture_element(reader, e)?;
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
                         if let Some(sdt) = CT_Sdt::from_raw(&raw, &prefixes) {
                             content.push(BodyContent::ContentControl(sdt));
                         } else {
                             content.push(BodyContent::RawXml(raw));
                         }
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
-                        let owner_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        let local_bindings = local_namespace_overrides(e, word_prefixes)?;
+                        let section_bindings =
+                            merged_owner_bindings(owner_bindings, &local_bindings);
                         sect_pr = Some(CT_SectPr::from_xml_with_prefixes_and_owner_bindings(
                             reader,
                             &prefixes,
-                            &owner_bindings,
+                            &section_bindings,
                         )?);
                     } else {
                         // Capture unknown elements as raw XML
-                        content.push(BodyContent::RawXml(capture_element(reader, e)?));
+                        content.push(BodyContent::RawXml(
+                            crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
@@ -755,7 +772,12 @@ impl CT_Body {
                     } else if is_word_element(name.as_ref(), b"sectPr", &prefixes) {
                         sect_pr = Some(CT_SectPr::empty());
                     } else {
-                        content.push(BodyContent::RawXml(capture_empty_element(e)?));
+                        content.push(BodyContent::RawXml(
+                            crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                owner_bindings,
+                            )?,
+                        ));
                     }
                 }
                 Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"body") => {
@@ -810,6 +832,9 @@ pub struct CT_Document {
     pub extra_namespaces: Vec<(String, String)>,
     /// Raw XML for `<w:background>` element if present.
     pub background_xml: Option<Vec<u8>>,
+    /// Foreign same-local-name background children retained before the body.
+    #[doc(hidden)]
+    pub background_extra_xml: Vec<Vec<u8>>,
 }
 
 #[allow(non_snake_case)]
@@ -819,6 +844,7 @@ impl CT_Document {
             body: CT_Body::new(),
             extra_namespaces: Vec::new(),
             background_xml: None,
+            background_extra_xml: Vec::new(),
         }
     }
 
@@ -830,6 +856,7 @@ impl CT_Document {
         let mut body = None;
         let mut extra_namespaces = Vec::new();
         let mut background_xml = None;
+        let mut background_extra_xml = Vec::new();
         let mut buf = Vec::new();
         let mut word_prefixes = Vec::new();
 
@@ -842,7 +869,12 @@ impl CT_Document {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, &word_prefixes)?;
                     if matches_local_name(name.as_ref(), b"body") {
-                        body = Some(CT_Body::from_xml_with_prefixes(&mut reader, &prefixes)?);
+                        let owner_bindings = local_namespace_overrides(e, &word_prefixes)?;
+                        body = Some(CT_Body::from_xml_with_prefixes_and_owner_bindings(
+                            &mut reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?);
                     } else if matches_local_name(name.as_ref(), b"document") {
                         // Capture extra namespace declarations from the document element
                         for attr in e.attributes().flatten() {
@@ -862,15 +894,20 @@ impl CT_Document {
                         }
                         // Continue into document element
                         word_prefixes = prefixes;
-                    } else if matches_local_name(name.as_ref(), b"background") {
+                    } else if is_word_element(name.as_ref(), b"background", &prefixes) {
                         background_xml = Some(capture_element(&mut reader, e)?);
+                    } else if matches_local_name(name.as_ref(), b"background") {
+                        background_extra_xml.push(capture_element(&mut reader, e)?);
                     } else {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
-                    if matches_local_name(e.name().as_ref(), b"background") {
+                    let prefixes = word_prefixes_at(e, &word_prefixes)?;
+                    if is_word_element(e.name().as_ref(), b"background", &prefixes) {
                         background_xml = Some(capture_empty_element(e)?);
+                    } else if matches_local_name(e.name().as_ref(), b"background") {
+                        background_extra_xml.push(capture_empty_element(e)?);
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -884,6 +921,7 @@ impl CT_Document {
             body: body.unwrap_or_default(),
             extra_namespaces,
             background_xml,
+            background_extra_xml,
         })
     }
 
@@ -931,6 +969,9 @@ impl CT_Document {
         // Write background element if present
         if let Some(ref bg) = self.background_xml {
             writer.get_mut().extend_from_slice(bg);
+        }
+        for raw in &self.background_extra_xml {
+            writer.get_mut().extend_from_slice(raw);
         }
 
         self.body.to_xml(&mut writer)?;
@@ -1048,6 +1089,31 @@ mod tests {
     }
 
     #[test]
+    fn foreign_document_background_lookalikes_remain_untyped() {
+        for raw in [
+            r#"<ext:background ext:color="red"/>"#,
+            r#"<ext:background ext:color="red"><ext:payload/></ext:background>"#,
+        ] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}" xmlns:ext="urn:producer">{raw}<w:body><w:p/></w:body></w:document>"#
+            );
+            let document = CT_Document::from_xml(xml.as_bytes()).expect("document opens");
+            assert!(document.background_xml.is_none());
+
+            let written = document.to_xml().expect("document writes");
+            assert!(
+                written
+                    .windows(raw.len())
+                    .any(|window| window == raw.as_bytes()),
+                "foreign background bytes survive exactly"
+            );
+            let reopened = CT_Document::from_xml(&written).expect("written document reopens");
+            assert!(reopened.background_xml.is_none());
+            assert_eq!(reopened.background_extra_xml, vec![raw.as_bytes().to_vec()]);
+        }
+    }
+
+    #[test]
     fn default_namespace_document_paragraph_properties_parse_in_scope() {
         let xml = format!(
             r#"<document xmlns="{W_NS}" xmlns:q="{W_NS}" xmlns:ext="urn:producer"><body><p><pPr><ext:jc ext:val="right"/><jc q:val="center"/></pPr><r><t>Scoped</t></r></p></body></document>"#
@@ -1058,6 +1124,126 @@ mod tests {
         assert_eq!(
             paragraph.properties.as_ref().unwrap().jc,
             Some(crate::shared::ST_Jc::Center)
+        );
+    }
+
+    #[test]
+    fn body_owner_bindings_reach_direct_table_descendants_after_redundant_redeclaration() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}">
+                  <w:body xmlns:ext="urn:body-owner">
+                    <w:tbl xmlns:ext="urn:body-owner">
+                      <w:tblPr>
+                        <w:tblBorders>
+                          <ext:diagonal ext:style="kept"/>
+                        </w:tblBorders>
+                      </w:tblPr>
+                      <w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+                    </w:tbl>
+                  </w:body>
+                </w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+
+        let written = String::from_utf8(document.to_xml().expect("document writes"))
+            .expect("document XML is UTF-8");
+        assert!(
+            written.contains(r#"<ext:diagonal ext:style="kept" xmlns:ext="urn:body-owner"/>"#),
+            "body binding survives a redundant table declaration: {written}"
+        );
+
+        let reopened = CT_Document::from_xml(written.as_bytes()).expect("document reopens");
+        let BodyContent::Table(table) = &reopened.body.content[0] else {
+            panic!("direct table reopens as typed content");
+        };
+        assert_eq!(
+            table
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.borders.as_ref())
+                .expect("table borders reopen")
+                .extra_xml,
+            vec![br#"<ext:diagonal ext:style="kept" xmlns:ext="urn:body-owner"/>"#.to_vec()]
+        );
+    }
+
+    #[test]
+    fn body_owner_bindings_survive_body_content_control_table_projection() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}">
+                  <w:body xmlns:ext="urn:body-control">
+                    <w:sdt><w:sdtContent>
+                      <w:tbl>
+                        <w:tblPr>
+                          <w:tblBorders><ext:diagonal ext:style="kept"/></w:tblBorders>
+                        </w:tblPr>
+                        <w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>
+                      </w:tbl>
+                    </w:sdtContent></w:sdt>
+                  </w:body>
+                </w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+
+        let written = String::from_utf8(document.to_xml().expect("document writes"))
+            .expect("document XML is UTF-8");
+        assert!(
+            written.contains(r#"xmlns:ext="urn:body-control""#),
+            "{written}"
+        );
+        assert!(written.contains("<ext:diagonal"), "{written}");
+
+        let reopened = CT_Document::from_xml(written.as_bytes()).expect("document reopens");
+        assert!(
+            matches!(reopened.body.content[0], BodyContent::ContentControl(_)),
+            "body control remains typed"
+        );
+        let rewritten = String::from_utf8(reopened.to_xml().expect("document rewrites"))
+            .expect("document XML is UTF-8");
+        assert!(
+            rewritten.contains(r#"xmlns:ext="urn:body-control""#),
+            "{rewritten}"
+        );
+        assert!(rewritten.contains("<ext:diagonal"), "{rewritten}");
+    }
+
+    #[test]
+    fn body_owner_bindings_survive_direct_raw_children() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{W_NS}">
+                  <w:body xmlns:ext="urn:body-raw">
+                    <ext:block ext:value="kept"><ext:nested/></ext:block>
+                    <ext:empty ext:value="kept"/>
+                  </w:body>
+                </w:document>"#
+        );
+        let document = CT_Document::from_xml(xml.as_bytes()).expect("document parses");
+
+        let written = String::from_utf8(document.to_xml().expect("document writes"))
+            .expect("document XML is UTF-8");
+        assert!(
+            written.contains(
+                r#"<ext:block ext:value="kept" xmlns:ext="urn:body-raw"><ext:nested/></ext:block>"#
+            ),
+            "body binding reaches a raw start child: {written}"
+        );
+        assert!(
+            written.contains(r#"<ext:empty ext:value="kept" xmlns:ext="urn:body-raw"/>"#),
+            "body binding reaches a raw empty child: {written}"
+        );
+
+        let reopened = CT_Document::from_xml(written.as_bytes()).expect("document reopens");
+        let rewritten = String::from_utf8(reopened.to_xml().expect("document rewrites"))
+            .expect("document XML is UTF-8");
+        assert!(
+            rewritten.contains(
+                r#"<ext:block ext:value="kept" xmlns:ext="urn:body-raw"><ext:nested/></ext:block>"#
+            ),
+            "body binding survives a second serialization: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(r#"<ext:empty ext:value="kept" xmlns:ext="urn:body-raw"/>"#),
+            "empty body child survives a second serialization: {rewritten}"
         );
     }
 

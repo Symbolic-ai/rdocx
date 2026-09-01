@@ -657,6 +657,194 @@ fn word_attribute_value(
     Ok(None)
 }
 
+fn typed_leaf_requires_raw(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+    has_content: bool,
+) -> Result<bool> {
+    let prefixes = word_prefixes_at(element, word_prefixes)?;
+    let mut value_count = 0usize;
+    let mut has_unmodelled_attribute = false;
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if is_word_attribute(attribute.key.as_ref(), b"val", &prefixes) {
+            value_count += 1;
+        } else {
+            has_unmodelled_attribute = true;
+        }
+    }
+    Ok(has_content || value_count != 1 || has_unmodelled_attribute)
+}
+
+fn typed_leaf_value(element: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Option<String>> {
+    let prefixes = word_prefixes_at(element, word_prefixes)?;
+    let mut value = None;
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if !is_word_attribute(attribute.key.as_ref(), b"val", &prefixes) {
+            continue;
+        }
+        if value.is_some() {
+            return Ok(None);
+        }
+        value = Some(
+            attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                .into_owned(),
+        );
+    }
+    Ok(value)
+}
+
+fn typed_leaf_start(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+    value: Option<&str>,
+    output_word_prefix: &str,
+) -> Result<BytesStart<'static>> {
+    let prefixes = word_prefixes_at(element, word_prefixes)?;
+    let name = std::str::from_utf8(element.name().as_ref())?.to_string();
+    let mut rewritten = BytesStart::new(name);
+    let mut wrote_value = false;
+    let namespace_bindings = namespace_bindings(&prefixes);
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let key = std::str::from_utf8(attribute.key.as_ref())?.to_string();
+        if is_word_attribute(attribute.key.as_ref(), b"val", &prefixes) {
+            if let Some(value) = value
+                && !wrote_value
+            {
+                rewritten.push_attribute((key.as_str(), value));
+                wrote_value = true;
+            }
+            continue;
+        }
+        let attribute_value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+            .into_owned();
+        rewritten.push_attribute((key.as_str(), attribute_value.as_str()));
+    }
+    if let Some(value) = value
+        && !wrote_value
+    {
+        let safe_prefix = prefixes
+            .iter()
+            .find(|candidate| candidate.as_str() == output_word_prefix)
+            .or_else(|| {
+                prefixes.iter().find(|candidate| {
+                    !candidate.is_empty() && split_namespace_binding(candidate).is_none()
+                })
+            })
+            .cloned();
+        let safe_prefix = match safe_prefix {
+            Some(prefix) => prefix,
+            None => {
+                let prefix = unused_prefix(&namespace_bindings, "rdocxWord");
+                let declaration = format!("xmlns:{prefix}");
+                rewritten.push_attribute((declaration.as_str(), W_NS));
+                prefix
+            }
+        };
+        let key = qualified(&safe_prefix, "val");
+        rewritten.push_attribute((key.as_str(), value));
+    }
+    Ok(rewritten.into_owned())
+}
+
+fn validate_typed_leaf_prefixes(raw: &[u8], inherited: &[String]) -> Result<()> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let mut scope_stack = vec![inherited.to_vec()];
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(event @ (Event::Start(_) | Event::Empty(_))) => {
+                let is_start = matches!(&event, Event::Start(_));
+                let element = match event {
+                    Event::Start(element) | Event::Empty(element) => element,
+                    _ => unreachable!(),
+                };
+                let scope = word_prefixes_at(
+                    &element,
+                    scope_stack.last().map(Vec::as_slice).unwrap_or_default(),
+                )?;
+                let bindings = namespace_bindings(&scope);
+                let mut names = vec![element.name().as_ref().to_vec()];
+                for attribute in element.attributes() {
+                    let attribute = attribute?;
+                    if attribute.key.as_ref() != b"xmlns"
+                        && !attribute.key.as_ref().starts_with(b"xmlns:")
+                    {
+                        names.push(attribute.key.as_ref().to_vec());
+                    }
+                }
+                for name in names {
+                    let name = std::str::from_utf8(&name)?;
+                    let Some((prefix, _)) = name.split_once(':') else {
+                        continue;
+                    };
+                    if prefix != "xml" && !bindings.iter().any(|(candidate, _)| candidate == prefix)
+                    {
+                        return Err(OxmlError::InvalidValue(format!(
+                            "typed numbering metadata uses undeclared prefix `{prefix}`"
+                        )));
+                    }
+                }
+                if is_start {
+                    scope_stack.push(scope);
+                }
+            }
+            Ok(Event::End(_)) => {
+                scope_stack.pop();
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(error.into()),
+        }
+        buffer.clear();
+    }
+    Ok(())
+}
+
+fn write_typed_leaf_raw<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    raw: &[u8],
+    word_prefixes: &[String],
+    value: Option<&str>,
+    output_word_prefix: &str,
+) -> Result<()> {
+    validate_typed_leaf_prefixes(raw, word_prefixes)?;
+    let mut reader = Reader::from_reader(raw);
+    let mut buf = Vec::new();
+    let mut root_pending = true;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) if root_pending => {
+                root_pending = false;
+                writer.write_event(Event::Start(typed_leaf_start(
+                    &element,
+                    word_prefixes,
+                    value,
+                    output_word_prefix,
+                )?))?;
+            }
+            Ok(Event::Empty(element)) if root_pending => {
+                writer.write_event(Event::Empty(typed_leaf_start(
+                    &element,
+                    word_prefixes,
+                    value,
+                    output_word_prefix,
+                )?))?;
+                break;
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer.write_event(event.into_owned())?,
+            Err(error) => return Err(error.into()),
+        }
+        buf.clear();
+    }
+    Ok(())
+}
+
 fn abstract_raw_boundary(name: &[u8], current: usize, word_prefixes: &[String]) -> (usize, usize) {
     if is_word_element(name, b"nsid", word_prefixes) {
         (0, 1)
@@ -2148,6 +2336,11 @@ pub struct CT_Lvl {
     pub start: Option<u32>,
     /// Number format
     pub num_fmt: Option<ST_NumberFormat>,
+    /// Paragraph style associated with this numbering level.
+    pub p_style: Option<String>,
+    /// Original typed value, raw XML, and namespace scope for an extended `w:pStyle`.
+    #[doc(hidden)]
+    pub p_style_raw: Option<(Option<String>, Vec<u8>, Vec<String>)>,
     /// Item emitted between the marker and the paragraph content.
     pub suffix: Option<ST_LvlSuffix>,
     /// Level text (e.g., "%1.", "%1.%2.", bullet char)
@@ -2175,6 +2368,8 @@ impl CT_Lvl {
             ilvl,
             start: None,
             num_fmt: None,
+            p_style: None,
+            p_style_raw: None,
             suffix: None,
             lvl_text: None,
             lvl_jc: None,
@@ -2199,6 +2394,7 @@ impl CT_Lvl {
         let mut lvl = CT_Lvl::new(ilvl);
         let mut buf = Vec::new();
         let mut boundary = 0;
+        let mut seen_p_style = false;
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -2217,6 +2413,17 @@ impl CT_Lvl {
                         }
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"pStyle", &prefixes) {
+                        let value = typed_leaf_value(e, &prefixes)?;
+                        let raw = capture_element(reader, e)?;
+                        if seen_p_style {
+                            lvl.extra_xml.push((boundary, raw));
+                            continue;
+                        }
+                        seen_p_style = true;
+                        lvl.p_style = value.clone();
+                        lvl.p_style_raw = Some((value, raw, prefixes));
+                        boundary = 4;
                     } else if is_word_element(name.as_ref(), b"suff", &prefixes) {
                         if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
                             && let Some(suffix) = ST_LvlSuffix::from_str(&value)
@@ -2235,10 +2442,14 @@ impl CT_Lvl {
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 7;
                     } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes) {
-                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)? {
-                            lvl.lvl_jc = ST_Jc::from_str(&value).ok();
+                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
+                            && let Ok(justification) = ST_Jc::from_str(&value)
+                        {
+                            lvl.lvl_jc = Some(justification);
+                            reader.read_to_end_into(name, &mut Vec::new())?;
+                        } else {
+                            lvl.extra_xml.push((9, capture_element(reader, e)?));
                         }
-                        reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 10;
                     } else if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_element(reader, e)?;
@@ -2275,6 +2486,19 @@ impl CT_Lvl {
                             lvl.num_fmt = Some(ST_NumberFormat::from_str(&val));
                         }
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"pStyle", &prefixes) {
+                        let value = typed_leaf_value(e, &prefixes)?;
+                        let raw = capture_empty_element(e)?;
+                        if seen_p_style {
+                            lvl.extra_xml.push((boundary, raw));
+                            continue;
+                        }
+                        seen_p_style = true;
+                        if typed_leaf_requires_raw(e, &prefixes, false)? {
+                            lvl.p_style_raw = Some((value.clone(), raw, prefixes));
+                        }
+                        lvl.p_style = value;
+                        boundary = 4;
                     } else if is_word_element(name.as_ref(), b"suff", &prefixes) {
                         if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
                             && let Some(suffix) = ST_LvlSuffix::from_str(&value)
@@ -2289,10 +2513,14 @@ impl CT_Lvl {
                     } else if is_word_element(name.as_ref(), b"lvlText", &prefixes) {
                         lvl.lvl_text = word_attribute_value(e, b"val", &prefixes)?;
                         boundary = 7;
-                    } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes)
-                        && let Some(val) = word_attribute_value(e, b"val", &prefixes)?
-                    {
-                        lvl.lvl_jc = ST_Jc::from_str(&val).ok();
+                    } else if is_word_element(name.as_ref(), b"lvlJc", &prefixes) {
+                        if let Some(value) = word_attribute_value(e, b"val", &prefixes)?
+                            && let Ok(justification) = ST_Jc::from_str(&value)
+                        {
+                            lvl.lvl_jc = Some(justification);
+                        } else {
+                            lvl.extra_xml.push((9, capture_empty_element(e)?));
+                        }
                         boundary = 10;
                     } else if is_word_element(name.as_ref(), b"pPr", &prefixes) {
                         let raw = capture_empty_element(e)?;
@@ -2366,7 +2594,21 @@ impl CT_Lvl {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 2..=5 {
+        write_extras_at(writer, &self.extra_xml, 2)?;
+        if let Some((original, raw, prefixes)) = &self.p_style_raw {
+            if self.p_style == *original {
+                writer.get_mut().write_all(raw)?;
+            } else {
+                write_typed_leaf_raw(writer, raw, prefixes, self.p_style.as_deref(), word_prefix)?;
+            }
+        } else if let Some(style) = &self.p_style {
+            let name = qualified(word_prefix, "pStyle");
+            let val_name = qualified(word_prefix, "val");
+            let mut element = BytesStart::new(name.as_str());
+            element.push_attribute((val_name.as_str(), style.as_str()));
+            writer.write_event(Event::Empty(element))?;
+        }
+        for boundary in 3..=5 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
         if let Some(suffix) = self.suffix {
@@ -2476,8 +2718,18 @@ impl CT_Lvl {
 pub struct CT_AbstractNum {
     pub abstract_num_id: u32,
     pub levels: Vec<CT_Lvl>,
+    /// Producer identifier for this abstract numbering definition.
+    pub nsid: Option<String>,
+    /// Original typed value, raw XML, and namespace scope for an extended `w:nsid`.
+    #[doc(hidden)]
+    pub nsid_raw: Option<(Option<String>, Vec<u8>, Vec<String>)>,
     /// Optional multi-level type hint
     pub multi_level_type: Option<String>,
+    /// Producer template identifier for this abstract numbering definition.
+    pub tmpl: Option<String>,
+    /// Original typed value, raw XML, and namespace scope for an extended `w:tmpl`.
+    #[doc(hidden)]
+    pub tmpl_raw: Option<(Option<String>, Vec<u8>, Vec<String>)>,
     /// Unmodelled children retained at their modelled-child boundaries.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
     /// Unmodelled attributes and namespace declarations from `w:abstractNum`.
@@ -2490,7 +2742,11 @@ impl CT_AbstractNum {
         CT_AbstractNum {
             abstract_num_id: id,
             levels: Vec::new(),
+            nsid: None,
+            nsid_raw: None,
             multi_level_type: None,
+            tmpl: None,
+            tmpl_raw: None,
             extra_xml: Vec::new(),
             extra_attributes: Vec::new(),
         }
@@ -2508,16 +2764,40 @@ impl CT_AbstractNum {
         let mut abs = CT_AbstractNum::new(abstract_num_id);
         let mut buf = Vec::new();
         let mut boundary = 0;
+        let mut seen_nsid = false;
+        let mut seen_tmpl = false;
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
+                    if is_word_element(name.as_ref(), b"nsid", &prefixes) {
+                        let value = typed_leaf_value(e, &prefixes)?;
+                        let raw = capture_element(reader, e)?;
+                        if seen_nsid {
+                            abs.extra_xml.push((boundary, raw));
+                            continue;
+                        }
+                        seen_nsid = true;
+                        abs.nsid = value.clone();
+                        abs.nsid_raw = Some((value, raw, prefixes));
+                        boundary = 1;
+                    } else if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
                         abs.multi_level_type = word_attribute_value(e, b"val", &prefixes)?;
                         reader.read_to_end_into(name, &mut Vec::new())?;
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"tmpl", &prefixes) {
+                        let value = typed_leaf_value(e, &prefixes)?;
+                        let raw = capture_element(reader, e)?;
+                        if seen_tmpl {
+                            abs.extra_xml.push((boundary, raw));
+                            continue;
+                        }
+                        seen_tmpl = true;
+                        abs.tmpl = value.clone();
+                        abs.tmpl_raw = Some((value, raw, prefixes));
+                        boundary = 3;
                     } else if is_word_element(name.as_ref(), b"lvl", &prefixes) {
                         let ilvl = u32_attribute(e, b"ilvl", &prefixes)?;
                         let mut level = CT_Lvl::from_xml_with_prefixes(reader, ilvl, &prefixes)?;
@@ -2534,9 +2814,35 @@ impl CT_AbstractNum {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
+                    if is_word_element(name.as_ref(), b"nsid", &prefixes) {
+                        let value = typed_leaf_value(e, &prefixes)?;
+                        let raw = capture_empty_element(e)?;
+                        if seen_nsid {
+                            abs.extra_xml.push((boundary, raw));
+                            continue;
+                        }
+                        seen_nsid = true;
+                        if typed_leaf_requires_raw(e, &prefixes, false)? {
+                            abs.nsid_raw = Some((value.clone(), raw, prefixes));
+                        }
+                        abs.nsid = value;
+                        boundary = 1;
+                    } else if is_word_element(name.as_ref(), b"multiLevelType", &prefixes) {
                         abs.multi_level_type = word_attribute_value(e, b"val", &prefixes)?;
                         boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"tmpl", &prefixes) {
+                        let value = typed_leaf_value(e, &prefixes)?;
+                        let raw = capture_empty_element(e)?;
+                        if seen_tmpl {
+                            abs.extra_xml.push((boundary, raw));
+                            continue;
+                        }
+                        seen_tmpl = true;
+                        if typed_leaf_requires_raw(e, &prefixes, false)? {
+                            abs.tmpl_raw = Some((value.clone(), raw, prefixes));
+                        }
+                        abs.tmpl = value;
+                        boundary = 3;
                     } else if is_word_element(name.as_ref(), b"lvl", &prefixes) {
                         let mut level = CT_Lvl::new(u32_attribute(e, b"ilvl", &prefixes)?);
                         level.extra_attributes =
@@ -2582,6 +2888,19 @@ impl CT_AbstractNum {
         writer.write_event(Event::Start(start))?;
 
         write_extras_at(writer, &self.extra_xml, 0)?;
+        if let Some((original, raw, prefixes)) = &self.nsid_raw {
+            if self.nsid == *original {
+                writer.get_mut().write_all(raw)?;
+            } else {
+                write_typed_leaf_raw(writer, raw, prefixes, self.nsid.as_deref(), word_prefix)?;
+            }
+        } else if let Some(nsid) = &self.nsid {
+            let name = qualified(word_prefix, "nsid");
+            let val_name = qualified(word_prefix, "val");
+            let mut element = BytesStart::new(name.as_str());
+            element.push_attribute((val_name.as_str(), nsid.as_str()));
+            writer.write_event(Event::Empty(element))?;
+        }
         write_extras_at(writer, &self.extra_xml, 1)?;
         if let Some(ref mlt) = self.multi_level_type {
             let name = qualified(word_prefix, "multiLevelType");
@@ -2591,7 +2910,21 @@ impl CT_AbstractNum {
             writer.write_event(Event::Empty(e))?;
         }
 
-        for boundary in 2..=6 {
+        write_extras_at(writer, &self.extra_xml, 2)?;
+        if let Some((original, raw, prefixes)) = &self.tmpl_raw {
+            if self.tmpl == *original {
+                writer.get_mut().write_all(raw)?;
+            } else {
+                write_typed_leaf_raw(writer, raw, prefixes, self.tmpl.as_deref(), word_prefix)?;
+            }
+        } else if let Some(tmpl) = &self.tmpl {
+            let name = qualified(word_prefix, "tmpl");
+            let val_name = qualified(word_prefix, "val");
+            let mut element = BytesStart::new(name.as_str());
+            element.push_attribute((val_name.as_str(), tmpl.as_str()));
+            writer.write_event(Event::Empty(element))?;
+        }
+        for boundary in 3..=6 {
             write_extras_at(writer, &self.extra_xml, boundary)?;
         }
         for (index, lvl) in self.levels.iter().enumerate() {
@@ -2736,12 +3069,21 @@ impl CT_Numbering {
         }
         for abstract_num in &self.abstract_nums {
             append_namespace_declarations(&abstract_num.extra_attributes, &mut declarations);
+            if let Some((_, raw, _)) = &abstract_num.nsid_raw {
+                append_raw_namespace_declarations(raw, &mut declarations)?;
+            }
+            if let Some((_, raw, _)) = &abstract_num.tmpl_raw {
+                append_raw_namespace_declarations(raw, &mut declarations)?;
+            }
             for (_, raw) in &abstract_num.extra_xml {
                 append_raw_namespace_declarations(raw, &mut declarations)?;
             }
             for level in &abstract_num.levels {
                 append_namespace_declarations(&level.extra_attributes, &mut declarations);
                 for (_, raw) in &level.extra_xml {
+                    append_raw_namespace_declarations(raw, &mut declarations)?;
+                }
+                if let Some((_, raw, _)) = &level.p_style_raw {
                     append_raw_namespace_declarations(raw, &mut declarations)?;
                 }
                 if let Some((_, raw, _)) = &level.ppr_raw {
@@ -3228,10 +3570,13 @@ mod tests {
         let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:abstractNum w:abstractNumId="0">
+    <w:nsid w:val="FFFFFF7C"/>
     <w:multiLevelType w:val="hybridMultilevel"/>
+    <w:tmpl w:val="C310EC42"/>
     <w:lvl w:ilvl="0">
       <w:start w:val="1"/>
       <w:numFmt w:val="decimal"/>
+      <w:pStyle w:val="ListNumber"/>
       <w:lvlText w:val="%1."/>
       <w:lvlJc w:val="left"/>
       <w:pPr>
@@ -3256,10 +3601,13 @@ mod tests {
 
         let abs = &numbering.abstract_nums[0];
         assert_eq!(abs.abstract_num_id, 0);
+        assert_eq!(abs.nsid.as_deref(), Some("FFFFFF7C"));
         assert_eq!(abs.multi_level_type, Some("hybridMultilevel".to_string()));
+        assert_eq!(abs.tmpl.as_deref(), Some("C310EC42"));
         assert_eq!(abs.levels.len(), 2);
         assert_eq!(abs.levels[0].start, Some(1));
         assert_eq!(abs.levels[0].num_fmt, Some(ST_NumberFormat::Decimal));
+        assert_eq!(abs.levels[0].p_style.as_deref(), Some("ListNumber"));
         assert_eq!(abs.levels[0].lvl_text, Some("%1.".to_string()));
         assert_eq!(
             abs.levels[0].ppr.as_ref().unwrap().ind_left,
@@ -3270,6 +3618,235 @@ mod tests {
         let num = &numbering.nums[0];
         assert_eq!(num.num_id, 1);
         assert_eq!(num.abstract_num_id, 0);
+    }
+
+    #[test]
+    fn typed_numbering_metadata_preserves_producer_payloads() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:producer">
+  <w:abstractNum w:abstractNumId="0">
+    <w:nsid w:val="11111111" ext:fact="nsid"/>
+    <w:tmpl w:val="22222222" ext:fact="tmpl"><ext:tmplData/></w:tmpl>
+    <w:lvl w:ilvl="0">
+      <w:numFmt w:val="decimal"/>
+      <w:pStyle w:val="ListNumber" ext:fact="style"><ext:styleData/></w:pStyle>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+</w:numbering>"#;
+
+        let mut numbering = CT_Numbering::from_xml(xml).expect("numbering opens");
+        let unchanged = String::from_utf8(numbering.to_xml().expect("numbering writes"))
+            .expect("numbering XML is UTF-8");
+        for raw in [
+            r#"<w:nsid w:val="11111111" ext:fact="nsid"/>"#,
+            r#"<w:tmpl w:val="22222222" ext:fact="tmpl"><ext:tmplData/></w:tmpl>"#,
+            r#"<w:pStyle w:val="ListNumber" ext:fact="style"><ext:styleData/></w:pStyle>"#,
+        ] {
+            assert!(unchanged.contains(raw), "missing retained leaf: {raw}");
+        }
+
+        let definition = &mut numbering.abstract_nums[0];
+        definition.nsid = Some("AAAAAAAA".to_owned());
+        definition.tmpl = Some("BBBBBBBB".to_owned());
+        definition.levels[0].p_style = Some("ChangedStyle".to_owned());
+        let changed = numbering.to_xml().expect("changed numbering writes");
+        let changed_text = String::from_utf8(changed.clone()).expect("numbering XML is UTF-8");
+        for retained in [
+            r#"ext:fact="nsid""#,
+            r#"ext:fact="tmpl""#,
+            "<ext:tmplData/>",
+            r#"ext:fact="style""#,
+            "<ext:styleData/>",
+        ] {
+            assert!(
+                changed_text.contains(retained),
+                "missing producer fact: {retained}"
+            );
+        }
+
+        let reopened = CT_Numbering::from_xml(&changed).expect("changed numbering reopens");
+        let definition = &reopened.abstract_nums[0];
+        assert_eq!(definition.nsid.as_deref(), Some("AAAAAAAA"));
+        assert_eq!(definition.tmpl.as_deref(), Some("BBBBBBBB"));
+        assert_eq!(
+            definition.levels[0].p_style.as_deref(),
+            Some("ChangedStyle")
+        );
+        let repeated = String::from_utf8(reopened.to_xml().expect("reopened numbering writes"))
+            .expect("numbering XML is UTF-8");
+        for retained in [
+            r#"ext:fact="nsid""#,
+            r#"ext:fact="tmpl""#,
+            "<ext:tmplData/>",
+            r#"ext:fact="style""#,
+            "<ext:styleData/>",
+        ] {
+            assert!(
+                repeated.contains(retained),
+                "lost repeated producer fact: {retained}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_typed_numbering_metadata_remains_raw() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:nsid w:val="first"/><w:nsid w:val="second"/>
+    <w:tmpl w:val="first-template"/><w:tmpl w:val="second-template"/>
+    <w:lvl w:ilvl="0">
+      <w:pStyle w:val="FirstStyle"/><w:pStyle w:val="SecondStyle"/>
+    </w:lvl>
+  </w:abstractNum>
+</w:numbering>"#;
+        let numbering = CT_Numbering::from_xml(xml).expect("numbering opens");
+        let definition = &numbering.abstract_nums[0];
+        assert_eq!(definition.nsid.as_deref(), Some("first"));
+        assert_eq!(definition.tmpl.as_deref(), Some("first-template"));
+        assert_eq!(definition.levels[0].p_style.as_deref(), Some("FirstStyle"));
+
+        let output = String::from_utf8(numbering.to_xml().expect("numbering writes"))
+            .expect("numbering XML is UTF-8");
+        for duplicate in [
+            r#"<w:nsid w:val="second"/>"#,
+            r#"<w:tmpl w:val="second-template"/>"#,
+            r#"<w:pStyle w:val="SecondStyle"/>"#,
+        ] {
+            assert!(output.contains(duplicate), "missing duplicate: {duplicate}");
+        }
+    }
+
+    #[test]
+    fn missing_numbering_metadata_values_avoid_locally_shadowed_output_prefixes() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <q:nsid xmlns:w="urn:foreign"/>
+    <q:tmpl xmlns:w="urn:foreign"/>
+    <w:lvl w:ilvl="0"><q:pStyle xmlns:w="urn:foreign"/></w:lvl>
+  </w:abstractNum>
+</w:numbering>"#;
+        let mut numbering = CT_Numbering::from_xml(xml).expect("numbering opens");
+        let definition = &mut numbering.abstract_nums[0];
+        definition.nsid = Some("AAAAAAAA".to_owned());
+        definition.tmpl = Some("BBBBBBBB".to_owned());
+        definition.levels[0].p_style = Some("ChangedStyle".to_owned());
+
+        let mut abstract_writer = Writer::new(Vec::new());
+        definition
+            .to_xml(&mut abstract_writer)
+            .expect("abstract numbering writes directly");
+        let abstract_xml =
+            String::from_utf8(abstract_writer.into_inner()).expect("abstract XML is UTF-8");
+        assert!(
+            !abstract_xml.contains("w:val=\"AAAAAAAA\""),
+            "{abstract_xml}"
+        );
+        assert!(
+            !abstract_xml.contains("w:val=\"BBBBBBBB\""),
+            "{abstract_xml}"
+        );
+
+        let mut level_writer = Writer::new(Vec::new());
+        definition.levels[0]
+            .to_xml(&mut level_writer)
+            .expect("numbering level writes directly");
+        let level_xml = String::from_utf8(level_writer.into_inner()).expect("level XML is UTF-8");
+        assert!(!level_xml.contains("w:val=\"ChangedStyle\""), "{level_xml}");
+
+        let output = numbering.to_xml().expect("numbering writes");
+        let output_text = String::from_utf8(output.clone()).expect("numbering XML is UTF-8");
+        assert!(!output_text.contains("w:val=\"AAAAAAAA\""), "{output_text}");
+        assert!(!output_text.contains("w:val=\"BBBBBBBB\""), "{output_text}");
+        assert!(
+            !output_text.contains("w:val=\"ChangedStyle\""),
+            "{output_text}"
+        );
+
+        let reopened = CT_Numbering::from_xml(&output).expect("numbering reopens");
+        let definition = &reopened.abstract_nums[0];
+        assert_eq!(definition.nsid.as_deref(), Some("AAAAAAAA"));
+        assert_eq!(definition.tmpl.as_deref(), Some("BBBBBBBB"));
+        assert_eq!(
+            definition.levels[0].p_style.as_deref(),
+            Some("ChangedStyle")
+        );
+    }
+
+    #[test]
+    fn duplicate_expanded_value_attributes_remain_untyped_and_canonicalize_on_mutation() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:nsid w:val="first" q:val="second"/>
+  </w:abstractNum>
+</w:numbering>"#;
+        let mut numbering = CT_Numbering::from_xml(xml).expect("numbering opens");
+        assert!(numbering.abstract_nums[0].nsid.is_none());
+        let unchanged = String::from_utf8(numbering.to_xml().expect("numbering writes"))
+            .expect("numbering XML is UTF-8");
+        assert!(unchanged.contains(r#"w:val="first" q:val="second""#));
+
+        numbering.abstract_nums[0].nsid = Some("changed".to_owned());
+        let changed = numbering.to_xml().expect("changed numbering writes");
+        let changed_text = String::from_utf8(changed.clone()).expect("numbering XML is UTF-8");
+        assert_eq!(changed_text.matches("val=\"changed\"").count(), 1);
+        assert!(!changed_text.contains("val=\"first\""));
+        assert!(!changed_text.contains("val=\"second\""));
+        assert_eq!(
+            CT_Numbering::from_xml(&changed)
+                .expect("changed numbering reopens")
+                .abstract_nums[0]
+                .nsid
+                .as_deref(),
+            Some("changed")
+        );
+    }
+
+    #[test]
+    fn typed_numbering_metadata_mutation_rejects_undeclared_attribute_prefixes() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:nsid rdocxWord:val="producer"/>
+  </w:abstractNum>
+</w:numbering>"#;
+        let mut numbering = CT_Numbering::from_xml(xml).expect("numbering opens");
+        assert!(numbering.abstract_nums[0].nsid.is_none());
+        let unchanged = String::from_utf8(numbering.to_xml().expect("unchanged numbering writes"))
+            .expect("numbering XML is UTF-8");
+        assert!(unchanged.contains(r#"rdocxWord:val="producer""#));
+
+        numbering.abstract_nums[0].nsid = Some("changed".to_owned());
+        let error = numbering
+            .to_xml()
+            .expect_err("mutation with an undeclared retained prefix rejects");
+        assert!(error.to_string().contains("undeclared prefix `rdocxWord`"));
+    }
+
+    #[test]
+    fn typed_numbering_metadata_mutation_rejects_undeclared_descendant_prefixes() {
+        let payloads = [
+            "<rdocxWord:producer/>",
+            "<producer rdocxWord:fact=\"retained\"/>",
+        ];
+        for payload in payloads {
+            let xml = format!(
+                r#"<w:numbering xmlns:w="{W_NS}">
+  <w:abstractNum w:abstractNumId="0">
+    <w:nsid>{payload}</w:nsid>
+  </w:abstractNum>
+</w:numbering>"#
+            );
+            let mut numbering = CT_Numbering::from_xml(xml.as_bytes()).expect("numbering opens");
+            let unchanged =
+                String::from_utf8(numbering.to_xml().expect("unchanged numbering writes"))
+                    .expect("numbering XML is UTF-8");
+            assert!(unchanged.contains(payload));
+
+            numbering.abstract_nums[0].nsid = Some("changed".to_owned());
+            let error = numbering
+                .to_xml()
+                .expect_err("mutation with an undeclared descendant prefix rejects");
+            assert!(error.to_string().contains("undeclared prefix `rdocxWord`"));
+        }
     }
 
     #[test]
@@ -4703,6 +5280,8 @@ mod tests {
             ilvl: 0,
             start: Some(1),
             num_fmt: Some(ST_NumberFormat::Decimal),
+            p_style: None,
+            p_style_raw: None,
             suffix: None,
             lvl_text: Some("%1.".to_string()),
             lvl_jc: Some(ST_Jc::Left),
@@ -4723,7 +5302,11 @@ mod tests {
             abstract_nums: vec![CT_AbstractNum {
                 abstract_num_id: 0,
                 levels: vec![level.clone()],
+                nsid: None,
+                nsid_raw: None,
                 multi_level_type: None,
+                tmpl: None,
+                tmpl_raw: None,
                 extra_xml: Vec::new(),
                 extra_attributes: Vec::new(),
             }],
@@ -4753,5 +5336,20 @@ mod tests {
             reopened.abstract_nums[0].levels[0].num_fmt,
             Some(ST_NumberFormat::Other("chicago".to_owned()))
         );
+    }
+
+    #[test]
+    fn producer_defined_suffix_and_justification_remain_unmodelled() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:suff w:val="producer"/><w:lvlJc w:val="producer"/></w:lvl></w:abstractNum></w:numbering>"#;
+        let numbering = CT_Numbering::from_xml(xml).unwrap();
+        let level = &numbering.abstract_nums[0].levels[0];
+
+        assert_eq!(level.suffix, None);
+        assert_eq!(level.lvl_jc, None);
+        assert_eq!(level.extra_xml.len(), 2);
+
+        let output = String::from_utf8(numbering.to_xml().unwrap()).unwrap();
+        assert!(output.contains(r#"<w:suff w:val="producer"/>"#));
+        assert!(output.contains(r#"<w:lvlJc w:val="producer"/>"#));
     }
 }

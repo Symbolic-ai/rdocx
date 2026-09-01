@@ -2027,7 +2027,7 @@ fn ordered_reader_items_keep_every_direct_child_and_preserved_boundary() {
         body,
         [
             "paragraph:firstcontrollink beforelink afterlast",
-            "raw:<x:body-raw><x:child/></x:body-raw>",
+            "raw:<x:body-raw xmlns:x=\"urn:foreign\"><x:child/></x:body-raw>",
             "table",
             "control:body control",
         ]
@@ -2126,7 +2126,7 @@ fn ordered_reader_items_keep_every_direct_child_and_preserved_boundary() {
         cell_items,
         [
             "paragraph:cell",
-            "raw:<x:cell-raw/>",
+            "raw:<x:cell-raw xmlns:x=\"urn:foreign\"/>",
             "table:1",
             "control:cell control",
         ]
@@ -2649,7 +2649,7 @@ fn every_modeled_container_replays_nested_namespaces_after_modification() {
         let saved_xml =
             std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
         assert!(saved_xml.contains(&format!(r#"xmlns:x="urn:{owner}""#)));
-        assert!(saved_xml.contains("<x:producer/>"));
+        assert!(saved_xml.contains("<x:producer"));
         let reopened = Document::from_bytes(&saved).unwrap();
         assert_eq!(
             ordered_reader_snapshot(&reopened),
@@ -2664,7 +2664,7 @@ fn every_modeled_container_replays_nested_namespaces_after_modification() {
         let saved_xml =
             std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
         assert!(saved_xml.contains(&format!(r#"xmlns:x="urn:{owner}""#)));
-        assert!(saved_xml.contains("<x:producer/>"));
+        assert!(saved_xml.contains("<x:producer"));
         let reopened = Document::from_bytes(&saved).unwrap();
         assert!(
             reopened
@@ -2784,7 +2784,8 @@ fn intermediate_raw_shadow_is_safe_but_direct_fixed_prefix_use_fails_closed() {
 }
 
 fn assert_namespace_on_raw_owner(xml: &str, owner: &str, declaration: &str, raw: &str) {
-    let raw_start = xml.find(raw).expect("raw producer is present");
+    let raw_prefix = raw.strip_suffix("/>").unwrap_or(raw);
+    let raw_start = xml.find(raw_prefix).expect("raw producer is present");
     let owner_start = xml[..raw_start]
         .rfind(&format!("<w:{owner}"))
         .expect("modeled owner starts before its raw producer");
@@ -2792,9 +2793,14 @@ fn assert_namespace_on_raw_owner(xml: &str, owner: &str, declaration: &str, raw:
         + xml[owner_start..]
             .find('>')
             .expect("modeled owner start tag is complete");
+    let raw_end = raw_start
+        + xml[raw_start..]
+            .find('>')
+            .expect("raw producer start tag is complete");
     assert!(
-        xml[owner_start..=owner_end].contains(declaration),
-        "{declaration} was not replayed on the {owner} that owns {raw}",
+        xml[owner_start..=owner_end].contains(declaration)
+            || xml[raw_start..=raw_end].contains(declaration),
+        "{declaration} was not retained on the {owner} or its raw child {raw}: {xml}",
     );
 }
 
@@ -2917,6 +2923,27 @@ fn duplicate_raw_markers_cannot_replace_removed_paragraph_or_table_owners() {
 }
 
 #[test]
+fn foreign_namespace_decoy_cannot_replace_a_removed_namespace_owner() {
+    for decoy_namespace in ["urn:decoy", "urn:target"] {
+        let xml = format!(
+            r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p><x:producer xmlns:x="{decoy_namespace}"/><q:r><q:t>same</q:t></q:r></q:p>
+      <q:p xmlns:x="urn:target"><x:producer/><q:r><q:t>same</q:t></q:r></q:p>
+    </q:body></q:document>"#
+        );
+        let mut document = document_with_content_controls(&xml);
+        assert!(document.remove_content(1));
+        let error = document.to_bytes().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("retained `p` nested namespace owner"),
+            "foreign expanded names must keep the removed owner unidentifiable: {error}",
+        );
+    }
+}
+
+#[test]
 fn duplicate_scope_markers_keep_the_target_owner_through_reorder_and_modification() {
     let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:root"><q:body>
       <q:p><x:producer/><q:r><q:t>scope decoy</q:t></q:r></q:p>
@@ -2957,6 +2984,93 @@ fn duplicate_scope_markers_keep_the_target_owner_through_reorder_and_modificatio
             "scope target",
         );
     }
+}
+
+#[test]
+fn inherited_and_self_bound_namespace_uses_keep_exact_owner_marker_cardinality() {
+    let cases = [
+        ("sibling elements", r#"<x:a/><x:b xmlns:x="urn:target"/>"#),
+        (
+            "nested elements",
+            r#"<u:outer xmlns:u="urn:opaque"><x:a/></u:outer><u:independent xmlns:u="urn:opaque" xmlns:x="urn:target"><x:b/></u:independent>"#,
+        ),
+        (
+            "namespaced attributes",
+            r#"<u:dependent xmlns:u="urn:opaque" x:a="one"/><u:independent xmlns:u="urn:opaque" xmlns:x="urn:target" x:b="two"/>"#,
+        ),
+    ];
+    for (case, raw) in cases {
+        let xml = format!(
+            r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:p xmlns:x="urn:target">{raw}<q:r><q:t>{case}</q:t></q:r></q:p>
+    </q:body></q:document>"#,
+        );
+        let mut document = document_with_content_controls(&xml);
+        document.add_paragraph("unrelated mutation");
+
+        let saved = document
+            .to_bytes()
+            .unwrap_or_else(|error| panic!("{case} rejected a valid owner: {error}"));
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let saved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(saved_xml.matches(r#"xmlns:x="urn:target""#).count(), 2);
+        assert!(
+            saved_xml.contains(raw),
+            "{case} raw XML changed: {saved_xml}"
+        );
+
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        let resaved = reopened.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&resaved)).unwrap();
+        let resaved_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(resaved_xml.matches(r#"xmlns:x="urn:target""#).count(), 2);
+        assert!(
+            resaved_xml.contains(raw),
+            "{case} raw XML changed: {resaved_xml}"
+        );
+    }
+}
+
+#[test]
+fn nested_table_cell_owner_ignores_independent_same_uri_local_binding() {
+    let raw = r#"<x:a/><x:b xmlns:x="urn:target"/>"#;
+    let stabilized_raw = r#"<x:a xmlns:x="urn:target"/><x:b xmlns:x="urn:target"/>"#;
+    let xml = format!(
+        r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:body>
+      <q:tbl><q:tr><q:tc xmlns:x="urn:target">{raw}<q:p><q:r><q:t>nested owner</q:t></q:r></q:p></q:tc></q:tr></q:tbl>
+    </q:body></q:document>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    document.add_paragraph("unrelated mutation");
+
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let saved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(
+        saved_xml.matches(r#"xmlns:x="urn:target""#).count(),
+        3,
+        "{saved_xml}"
+    );
+    assert!(
+        saved_xml.contains(stabilized_raw),
+        "nested owner bindings were not stabilized: {saved_xml}"
+    );
+
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    let resaved = reopened.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&resaved)).unwrap();
+    let resaved_xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert_eq!(
+        resaved_xml.matches(r#"xmlns:x="urn:target""#).count(),
+        2,
+        "{resaved_xml}"
+    );
+    assert!(
+        resaved_xml.contains(stabilized_raw),
+        "nested owner bindings changed after reopen: {resaved_xml}"
+    );
 }
 
 #[test]

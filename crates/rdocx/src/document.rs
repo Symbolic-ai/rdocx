@@ -26,11 +26,11 @@ use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
 };
 use rdocx_oxml::namespace::matches_local_name;
-use rdocx_oxml::numbering::{CT_Numbering, ST_NumberFormat};
+use rdocx_oxml::numbering::{CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::settings::{CT_Settings, DocumentProtection};
-use rdocx_oxml::shared::{ST_PageOrientation, ST_SectionType};
-use rdocx_oxml::styles::CT_Styles;
+use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
+use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
@@ -42,6 +42,7 @@ use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
 use crate::revision::RevisionRef;
+use crate::run::RunRef;
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef};
 
@@ -82,6 +83,12 @@ pub struct UnsupportedXmlRef<'a> {
 }
 
 impl<'a> UnsupportedXmlRef<'a> {
+    /// Inspect preserved reader-item bytes using the same unsupported XML
+    /// projection as body compatibility items.
+    pub fn from_bytes(raw: &'a [u8]) -> Self {
+        Self::raw(raw, &[])
+    }
+
     fn raw(raw: &'a [u8], inherited_namespaces: &'a [(String, String)]) -> Self {
         let names = raw_element_names(raw);
         let namespace_uri = names.as_ref().and_then(|(name, _)| {
@@ -575,6 +582,7 @@ fn element_declared_prefixes(
     bindings: &[(String, String)],
     parent_local_name: Option<&[u8]>,
     shadowed_owner_prefixes: &HashSet<String>,
+    allow_redundant_local_bindings: bool,
 ) -> Vec<String> {
     let prefixes = declarations
         .iter()
@@ -594,7 +602,8 @@ fn element_declared_prefixes(
                 && !shadowed_owner_prefixes.contains(prefix)
                 && inherited_namespace(bindings, prefix) == Some(*value)
                 && !(*value == WORD_NAMESPACE && element_is_modeled_word)
-        }) && !local_declarations.contains(prefix)
+        }) && (!local_declarations.contains(element_prefix.unwrap_or_default())
+            || allow_redundant_local_bindings)
     }) {
         used.push(element_prefix.unwrap_or_default().to_owned());
     }
@@ -612,7 +621,7 @@ fn element_declared_prefixes(
                     && inherited_namespace(bindings, prefix) == Some(*value)
                     && !(*value == WORD_NAMESPACE && element_is_modeled_word)
             })
-            && !local_declarations.contains(prefix)
+            && (!local_declarations.contains(prefix) || allow_redundant_local_bindings)
             && !used.iter().any(|candidate| candidate == prefix)
         {
             used.push(prefix.to_owned());
@@ -771,10 +780,96 @@ fn logical_owner_snapshot(
     }
 }
 
+fn marker_raw_without_owner_declarations(
+    raw: &[u8],
+    declarations: &[(String, String)],
+) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let element = match reader
+        .read_event_into(&mut buffer)
+        .map_err(|error| Error::Other(format!("invalid namespace marker XML: {error}")))?
+    {
+        Event::Start(element) | Event::Empty(element) => element,
+        _ => return Ok(raw.to_vec()),
+    };
+    let removable = namespace_declarations(&element)?
+        .into_iter()
+        .filter(|candidate| declarations.iter().any(|expected| expected == candidate))
+        .map(|(name, _)| name.into_bytes())
+        .collect::<HashSet<_>>();
+    if removable.is_empty() {
+        return Ok(raw.to_vec());
+    }
+
+    let mut cursor = 1usize;
+    while cursor < raw.len()
+        && !raw[cursor].is_ascii_whitespace()
+        && !matches!(raw[cursor], b'/' | b'>')
+    {
+        cursor += 1;
+    }
+    let mut removals = Vec::new();
+    loop {
+        let whitespace_start = cursor;
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= raw.len() || matches!(raw[cursor], b'/' | b'>') {
+            break;
+        }
+        let name_start = cursor;
+        while cursor < raw.len()
+            && !raw[cursor].is_ascii_whitespace()
+            && !matches!(raw[cursor], b'=' | b'/' | b'>')
+        {
+            cursor += 1;
+        }
+        let name_end = cursor;
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= raw.len() || raw[cursor] != b'=' {
+            return Ok(raw.to_vec());
+        }
+        cursor += 1;
+        while cursor < raw.len() && raw[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= raw.len() || !matches!(raw[cursor], b'\'' | b'"') {
+            return Ok(raw.to_vec());
+        }
+        let quote = raw[cursor];
+        cursor += 1;
+        while cursor < raw.len() && raw[cursor] != quote {
+            cursor += 1;
+        }
+        if cursor >= raw.len() {
+            return Ok(raw.to_vec());
+        }
+        cursor += 1;
+        if removable.contains(&raw[name_start..name_end]) {
+            removals.push((whitespace_start, cursor));
+        }
+    }
+    if removals.is_empty() {
+        return Ok(raw.to_vec());
+    }
+    let mut normalized = Vec::with_capacity(raw.len());
+    let mut copied = 0usize;
+    for (start, end) in removals {
+        normalized.extend_from_slice(&raw[copied..start]);
+        copied = end;
+    }
+    normalized.extend_from_slice(&raw[copied..]);
+    Ok(normalized)
+}
+
 fn namespace_owner_markers(
     owner_xml: &[u8],
     declarations: &[(String, String)],
     inherited_bindings: &[(String, String)],
+    allow_redundant_local_bindings: bool,
 ) -> Result<Vec<NamespaceMarker>> {
     let mut reader = quick_xml::Reader::from_reader(owner_xml);
     reader.config_mut().trim_text(false);
@@ -805,6 +900,16 @@ fn namespace_owner_markers(
                 let mut shadowed = shadow_stack.last().cloned().unwrap_or_default();
                 if depth > 0 {
                     shadowed.extend(local_namespace_prefixes(&element));
+                    if allow_redundant_local_bindings {
+                        for (name, value) in namespace_declarations(&element)? {
+                            let prefix = namespace_prefix(&name);
+                            if declarations.iter().any(|(candidate, owner_value)| {
+                                namespace_prefix(candidate) == prefix && value == *owner_value
+                            }) {
+                                shadowed.remove(&prefix);
+                            }
+                        }
+                    }
                 }
                 let used_prefixes = if depth > 0 {
                     element_declared_prefixes(
@@ -813,6 +918,7 @@ fn namespace_owner_markers(
                         &bindings,
                         element_stack.last().map(Vec::as_slice),
                         &shadowed,
+                        allow_redundant_local_bindings,
                     )
                 } else {
                     Vec::new()
@@ -836,6 +942,16 @@ fn namespace_owner_markers(
                 let mut shadowed = shadow_stack.last().cloned().unwrap_or_default();
                 if depth > 0 {
                     shadowed.extend(local_namespace_prefixes(&element));
+                    if allow_redundant_local_bindings {
+                        for (name, value) in namespace_declarations(&element)? {
+                            let prefix = namespace_prefix(&name);
+                            if declarations.iter().any(|(candidate, owner_value)| {
+                                namespace_prefix(candidate) == prefix && value == *owner_value
+                            }) {
+                                shadowed.remove(&prefix);
+                            }
+                        }
+                    }
                 }
                 let used_prefixes = if depth > 0 {
                     element_declared_prefixes(
@@ -844,6 +960,7 @@ fn namespace_owner_markers(
                         &bindings,
                         element_stack.last().map(Vec::as_slice),
                         &shadowed,
+                        allow_redundant_local_bindings,
                     )
                 } else {
                     Vec::new()
@@ -858,7 +975,10 @@ fn namespace_owner_markers(
                         })
                         .collect();
                     empty_markers.push(NamespaceMarker {
-                        raw: owner_xml[start..end].to_vec(),
+                        raw: marker_raw_without_owner_declarations(
+                            &owner_xml[start..end],
+                            declarations,
+                        )?,
                         namespace_facts,
                     });
                 }
@@ -872,7 +992,10 @@ fn namespace_owner_markers(
                     && !namespace_facts.is_empty()
                 {
                     expanded_markers.push(NamespaceMarker {
-                        raw: owner_xml[marker_start..end].to_vec(),
+                        raw: marker_raw_without_owner_declarations(
+                            &owner_xml[marker_start..end],
+                            declarations,
+                        )?,
                         namespace_facts,
                     });
                 }
@@ -884,6 +1007,31 @@ fn namespace_owner_markers(
     }
     empty_markers.extend(expanded_markers);
     Ok(empty_markers)
+}
+
+fn candidate_namespace_owner_markers(
+    owner_xml: &[u8],
+    declarations: &[(String, String)],
+    inherited_bindings: &[(String, String)],
+    expected: &[NamespaceMarker],
+) -> Result<Vec<NamespaceMarker>> {
+    let candidates = namespace_owner_markers(owner_xml, declarations, inherited_bindings, true)?;
+    let mut matched = vec![false; expected.len()];
+    Ok(candidates
+        .into_iter()
+        .filter(|candidate| {
+            let expected_index = expected
+                .iter()
+                .enumerate()
+                .position(|(index, marker)| !matched[index] && marker.raw == candidate.raw);
+            if let Some(index) = expected_index {
+                matched[index] = true;
+                true
+            } else {
+                false
+            }
+        })
+        .collect())
 }
 
 fn marker_multiset_matches(
@@ -918,8 +1066,12 @@ fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwne
         if declarations.is_empty() {
             continue;
         }
-        let markers =
-            namespace_owner_markers(&xml[span.start..span.end], &declarations, &span.bindings)?;
+        let markers = namespace_owner_markers(
+            &xml[span.start..span.end],
+            &declarations,
+            &span.bindings,
+            false,
+        )?;
         if markers.is_empty() {
             continue;
         }
@@ -945,10 +1097,11 @@ fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwne
             if candidate_snapshot != snapshot {
                 return false;
             }
-            let Ok(candidate_markers) = namespace_owner_markers(
+            let Ok(candidate_markers) = candidate_namespace_owner_markers(
                 &xml[candidate.start..candidate.end],
                 &declarations,
                 &candidate.bindings,
+                &markers,
             ) else {
                 return true;
             };
@@ -968,10 +1121,11 @@ fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwne
             if candidate_snapshot.structure != snapshot.structure {
                 return false;
             }
-            let Ok(candidate_markers) = namespace_owner_markers(
+            let Ok(candidate_markers) = candidate_namespace_owner_markers(
                 &xml[candidate.start..candidate.end],
                 &declarations,
                 &candidate.bindings,
+                &markers,
             ) else {
                 return true;
             };
@@ -991,10 +1145,11 @@ fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwne
             if candidate_snapshot.structure != snapshot.structure {
                 return false;
             }
-            let Ok(candidate_markers) = namespace_owner_markers(
+            let Ok(candidate_markers) = candidate_namespace_owner_markers(
                 &xml[candidate.start..candidate.end],
                 &declarations,
                 &candidate.bindings,
+                &markers,
             ) else {
                 return true;
             };
@@ -1050,10 +1205,11 @@ fn replay_nested_namespace_declarations(
             if snapshot.structure != owner.snapshot.structure {
                 continue;
             }
-            let markers = namespace_owner_markers(
+            let markers = candidate_namespace_owner_markers(
                 &xml[span.start..span.end],
                 &owner.declarations,
                 &span.bindings,
+                &owner.markers,
             )?;
             if marker_multiset_matches(&owner.markers, &markers, false) {
                 candidates.push((span, snapshot, markers));
@@ -2324,6 +2480,28 @@ impl Document {
         })
     }
 
+    /// Whether the document declares a page background that may affect its
+    /// visible appearance.
+    pub fn has_document_background(&self) -> bool {
+        self.document.background_xml.is_some()
+    }
+
+    /// Whether any document section carries layout formatting.
+    ///
+    /// This includes the final body section and sections attached to paragraph
+    /// properties. Callers that cannot preserve page layout can reject such
+    /// documents without treating section XML as ordinary body content.
+    pub fn has_section_layout_formatting(&self) -> bool {
+        self.section_properties_in_order().any(section_has_layout)
+    }
+
+    /// Whether any document section retains XML that the semantic section
+    /// reader does not model.
+    pub fn has_unmodeled_section_properties(&self) -> bool {
+        self.section_properties_in_order()
+            .any(|properties| !properties.extra_xml.is_empty() || properties.change.is_some())
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -2841,6 +3019,74 @@ impl Document {
             rdocx_oxml::numbering::ST_NumberFormat::Other(_) => None,
             _ => Some(false),
         }
+    }
+
+    /// Resolve the public reader projection for one numbering level.
+    ///
+    /// `has_unmodeled_properties` reports retained XML or attributes attached
+    /// to this numbering instance, definition, or level. Modeled producer
+    /// metadata that this projection does not expose is not reported here.
+    pub fn numbering_level(&self, num_id: u32, level: u32) -> Option<NumberingLevel<'_>> {
+        if num_id == 0 {
+            return None;
+        }
+        let numbering = self.numbering.as_ref()?;
+        let instance = numbering.nums.iter().find(|item| item.num_id == num_id)?;
+        let definition = numbering
+            .abstract_nums
+            .iter()
+            .find(|item| item.abstract_num_id == instance.abstract_num_id)?;
+        let level = definition.levels.iter().find(|item| item.ilvl == level)?;
+        let format = level.num_fmt.as_ref();
+
+        Some(NumberingLevel {
+            level: level.ilvl,
+            format: format
+                .map(NumberingFormat::from_st)
+                .unwrap_or(NumberingFormat::Decimal),
+            format_name: format.map(ST_NumberFormat::to_str).unwrap_or("decimal"),
+            start: level.start.unwrap_or(1),
+            suffix: level
+                .suffix
+                .map(ListLevelSuffix::from_st)
+                .unwrap_or(ListLevelSuffix::Tab),
+            level_text: level.lvl_text.as_deref(),
+            alignment: level.lvl_jc.map(list_level_alignment),
+            paragraph_style: level.p_style.as_deref(),
+            has_unmodeled_properties: !instance.extra_xml.is_empty()
+                || !instance.extra_attributes.is_empty()
+                || !definition.extra_xml.is_empty()
+                || !definition.extra_attributes.is_empty()
+                || definition.nsid_raw.is_some()
+                || definition.tmpl_raw.is_some()
+                || !level.extra_xml.is_empty()
+                || !level.extra_attributes.is_empty()
+                || level.p_style_raw.is_some()
+                || level.ppr_raw.is_some()
+                || level.rpr_raw.is_some(),
+            has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
+                Self::has_list_paragraph_presentation(level.ilvl, properties)
+            }),
+            has_marker_presentation: level
+                .rpr
+                .as_ref()
+                .is_some_and(|properties| properties != &CT_RPr::default()),
+        })
+    }
+
+    fn has_list_paragraph_presentation(level: u32, properties: &CT_PPr) -> bool {
+        let Some(standard_indent) = (u64::from(level) + 1)
+            .checked_mul(720)
+            .and_then(|value| i32::try_from(value).ok())
+        else {
+            return true;
+        };
+        let standard = CT_PPr {
+            ind_left: Some(rdocx_oxml::units::Twips(standard_indent)),
+            ind_hanging: Some(rdocx_oxml::units::Twips(360)),
+            ..CT_PPr::default()
+        };
+        properties != &standard
     }
 
     /// Append an external hyperlink to the last paragraph (creating one if
@@ -3650,6 +3896,43 @@ impl Document {
         style::resolve_paragraph_properties(style_id, &self.styles)
     }
 
+    /// Resolve inherited, numbering-level, and direct properties for a
+    /// concrete paragraph.
+    pub fn effective_paragraph_properties(&self, paragraph: &ParagraphRef<'_>) -> CT_PPr {
+        let direct = paragraph.inner.properties.as_ref();
+        let style_id = direct
+            .and_then(|properties| properties.style_id.as_deref())
+            .or_else(|| {
+                self.styles
+                    .get_default(StyleType::Paragraph)
+                    .map(|style| style.style_id.as_str())
+            });
+        let mut effective = style::resolve_paragraph_properties(style_id, &self.styles);
+
+        effective.num_id = direct
+            .and_then(|properties| properties.num_id)
+            .or(effective.num_id);
+        effective.num_ilvl = direct
+            .and_then(|properties| properties.num_ilvl)
+            .or(effective.num_ilvl);
+        if let Some(num_id) = effective.num_id {
+            effective.num_ilvl = effective
+                .num_ilvl
+                .or_else(|| self.numbering_level_for_style(num_id, style_id));
+        }
+
+        if let Some((num_id, level)) = effective.num_id.zip(effective.num_ilvl)
+            && let Some(definition) = self.numbering_definition(num_id, level)
+            && let Some(properties) = &definition.ppr
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) = direct {
+            effective.merge_from(properties);
+        }
+        effective
+    }
+
     /// Resolve the effective run properties for the given paragraph and character styles,
     /// walking the full inheritance chain.
     pub fn resolve_run_properties(
@@ -3658,6 +3941,80 @@ impl Document {
         run_style_id: Option<&str>,
     ) -> CT_RPr {
         style::resolve_run_properties(para_style_id, run_style_id, &self.styles)
+    }
+
+    /// Resolve inherited, paragraph-mark, and direct properties for one
+    /// concrete body run.
+    pub fn effective_run_properties(
+        &self,
+        paragraph: &ParagraphRef<'_>,
+        run: &RunRef<'_>,
+    ) -> CT_RPr {
+        let paragraph_properties = paragraph.inner.properties.as_ref();
+        let direct = run.inner.properties.as_ref();
+        let mut effective = style::resolve_run_properties(
+            paragraph_properties.and_then(|properties| properties.style_id.as_deref()),
+            direct.and_then(|properties| properties.style_id.as_deref()),
+            &self.styles,
+        );
+        if let Some(properties) =
+            paragraph_properties.and_then(|properties| properties.rpr.as_ref())
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) = direct {
+            effective.merge_from(properties);
+        }
+        effective
+    }
+
+    fn numbering_definition(
+        &self,
+        num_id: u32,
+        level: u32,
+    ) -> Option<&rdocx_oxml::numbering::CT_Lvl> {
+        if num_id == 0 {
+            return None;
+        }
+        self.numbering
+            .as_ref()?
+            .get_abstract_num_for(num_id)?
+            .levels
+            .iter()
+            .find(|definition| definition.ilvl == level)
+    }
+
+    fn numbering_level_for_style(&self, num_id: u32, style_id: Option<&str>) -> Option<u32> {
+        let definition = self.numbering.as_ref()?.get_abstract_num_for(num_id)?;
+        let mut style_id = style_id?;
+        for _ in 0..self.styles.styles.len() {
+            if let Some(level) = definition
+                .levels
+                .iter()
+                .find(|level| level.p_style.as_deref() == Some(style_id))
+            {
+                return Some(level.ilvl);
+            }
+            style_id = self.styles.get_by_id(style_id)?.based_on.as_deref()?;
+        }
+        None
+    }
+
+    fn section_properties_in_order(&self) -> impl Iterator<Item = &CT_SectPr> {
+        self.document
+            .body
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                BodyContent::Paragraph(paragraph) => paragraph
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.sect_pr.as_ref()),
+                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
+                    None
+                }
+            })
+            .chain(self.document.body.sect_pr.iter())
     }
 
     // ---- Section/Page setup ----
@@ -4137,6 +4494,8 @@ impl Document {
             p.hyperlinks.push(HyperlinkSpan {
                 rel_id: None,
                 anchor: Some(heading.bookmark_name.clone()),
+                tooltip: None,
+                doc_location: None,
                 run_start: 0,
                 run_end: 1, // Just the text run, not the tab
                 extra_attributes: Vec::new(),
@@ -6082,6 +6441,22 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
     }
 }
 
+fn section_has_layout(properties: &CT_SectPr) -> bool {
+    properties.page_width.is_some()
+        || properties.page_height.is_some()
+        || properties.orientation.is_some()
+        || properties.margin_top.is_some()
+        || properties.margin_right.is_some()
+        || properties.margin_bottom.is_some()
+        || properties.margin_left.is_some()
+        || properties.gutter.is_some()
+        || properties.header_distance.is_some()
+        || properties.footer_distance.is_some()
+        || properties.section_type.is_some()
+        || properties.columns.is_some()
+        || properties.title_pg.is_some()
+}
+
 /// Numbering format for one level of a custom list definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListNumberFormat {
@@ -6105,6 +6480,91 @@ impl ListNumberFormat {
             Self::UpperRoman => ST_NumberFormat::UpperRoman,
             Self::Ordinal => ST_NumberFormat::Ordinal,
         }
+    }
+}
+
+/// The numbering format reported by the read-only numbering projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberingFormat<'a> {
+    Bullet,
+    Decimal,
+    LowerLetter,
+    UpperLetter,
+    LowerRoman,
+    UpperRoman,
+    Ordinal,
+    None,
+    /// A producer-defined format value retained by rdocx.
+    Other(&'a str),
+}
+
+impl<'a> NumberingFormat<'a> {
+    fn from_st(value: &'a ST_NumberFormat) -> Self {
+        match value {
+            ST_NumberFormat::Bullet => Self::Bullet,
+            ST_NumberFormat::Decimal => Self::Decimal,
+            ST_NumberFormat::LowerLetter => Self::LowerLetter,
+            ST_NumberFormat::UpperLetter => Self::UpperLetter,
+            ST_NumberFormat::LowerRoman => Self::LowerRoman,
+            ST_NumberFormat::UpperRoman => Self::UpperRoman,
+            ST_NumberFormat::Ordinal => Self::Ordinal,
+            ST_NumberFormat::None => Self::None,
+            ST_NumberFormat::Other(value) => Self::Other(value),
+        }
+    }
+}
+
+/// The layout item emitted between a list marker and paragraph content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListLevelSuffix {
+    Tab,
+    Space,
+    Nothing,
+}
+
+impl ListLevelSuffix {
+    fn from_st(value: ST_LvlSuffix) -> Self {
+        match value {
+            ST_LvlSuffix::Tab => Self::Tab,
+            ST_LvlSuffix::Space => Self::Space,
+            ST_LvlSuffix::Nothing => Self::Nothing,
+        }
+    }
+}
+
+/// Resolved reader metadata for one numbering definition level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberingLevel<'a> {
+    /// The zero-based list level.
+    pub level: u32,
+    /// The marker format at this level.
+    pub format: NumberingFormat<'a>,
+    /// The exact OOXML format name, including producer-defined values.
+    pub format_name: &'a str,
+    /// The first marker value, defaulting to one when Word omits it.
+    pub start: u32,
+    /// The item emitted between the marker and paragraph content.
+    pub suffix: ListLevelSuffix,
+    /// The Word level-text template or bullet glyph.
+    pub level_text: Option<&'a str>,
+    /// The marker alignment, when explicitly configured.
+    pub alignment: Option<crate::paragraph::Alignment>,
+    /// The paragraph style associated with this numbering level.
+    pub paragraph_style: Option<&'a str>,
+    /// Whether this level retains semantic facts this projection does not model.
+    pub has_unmodeled_properties: bool,
+    /// Whether the list item has nonstandard paragraph-level presentation.
+    pub has_paragraph_presentation: bool,
+    /// Whether the marker has run-level presentation properties.
+    pub has_marker_presentation: bool,
+}
+
+fn list_level_alignment(value: ST_Jc) -> crate::paragraph::Alignment {
+    match value {
+        ST_Jc::Center => crate::paragraph::Alignment::Center,
+        ST_Jc::Right | ST_Jc::End => crate::paragraph::Alignment::Right,
+        ST_Jc::Both | ST_Jc::Distribute => crate::paragraph::Alignment::Justify,
+        _ => crate::paragraph::Alignment::Left,
     }
 }
 
@@ -6740,6 +7200,26 @@ mod tests {
                 "paragraph:last",
             ]
         );
+    }
+
+    #[test]
+    fn reader_reports_background_and_section_completeness_facts() {
+        let mut doc = Document::new();
+        assert!(!doc.has_document_background());
+        assert!(doc.has_section_layout_formatting());
+        assert!(!doc.has_unmodeled_section_properties());
+
+        doc.document.background_xml = Some(b"<w:background/>".to_vec());
+        doc.document
+            .body
+            .sect_pr
+            .as_mut()
+            .expect("default section properties")
+            .extra_xml
+            .push(b"<w:printerSettings r:id=\"rId1\"/>".to_vec());
+
+        assert!(doc.has_document_background());
+        assert!(doc.has_unmodeled_section_properties());
     }
 
     #[test]
@@ -10553,9 +11033,10 @@ mod tests {
             panic!("expected paragraph");
         };
         assert_eq!(
-            paragraph.hyperlinks[0].extra_attributes,
-            vec![("w:tooltip".to_string(), "Example site".to_string())]
+            paragraph.hyperlinks[0].tooltip.as_deref(),
+            Some("Example site")
         );
+        assert!(paragraph.hyperlinks[0].extra_attributes.is_empty());
         let BodyContent::Table(table) = &reopened.document.body.content[1] else {
             panic!("expected table");
         };
@@ -10669,6 +11150,276 @@ mod tests {
     }
 
     #[test]
+    fn reader_exposes_complete_numbering_level_facts() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.num_fmt = Some(ST_NumberFormat::Other("chicago".to_owned()));
+        level.start = Some(4);
+        level.suffix = Some(ST_LvlSuffix::Space);
+        level.lvl_jc = Some(ST_Jc::Center);
+        level.p_style = Some("ListNumber".to_owned());
+
+        let level = doc.numbering_level(num_id, 0).expect("numbering level");
+        assert_eq!(level.format, NumberingFormat::Other("chicago"));
+        assert_eq!(level.format_name, "chicago");
+        assert_eq!(level.start, 4);
+        assert_eq!(level.suffix, ListLevelSuffix::Space);
+        assert_eq!(level.alignment, Some(Alignment::Center));
+        assert_eq!(level.paragraph_style, Some("ListNumber"));
+        assert!(!level.has_unmodeled_properties);
+        assert!(!level.has_paragraph_presentation);
+        assert!(!level.has_marker_presentation);
+
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.ppr = Some(CT_PPr {
+            ind_left: Some(Twips(360)),
+            ..Default::default()
+        });
+        level.rpr = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+        level.extra_xml.push((0, b"<w:unknown/>".to_vec()));
+
+        let level = doc.numbering_level(num_id, 0).expect("numbering level");
+        assert!(level.has_unmodeled_properties);
+        assert!(level.has_paragraph_presentation);
+        assert!(level.has_marker_presentation);
+
+        let none_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0].num_fmt =
+            Some(ST_NumberFormat::None);
+        assert_eq!(
+            doc.numbering_level(none_id, 0)
+                .expect("no-numbering level")
+                .format,
+            NumberingFormat::None
+        );
+    }
+
+    #[test]
+    fn numbering_level_distinguishes_modeled_metadata_from_retained_raw_facts() {
+        let mut doc = Document::new();
+        let definition_metadata_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let raw_level_properties_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let raw_leaf_metadata_id = doc.add_list_definition(&[ListLevel::decimal()]);
+
+        let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[0];
+        definition.nsid = Some("12345678".to_owned());
+        definition.tmpl = Some("87654321".to_owned());
+        definition.multi_level_type = Some("hybridMultilevel".to_owned());
+
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0];
+        level.ppr_raw = Some((
+            CT_PPr::default(),
+            b"<w:pPr><producer:property/></w:pPr>".to_vec(),
+            vec!["producer".to_owned()],
+        ));
+        level.rpr_raw = Some((
+            CT_RPr::default(),
+            b"<w:rPr><producer:property/></w:rPr>".to_vec(),
+            vec!["producer".to_owned()],
+        ));
+
+        let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[2];
+        definition.nsid = Some("12345678".to_owned());
+        definition.nsid_raw = Some((
+            Some("12345678".to_owned()),
+            b"<w:nsid w:val=\"12345678\" producer:fact=\"kept\"/>".to_vec(),
+            vec!["w".to_owned(), "producer".to_owned()],
+        ));
+        definition.levels[0].p_style = Some("ListNumber".to_owned());
+        definition.levels[0].p_style_raw = Some((
+            Some("ListNumber".to_owned()),
+            b"<w:pStyle w:val=\"ListNumber\"><producer:fact/></w:pStyle>".to_vec(),
+            vec!["w".to_owned(), "producer".to_owned()],
+        ));
+
+        assert!(
+            !doc.numbering_level(definition_metadata_id, 0)
+                .expect("definition metadata level")
+                .has_unmodeled_properties
+        );
+        assert!(
+            doc.numbering_level(raw_level_properties_id, 0)
+                .expect("raw properties level")
+                .has_unmodeled_properties
+        );
+        assert!(
+            doc.numbering_level(raw_leaf_metadata_id, 0)
+                .expect("raw leaf metadata level")
+                .has_unmodeled_properties
+        );
+    }
+
+    #[test]
+    fn extreme_numbering_level_reader_fact_does_not_overflow() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.ilvl = u32::MAX;
+        level.ppr = Some(CT_PPr::default());
+
+        let level = doc
+            .numbering_level(num_id, u32::MAX)
+            .expect("extreme level remains readable");
+        assert!(level.has_paragraph_presentation);
+    }
+
+    #[test]
+    fn absent_or_unstyled_paragraph_properties_use_default_style_numbering() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.p_style = Some("Normal".to_owned());
+        level.ppr = Some(CT_PPr {
+            keep_next: Some(true),
+            ..Default::default()
+        });
+        let default_style = doc
+            .styles
+            .styles
+            .iter_mut()
+            .find(|style| style.style_id == "Normal")
+            .expect("default paragraph style");
+        default_style.ppr = Some(CT_PPr {
+            num_id: Some(num_id),
+            ..Default::default()
+        });
+
+        doc.add_paragraph("absent properties");
+        doc.add_paragraph("unstyled properties");
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[1] else {
+            panic!("expected paragraph");
+        };
+        paragraph.properties = Some(CT_PPr {
+            keep_lines: Some(true),
+            ..Default::default()
+        });
+
+        for index in 0..2 {
+            let paragraph = doc.paragraph(index).expect("paragraph");
+            let effective = doc.effective_paragraph_properties(&paragraph);
+            assert_eq!(effective.num_id, Some(num_id));
+            assert_eq!(effective.num_ilvl, Some(0));
+            assert_eq!(effective.keep_next, Some(true));
+        }
+    }
+
+    #[test]
+    fn reader_resolves_concrete_paragraph_and_run_properties() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
+        level.p_style = Some("ListBase".to_owned());
+        level.ppr = Some(CT_PPr {
+            keep_next: Some(true),
+            ..Default::default()
+        });
+        level.rpr = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+
+        doc.add_style(
+            StyleBuilder::paragraph("ListBase", "List Base")
+                .paragraph_properties(CT_PPr {
+                    num_id: Some(num_id),
+                    ..Default::default()
+                })
+                .run_properties(CT_RPr {
+                    italic: Some(true),
+                    ..Default::default()
+                }),
+        );
+        doc.add_style(StyleBuilder::paragraph("ListChild", "List Child").based_on("ListBase"));
+        doc.add_paragraph("text").style("ListChild");
+
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
+            panic!("expected paragraph");
+        };
+        let properties = paragraph.properties.as_mut().expect("paragraph style");
+        properties.ind_left = Some(Twips(720));
+        properties.rpr = Some(CT_RPr {
+            strike: Some(true),
+            ..Default::default()
+        });
+        paragraph.runs[0].properties = Some(CT_RPr {
+            vanish: Some(true),
+            ..Default::default()
+        });
+
+        let paragraph = doc.paragraph(0).expect("paragraph");
+        let run = paragraph.runs().next().expect("run");
+        let paragraph_properties = doc.effective_paragraph_properties(&paragraph);
+        let run_properties = doc.effective_run_properties(&paragraph, &run);
+
+        assert_eq!(paragraph_properties.num_id, Some(num_id));
+        assert_eq!(paragraph_properties.num_ilvl, Some(0));
+        assert_eq!(paragraph_properties.keep_next, Some(true));
+        assert_eq!(paragraph_properties.ind_left, Some(Twips(720)));
+        assert_eq!(run_properties.italic, Some(true));
+        assert_eq!(run_properties.bold, None);
+        assert_eq!(run_properties.strike, Some(true));
+        assert_eq!(run_properties.vanish, Some(true));
+        assert!(
+            doc.numbering_level(num_id, 0)
+                .expect("numbering level")
+                .has_marker_presentation
+        );
+    }
+
+    #[test]
+    fn effective_paragraph_properties_use_the_final_numbering_identity() {
+        let mut doc = Document::new();
+        let inherited_num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let direct_num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0].ppr = Some(CT_PPr {
+            keep_next: Some(true),
+            ..Default::default()
+        });
+        doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0].ppr = Some(CT_PPr {
+            keep_lines: Some(true),
+            ..Default::default()
+        });
+        doc.add_style(
+            StyleBuilder::paragraph("InheritedList", "Inherited List").paragraph_properties(
+                CT_PPr {
+                    num_id: Some(inherited_num_id),
+                    num_ilvl: Some(0),
+                    ..Default::default()
+                },
+            ),
+        );
+
+        doc.add_paragraph("direct").numbering(direct_num_id, 0);
+        doc.add_paragraph("override")
+            .style("InheritedList")
+            .numbering(direct_num_id, 0);
+        doc.add_paragraph("disabled")
+            .style("InheritedList")
+            .numbering(0, 0);
+
+        let direct =
+            doc.effective_paragraph_properties(&doc.paragraph(0).expect("direct paragraph"));
+        assert_eq!(direct.num_id, Some(direct_num_id));
+        assert_eq!(direct.keep_lines, Some(true));
+
+        let overridden =
+            doc.effective_paragraph_properties(&doc.paragraph(1).expect("overridden paragraph"));
+        assert_eq!(overridden.num_id, Some(direct_num_id));
+        assert_eq!(overridden.keep_next, None);
+        assert_eq!(overridden.keep_lines, Some(true));
+
+        let disabled =
+            doc.effective_paragraph_properties(&doc.paragraph(2).expect("disabled paragraph"));
+        assert_eq!(disabled.num_id, Some(0));
+        assert_eq!(disabled.keep_next, None);
+        assert_eq!(disabled.keep_lines, None);
+    }
+
+    #[test]
     fn picture_round_trips() {
         // 1x1 red PNG
         let png: &[u8] = &[
@@ -10763,6 +11514,8 @@ mod hyperlink_span_tests {
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("bookmark".to_string()),
+            tooltip: None,
+            doc_location: None,
             run_start: 1,
             run_end: 99,
             extra_attributes: Vec::new(),
@@ -10772,6 +11525,8 @@ mod hyperlink_span_tests {
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: None,
             anchor: Some("inverted".to_string()),
+            tooltip: None,
+            doc_location: None,
             run_start: 5,
             run_end: 1,
             extra_attributes: Vec::new(),
@@ -11506,6 +12261,53 @@ mod watermark_tests {
                 1_020_215_290_976_271_429,
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod reader_fact_tests {
+    use super::*;
+
+    #[test]
+    fn revision_reader_exposes_tracked_insertion_paragraph_items() {
+        let xml = br#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:ins w:id="7" w:author="Ada"><w:r><w:t>before</w:t></w:r><w:hyperlink r:id="rId9"><w:r><w:t>linked</w:t></w:r></w:hyperlink></w:ins></w:p></w:body></w:document>"#;
+        let mut document = Document::new();
+        document.document = CT_Document::from_xml(xml).expect("document parses");
+        let crate::BodyItemRef::Paragraph(paragraph) =
+            document.body_items().next().expect("paragraph body item")
+        else {
+            panic!("expected paragraph");
+        };
+        let crate::ParagraphItemRef::Revision(revision) =
+            paragraph.items().next().expect("revision paragraph item")
+        else {
+            panic!("expected revision");
+        };
+        let insertion = revision
+            .insertion_paragraph()
+            .expect("insertion paragraph projection");
+        let items = insertion.items().collect::<Vec<_>>();
+
+        assert!(matches!(items[0], crate::ParagraphItemRef::Run(_)));
+        let crate::ParagraphItemRef::Hyperlink(link) = &items[1] else {
+            panic!("expected hyperlink");
+        };
+        assert_eq!(link.relationship_id(), Some("rId9"));
+    }
+
+    #[test]
+    fn unsupported_xml_reader_inspects_preserved_item_bytes() {
+        let raw = br#"<w:proofErr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:type="spellStart"/>"#;
+        let fact = UnsupportedXmlRef::from_bytes(raw);
+
+        assert_eq!(fact.raw_xml(), Some(raw.as_slice()));
+        assert_eq!(fact.qualified_name(), Some("w:proofErr"));
+        assert_eq!(fact.local_name(), "proofErr");
+        assert_eq!(
+            fact.namespace_uri(),
+            Some("http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+        );
+        assert!(!fact.has_child_content());
     }
 }
 

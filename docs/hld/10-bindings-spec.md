@@ -97,6 +97,18 @@ while `Run::language` and `Run::set_language` assign the direct `w:lang` value.
 additions do not create a parallel binding model or make language inference
 part of the API contract.
 
+The native pre-1.0 Word reader surface is additive. `Document` reports
+document-background and section-layout completeness, resolves one numbering
+level, and computes effective paragraph and run properties. Borrowed paragraph,
+run, table, row, and cell handles expose hyperlink metadata, drawing and field
+kinds, embedded or linked drawing relationships, ordered complex-field display
+segments, numbering facts, table formatting, row grid offsets, horizontal
+merge state, and unmodelled-content flags. `NumberingFormat`,
+`ListLevelSuffix`, `NumberingLevel`, `DrawingKind`,
+`DrawingRelationshipKind`, `FieldKind`, and `FieldDisplaySegmentRef` are
+concrete native Rust values. Python, WASM, and CLI surfaces do not gain these
+reader methods.
+
 At the public low-level Rust boundary, `CT_RPr` includes the complete language
 attribute set and its retained foreign attributes, while `LayoutInput` includes
 the document automatic-hyphenation boolean. Full struct literals must provide
@@ -687,6 +699,15 @@ CLI consumers continue through the package-preserving facade and do not
 construct these low-level structs. Existing Python import error mapping uses
 the generic `RdocxError` exception and gains no new exception type.
 
+The same intentional low-level pre-1.0 boundary includes retained document
+background children, linked drawing relationship ids, numbering style and
+producer identifiers with raw namespace context, table, border, row, and cell
+raw sidecars, row revision positions, grid offsets, horizontal merge state,
+table-property exceptions, and insertion paragraph projection. Exhaustive
+`rdocx-oxml` struct literals must provide the new fields or use existing
+constructors. These preservation fields do not create new Python, WASM, or CLI
+surface.
+
 `CT_TabStop` also exposes `source_occurrence: Option<usize>`. Parsed numbering
 tabs use this provenance to retain producer XML on the same occurrence after
 an edit, insertion, or removal. New tabs carry `None`, and semantic equality
@@ -720,6 +741,51 @@ models. This is an additive semver change for the published pre-1.0
 `rpptx-oxml` and `rpptx` crates. It adds no production dependency or feature
 flag. Unsupported modern comment XML and all legacy comment parts remain
 preserved, so consumers do not need a parallel raw authoring API.
+
+## Native PowerPoint SmartArt model
+
+The published pre-1.0 `rpptx` facade exposes concrete `SmartArtInfo` and
+`DiagramPart<T>` values through `Presentation::smart_art`. The five concrete
+diagram part instantiations expose bounded data-model points and connections,
+layout family evidence, quick-style labels, colour labels, and cached drawing
+shape counts. Missing, external, wrong-type, malformed, and parsed resource
+states remain explicit rather than collapsing into an optional raw payload.
+
+Native callers edit supported node text with
+`Presentation::set_smart_art_node_text`. They may copy one placeholder-free
+SmartArt slide between presentations with
+`Presentation::transfer_smartart_slide_from`, supplying an explicit
+destination layout index. Both operations validate relationship roles and
+stage the complete package change before commit. Transfer is intentionally
+bounded to one source layout, the five SmartArt relationship types, and
+relationship-free internal images.
+
+The published pre-1.0 `rpptx-oxml` crate exposes the concrete `diagram` module,
+and `oxml-opc` exposes the diagram relationship constants. These additions are
+native Rust APIs only. Python, WASM, and CLI consumers gain no SmartArt methods
+and continue to preserve presentations already edited or transferred through
+the native owner. No production dependency, feature flag, trait, dynamic
+dispatch, generic parameter, or builder is added.
+
+## Native PowerPoint executable-content inventory
+
+The published pre-1.0 `rpptx` facade exposes concrete `EmbeddedContentKind`,
+`EmbeddedSignatureState`, `EmbeddedMutationPolicy`, and
+`EmbeddedContentInfo` values. `Presentation::embedded_content` inventories
+relationship-owned OLE, ActiveX, and VBA payloads without parsing or executing
+them. `extract_embedded_content` returns exact stored bytes.
+`replace_embedded_content` and `remove_embedded_content` use the normalized
+source part and relationship id as identity and commit only a validated staged
+package. The explicit mutation policy either retains invalidated package and
+VBA signature evidence or removes only its validated infrastructure.
+
+The published pre-1.0 `oxml-opc` crate adds Transitional and Strict OLE and
+control relationship constants plus ActiveX binary, VBA project, and legacy and
+Agile VBA signature constants. These are additive native Rust APIs. Python,
+WASM, and CLI consumers gain no executable-content methods and continue to
+preserve these payloads through the existing presentation owner. No feature,
+trait, generic parameter, dynamic dispatch, wrapper identifier, crate, or
+binary fixture is added.
 
 ## Native PowerPoint media model
 

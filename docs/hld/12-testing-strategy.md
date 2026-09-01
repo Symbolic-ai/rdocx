@@ -60,6 +60,17 @@ comment parts, occupied conventional paths, and unserializable staged changes
 without mutating the opened package. All fixtures remain source-built in the
 two existing integration binaries.
 
+The Presentation executable-content regression gate is
+`embedded_inventory_reports_exact_hashes_relationships_and_signature_state`.
+It constructs OLE, ActiveX, VBA, package-signature, and VBA-signature graphs in
+the existing `rpptx` integration binary and requires stable kind, source,
+relationship, target, content type, byte length, SHA-256, and signature state.
+Adjacent source-built tests prove exact extraction, transactional replacement
+and removal, ownership-aware reachability, retained raw XML and signature
+evidence, producing-scope selection, namespace and compatibility handling,
+malformed graph rejection, and byte-for-byte failure atomicity. No payload is
+decoded or executed.
+
 The Presentation timing round-trip gate is
 `the_corpus_timeline_preserves_every_unsupported_sibling`. It walks every
 slide, layout, and master in the 50-deck corpus. The gate requires nonzero
@@ -136,6 +147,17 @@ save and reopen matrix compares the ordered public facts and every exposed raw
 subtree, including namespace shadowing and owner insertion, removal, and
 reordering. Unsafe namespace replay must fail closed without changing the
 opened package.
+
+The Word reader-fact regression gate combines source-built drawing,
+document, table, numbering, revision, and field fixtures. It requires Office
+relationship expanded names, inherited namespace replay, table schema slots,
+default-style numbering association, direct numbering overrides and
+cancellation, bounded nested revisions, and ordered complex-field display
+segments. Mixed owner-dependent and independently self-bound same-URI element
+or attribute uses retain exact marker cardinality. Same-URI and different-URI
+decoys still fail closed. The complete `rdocx-oxml` and `rdocx` suites, public
+package dry runs, archive ceiling, and unchanged 49-entry hash harness complete
+the gate.
 
 The legacy horizontal-rule reader regression classifies canonical, aliased,
 default, locally shadowed, and ancestor-bound Word, VML, and Office names by
@@ -732,7 +754,7 @@ slide text, and optional speaker-note text. Empty python-pptx names and shape
 text capability without a stored `p:txBody` are normalized to the facade's
 explicit `Option` contract.
 
-Five gates run against it:
+Eight gates run against it:
 
 1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
    serialises and reparses to a structurally equal value. The pinned corpus has
@@ -764,6 +786,18 @@ Five gates run against it:
    preserve exact media bytes, relationships, content types, poster ownership,
    playback settings, unsupported metadata, and part counts through save and
    reopen without duplication.
+7. **SmartArt typed projection and preservation**: every diagram data, layout,
+   quick-style, colour, and cached drawing part projects through its bounded
+   namespace-aware model without rewriting source bytes. Source-built fixtures
+   prove producing-scope ownership, relationship-role validation, checked node
+   editing, complete graph remapping, schema-position sensitivity, and failure
+   atomicity. The gate requires nonzero coverage for all five part families
+   when the pinned corpus is required.
+8. **Executable-content producing scopes**: the tracked
+   `alterman_security.pptx` deck inventories relationship-owned OLE objects in
+   slides, layouts, and masters without interpreting their payloads. The gate
+   requires exactly two layout owners and one master owner and proves each
+   reported payload extracts to the reported byte length.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
 `placeholder-layout-color.pptx`, and

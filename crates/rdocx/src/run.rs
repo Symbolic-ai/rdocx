@@ -19,6 +19,38 @@ pub enum BreakKind {
     Column,
 }
 
+/// Semantic kind of drawing exposed by the reader facade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingKind {
+    /// A DrawingML picture with an image relationship.
+    Image,
+    /// An anchored DrawingML shape.
+    Shape,
+    /// Any other drawing construct.
+    Other,
+}
+
+/// How an image relationship obtains its content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawingRelationshipKind {
+    /// The drawing refers to an image part within the package.
+    Embedded,
+    /// The drawing refers to an external image relationship.
+    Linked,
+}
+
+/// The source representation of a Word field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
+    /// A `w:fldSimple` element.
+    Simple,
+    /// A `w:fldChar` begin/separate/end sequence.
+    Complex,
+}
+
+/// Resolved or direct run properties returned by the reader API.
+pub type RunProperties = CT_RPr;
+
 /// An immutable drawing embedded in a run.
 #[derive(Debug, Clone, Copy)]
 pub struct DrawingRef<'a> {
@@ -26,6 +58,22 @@ pub struct DrawingRef<'a> {
 }
 
 impl DrawingRef<'_> {
+    /// Semantic content kind.
+    pub fn kind(&self) -> DrawingKind {
+        if self.relationship_id().is_some() {
+            DrawingKind::Image
+        } else if self
+            .inner
+            .anchor
+            .as_ref()
+            .is_some_and(|anchor| anchor.shape.is_some())
+        {
+            DrawingKind::Shape
+        } else {
+            DrawingKind::Other
+        }
+    }
+
     /// Whether this drawing is inline with the surrounding text.
     pub fn is_inline(&self) -> bool {
         self.inner.inline.is_some()
@@ -36,19 +84,45 @@ impl DrawingRef<'_> {
         self.inner.anchor.is_some()
     }
 
-    /// The relationship ID for the drawing's embedded image, when present.
+    /// The relationship ID for the drawing's embedded or linked image, when present.
     pub fn relationship_id(&self) -> Option<&str> {
         self.inner
             .inline
             .as_ref()
-            .map(|inline| inline.embed_id.as_str())
+            .and_then(|inline| {
+                (!inline.embed_id.is_empty())
+                    .then_some(inline.embed_id.as_str())
+                    .or(inline.link_id.as_deref())
+            })
+            .or_else(|| {
+                self.inner.anchor.as_ref().and_then(|anchor| {
+                    (!anchor.embed_id.is_empty())
+                        .then_some(anchor.embed_id.as_str())
+                        .or(anchor.link_id.as_deref())
+                })
+            })
+    }
+
+    /// Whether the image relationship is embedded in the package or linked.
+    pub fn relationship_kind(&self) -> Option<DrawingRelationshipKind> {
+        self.inner
+            .inline
+            .as_ref()
+            .map(|inline| inline.embed_id.is_empty() && inline.link_id.is_some())
             .or_else(|| {
                 self.inner
                     .anchor
                     .as_ref()
-                    .map(|anchor| anchor.embed_id.as_str())
+                    .map(|anchor| anchor.embed_id.is_empty() && anchor.link_id.is_some())
             })
-            .filter(|id| !id.is_empty())
+            .filter(|_| self.relationship_id().is_some())
+            .map(|linked| {
+                if linked {
+                    DrawingRelationshipKind::Linked
+                } else {
+                    DrawingRelationshipKind::Embedded
+                }
+            })
     }
 
     /// The drawing description, commonly used as image alternative text.
@@ -114,6 +188,25 @@ pub struct FieldRef<'a> {
     inner: &'a Field,
 }
 
+/// One cached display segment retained from a complex field result.
+#[derive(Debug, Clone, Copy)]
+pub struct FieldDisplaySegmentRef<'a> {
+    text: &'a str,
+    properties: Option<&'a RunProperties>,
+}
+
+impl FieldDisplaySegmentRef<'_> {
+    /// The visible text retained from the result run.
+    pub fn text(&self) -> &str {
+        self.text
+    }
+
+    /// Direct run properties retained from the result run.
+    pub fn properties(&self) -> Option<&RunProperties> {
+        self.properties
+    }
+}
+
 /// An immutable legacy VML horizontal rule retained by a run.
 #[derive(Debug, Clone, Copy)]
 pub struct LegacyHorizontalRuleRef<'a> {
@@ -128,6 +221,15 @@ impl LegacyHorizontalRuleRef<'_> {
 }
 
 impl FieldRef<'_> {
+    /// Whether the field was represented as a simple element or complex run sequence.
+    pub fn kind(&self) -> FieldKind {
+        if self.inner.is_complex() {
+            FieldKind::Complex
+        } else {
+            FieldKind::Simple
+        }
+    }
+
     /// The retained field instruction text.
     pub fn instruction(&self) -> &str {
         &self.inner.instruction.raw
@@ -146,6 +248,21 @@ impl FieldRef<'_> {
     /// The producer's update marker, when specified.
     pub fn dirty(&self) -> Option<bool> {
         self.inner.dirty
+    }
+
+    /// Whether the retained field source carries semantic attributes outside
+    /// the modeled reader projection.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        self.inner.has_unmodeled_semantic_attributes()
+    }
+
+    /// Cached display segments retained from the result runs of a complex field.
+    pub fn cached_display_segments(&self) -> Vec<FieldDisplaySegmentRef<'_>> {
+        self.inner
+            .cached_display_segments()
+            .into_iter()
+            .map(|(text, properties)| FieldDisplaySegmentRef { text, properties })
+            .collect()
     }
 }
 
@@ -837,6 +954,77 @@ mod tests {
         paragraph.runs.remove(0)
     }
 
+    fn run_from_paragraph_inner_xml(inner_xml: &str) -> CT_R {
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>{inner_xml}</w:p></w:body></w:document>"#
+        );
+        let mut document = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let BodyContent::Paragraph(mut paragraph) = document.body.content.remove(0) else {
+            panic!("expected paragraph");
+        };
+        paragraph.runs.remove(0)
+    }
+
+    #[test]
+    fn drawing_reader_classifies_image_relationships_and_shapes() {
+        let linked_run = run_with_inner_xml(concat!(
+            r#"<w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:inline><wp:extent cx="10" cy="20"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:link="rId7"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
+        ));
+        let linked_run = RunRef { inner: &linked_run };
+        let linked_items = linked_run.items().collect::<Vec<_>>();
+        let [RunItemRef::Drawing(linked)] = linked_items.as_slice() else {
+            panic!("expected one linked drawing");
+        };
+        assert_eq!(linked.kind(), DrawingKind::Image);
+        assert_eq!(linked.relationship_id(), Some("rId7"));
+        assert_eq!(
+            linked.relationship_kind(),
+            Some(DrawingRelationshipKind::Linked)
+        );
+
+        let embedded = CT_Drawing::inline(rdocx_oxml::drawing::CT_Inline::new("rId8", 10, 20));
+        let embedded = DrawingRef { inner: &embedded };
+        assert_eq!(embedded.kind(), DrawingKind::Image);
+        assert_eq!(
+            embedded.relationship_kind(),
+            Some(DrawingRelationshipKind::Embedded)
+        );
+
+        let mut anchor = rdocx_oxml::drawing::CT_Anchor::background("", 10, 20);
+        anchor.shape = Some(rdocx_oxml::drawing::CT_Shape::default());
+        let shape = CT_Drawing::anchor(anchor);
+        assert_eq!(DrawingRef { inner: &shape }.kind(), DrawingKind::Shape);
+
+        let filled_shape = run_with_inner_xml(concat!(
+            r#"<w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:anchor><wps:wsp><wps:spPr><a:blipFill><a:blip r:embed="rIdFill"/></a:blipFill></wps:spPr></wps:wsp></wp:anchor></w:drawing>"#,
+        ));
+        let filled_shape = DrawingRef {
+            inner: filled_shape
+                .content
+                .iter()
+                .find_map(|content| match content {
+                    RunContent::Drawing(drawing) => Some(drawing),
+                    _ => None,
+                })
+                .expect("filled shape drawing"),
+        };
+        assert_eq!(filled_shape.kind(), DrawingKind::Shape);
+        assert_eq!(filled_shape.relationship_id(), None);
+
+        let chart = CT_Drawing::inline(rdocx_oxml::drawing::CT_Inline::new_chart("rId9", 10, 20));
+        let chart = DrawingRef { inner: &chart };
+        assert_eq!(chart.kind(), DrawingKind::Other);
+        assert_eq!(chart.relationship_kind(), None);
+    }
+
     #[test]
     fn legacy_horizontal_rule_classification_is_namespace_aware() {
         let cases = [
@@ -925,6 +1113,61 @@ mod tests {
         let items = run.items().collect::<Vec<_>>();
         assert!(matches!(items[0], RunItemRef::Text("typed")));
         assert!(matches!(items[1], RunItemRef::UnsupportedXml(b"<x:raw/>")));
+    }
+
+    #[test]
+    fn field_reader_reports_unmodeled_semantic_attributes() {
+        let supported = run_from_paragraph_inner_xml(
+            r#"<w:fldSimple w:instr="PAGE" w:dirty="false"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+        );
+        let unsupported = run_from_paragraph_inner_xml(
+            r#"<w:fldSimple w:instr="PAGE" w:fldLock="true"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+        );
+
+        let supported_run = RunRef { inner: &supported };
+        let RunItemRef::Field(supported) = supported_run.items().next().expect("supported field")
+        else {
+            panic!("expected field");
+        };
+        let unsupported_run = RunRef {
+            inner: &unsupported,
+        };
+        let RunItemRef::Field(unsupported) =
+            unsupported_run.items().next().expect("unsupported field")
+        else {
+            panic!("expected field");
+        };
+
+        assert!(!supported.has_unmodeled_semantic_attributes());
+        assert!(unsupported.has_unmodeled_semantic_attributes());
+    }
+
+    #[test]
+    fn field_reader_exposes_complex_cached_display_segments() {
+        let simple = run_from_paragraph_inner_xml(
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#,
+        );
+        let complex = run_from_paragraph_inner_xml(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>1</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>2</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+
+        let simple_run = RunRef { inner: &simple };
+        let RunItemRef::Field(simple) = simple_run.items().next().unwrap() else {
+            panic!("expected simple field");
+        };
+        let complex_run = RunRef { inner: &complex };
+        let RunItemRef::Field(complex) = complex_run.items().next().unwrap() else {
+            panic!("expected complex field");
+        };
+
+        assert_eq!(simple.kind(), FieldKind::Simple);
+        assert_eq!(complex.kind(), FieldKind::Complex);
+        let segments = complex.cached_display_segments();
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text(), "1");
+        assert_eq!(segments[0].properties().unwrap().bold, Some(true));
+        assert_eq!(segments[1].text(), "2");
+        assert_eq!(segments[1].properties().unwrap().italic, Some(true));
     }
 
     #[test]

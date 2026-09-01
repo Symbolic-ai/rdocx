@@ -1145,7 +1145,7 @@ Codec handling is bounded to reviewed backends. Unsupported media remains
 extractable and visible through poster frames and diagnostics rather than being
 dropped.
 
-#### Sprint S62, SmartArt and embedded content
+#### Sprint S62, SmartArt, embedded content, and reader contributions
 
 **Goal**: model the two major opaque PresentationML surfaces without executing
 untrusted content.
@@ -1154,11 +1154,13 @@ untrusted content.
 |------|-------|------|
 | F-218 | Embedded object and macro inventory | L |
 | F-219 | SmartArt typed model | L |
-| F-220 | SmartArt layout and rendering | L |
+| F-X071 | Integrate PRs 61 through 64 | L |
 
 OLE, ActiveX, and VBA remain inventory, extraction, replacement, removal, and
-preservation surfaces. SmartArt gains typed editing and rendering only for the
-bounded corpus algorithms.
+preservation surfaces. SmartArt gains typed inspection and editing. F-X071
+independently adopts the reviewed Word
+reader contributions from PRs 61 through 64 and hardens namespace, schema-order,
+and effective-style edge cases before integration.
 
 #### Sprint S63, ODP, notes and handouts
 
@@ -1167,14 +1169,16 @@ and audience output surfaces.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-220 | SmartArt layout and rendering | L |
 | F-222 | ODP read and write | L |
 | F-223 | Modern presentation package variants | M |
 | F-226 | Notes and handout export | M |
 
-ODP uses a declared LibreOffice differential boundary. Notes pages and handouts
-reuse the existing master hierarchy and shared PDF and image backends. Modern
-macro, template, and slide-show variants build on the embedded-content inventory
-from S62.
+F-220 completes the carried SmartArt validator boundary before F-222 consumes
+SmartArt through ODP interchange. ODP uses a declared LibreOffice differential
+boundary. Notes pages and handouts reuse the existing master hierarchy and
+shared PDF and image backends. Modern macro, template, and slide-show variants
+build on the embedded-content inventory from S62.
 
 #### Sprint S64, HTML and PDF slide import
 

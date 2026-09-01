@@ -11,6 +11,8 @@ use crate::raw_xml::capture_empty_element;
 use crate::table::{CT_Row, CT_Tbl, CT_TblPr, CT_Tc, CellContent};
 use crate::text::{CT_P, CT_R, hyperlink_revision_index};
 
+const MAX_REVISION_NESTING_DEPTH: usize = 32;
+
 /// The modeled tracked-change element kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevisionKind {
@@ -45,6 +47,7 @@ pub struct CT_Revision {
     timestamp: Option<String>,
     raw_xml: Vec<u8>,
     content: RevisionContent,
+    content_paragraph: Option<Box<CT_P>>,
     nested_revisions: Vec<(usize, CT_Revision)>,
 }
 
@@ -58,6 +61,7 @@ impl CT_Revision {
     }
 
     fn try_from_raw(raw_xml: Vec<u8>, word_prefixes: &[String]) -> crate::Result<Self> {
+        validate_revision_nesting_depth(&raw_xml, word_prefixes)?;
         let mut reader = Reader::from_reader(raw_xml.as_slice());
         reader.config_mut().trim_text(false);
         let mut buffer = Vec::new();
@@ -94,6 +98,7 @@ impl CT_Revision {
                         timestamp,
                         raw_xml,
                         content: RevisionContent::Marker,
+                        content_paragraph: None,
                         nested_revisions: Vec::new(),
                     });
                 }
@@ -107,7 +112,14 @@ impl CT_Revision {
             buffer.clear();
         };
         let (kind, id, author, timestamp) = kind;
-        let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
+        let (content, content_paragraph, nested_revisions) = if kind == RevisionKind::Insertion {
+            let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
+            let paragraph = parse_insertion_content(&raw_xml, &prefixes)?;
+            (content, Some(Box::new(paragraph)), nested_revisions)
+        } else {
+            let (content, nested_revisions) = parse_content(&mut reader, kind, &prefixes)?;
+            (content, None, nested_revisions)
+        };
         Ok(Self {
             kind,
             id,
@@ -115,6 +127,7 @@ impl CT_Revision {
             timestamp,
             raw_xml,
             content,
+            content_paragraph,
             nested_revisions,
         })
     }
@@ -139,6 +152,12 @@ impl CT_Revision {
         &self.content
     }
 
+    /// Return the paragraph projection for an insertion, when it has inline wrappers.
+    #[doc(hidden)]
+    pub fn content_paragraph(&self) -> Option<&CT_P> {
+        self.content_paragraph.as_deref()
+    }
+
     /// Return nested revision wrappers at their direct-run boundaries.
     #[doc(hidden)]
     pub fn nested_revisions(&self) -> &[(usize, CT_Revision)] {
@@ -160,6 +179,55 @@ impl CT_Revision {
     ) -> crate::Result<()> {
         crate::text::write_raw_with_word_override(writer, &self.raw_xml, foreign_word_namespace)
     }
+}
+
+fn validate_revision_nesting_depth(raw_xml: &[u8], word_prefixes: &[String]) -> crate::Result<()> {
+    let mut reader = Reader::from_reader(raw_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![(word_prefixes.to_vec(), false)];
+    let mut revision_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let inherited = &scopes.last().expect("root namespace scope").0;
+                let prefixes = word_prefixes_at(&start, inherited)?;
+                let is_revision = revision_kind(start.name().as_ref(), &prefixes).is_some();
+                if is_revision {
+                    revision_depth += 1;
+                    if revision_depth > MAX_REVISION_NESTING_DEPTH {
+                        return Err(crate::OxmlError::InvalidValue(
+                            "revision nesting depth exceeds reader limit".to_owned(),
+                        ));
+                    }
+                }
+                scopes.push((prefixes, is_revision));
+            }
+            Event::Empty(start) => {
+                let inherited = &scopes.last().expect("root namespace scope").0;
+                let prefixes = word_prefixes_at(&start, inherited)?;
+                if revision_kind(start.name().as_ref(), &prefixes).is_some()
+                    && revision_depth + 1 > MAX_REVISION_NESTING_DEPTH
+                {
+                    return Err(crate::OxmlError::InvalidValue(
+                        "revision nesting depth exceeds reader limit".to_owned(),
+                    ));
+                }
+            }
+            Event::End(_) => {
+                let (_, was_revision) = scopes.pop().expect("balanced namespace scope");
+                if was_revision {
+                    revision_depth -= 1;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    Ok(())
 }
 
 impl CT_Document {
@@ -370,6 +438,10 @@ fn collect_control<'a>(control: &'a CT_Sdt, revisions: &mut Vec<&'a CT_Revision>
 
 fn collect_revision<'a>(revision: &'a CT_Revision, revisions: &mut Vec<&'a CT_Revision>) {
     revisions.push(revision);
+    if let Some(paragraph) = revision.content_paragraph() {
+        collect_paragraph(paragraph, revisions);
+        return;
+    }
     if let RevisionContent::Runs(runs) = revision.content() {
         for boundary in 0..=runs.len() {
             for (_, nested) in revision
@@ -387,6 +459,41 @@ fn collect_revision<'a>(revision: &'a CT_Revision, revisions: &mut Vec<&'a CT_Re
         for (_, nested) in &revision.nested_revisions {
             collect_revision(nested, revisions);
         }
+    }
+}
+
+fn parse_insertion_content(raw_xml: &[u8], word_prefixes: &[String]) -> crate::Result<CT_P> {
+    let mut reader = Reader::from_reader(raw_xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let content_start = loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(_) => break reader.buffer_position() as usize,
+            Event::Eof => {
+                return Err(crate::OxmlError::MissingElement(
+                    "insertion element".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let content_end = raw_xml
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, byte)| (*byte == b'<').then_some(index))
+        .ok_or_else(|| crate::OxmlError::MissingElement("insertion close tag".to_owned()))?;
+    let mut paragraph_xml = Vec::from(b"<w:p>".as_slice());
+    paragraph_xml.extend_from_slice(&raw_xml[content_start..content_end]);
+    paragraph_xml.extend_from_slice(b"</w:p>");
+    let mut paragraph_reader = Reader::from_reader(paragraph_xml.as_slice());
+    let mut paragraph_buffer = Vec::new();
+    match paragraph_reader.read_event_into(&mut paragraph_buffer)? {
+        Event::Start(_) => CT_P::from_xml_with_prefixes(&mut paragraph_reader, word_prefixes),
+        _ => Err(crate::OxmlError::MissingElement(
+            "insertion content".to_owned(),
+        )),
     }
 }
 
@@ -612,6 +719,33 @@ mod tests {
     use crate::namespace::W_NS;
     use crate::text::RunContent;
 
+    fn nested_insertions(depth: usize) -> Vec<u8> {
+        let mut xml = format!(r#"<w:ins xmlns:w="{W_NS}" w:id="0" w:author="Ada">"#);
+        for id in 1..depth {
+            xml.push_str(&format!(r#"<w:ins w:id="{id}" w:author="Ada">"#));
+        }
+        xml.push_str("<w:r><w:t>visible</w:t></w:r>");
+        for _ in 0..depth {
+            xml.push_str("</w:ins>");
+        }
+        xml.into_bytes()
+    }
+
+    #[test]
+    fn revision_nesting_depth_is_bounded_before_recursive_projection() {
+        let prefixes = ["w".to_owned()];
+        assert!(
+            validate_revision_nesting_depth(
+                &nested_insertions(MAX_REVISION_NESTING_DEPTH),
+                &prefixes,
+            )
+            .is_ok()
+        );
+        let too_deep = nested_insertions(MAX_REVISION_NESTING_DEPTH + 1);
+        assert!(validate_revision_nesting_depth(&too_deep, &prefixes).is_err());
+        assert!(CT_Revision::from_raw(too_deep, &prefixes).is_none());
+    }
+
     #[test]
     fn revision_attributes_are_prefix_tolerant_and_namespace_checked() {
         let raw = format!(
@@ -714,6 +848,59 @@ mod tests {
                 .map(|revision| revision.id())
                 .collect::<Vec<_>>(),
             vec![30]
+        );
+    }
+
+    #[test]
+    fn insertion_content_retains_inline_paragraph_structure() {
+        let raw = format!(
+            r#"<w:ins xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" w:id="7" w:author="Ada"><w:r><w:t>before</w:t></w:r><w:hyperlink r:id="rId9"><w:r><w:t>linked</w:t></w:r></w:hyperlink></w:ins>"#
+        )
+        .into_bytes();
+        let revision = CT_Revision::from_raw(raw, &["w".to_owned()]).expect("insertion parses");
+        let paragraph = revision
+            .content_paragraph()
+            .expect("insertion exposes paragraph content");
+
+        assert_eq!(paragraph.text(), "beforelinked");
+        assert_eq!(paragraph.hyperlinks.len(), 1);
+        assert_eq!(paragraph.hyperlinks[0].rel_id.as_deref(), Some("rId9"));
+    }
+
+    #[test]
+    fn insertion_content_retains_nested_revision_projection() {
+        let raw = format!(
+            r#"<w:ins xmlns:w="{W_NS}" w:id="7" w:author="Ada"><w:r><w:t>before</w:t></w:r><w:del w:id="8" w:author="Ben"><w:r><w:delText>removed</w:delText></w:r></w:del><w:ins w:id="9" w:author="Cy"><w:r><w:t>nested</w:t></w:r></w:ins><w:r><w:t>after</w:t></w:r></w:ins>"#
+        )
+        .into_bytes();
+        let revision = CT_Revision::from_raw(raw, &["w".to_owned()]).expect("insertion parses");
+
+        let RevisionContent::Runs(runs) = revision.content() else {
+            panic!("insertion exposes direct runs");
+        };
+        assert_eq!(
+            runs.iter().map(CT_R::text).collect::<String>(),
+            "beforeafter"
+        );
+        assert_eq!(
+            revision
+                .nested_revisions()
+                .iter()
+                .map(|(boundary, nested)| (*boundary, nested.kind()))
+                .collect::<Vec<_>>(),
+            vec![(1, RevisionKind::Deletion), (1, RevisionKind::Insertion),]
+        );
+        let paragraph = revision
+            .content_paragraph()
+            .expect("insertion exposes paragraph content");
+        assert_eq!(paragraph.text(), "beforeafter");
+        assert_eq!(
+            paragraph
+                .revisions
+                .iter()
+                .map(|(_, _, nested)| nested.kind())
+                .collect::<Vec<_>>(),
+            vec![RevisionKind::Deletion, RevisionKind::Insertion]
         );
     }
 

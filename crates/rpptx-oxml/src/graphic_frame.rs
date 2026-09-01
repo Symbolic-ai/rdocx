@@ -10,6 +10,7 @@ use oxml_drawing::xfrm::CT_Transform2D;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::diagram::DiagramRelationshipIds;
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, non_visual_drawing_id,
     non_visual_drawing_name, root_attributes, self_contained_attributes,
@@ -31,7 +32,7 @@ type RawAttributes = Vec<(String, String)>;
 pub enum GraphicDataPayload {
     Table(Box<CT_Table>),
     Chart(Vec<u8>),
-    SmartArt(Vec<u8>),
+    SmartArt(Box<DiagramRelationshipIds>),
     Ole {
         raw: Vec<u8>,
         preview: Option<Box<CT_Picture>>,
@@ -43,9 +44,8 @@ impl GraphicDataPayload {
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         match self {
             Self::Table(table) => writer.get_mut().write_all(&table.to_xml()?)?,
-            Self::Chart(xml) | Self::SmartArt(xml) | Self::Other(xml) => {
-                writer.get_mut().write_all(xml)?
-            }
+            Self::Chart(xml) | Self::Other(xml) => writer.get_mut().write_all(xml)?,
+            Self::SmartArt(relationships) => writer.get_mut().write_all(&relationships.to_xml())?,
             Self::Ole { raw, .. } => writer.get_mut().write_all(raw)?,
         }
         Ok(())
@@ -667,7 +667,9 @@ fn capture_payload(
             *chart_relationship_id = parse_chart_relationship_id(&raw, namespaces)?;
             GraphicDataPayload::Chart(raw)
         }
-        DIAGRAM_URI => GraphicDataPayload::SmartArt(raw),
+        DIAGRAM_URI => GraphicDataPayload::SmartArt(Box::new(
+            DiagramRelationshipIds::from_xml_with_namespaces(&raw, &namespaces.entries())?,
+        )),
         OLE_URI => GraphicDataPayload::Ole {
             preview: parse_ole_preview(&raw, &namespaces.entries())
                 .ok()

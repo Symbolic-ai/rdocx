@@ -2,6 +2,7 @@
 
 pub mod comments;
 pub mod connector;
+pub mod diagram;
 pub mod graphic_frame;
 pub mod namespace;
 pub mod notes_parts;

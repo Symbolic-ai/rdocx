@@ -151,6 +151,15 @@ position state. The facade admits only poster images to renderer media, freezes
 an unresolved poster as a deterministic labelled group when policy permits,
 and never offers audio or video payload bytes to a renderer or codec decoder.
 
+Presentation executable-content editing uses the same package seam.
+`oxml-opc` owns the Transitional and Strict OLE, control, ActiveX, VBA, and
+signature relationship constants. `rpptx` owns producing-scope discovery,
+relationship-graph validation, opaque payload hashing and extraction, and
+transactional replacement or removal. OLE owner XML remains in the slide,
+layout, or master model, while ActiveX and VBA ownership is resolved through
+their package relationships. No OLE, ActiveX, or VBA decoder enters an
+`oxml-*`, layout, renderer, binding, WASM, or CLI crate.
+
 Deterministic animation export also belongs to the `rpptx` facade. It validates
 and samples explicit segments, prepares the package, resolver, font, chart,
 picture, and media state once, then evaluates and lowers one timeline sample at
@@ -314,6 +323,16 @@ footnotes, comments, settings, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
 
+That grammar also owns the bounded reader projections for document and section
+completeness, table, row, and cell formatting, numbering metadata, tracked
+insertions, complex-field display, and drawing relationship safety. Expanded
+names and schema positions decide typed meaning. Ancestor namespace bindings
+travel with retained table and document content, while malformed row revisions
+and every unmodelled property remain in their original schema slots. The
+`rdocx` facade exposes borrowed reader facts and computes effective paragraph
+and run properties from the final direct, style, and numbering identities. It
+does not maintain a second reader model.
+
 The low-level text reader decodes visible `w:t` and `w:delText` content
 fallibly and rejects malformed encoded values instead of publishing partial
 text. The numbering grammar retains producer-defined `w:numFmt` tokens in
@@ -346,6 +365,10 @@ boundaries while retaining every marker as ordered raw XML. Simple and complex
 fields share one recursive `Field` grammar with a normalized name, text or
 nested arguments, switches, cached result, and optional dirty state. Its private
 source records the original field form, run partition, and producer XML.
+Complex fields expose ordered cached-display segments with each segment's
+direct run properties. Tracked insertion projection retains inline paragraph
+structure and nested revision boundaries, with a fixed depth ceiling checked
+before recursive projection.
 Unchanged fields therefore write their original bytes. Cache and dirty updates
 rewrite only the typed values while preserving run formatting and unmodelled
 neighbours. Markers are recognized only as direct run children through their
@@ -781,6 +804,15 @@ shape trees, placeholders, text frames, paragraphs, regular runs, tables and
 cells. Consuming mutable accessors transfer a facade borrow into its nested
 handle, which lets the Python binding re-resolve a path without exposing
 PresentationML internals or storing a Rust borrow in a pyclass.
+
+SmartArt follows the same ownership split. `rpptx-oxml::diagram` owns the five
+namespace-aware diagram part models and raw-preserving relationship payload.
+`oxml-opc` owns the standard diagram relationship constants and the Microsoft
+cached-drawing relationship constant. The `rpptx` facade alone resolves those
+parts in the producing slide, layout, or master scope, stages checked node-text
+edits, and copies the bounded owned graph for duplication or explicitly
+layout-bound cross-presentation transfer. No diagram model depends back on the
+facade, layout resolver, or renderer.
 
 The facade also owns package-to-render-input assembly. Its deterministic render
 entry points resolve the current package once and return either the shared

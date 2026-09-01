@@ -414,6 +414,21 @@ impl<'a> RtfWriter<'a> {
                 "unmodelled table-row revision XML was dropped during RTF export",
             );
         }
+        let mut occurrences = BTreeMap::<usize, usize>::new();
+        for (index, raw) in &properties.extra_xml {
+            let occurrence = occurrences.entry(*index).or_insert(0);
+            let suffix = if *occurrence == 0 {
+                String::new()
+            } else {
+                format!("#{occurrence}")
+            };
+            let item_name = raw_xml_item_name(raw).unwrap_or("unknown");
+            self.diagnose(
+                &format!("{location}/trPr/raw[{index}]{suffix}"),
+                &format!("unmodelled table-row property {item_name} was dropped during RTF export"),
+            );
+            *occurrence += 1;
+        }
     }
 
     fn scan_cell_properties(&mut self, properties: &CT_TcPr, location: &str) {
