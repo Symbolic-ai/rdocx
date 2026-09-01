@@ -18,7 +18,8 @@ use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{
-    BreakType, CT_P, CT_R, Field, FieldArgument, RunContent, hyperlink_revision_index,
+    BookmarkMarker, BreakType, CT_P, CT_R, Field, FieldArgument, RunContent,
+    hyperlink_revision_index,
 };
 
 use crate::block::{
@@ -875,7 +876,6 @@ const TABLE_CACHE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const HEADER_FOOTER_CACHE_MAX_ENTRIES: usize = 64;
 const HEADER_FOOTER_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const RESTART_CACHE_MAX_ENTRIES: usize = 1_024;
-const RESTART_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const CALLER_ALIAS_MAX_ENTRIES: usize = 256;
 const CALLER_ALIAS_MAX_RETAINED_BYTES: usize = 64 * 1024;
 const _: () = assert!(PARAGRAPH_CACHE_MAX_ENTRIES == 4_096);
@@ -892,10 +892,7 @@ const _: () = assert!(
         <= CACHE_MAX_ENTRIES
 );
 const _: () = assert!(
-    PARAGRAPH_CACHE_MAX_BYTES
-        + TABLE_CACHE_MAX_BYTES
-        + HEADER_FOOTER_CACHE_MAX_BYTES
-        + RESTART_CACHE_MAX_BYTES
+    PARAGRAPH_CACHE_MAX_BYTES + TABLE_CACHE_MAX_BYTES + HEADER_FOOTER_CACHE_MAX_BYTES
         <= CACHE_MAX_BYTES
 );
 const CACHE_SOURCE_NODE: SourceNodeId = match SourceNodeId::new(1) {
@@ -1390,7 +1387,7 @@ impl Engine {
         )?;
 
         let mut font_trace = self.font_manager.current_layout_fonts().to_vec();
-        let restart_record_eligible = sections.len() == 1
+        let mut restart_record_eligible = sections.len() == 1
             && input.document.background_xml.is_none()
             && !document_wraps
             && input
@@ -1400,16 +1397,26 @@ impl Engine {
                 .iter()
                 .zip(&sections[0].blocks)
                 .all(|(content, block)| match content {
-                    BodyContent::Paragraph(_) if block.paragraph().is_some() => {
-                        restart_record_block_is_safe(block)
+                    BodyContent::Paragraph(paragraph) if block.paragraph().is_some() => {
+                        paragraph_is_restart_record_source_safe(paragraph, styles)
+                            && restart_record_block_is_safe(block)
                     }
                     BodyContent::Table(table) if block.table().is_some() => {
                         table_is_cache_safe(table, styles)
                     }
                     _ => false,
                 });
-        let restart_eligible =
-            restart_record_eligible && sections[0].blocks.iter().all(restart_block_is_safe);
+        let restart_eligible = restart_record_eligible
+            && input
+                .document
+                .body
+                .content
+                .iter()
+                .zip(&sections[0].blocks)
+                .all(|(content, block)| {
+                    !matches!(content, BodyContent::Paragraph(paragraph) if paragraph_has_field(paragraph))
+                        && restart_block_is_safe(block)
+                });
         let reusable_restart_record = restart_record_eligible
             && retained_context_matches
             && self.restart_cache.as_ref().is_some_and(|cache| {
@@ -1512,90 +1519,118 @@ impl Engine {
             {
                 self.page_layout_invocations = recorded.pages.len();
             }
-            if recorded.stopped_at.is_none() {
-                if let Some(checkpoint) = restart_checkpoint {
-                    let references = body_note_references(input);
-                    paginator::append_endnote_pages_for_references(
-                        &mut recorded.pages,
-                        &references,
-                        &notes,
-                        final_geometry,
-                        checkpoint.page_count,
-                    );
-                } else {
-                    paginator::append_endnote_pages(&mut recorded.pages, &notes, final_geometry);
-                }
-            }
-            for page in &mut recorded.pages {
-                mark_remaining_artifacts(&mut page.elements);
-            }
-            let mut pages = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
-                self.restart_cache
-                    .as_ref()
-                    .expect("a restart checkpoint belongs to retained pages")
-                    .raw_pages[..checkpoint.page_count]
-                    .iter()
-                    .map(Arc::clone)
-                    .collect()
-            });
-            pages.extend(recorded.pages.into_iter().map(Arc::new));
-            let mut outlines = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
-                self.restart_cache
-                    .as_ref()
-                    .expect("a restart checkpoint belongs to retained outlines")
-                    .outlines
-                    .iter()
-                    .filter(|outline| outline.page_index < checkpoint.page_count)
-                    .cloned()
-                    .collect()
-            });
-            outlines.extend(recorded.outlines);
-            let mut checkpoints = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
-                self.restart_cache
-                    .as_ref()
-                    .expect("a restart checkpoint belongs to retained state")
-                    .checkpoints
-                    .iter()
-                    .copied()
-                    .filter(|candidate| candidate.page_count <= checkpoint.page_count)
-                    .collect()
-            });
-            checkpoints.extend(recorded.checkpoints);
-            if let (Some(stopped), Some((_, old_tail))) = (recorded.stopped_at, tail_source) {
-                debug_assert_eq!(stopped.page_count, old_tail.page_count);
-                let cache = self.restart_cache.as_ref().expect("restart cache exists");
-                pages.extend(
-                    cache.raw_pages[old_tail.page_count..]
-                        .iter()
-                        .map(Arc::clone),
+            if recorded.had_split_paragraph {
+                restart_record_eligible = false;
+                let (mut pages, outlines) = paginator::paginate_shared_sections(
+                    &sections,
+                    &self.font_manager,
+                    &media,
+                    &notes,
                 );
-                outlines.extend(
-                    cache
+                #[cfg(test)]
+                {
+                    self.page_layout_invocations = pages.len();
+                }
+                paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
+                apply_page_background(&mut pages, input);
+                for page in &mut pages {
+                    mark_remaining_artifacts(&mut page.elements);
+                }
+                (
+                    pages.into_iter().map(Arc::new).collect(),
+                    outlines,
+                    Vec::new(),
+                )
+            } else {
+                if recorded.stopped_at.is_none() {
+                    if let Some(checkpoint) = restart_checkpoint {
+                        let references = body_note_references(input);
+                        paginator::append_endnote_pages_for_references(
+                            &mut recorded.pages,
+                            &references,
+                            &notes,
+                            final_geometry,
+                            checkpoint.page_count,
+                        );
+                    } else {
+                        paginator::append_endnote_pages(
+                            &mut recorded.pages,
+                            &notes,
+                            final_geometry,
+                        );
+                    }
+                }
+                for page in &mut recorded.pages {
+                    mark_remaining_artifacts(&mut page.elements);
+                }
+                let mut pages = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                    self.restart_cache
+                        .as_ref()
+                        .expect("a restart checkpoint belongs to retained pages")
+                        .raw_pages[..checkpoint.page_count]
+                        .iter()
+                        .map(Arc::clone)
+                        .collect()
+                });
+                pages.extend(recorded.pages.into_iter().map(Arc::new));
+                let mut outlines = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                    self.restart_cache
+                        .as_ref()
+                        .expect("a restart checkpoint belongs to retained outlines")
                         .outlines
                         .iter()
-                        .filter(|outline| outline.page_index >= old_tail.page_count)
-                        .cloned(),
-                );
-                let block_delta =
-                    stopped.next_block_index as isize - old_tail.next_block_index as isize;
-                checkpoints.extend(
-                    cache
+                        .filter(|outline| outline.page_index < checkpoint.page_count)
+                        .cloned()
+                        .collect()
+                });
+                outlines.extend(recorded.outlines);
+                let mut checkpoints = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                    self.restart_cache
+                        .as_ref()
+                        .expect("a restart checkpoint belongs to retained state")
                         .checkpoints
                         .iter()
-                        .filter(|candidate| candidate.page_count > old_tail.page_count)
-                        .map(|candidate| paginator::PaginationCheckpoint {
-                            next_block_index: candidate
-                                .next_block_index
-                                .checked_add_signed(block_delta)
-                                .expect("common suffix block index remains in range"),
-                            page_count: candidate.page_count,
-                            next_header_page_number: candidate.next_header_page_number,
-                        }),
-                );
+                        .copied()
+                        .filter(|candidate| candidate.page_count <= checkpoint.page_count)
+                        .collect()
+                });
+                checkpoints.extend(recorded.checkpoints);
+                if let (Some(stopped), Some((_, old_tail))) = (recorded.stopped_at, tail_source) {
+                    debug_assert_eq!(stopped.page_count, old_tail.page_count);
+                    let cache = self.restart_cache.as_ref().expect("restart cache exists");
+                    pages.extend(
+                        cache.raw_pages[old_tail.page_count..]
+                            .iter()
+                            .map(Arc::clone),
+                    );
+                    outlines.extend(
+                        cache
+                            .outlines
+                            .iter()
+                            .filter(|outline| outline.page_index >= old_tail.page_count)
+                            .cloned(),
+                    );
+                    let block_delta =
+                        stopped.next_block_index as isize - old_tail.next_block_index as isize;
+                    checkpoints.extend(
+                        cache
+                            .checkpoints
+                            .iter()
+                            .filter(|candidate| candidate.page_count > old_tail.page_count)
+                            .map(|candidate| paginator::PaginationCheckpoint {
+                                next_block_index: candidate
+                                    .next_block_index
+                                    .checked_add_signed(block_delta)
+                                    .expect("common suffix block index remains in range"),
+                                page_count: candidate.page_count,
+                                next_header_page_number: candidate.next_header_page_number,
+                            }),
+                    );
+                }
+                checkpoints.sort_unstable_by_key(|checkpoint| checkpoint.next_block_index);
+                checkpoints.dedup();
+                (pages, outlines, checkpoints)
             }
-            checkpoints.sort_unstable_by_key(|checkpoint| checkpoint.next_block_index);
-            checkpoints.dedup();
-            (pages, outlines, checkpoints)
         } else {
             let (mut pages, outlines) =
                 paginator::paginate_shared_sections(&sections, &self.font_manager, &media, &notes);
@@ -1851,7 +1886,8 @@ impl Engine {
             {
                 self.last_restart_candidate_bytes = bytes;
             }
-            if bytes <= RESTART_CACHE_MAX_BYTES {
+            let entries = restart_cache_entries(&candidate);
+            if self.restart_candidate_fits_aggregate(entries, bytes) {
                 candidate.bytes = bytes;
                 self.restart_cache = Some(candidate);
             } else {
@@ -2131,8 +2167,49 @@ impl Engine {
             };
             self.paragraph_cache_bytes = self.paragraph_cache_bytes.saturating_sub(evicted.bytes);
         }
-        self.paragraph_cache_bytes += entry.bytes;
+        let Some(bytes) = self.paragraph_cache_bytes.checked_add(entry.bytes) else {
+            return;
+        };
+        if bytes > PARAGRAPH_CACHE_MAX_BYTES {
+            return;
+        }
+        self.paragraph_cache_bytes = bytes;
         self.paragraph_cache.push_back(entry);
+    }
+
+    fn restart_candidate_fits_aggregate(
+        &self,
+        candidate_entries: usize,
+        candidate_bytes: usize,
+    ) -> bool {
+        let pending_paragraph_entries = self
+            .pending_paragraph_cache
+            .as_ref()
+            .map_or(0, VecDeque::len);
+        let pending_table_entries = self.pending_table_cache.as_ref().map_or(0, VecDeque::len);
+        let pending_header_footer_entries = self
+            .pending_header_footer_cache
+            .as_ref()
+            .map_or(0, VecDeque::len);
+        let entries = self
+            .paragraph_cache
+            .len()
+            .checked_add(self.table_cache.len())
+            .and_then(|entries| entries.checked_add(self.header_footer_cache.len()))
+            .and_then(|entries| entries.checked_add(pending_paragraph_entries))
+            .and_then(|entries| entries.checked_add(pending_table_entries))
+            .and_then(|entries| entries.checked_add(pending_header_footer_entries))
+            .and_then(|entries| entries.checked_add(candidate_entries));
+        let bytes = self
+            .paragraph_cache_bytes
+            .checked_add(self.table_cache_bytes)
+            .and_then(|bytes| bytes.checked_add(self.header_footer_cache_bytes))
+            .and_then(|bytes| bytes.checked_add(self.pending_paragraph_cache_bytes))
+            .and_then(|bytes| bytes.checked_add(self.pending_table_cache_bytes))
+            .and_then(|bytes| bytes.checked_add(self.pending_header_footer_cache_bytes))
+            .and_then(|bytes| bytes.checked_add(candidate_bytes));
+        entries.is_some_and(|entries| entries <= CACHE_MAX_ENTRIES)
+            && bytes.is_some_and(|bytes| bytes <= CACHE_MAX_BYTES)
     }
 
     fn stage_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
@@ -2296,11 +2373,18 @@ impl Engine {
     }
 }
 
-fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
+fn paragraph_source_is_cache_safe(
+    paragraph: &CT_P,
+    styles: &CT_Styles,
+    allow_fields: bool,
+    allow_bookmarks: bool,
+) -> bool {
+    let extra_xml_is_represented = paragraph.extra_xml.is_empty()
+        || (allow_bookmarks && paragraph_bookmark_raw_is_exact(paragraph));
     if !paragraph.hyperlinks.is_empty()
         || !paragraph.comment_ranges.is_empty()
-        || !paragraph.bookmark_markers.is_empty()
-        || !paragraph.extra_xml.is_empty()
+        || (!allow_bookmarks && !paragraph.bookmark_markers.is_empty())
+        || !extra_xml_is_represented
         || !paragraph.content_controls.is_empty()
         || !paragraph.revisions.is_empty()
     {
@@ -2341,12 +2425,146 @@ fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
                     && rpr.revision_xml.is_empty()
                     && rpr.revision_xml_positions.is_empty()
             })
-            && run.content.iter().all(|content| {
-                matches!(
-                    content,
-                    RunContent::Text(_) | RunContent::Tab | RunContent::Break(_)
-                )
+            && run.content.iter().all(|content| match content {
+                RunContent::Text(_)
+                | RunContent::Tab
+                | RunContent::Break(_)
+                | RunContent::FootnoteRef { .. }
+                | RunContent::EndnoteRef { .. } => true,
+                RunContent::Field(_) => allow_fields,
+                _ => false,
             })
+    })
+}
+
+fn paragraph_is_restart_record_source_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
+    paragraph_source_is_cache_safe(paragraph, styles, true, true)
+        && paragraph.runs.iter().all(|run| {
+            run.properties
+                .as_ref()
+                .is_none_or(|properties| properties.language.is_none())
+        })
+}
+
+fn paragraph_is_cache_safe(paragraph: &CT_P, styles: &CT_Styles) -> bool {
+    paragraph_source_is_cache_safe(paragraph, styles, false, false)
+}
+
+fn paragraph_bookmark_raw_is_exact(paragraph: &CT_P) -> bool {
+    paragraph.extra_xml.len() == paragraph.bookmark_markers.len()
+        && paragraph
+            .extra_xml
+            .iter()
+            .enumerate()
+            .zip(&paragraph.bookmark_markers)
+            .all(|((raw_index, (run_index, raw)), marker)| {
+                let raw_before = paragraph.extra_xml[..raw_index]
+                    .iter()
+                    .filter(|(at, _)| at == run_index)
+                    .count();
+                *run_index == marker.run_index()
+                    && raw_before == marker.raw_before()
+                    && raw_xml_is_exact_word_bookmark(raw, marker)
+            })
+}
+
+fn raw_xml_is_exact_word_bookmark(raw: &[u8], marker: &BookmarkMarker) -> bool {
+    let Some(start) = raw.iter().position(|byte| !byte.is_ascii_whitespace()) else {
+        return false;
+    };
+    let end = raw
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .expect("non-empty raw XML has a final byte");
+    let raw = &raw[start..=end];
+    if !raw.ends_with(b"/>") {
+        return false;
+    }
+    let Some((root_name, raw_attributes)) = raw_root_start_tag(raw) else {
+        return false;
+    };
+    let Some(attributes) = parse_raw_attributes(raw_attributes) else {
+        return false;
+    };
+    let expected_local_name = if marker.is_start() {
+        b"bookmarkStart".as_slice()
+    } else {
+        b"bookmarkEnd".as_slice()
+    };
+    if xml_local_name(root_name) != expected_local_name
+        || !raw_name_has_namespace(root_name, &attributes, rdocx_oxml::namespace::W_NS, false)
+    {
+        return false;
+    }
+    let word_attribute_count = |local: &[u8]| {
+        attributes
+            .iter()
+            .filter(|(name, _)| {
+                xml_local_name(name) == local
+                    && raw_name_has_namespace(name, &attributes, rdocx_oxml::namespace::W_NS, true)
+            })
+            .count()
+    };
+    if word_attribute_count(b"id") != 1
+        || word_attribute_count(b"name") != usize::from(marker.is_start())
+    {
+        return false;
+    }
+
+    let mut document_xml = Vec::with_capacity(raw.len() + 160);
+    document_xml.extend_from_slice(
+        br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>"#,
+    );
+    document_xml.extend_from_slice(raw);
+    document_xml.extend_from_slice(b"</w:p></w:body></w:document>");
+    let Ok(document) = CT_Document::from_xml(&document_xml) else {
+        return false;
+    };
+    let [BodyContent::Paragraph(parsed)] = document.body.content.as_slice() else {
+        return false;
+    };
+    let [(run_index, parsed_raw)] = parsed.extra_xml.as_slice() else {
+        return false;
+    };
+    let [parsed_marker] = parsed.bookmark_markers.as_slice() else {
+        return false;
+    };
+    parsed.properties.is_none()
+        && parsed.runs.is_empty()
+        && parsed.hyperlinks.is_empty()
+        && parsed.comment_ranges.is_empty()
+        && parsed.content_controls.is_empty()
+        && parsed.revisions.is_empty()
+        && *run_index == 0
+        && parsed_raw == raw
+        && parsed_marker.raw_before() == 0
+        && parsed_marker.is_start() == marker.is_start()
+        && parsed_marker.id().is_some()
+        && parsed_marker.id() == marker.id()
+        && parsed_marker.name() == marker.name()
+        && if parsed_marker.is_start() {
+            parsed_marker.name().is_some()
+        } else {
+            parsed_marker.name().is_none()
+        }
+}
+
+fn paragraph_has_field(paragraph: &CT_P) -> bool {
+    paragraph
+        .runs
+        .iter()
+        .flat_map(|run| &run.content)
+        .any(|content| matches!(content, RunContent::Field(_)))
+}
+
+fn paragraph_has_note_reference(paragraph: &CT_P) -> bool {
+    paragraph.runs.iter().any(|run| {
+        run.content.iter().any(|content| {
+            matches!(
+                content,
+                RunContent::FootnoteRef { .. } | RunContent::EndnoteRef { .. }
+            )
+        })
     })
 }
 
@@ -2384,7 +2602,7 @@ fn header_footer_part_is_cache_safe(
             run.extra_xml.clear();
             run.extra_xml_positions.clear();
         }
-        paragraph_is_cache_safe(&projected, styles)
+        !paragraph_has_note_reference(&projected) && paragraph_is_cache_safe(&projected, styles)
     })
 }
 
@@ -2490,7 +2708,8 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
                             .is_none_or(|properties| properties.extra_xml.is_empty())
                         && cell.content.iter().all(|content| match content {
                             CellContent::Paragraph(paragraph) => {
-                                paragraph_is_cache_safe(paragraph, styles)
+                                !paragraph_has_note_reference(paragraph)
+                                    && paragraph_is_cache_safe(paragraph, styles)
                             }
                             CellContent::Table(table) => table_is_cache_safe(table, styles),
                             CellContent::ContentControl(_) => false,
@@ -3137,10 +3356,6 @@ fn restart_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
 fn restart_record_block_is_safe<B: LayoutBlockLike>(block: &B) -> bool {
     if let Some(paragraph) = block.paragraph() {
         paragraph.anchored.is_empty()
-            && paragraph.lines.len() <= 2
-            && paragraph.heading_level.is_none()
-            && !paragraph.keep_next
-            && !paragraph.keep_lines
             && paragraph.lines.iter().all(|line| {
                 line.items.iter().all(|item| match item {
                     LineItem::Text(_) | LineItem::Marker(_) => true,
@@ -6897,6 +7112,30 @@ mod tests {
     use oxml_layout::{MediaId, MultilingualGlyphRun, TextScript};
     use std::collections::HashMap;
 
+    const LEGACY_RESTART_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+    fn assert_restart_cache_within_aggregate(engine: &Engine) {
+        let restart = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart state retained");
+        let entries = engine
+            .paragraph_cache
+            .len()
+            .checked_add(engine.table_cache.len())
+            .and_then(|entries| entries.checked_add(engine.header_footer_cache.len()))
+            .and_then(|entries| entries.checked_add(restart_cache_entries(restart)))
+            .expect("retained cache entry accounting does not overflow");
+        let bytes = engine
+            .paragraph_cache_bytes
+            .checked_add(engine.table_cache_bytes)
+            .and_then(|bytes| bytes.checked_add(engine.header_footer_cache_bytes))
+            .and_then(|bytes| bytes.checked_add(restart.bytes))
+            .expect("retained cache byte accounting does not overflow");
+        assert!(entries <= CACHE_MAX_ENTRIES, "{entries}");
+        assert!(bytes <= CACHE_MAX_BYTES, "{bytes}");
+    }
+
     fn compatibility_elements(elements: &[PositionedElement]) -> Vec<&PositionedElement> {
         fn collect<'a>(
             elements: &'a [PositionedElement],
@@ -9235,6 +9474,128 @@ mod tests {
         );
     }
 
+    fn note_reference_cache_input(stream: NoteStream, include_second_note: bool) -> LayoutInput {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+
+        let mut input = make_input_with_text("note cache paragraph 000");
+        for index in 1..700 {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("note cache paragraph {index:03}"));
+            input.document.body.add_paragraph(paragraph);
+        }
+        let BodyContent::Paragraph(reference) = &mut input.document.body.content[20] else {
+            panic!("note reference belongs to a paragraph");
+        };
+        let mut marker = CT_R::new("");
+        marker.content = vec![match stream {
+            NoteStream::Footnote => RunContent::FootnoteRef { id: 1 },
+            NoteStream::Endnote => RunContent::EndnoteRef { id: 1 },
+        }];
+        reference.runs.push(marker);
+
+        let note = |id, text: &str| {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(text);
+            CT_Footnote {
+                id,
+                note_type: NoteType::Normal,
+                paragraphs: vec![paragraph],
+            }
+        };
+        let mut notes = vec![note(1, "first note text")];
+        if include_second_note {
+            notes.push(note(2, "second note text"));
+        }
+        let part = Some(CT_Footnotes { footnotes: notes });
+        match stream {
+            NoteStream::Footnote => input.footnotes = part,
+            NoteStream::Endnote => input.endnotes = part,
+        }
+        input
+    }
+
+    fn assert_note_reference_does_not_poison_later_hits(stream: NoteStream) {
+        let mut input = note_reference_cache_input(stream, false);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("cold note layout succeeds");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 700));
+
+        set_body_paragraph_text(&mut input, 350, "note cache paragraph 350 changed");
+        let warm = engine.layout(&input).expect("warm note layout succeeds");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh note layout succeeds");
+
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+    }
+
+    #[test]
+    fn note_reference_does_not_poison_later_paragraph_cache_hits() {
+        assert_note_reference_does_not_poison_later_hits(NoteStream::Footnote);
+    }
+
+    #[test]
+    fn endnote_reference_does_not_poison_later_paragraph_cache_hits() {
+        assert_note_reference_does_not_poison_later_hits(NoteStream::Endnote);
+    }
+
+    #[test]
+    fn changed_note_reference_or_note_part_invalidates_required_cache_entry() {
+        let mut input = note_reference_cache_input(NoteStream::Footnote, true);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("cold note layout succeeds");
+        assert_eq!(engine.paragraph_cache_counts(), (0, 700));
+
+        let BodyContent::Paragraph(reference) = &mut input.document.body.content[20] else {
+            panic!("note reference belongs to a paragraph");
+        };
+        reference.runs.last_mut().expect("marker run").content =
+            vec![RunContent::FootnoteRef { id: 2 }];
+        let warm_reference = engine
+            .layout(&input)
+            .expect("changed reference layout succeeds");
+        let fresh_reference = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh changed reference layout succeeds");
+        assert_layout_results_equal(&warm_reference, &fresh_reference);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+
+        input.footnotes.as_mut().expect("footnotes exist").footnotes[1].paragraphs[0].runs[0]
+            .content = vec![RunContent::Text(rdocx_oxml::text::CT_Text::new(
+            "second note text changed",
+        ))];
+        let warm_note = engine.layout(&input).expect("changed note layout succeeds");
+        let fresh_note = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh changed note layout succeeds");
+        assert_layout_results_equal(&warm_note, &fresh_note);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 1_401));
+    }
+
+    #[test]
+    fn note_reference_warm_layout_equals_fresh_layout() {
+        let mut input = related_story_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout(&input)
+            .expect("cold related-story layout succeeds");
+        set_body_paragraph_text(&mut input, 350, "related note paragraph changed");
+
+        let warm = engine
+            .layout(&input)
+            .expect("warm related-story layout succeeds");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh related-story layout succeeds");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(engine.paragraph_cache_counts(), (699, 701));
+    }
+
     fn mixed_editor_input() -> LayoutInput {
         let mut input = make_input_with_text("");
         input.document.body.content.clear();
@@ -9297,7 +9658,7 @@ mod tests {
                 engine.last_restart_candidate_bytes
             )
         });
-        assert!(restart.bytes <= RESTART_CACHE_MAX_BYTES);
+        assert_restart_cache_within_aggregate(&engine);
         assert!(restart.checkpoints.len() <= RESTART_CACHE_MAX_ENTRIES);
         let rebuilt = engine
             .last_rebuilt_page_range
@@ -9352,11 +9713,6 @@ mod tests {
 
     #[test]
     fn unsafe_prefix_still_disables_later_paragraph_hits() {
-        let mut note = CT_P::new();
-        let mut note_run = CT_R::new("");
-        note_run.content = vec![RunContent::FootnoteRef { id: 1 }];
-        note.runs.push(note_run);
-
         let mut field = CT_P::new();
         let mut field_run = CT_R::new("");
         field_run.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
@@ -9366,8 +9722,27 @@ mod tests {
         numbered.add_run("numbered prefix");
         numbered.properties.get_or_insert_default().num_id = Some(1);
 
-        for (name, unsafe_paragraph) in [("note", note), ("field", field), ("numbering", numbered)]
-        {
+        let mut drawing = CT_P::new();
+        let mut drawing_run = CT_R::new("");
+        drawing_run.content = vec![RunContent::Drawing(rdocx_oxml::drawing::CT_Drawing {
+            inline: None,
+            anchor: None,
+        })];
+        drawing.runs.push(drawing_run);
+
+        let mut raw = CT_P::new();
+        raw.extra_xml.push((
+            0,
+            br#"<w:unknown xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#
+                .to_vec(),
+        ));
+
+        for (name, unsafe_paragraph) in [
+            ("field", field),
+            ("numbering", numbered),
+            ("drawing", drawing),
+            ("raw child", raw),
+        ] {
             let mut input = make_input_with_text("safe cached suffix");
             let mut engine = Engine::new_deterministic().expect("bundled fonts load");
             engine.layout(&input).expect("prime safe suffix");
@@ -9965,7 +10340,7 @@ mod tests {
     fn restart_body_accounting_charges_cache_safe_property_payloads() {
         let mut paragraph = CT_P::new();
         paragraph.properties = Some(CT_PPr {
-            style_id: Some("p".repeat(RESTART_CACHE_MAX_BYTES + 1)),
+            style_id: Some("p".repeat(LEGACY_RESTART_CACHE_MAX_BYTES + 1)),
             ..CT_PPr::default()
         });
         let paragraph_entry = RestartBodyEntry::for_content(
@@ -9973,7 +10348,7 @@ mod tests {
             RevisionView::Accepted,
         )
         .expect("paragraph has restart identity");
-        assert!(paragraph_entry.bytes() > RESTART_CACHE_MAX_BYTES);
+        assert!(paragraph_entry.bytes() > LEGACY_RESTART_CACHE_MAX_BYTES);
 
         let mut table = safe_table("property accounting");
         table.properties = Some(rdocx_oxml::table::CT_TblPr {
@@ -10445,7 +10820,7 @@ mod tests {
             .layout(&input)
             .expect("cold insertion layout");
         assert_layout_results_equal(&warm_insert, &cold_insert);
-        assert_eq!(engine.paragraph_cache_counts(), (1, 3));
+        assert_eq!(engine.paragraph_cache_counts(), (2, 3));
 
         input.document.body.content.remove(1);
         let warm_delete = engine.layout(&input).expect("warm deletion layout");
@@ -10455,7 +10830,7 @@ mod tests {
             .expect("cold deletion layout");
         assert_layout_results_equal(&warm_delete, &cold_delete);
         assert_layout_results_equal(&original, &warm_delete);
-        assert_eq!(engine.paragraph_cache_counts(), (3, 3));
+        assert_eq!(engine.paragraph_cache_counts(), (4, 3));
     }
 
     #[test]
@@ -10589,6 +10964,341 @@ mod tests {
             input.document.body.add_paragraph(paragraph);
         }
         input
+    }
+
+    fn ordinary_prose_restart_input(paragraph_count: usize) -> LayoutInput {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        for index in 0..paragraph_count {
+            let mut paragraph = CT_P::new();
+            if index == 10 {
+                paragraph.properties = Some(CT_PPr {
+                    style_id: Some("Heading1".to_owned()),
+                    ..CT_PPr::default()
+                });
+            } else if index == 11 {
+                paragraph.properties.get_or_insert_default().keep_next = Some(true);
+            } else if index == 13 {
+                paragraph.properties.get_or_insert_default().keep_lines = Some(true);
+            }
+            let text = if index == 20 {
+                "ordinary multiline paragraph wraps without splitting across pages ".repeat(8)
+            } else {
+                format!("ordinary prose paragraph {index:03} stable line")
+            };
+            paragraph.add_run(&text);
+            input.document.body.add_paragraph(paragraph);
+        }
+        input
+    }
+
+    #[test]
+    fn ordinary_multiline_heading_and_keep_paragraphs_publish_restart_records() {
+        let input = ordinary_prose_restart_input(140);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let result = engine
+            .layout(&input)
+            .expect("ordinary prose layout succeeds");
+
+        let multiline = engine
+            .paragraph_cache
+            .iter()
+            .find(|entry| entry.key.paragraph.text().starts_with("ordinary multiline"))
+            .expect("multiline paragraph is cached");
+        assert!(multiline.block.lines.len() > 2);
+        assert_eq!(result.outlines.len(), 1);
+        assert_eq!(result.outlines[0].level, 1);
+        assert!(
+            engine
+                .restart_cache
+                .as_ref()
+                .is_some_and(|cache| !cache.checkpoints.is_empty()),
+            "complete ordinary-prose block boundaries must publish restart checkpoints"
+        );
+    }
+
+    #[test]
+    fn restart_candidate_uses_available_aggregate_cache_budget() {
+        let mut input = make_input_with_text("aggregate candidate");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("body entry is a paragraph");
+        };
+        paragraph.properties = Some(CT_PPr {
+            style_id: Some("x".repeat(LEGACY_RESTART_CACHE_MAX_BYTES + 64 * 1024)),
+            ..CT_PPr::default()
+        });
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout(&input)
+            .expect("large candidate layout succeeds");
+        assert!(engine.last_restart_candidate_bytes > LEGACY_RESTART_CACHE_MAX_BYTES);
+        assert!(
+            engine
+                .paragraph_cache_bytes
+                .checked_add(engine.table_cache_bytes)
+                .and_then(|bytes| bytes.checked_add(engine.header_footer_cache_bytes))
+                .and_then(|bytes| bytes.checked_add(engine.last_restart_candidate_bytes))
+                .is_some_and(|bytes| bytes <= CACHE_MAX_BYTES)
+        );
+        assert!(
+            engine.restart_cache.is_some(),
+            "candidate above 8 MiB must use available aggregate capacity"
+        );
+    }
+
+    #[test]
+    fn restart_candidate_over_aggregate_budget_fails_closed() {
+        for occupied in [CACHE_MAX_BYTES, usize::MAX] {
+            let input = restart_input();
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            let original = engine.layout(&input).expect("prime restart state");
+            engine.paragraph_cache_bytes = occupied;
+
+            let warm = engine.layout(&input).expect("pressured layout succeeds");
+            let fresh = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .expect("fresh pressured layout succeeds");
+            assert_layout_results_equal(&warm, &fresh);
+            assert_layout_results_equal(&warm, &original);
+            assert!(
+                engine.restart_cache.is_none(),
+                "aggregate pressure {occupied} must reject the candidate"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_prose_late_edit_insert_delete_and_undo_match_fresh_layout() {
+        let mut input = ordinary_prose_restart_input(700);
+        let original_input = input.clone();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let original = engine.layout(&input).expect("prime ordinary prose state");
+        assert!(engine.restart_cache.is_some());
+
+        set_body_paragraph_text(&mut input, 650, "ordinary prose paragraph 650 changed");
+        let warm_edit = engine.layout(&input).expect("warm late edit");
+        assert!(
+            engine.page_layout_invocation_count() <= 2,
+            "edit recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let fresh_edit = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh late edit");
+        assert_layout_results_equal(&warm_edit, &fresh_edit);
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("ordinary inserted paragraph");
+        input
+            .document
+            .body
+            .content
+            .insert(640, BodyContent::Paragraph(inserted));
+        let warm_insert = engine.layout(&input).expect("warm insertion");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "insertion recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let fresh_insert = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh insertion");
+        assert_layout_results_equal(&warm_insert, &fresh_insert);
+
+        input.document.body.content.remove(640);
+        let warm_delete = engine.layout(&input).expect("warm deletion");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "deletion recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let fresh_delete = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh deletion");
+        assert_layout_results_equal(&warm_delete, &fresh_delete);
+
+        input = original_input;
+        let warm_undo = engine.layout(&input).expect("warm undo");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "undo recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let fresh_undo = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh undo");
+        assert_layout_results_equal(&warm_undo, &fresh_undo);
+        assert_layout_results_equal(&warm_undo, &original);
+    }
+
+    #[test]
+    fn ordinary_prose_restart_bounds_recomputed_page_work() {
+        let mut input = ordinary_prose_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("prime ordinary prose state");
+        assert!(initial.pages.len() > 2);
+        assert!(engine.restart_cache.is_some());
+
+        set_body_paragraph_text(&mut input, 650, "ordinary prose paragraph 650 changed");
+        let warm = engine.layout(&input).expect("warm late edit");
+        assert!(engine.page_layout_invocation_count() <= 2);
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh late edit");
+        assert_layout_results_equal(&warm, &fresh);
+    }
+
+    #[test]
+    fn unrepresented_restart_content_remains_rejected() {
+        let assert_no_checkpoints = |label: &str, input: LayoutInput| {
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            engine
+                .layout(&input)
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            assert!(
+                engine
+                    .restart_cache
+                    .as_ref()
+                    .is_none_or(|cache| cache.checkpoints.is_empty()),
+                "{label}"
+            );
+        };
+
+        let mut numbered = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut numbered.document.body.content[20] else {
+            panic!("numbered body entry is a paragraph");
+        };
+        paragraph.properties.get_or_insert_default().num_id = Some(1);
+        assert_no_checkpoints("numbering", numbered);
+
+        for instruction in ["PAGE", "DATE", "REF missing", "UNSUPPORTED"] {
+            let mut field = restart_input();
+            let BodyContent::Paragraph(paragraph) = &mut field.document.body.content[20] else {
+                panic!("field body entry is a paragraph");
+            };
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(Field::new(instruction, "cached"))];
+            paragraph.runs.push(run);
+            assert_no_checkpoints(instruction, field);
+        }
+
+        let mut drawing = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut drawing.document.body.content[20] else {
+            panic!("drawing body entry is a paragraph");
+        };
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::Drawing(rdocx_oxml::drawing::CT_Drawing {
+            inline: None,
+            anchor: None,
+        })];
+        paragraph.runs.push(run);
+        assert_no_checkpoints("drawing", drawing);
+
+        let mut raw = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut raw.document.body.content[20] else {
+            panic!("raw body entry is a paragraph");
+        };
+        paragraph.extra_xml.push((0, br#"<w:unknown/>"#.to_vec()));
+        assert_no_checkpoints("raw child", raw);
+
+        let mut foreign_bookmark = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut foreign_bookmark.document.body.content[20]
+        else {
+            panic!("bookmark body entry is a paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 7, "target"));
+        assert!(paragraph.insert_bookmark_end(1, 7));
+        paragraph.extra_xml[0].1 =
+            br#"<ext:bookmarkStart xmlns:ext="urn:foreign" ext:id="7"/>"#.to_vec();
+        assert_no_checkpoints("same-count foreign bookmark raw", foreign_bookmark);
+
+        for (label, duplicate_raw) in [
+            (
+                "duplicate expanded bookmark id",
+                br#"<w:bookmarkStart xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:id="7" x:id="7" w:name="target"/>"#.as_slice(),
+            ),
+            (
+                "duplicate expanded bookmark name",
+                br#"<w:bookmarkStart xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:id="7" w:name="target" x:name="target"/>"#.as_slice(),
+            ),
+        ] {
+            let mut duplicate_bookmark = restart_input();
+            let BodyContent::Paragraph(paragraph) =
+                &mut duplicate_bookmark.document.body.content[20]
+            else {
+                panic!("bookmark body entry is a paragraph");
+            };
+            assert!(paragraph.insert_bookmark_start(0, 7, "target"));
+            assert!(paragraph.insert_bookmark_end(1, 7));
+            paragraph.extra_xml[0].1 = duplicate_raw.to_vec();
+            assert_no_checkpoints(label, duplicate_bookmark);
+        }
+
+        let mut nested_bookmark = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut nested_bookmark.document.body.content[20]
+        else {
+            panic!("bookmark body entry is a paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 7, "target"));
+        assert!(paragraph.insert_bookmark_end(1, 7));
+        paragraph.extra_xml[0].1 =
+            br#"<w:bookmarkStart w:id="7" w:name="target"><w:unknown/></w:bookmarkStart>"#.to_vec();
+        assert_no_checkpoints("non-empty bookmark root", nested_bookmark);
+
+        let mut trailing_bookmark = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut trailing_bookmark.document.body.content[20]
+        else {
+            panic!("bookmark body entry is a paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 7, "target"));
+        assert!(paragraph.insert_bookmark_end(1, 7));
+        paragraph.extra_xml[0].1 =
+            br#"<w:bookmarkStart w:id="7" w:name="target"/><w:unknown/>"#.to_vec();
+        assert_no_checkpoints("trailing bookmark raw", trailing_bookmark);
+
+        let mut stale_raw_before = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut stale_raw_before.document.body.content[20]
+        else {
+            panic!("bookmark body entry is a paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 7, "target"));
+        assert!(paragraph.insert_bookmark_start(0, 7, "target"));
+        paragraph.bookmark_markers.swap(0, 1);
+        assert_no_checkpoints("stale bookmark raw order", stale_raw_before);
+
+        let aliased = CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><x:bookmarkStart xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" x:id="7" x:name="target"/><w:r><w:t>text</w:t></w:r><x:bookmarkEnd xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" x:id="7"/></w:p></w:body></w:document>"#,
+        )
+        .expect("locally aliased bookmarks parse");
+        let BodyContent::Paragraph(aliased) = &aliased.body.content[0] else {
+            panic!("aliased bookmark body entry is a paragraph");
+        };
+        assert!(paragraph_bookmark_raw_is_exact(aliased));
+
+        let mut multilingual = restart_input();
+        let BodyContent::Paragraph(paragraph) = &mut multilingual.document.body.content[20] else {
+            panic!("multilingual body entry is a paragraph");
+        };
+        paragraph.runs[0].content = vec![RunContent::Text(rdocx_oxml::text::CT_Text::new(
+            "다국어 상태",
+        ))];
+        paragraph.runs[0]
+            .properties
+            .get_or_insert_default()
+            .language = Some("ko-KR".to_owned());
+        assert_no_checkpoints("multilingual state", multilingual);
+
+        assert_no_checkpoints(
+            "anchored empty paragraph",
+            make_wrapping_document(WrapType::Square, None, 120.0, 60.0, 5.0),
+        );
     }
 
     fn related_story_restart_input(paragraph_count: usize) -> LayoutInput {
@@ -11111,7 +11821,7 @@ mod tests {
         assert!(
             retained.raw_pages.len().max(retained.checkpoints.len()) <= RESTART_CACHE_MAX_ENTRIES
         );
-        assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
+        assert_restart_cache_within_aggregate(&engine);
 
         let mut bounded_input = make_input_with_text("");
         bounded_input.document.body.content.clear();
@@ -11131,11 +11841,11 @@ mod tests {
             .layout(&bounded_input)
             .expect("bounded layout succeeds");
         assert_eq!(result.pages.len(), 1_024);
-        let retained = bounded
+        bounded
             .restart_cache
             .as_ref()
             .expect("1,024 substituted page slots remain reusable");
-        assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
+        assert_restart_cache_within_aggregate(&bounded);
 
         let mut oversized = bounded_input;
         let mut paragraph = CT_P::new();
@@ -11157,7 +11867,7 @@ mod tests {
         );
 
         fn over_limit<T>() -> usize {
-            RESTART_CACHE_MAX_BYTES / std::mem::size_of::<T>() + 1
+            LEGACY_RESTART_CACHE_MAX_BYTES / std::mem::size_of::<T>() + 1
         }
         fn assert_capacity_rejected(label: &str, mutate: impl FnOnce(&mut RestartCache)) {
             let mut candidate = RestartCache {
@@ -11173,7 +11883,7 @@ mod tests {
             };
             mutate(&mut candidate);
             assert!(
-                restart_cache_bytes(&candidate) > RESTART_CACHE_MAX_BYTES,
+                restart_cache_bytes(&candidate) > LEGACY_RESTART_CACHE_MAX_BYTES,
                 "{label}"
             );
         }
@@ -11205,12 +11915,12 @@ mod tests {
                 fingerprint: 0,
                 identity: Vec::new(),
                 note_references: Vec::new(),
-                bytes: RESTART_CACHE_MAX_BYTES + 1,
+                bytes: LEGACY_RESTART_CACHE_MAX_BYTES + 1,
             });
         });
         assert_capacity_rejected("outline title capacity is charged", |cache| {
             cache.outlines.push(oxml_layout::OutlineEntry {
-                title: String::with_capacity(RESTART_CACHE_MAX_BYTES + 1),
+                title: String::with_capacity(LEGACY_RESTART_CACHE_MAX_BYTES + 1),
                 level: 1,
                 page_index: 0,
                 y_position: 0.0,
@@ -11297,7 +12007,7 @@ mod tests {
             .expect("restart state retained");
         assert!(retained.checkpoints.len() > 1);
         assert!(retained.checkpoints.len() <= RESTART_CACHE_MAX_ENTRIES);
-        assert!(retained.bytes <= RESTART_CACHE_MAX_BYTES);
+        assert_restart_cache_within_aggregate(&engine);
 
         set_body_paragraph_text(&mut input, 70, "paragraph 070 changed line");
         let warm = engine.layout(&input).expect("warm middle edit");
@@ -11346,23 +12056,6 @@ mod tests {
 
     #[test]
     fn unsafe_pagination_state_falls_back_to_full_layout() {
-        let mut input = restart_input();
-        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[20] else {
-            panic!("paragraph");
-        };
-        paragraph.properties.get_or_insert_default().keep_next = Some(true);
-        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
-        let warm = engine.layout(&input).expect("keep layout");
-        assert!(engine.restart_cache.is_none());
-        set_body_paragraph_text(&mut input, 30, "paragraph 030 changed line");
-        let next = engine.layout(&input).expect("fallback relayout");
-        let cold = Engine::new_deterministic()
-            .expect("bundled fonts load")
-            .layout(&input)
-            .expect("cold fallback layout");
-        assert_layout_results_equal(&next, &cold);
-        assert!(!warm.pages.is_empty());
-
         let assert_fallback = |label: &str, input: LayoutInput| {
             let mut engine = Engine::new_deterministic().expect("bundled fonts load");
             engine
@@ -11380,8 +12073,17 @@ mod tests {
         table.document.body.add_table(unsafe_table);
         assert_fallback("traversal-sensitive table", table);
 
-        let split = make_input_with_text(&"split paragraph content ".repeat(200));
-        assert_fallback("split paragraph", split);
+        let split = make_input_with_text(&"split paragraph content ".repeat(2_000));
+        let mut split_engine = Engine::new_deterministic().expect("bundled fonts load");
+        let split_result = split_engine.layout(&split).expect("split paragraph layout");
+        assert!(
+            split_result.pages.len() > 1,
+            "fixture must split across pages"
+        );
+        assert!(
+            split_engine.restart_cache.is_none(),
+            "split paragraphs must not publish restart state"
+        );
 
         assert_fallback(
             "floating drawing",

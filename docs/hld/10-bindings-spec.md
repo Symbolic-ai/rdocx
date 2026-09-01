@@ -275,6 +275,13 @@ portable replacement primitive. A failure cannot truncate an existing
 destination. Export does not mutate the source document. Python, WASM, and CLI
 surfaces gain no ODT export entry point and retain their existing contracts.
 
+Native Rust callers can import and export OpenDocument Presentation through
+`Presentation::from_odp_bytes`, `from_odp_bytes_with_limits`, `open_odp`,
+`to_odp_bytes`, and `save_odp`. Read and write result values carry ordered
+`OdpDiagnostic` records. Read failures publish no presentation, and path writes
+serialize fully before atomic replacement. This is an additive pre-1.0 native
+surface. Python, WASM, and CLI bindings gain no ODP entry point.
+
 Native Rust callers can export EPUB 3 through `Document::to_epub_bytes` and
 `Document::save_epub`. The byte API returns `EpubWriteResult`, which carries
 the bounded deterministic publication and ordered location-aware
@@ -767,6 +774,35 @@ and continue to preserve presentations already edited or transferred through
 the native owner. No production dependency, feature flag, trait, dynamic
 dispatch, generic parameter, or builder is added.
 
+The low-level diagram definitions include doc-hidden read-only layout and
+colour render projections for the native renderer. They expose typed nested
+instruction ownership and typed colour choices with transforms, not raw XML or
+mutation. F-220 adds no facade, binding, `rpptx-layout`, or `rpptx-render`
+public surface.
+
+## Native PowerPoint notes and handout export
+
+The published pre-1.0 `rpptx` facade exposes `HandoutLayout::{One, Two, Three,
+Four, Six, Nine}` and four render-feature methods:
+
+```rust
+Presentation::to_notes_pdf_deterministic(&self) -> Result<Vec<u8>>;
+Presentation::notes_page_pngs_deterministic(&self, dpi: f64)
+    -> Result<Vec<Vec<u8>>>;
+Presentation::to_handout_pdf_deterministic(&self, layout: HandoutLayout)
+    -> Result<Vec<u8>>;
+Presentation::handout_page_pngs_deterministic(
+    &self,
+    layout: HandoutLayout,
+    dpi: f64,
+) -> Result<Vec<Vec<u8>>>;
+```
+
+These additions are native Rust APIs only. Python, WASM, and CLI surfaces add
+no notes or handout methods and continue to preserve the underlying parts. No
+new public surface is added to `rpptx-layout`, `rpptx-render`, or the OXML
+crates. The additive facade API is reviewed through the pre-1.0 release gate.
+
 ## Native PowerPoint executable-content inventory
 
 The published pre-1.0 `rpptx` facade exposes concrete `EmbeddedContentKind`,
@@ -1084,6 +1120,11 @@ profile exposes the constructor, `fromBytes`, `toBytes`, `slideCount`, and
 backend, rasteriser, or host font discovery. The `render` feature adds only
 `toPdf` and selects the facade's deterministic renderer. The optimized default
 artifact must remain below 1,000,000 bytes after deterministic gzip.
+
+Modern presentation package-class inspection and output selection remain
+native Rust APIs. Python, WASM, and CLI callers continue to preserve the
+source main content type through their existing byte or path save operations,
+but they gain no package-class selector in this milestone.
 Pull-request CI target-checks the default wrapper with the locked workspace
 graph and runs its package-preserving inline test in Node.
 

@@ -80,6 +80,9 @@ Presentation::set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()>;
 Presentation::core_properties(&self) -> Option<&CoreProperties>;
 Presentation::core_properties_mut(&mut self) -> &mut CoreProperties;
 Presentation::replace_text(&mut self, placeholder: &str, value: &str) -> usize;
+Presentation::package_class(&self) -> Result<PresentationPackageClass>;
+Presentation::to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<u8>>;
+Presentation::save_as_package_class(&self, path: impl AsRef<Path>, class: PresentationPackageClass) -> Result<()>;
 Presentation::save_as_show(&self, path: impl AsRef<Path>) -> Result<()>;
 SlideRef::hidden(&self) -> bool;
 SlideRef::has_explicit_background(&self) -> bool;
@@ -87,6 +90,13 @@ SlideMut::set_hidden(&mut self, hidden: bool);
 SlideMut::set_background(&mut self, fill: Fill) -> Result<()>;
 SlideMut::clear_background(&mut self);
 ```
+
+The native facade also owns the ODP conversion boundary. Import creates a fresh
+presentation containing ordered slides, ordinary rectangle shapes and text
+boxes, tables, embedded images, slide names, and speaker notes. Export projects
+the same subset without mutating the source. Charts, transitions, media,
+animation, SmartArt, and unsupported appearance semantics remain outside the
+editable ODP subset and produce stable source or model path diagnostics.
 
 Native collaboration, section, and master-setting access is also concrete and
 ordered:
@@ -398,11 +408,14 @@ retaining unsupported attributes, direct events, descendants, and raw
 boundaries. A clear that would strand direct raw list payload fails before
 mutation instead of publishing invalid XML.
 
-The `.pptx` versus `.ppsx` distinction lives entirely in this part's content
-type: `presentationml.presentation.main+xml` against
-`presentationml.slideshow.main+xml`. `Presentation::save_as_show()` changes
-only the staged output package's main content type. It does not store slideshow
-mode on the facade or affect later ordinary saves.
+The PPTX, PPTM, POTX, POTM, PPSX, and PPSM distinction lives entirely in this
+part's exact main content type. `PresentationPackageClass` maps those six
+values without inspecting a path extension. Ordinary `save` and `to_bytes`
+retain the opened class. `to_bytes_as` and `save_as_package_class` change only
+the staged output override and leave the live facade unchanged.
+`Presentation::save_as_show()` remains a compatibility wrapper for ordinary
+PPSX output. A class conversion preserves executable payloads and relationships
+and records retained package signature evidence as invalidated.
 
 ## Notes parts
 
@@ -450,6 +463,21 @@ It includes text only from a `p:sp` whose placeholder effective type is exactly
 equivalence between `body`, `subTitle`, and `obj` does not broaden extraction.
 Slide-image, slide-number, date, footer, header, and notes-master prompt text is
 excluded.
+
+Native notes-page export uses the presentation `p:notesSz` as the page size and
+emits one page for every source slide, including a slide without a notes part.
+Notes-master shapes form the page base. Notes-slide placeholders then match
+their master placeholders by explicit index first and compatible type second.
+Each match must be unique and consumed once. Missing, unmatched, or ambiguous
+ownership fails before output. Slide-image placeholders receive the source
+slide as a vector subtree. Header, footer, date, and slide-number placeholders
+obey the typed master flags and stored text.
+
+Audience handouts use the same relationship-resolved handout master and expose
+the six fixed `HandoutLayout` choices: one, two, three, four, six, and nine
+slides per page. The master remains below the slide thumbnails. Each thumbnail
+is aspect-fitted, clipped, bordered, and numbered. The three-slide layout adds
+five ruled note lines beside each thumbnail.
 
 Each included `p:txBody` contributes run and field text in document order.
 `a:br` contributes a newline and paragraph boundaries contribute a newline.
@@ -546,6 +574,16 @@ data, layout, quick-style, and colour relationships while retaining the exact
 `CT_DiagramStyleDefinition`, `CT_DiagramColorsDefinition`, and
 `CT_DiagramDrawing`. Readers are prefix-tolerant and namespace-aware. Untouched
 parts serialize from their original bytes.
+
+`CT_DiagramLayoutDefinition` and `CT_DiagramColorsDefinition` also expose
+doc-hidden read-only render projections. The layout projection retains the
+schema-owned nested instruction order and ownership for layout nodes,
+iteration, choices, conditions, shapes, presentation mappings, algorithms,
+parameters, constraints, and rules. The colour projection retains the
+schema-owned colour choice kind, value, and ordered transforms. Parsing is
+namespace-aware and schema-position-specific. Prefix aliases are accepted,
+while namespace shadows and extension lookalikes remain opaque. These
+projections do not expose raw XML or add a mutable object tree.
 
 The data model exposes points, connections, supported node text, optional
 background XML, and the schema-position-owned cached drawing id. Dirty writes

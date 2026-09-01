@@ -107,6 +107,13 @@ manifest, and image entries. ODT is not OPC, so neither direction enters
 `oxml-opc` or retains an ODT object model. The facade uses the existing
 workspace `zip`, `quick-xml`, and `oxml-media` dependencies for conversion.
 
+**ODP conversion belongs to the `rpptx` facade.** One private module validates
+the complete bounded non-OPC ZIP, parses ODF XML by expanded namespace, and
+projects the supported subset into a fresh `Presentation`. The writer walks
+that same owner and emits deterministic ODF 1.3. It does not retain a second
+presentation model or shell out to LibreOffice. Unsupported safe content is
+represented only by stable diagnostics.
+
 **Outbound EPUB belongs to the `rdocx` facade.** The private writer projects
 the owned Word document through the established outbound HTML semantics, then
 packages deterministic EPUB 3 metadata, navigation, reflowable XHTML, shared
@@ -642,6 +649,13 @@ contiguous regular runs in ordinary shapes, nested groups, and table cells.
 Fields, breaks, and selected alternate-content fallbacks remain traversal
 boundaries so the facade preserves their unmodelled or separately typed XML.
 
+The facade also owns modern PresentationML package identity. The exact main
+part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Normal
+serialization preserves that source class. An explicit output conversion
+changes only a staged content-type override, retains opaque executable parts
+and relationships, and invalidates retained package signature evidence when
+the signed table changes. Binary `.ppt` never enters this OPC path.
+
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
 workspace values say `["docx", "word"]` which would be wrong on a presentation
 crate. Once publication is approved, the rpptx family uses its own pre-1.0
@@ -813,6 +827,24 @@ parts in the producing slide, layout, or master scope, stages checked node-text
 edits, and copies the bounded owned graph for duplication or explicitly
 layout-bound cross-presentation transfer. No diagram model depends back on the
 facade, layout resolver, or renderer.
+
+For rendering, the same facade projects the six exact pinned authentic layout
+resources into transient ordinary PresentationML groups in the producing
+slide, layout, or master clone. A bounded private evaluator consumes the typed,
+doc-hidden layout and colour render data from `rpptx-oxml`, validates the
+authoritative data and presentation graphs, and fails closed for every other
+instruction program. The unchanged layout resolver and renderers then apply
+their shared geometry, text, paint, effect, clipping, timeline, and media
+paths. No cached drawing becomes authoritative and no persistent second
+diagram model is created.
+
+Notes-page and audience-handout export follow the same facade-owned assembly
+boundary. `rpptx` resolves the notes slide, notes master, handout master, and
+their themes from the OPC relationship graph, remaps notes-master and
+notes-slide relationship scopes into one collision-free transient package
+scope, and composes ordinary `PageFrame` values. The existing layout and render
+crates consume those frames without a notes-specific parser, renderer, public
+type, or dependency.
 
 The facade also owns package-to-render-input assembly. Its deterministic render
 entry points resolve the current package once and return either the shared

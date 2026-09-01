@@ -20,8 +20,16 @@ pub const CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml
 
 pub const PRESENTATION: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml";
+pub const PRESENTATION_MACRO_ENABLED: &str =
+    "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml";
+pub const PRESENTATION_TEMPLATE: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml";
+pub const PRESENTATION_TEMPLATE_MACRO_ENABLED: &str =
+    "application/vnd.ms-powerpoint.template.macroEnabled.main+xml";
 pub const SLIDESHOW: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml";
+pub const SLIDESHOW_MACRO_ENABLED: &str =
+    "application/vnd.ms-powerpoint.slideshow.macroEnabled.main+xml";
 pub const SLIDE: &str = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml";
 pub const SLIDE_LAYOUT: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml";

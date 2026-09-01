@@ -807,14 +807,22 @@ impl<'a> ResolveCtx<'a> {
                     .as_ref()
                     .map(resolved_line_ends)
                     .unwrap_or((None, None));
-                let (geometry, geometry_unsupported, geometry_diagnostic) = connector
-                    .shape_properties
-                    .preset_geometry
-                    .as_ref()
-                    .map(|preset| {
-                        match self
-                            .concrete_preset_geometry(preset, (bounds.width, bounds.height))
-                        {
+                let (geometry, geometry_unsupported, geometry_diagnostic) = if let Some(custom) =
+                    &connector.shape_properties.custom_geometry
+                {
+                    match self.concrete_custom_geometry(custom, (bounds.width, bounds.height)) {
+                        Ok(geometry) => (geometry, None, None),
+                        Err(error) => (
+                            ResolvedGeometry::BoundsFallback,
+                            Some("connector custom geometry evaluation"),
+                            Some(format!(
+                                "connector custom geometry evaluation failed: {error}; retained as shape bounds"
+                            )),
+                        ),
+                    }
+                } else if let Some(preset) = &connector.shape_properties.preset_geometry {
+                    {
+                        match self.concrete_preset_geometry(preset, (bounds.width, bounds.height)) {
                             Ok(Some(geometry)) => (geometry, None, None),
                             Ok(None) => (
                                 ResolvedGeometry::BoundsFallback,
@@ -833,12 +841,14 @@ impl<'a> ResolveCtx<'a> {
                                 )),
                             ),
                         }
-                    })
-                    .unwrap_or((
+                    }
+                } else {
+                    (
                         ResolvedGeometry::BoundsFallback,
                         Some("connector geometry"),
                         Some("unsupported connector geometry retained as shape bounds".to_owned()),
-                    ));
+                    )
+                };
                 if let Some(category) = fill_unsupported {
                     diagnostics.push(Diagnostic {
                         message: format!(
@@ -5462,6 +5472,30 @@ mod tests {
                 PathCommand::CurveTo { .. }
             ] if *to == Point { x: 5.0, y: 10.0 }
         ));
+    }
+
+    #[test]
+    fn connector_custom_geometry_reuses_the_shared_path_evaluator() {
+        let connector = r#"<p:cxnSp><p:nvCxnSpPr><p:cNvPr/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="254000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="l" t="t" r="r" b="b"/><a:pathLst><a:path w="100" h="100"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="0" y="50"/></a:lnTo><a:lnTo><a:pt x="100" y="50"/></a:lnTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:ln></p:spPr></p:cxnSp>"#;
+        let resolved = Fixture::new(connector, "", "")
+            .context()
+            .resolve_slide((720.0, 540.0))
+            .unwrap();
+
+        assert!(resolved.diagnostics.is_empty());
+        assert_eq!(resolved.shapes[0].unsupported, None);
+        let ResolvedGeometry::Custom { paths, .. } = &resolved.shapes[0].geometry else {
+            panic!("expected concrete connector custom geometry");
+        };
+        assert_eq!(
+            paths[0].commands,
+            [
+                PathCommand::MoveTo(Point { x: 0.0, y: 0.0 }),
+                PathCommand::LineTo(Point { x: 0.0, y: 10.0 }),
+                PathCommand::LineTo(Point { x: 10.0, y: 10.0 }),
+                PathCommand::LineTo(Point { x: 10.0, y: 20.0 }),
+            ]
+        );
     }
 
     #[test]

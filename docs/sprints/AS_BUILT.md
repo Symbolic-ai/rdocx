@@ -10680,3 +10680,282 @@ nitpicks.
 authoritative when exposing preserved reader facts. Preserve exact producer
 content unless the typed projection owns it. Any future live PR changes must be
 audited against the hardened canonical behavior rather than assumed newer.
+
+### F-X072, Keep paragraph caching across note references
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Direct body paragraphs containing a footnote or endnote
+reference now remain eligible for paragraph-cache reuse. A later edit in a
+700-paragraph document reuses 699 exact cached paragraphs and rebuilds one,
+instead of the early reference disabling every later cache read.
+
+**Non-obvious choices.** The complete typed paragraph remains the key, so a
+changed note ID misses its paragraph. Exact footnote and endnote parts remain
+in the retained-work context, so changed note content invalidates reuse for the
+transaction. Note-bearing table, header, and footer paragraphs remain
+conservative because their retained payloads do not own body note placement.
+
+**Deviations from the design plan.** None. The implementation changes one
+private safety predicate and adds one private helper with table and header or
+footer consumers. It adds no public API, dependency, feature, module, file,
+trait, or generic.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The footnote and endnote gates each require 699 hits and one rebuild
+after a late edit. Additional regressions cover changed reference IDs, changed
+note parts, exact warm and fresh equality, and conservative fields, numbering,
+drawings, raw children, tables, headers, and footers. Full workspace
+verification, the 219-test `rdocx-layout` suite, no-default fonts, WASM,
+rustdoc, README inventories, and the release 1,000-page performance gate all
+passed. Microscope pass 2 reported zero defects, zero smells, and zero
+nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Direct body note references are safe only
+because both the complete paragraph and exact note-part context are compared.
+Do not reduce either identity, and do not widen table or related-story caching
+without making body note placement part of that payload's ownership.
+
+### F-X073, Restart ordinary-prose pagination within the aggregate cache
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Ordinary multi-line prose, headings, and paragraphs using
+`keepNext` or `keepLines` can now publish restart checkpoints at complete block
+boundaries. Restart candidates use available capacity in the existing 64 MiB
+aggregate cache budget instead of failing at an independent 8 MiB ceiling.
+Late edit, insert, delete, and undo operations can therefore reuse the exact
+complete prefix while remaining byte-for-byte equal to fresh layout.
+
+**Non-obvious choices.** Record representability is separate from checkpoint
+placement. A paragraph split across pages falls back through the normal
+paginator and discards that restart candidate. Source-level fields, numbering,
+drawings, multilingual state, raw children, anchored empty paragraphs, and
+unsupported line items remain fail-closed. Bookmark safety compares complete
+namespace-aware raw elements, exact expanded-name attribute cardinality, and
+the retained `raw_before` position rather than trusting rendered projections.
+
+**Deviations from the design plan.** None. The implementation changes private
+layout and paginator logic only. It adds no public API, dependency, feature,
+module, file, trait, or generic.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built regressions cover multi-line prose, headings,
+`keepNext`, `keepLines`, aggregate-budget admission and rejection, exact warm
+and fresh edit, insert, delete, and undo equality, bounded recomputation, split
+paragraph fallback, unsafe fields, and exact bookmark raw XML. Full integrated
+workspace verification passed, including the 225-test `rdocx-layout` suite,
+LibreOffice and corpus gates, no-default fonts, both WASM facades, rustdoc,
+README inventories, publish dry-runs, archive limits, and supply-chain checks.
+The release-mode 1,000-page performance rider passed. Microscope pass 4
+reported zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Publish restart records only at complete block
+boundaries, and account for every current and pending cache class under the one
+aggregate limit with checked arithmetic. Keep source-level safety conservative.
+Rendered output alone is not proof that a restart record owns every effect.
+
+### F-220, SmartArt layout and rendering
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native presentation rendering now supports the six pinned
+authentic list, hierarchy, cycle, relationship, matrix, and pyramid SmartArt
+programs. Namespace-aware OXML projections retain bounded instruction, style,
+and colour semantics. A private evaluator validates exact ownership, order,
+cardinality, attributes, parameters, and total work before transiently lowering
+the diagram into the existing DrawingML geometry, paint, and text paths.
+
+**Non-obvious choices.** Five families use readable exact semantic profiles
+after the field and ownership validators. The three-node PowerPoint 16.104
+cycle1 resource has a private identity, raw SHA-256, instruction, and node-count
+compatibility boundary because its producer curve solve is not specified by
+OOXML. Unsupported or changed programs fail closed and remain preserved. The
+same resolved group serves static, timeline, media, and animation output.
+
+**Deviations from the design plan.** None. The implementation remains private
+to the presentation facade and doc-hidden OXML projections. It adds no facade,
+binding, layout, or renderer public API.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/06-presentationml-model.md`,
+`docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The common-source PowerPoint 16.104 corpus proves exact ownership,
+diagnostics, and provenance, shape edges within 1 point, ordered owner-centred
+text metrics within 3 points, and symmetric text-masked non-text SSIM of at
+least 0.90 for every family. Sensitivity rejects a 1.01-point displacement and
+a calibrated decorative mutation. Adversarial tests cover unsupported trees,
+excess work, changed identities and hashes, node counts, same-kind reorders,
+tuple substitutions, duplicate semantic replacements, and wrong owners. The
+integrated full presentation test binary, workspace tests, Clippy, no-default
+fonts, WASM, rustdoc, README inventories, package dry-run, archive limit, and
+supply-chain checks passed. Microscope pass 12 reported zero defects, zero
+smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the OXML projection as the only diagram
+model. Any newly supported authentic program needs an explicit bounded semantic
+profile and external common-source evidence. Do not infer plausible geometry
+from an unknown program or weaken the cycle1 identity boundary.
+
+### F-222, ODP read and write
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The native presentation facade now reads bounded ODP
+packages and writes deterministic ODP packages. The editable subset includes
+slides, ordinary rectangles and text boxes, tables, embedded images, slide
+names, and notes. Unsupported safe content is retained as stable, capped,
+location-aware diagnostics rather than silently disappearing.
+
+**Non-obvious choices.** The reader requires the stored ODP mimetype first,
+validates safe unique archive paths, parses namespace-expanded XML at exact
+schema positions, and applies part, total, depth, node, text, and diagnostic
+limits. The writer charges escaped text and media before growth, writes a
+complete manifest, and publishes files atomically. It does not claim parity for
+charts, transitions, animation, media timing, SmartArt, or unsupported visual
+appearance.
+
+**Deviations from the design plan.** None. The approved private
+`crates/rpptx/src/odp.rs` module contains the package and projection logic. The
+native pre-1.0 facade additions are intentional. The existing workspace ZIP
+dependency is used directly. No feature flag, trait, generic, integration
+binary, or binary fixture was added.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built regressions cover supported round trips, deterministic
+archive construction, namespace aliases and lookalikes, duplicate expanded
+attributes, unsafe entries, every declared resource limit, diagnostic order
+and ceiling, malformed images, and atomic read and save failures. The pinned
+LibreOffice 26.2.5.2 gate passed in both ODP-to-PPTX and PPTX-to-ODP directions.
+The full workspace, presentation, Clippy, no-default-font, WASM, rustdoc,
+README, publish dry-run, archive-size, prose, workflow, and skill-sync gates
+passed. Microscope pass 2 reported zero defects, zero smells, and zero
+nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep ODP import bounded before allocation and
+classify nodes by expanded name and schema position. Add a construct to the
+editable subset only when both directions have a pinned differential. Every
+safe unsupported direct object must produce one stable diagnostic.
+
+### F-223, Modern presentation package variants
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native presentation facade now identifies and writes
+ordinary presentations, macro-enabled presentations, ordinary templates,
+macro-enabled templates, ordinary slide shows, and macro-enabled slide shows.
+Ordinary saves retain the opened class. Output-only conversion changes only
+the presentation main-part content type on a staged package copy.
+
+**Non-obvious choices.** Package identity comes from the exact main-part
+content type rather than the filename extension. Class conversion preserves
+VBA, OLE, ActiveX, relationships, signatures, and unrelated content types. A
+class change records package-signature invalidation because it changes the
+signed content-type table. Unknown main-part content types fail closed.
+
+**Deviations from the design plan.** None. The implementation stays in the
+existing presentation facade, adds no module or dependency, and keeps the
+existing `save_as_show` API as a delegating compatibility method. The native
+pre-1.0 enum and methods are intentional additive public API.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built regressions cover all five newly supported classes,
+ordinary save retention, all-class conversion, exact executable payload and
+relationship preservation, package-signature invalidation, unknown-class
+rejection, and the established slide-show method. Full workspace tests,
+Clippy, no-default fonts, both WASM facades, rustdoc, README inventories,
+dependency direction, package dry-runs, and archive limits passed. Microscope
+pass 1 reported zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat the main-part content type as the only
+authoritative package class. Keep conversions output-only and preserve every
+opaque executable part and relationship. Any additional class requires an
+exact registered content type and a source-built round-trip.
+
+### F-226, Notes and handout export
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native presentation facade now exports one
+deterministic notes page per source slide and all six audience handout layouts
+to PDF and PNG. Notes pages include vector slide thumbnails, speaker text,
+stored metadata, and master content. Handouts preserve the master below
+aspect-fitted, clipped, bordered, and numbered thumbnails, with writing rules
+for the three-slide layout.
+
+**Non-obvious choices.** Notes-master and notes-slide relationships are remapped
+into one collision-free transient owner scope before the shared resolver runs.
+This preserves distinct media when both source scopes use the same relationship
+id. Placeholder overlay matches explicit index first and compatible type
+second, consumes each owner once, and fails on missing or ambiguous ownership.
+
+**Deviations from the design plan.** None. The implementation remains in the
+existing facade, reuses the existing deterministic layout and rendering stack,
+and adds no module, dependency, feature, binding, or renderer API.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/04-opc-and-packaging.md`, `docs/hld/06-presentationml-model.md`,
+`docs/hld/07-inheritance-and-resolution.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The six named source-built integration gates cover notes geometry,
+all handout layouts, deterministic PDF and PNG dimensions, noncanonical
+relationship targets, malformed graphs, invalid DPI, and package-byte
+preservation. Additional regressions cover exact placeholder ambiguity,
+cross-scope relationship id collisions, master z-order, and rejection of a
+1.01-point geometry displacement. Full workspace verification and public
+package riders passed. Microscope pass 4 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep notes and handout composition in the
+facade-owned package assembly stage. Do not resolve notes-slide media in the
+notes-master relationship scope, and do not replace vector thumbnails with a
+raster intermediate.

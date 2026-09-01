@@ -95,9 +95,11 @@ entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
 entry ceilings. The reusable Word engine bounds paragraph state at 4,096
 entries and 50 MiB, table state at 32 entries and 2 MiB, header and footer state
 at 64 entries and 4 MiB, and aligned restart page and checkpoint state at 1,024
-entries and 8 MiB. Its aggregate retained state stays within 5,216 entries and
-64 MiB. Both pending and published queues use retained-capacity accounting.
-The thousand-page incremental gate exercises the deterministic bundled-fallback
+entries. Restart candidates have no independent byte partition. Checked
+admission charges current and pending block caches plus the complete candidate
+against the 5,216-entry and 64 MiB aggregate limits, and arithmetic overflow
+fails closed. Both pending and published queues use retained-capacity
+accounting. The thousand-page incremental gate exercises the deterministic bundled-fallback
 facade and requires a middle edit to paginate at most two pages while matching
 a fresh layout exactly. The related-story gate source-builds 700 paragraphs
 with a footnote, endnote, default header, and page-number footer. An unchanged
@@ -122,6 +124,13 @@ whole presentation. It shares page lowering with
 font files from `RenderInput`. The `rpptx` corpus example is an unpublished
 development target and does not change any crate publication setting.
 
+Native notes and handout export is available only with the existing `render`
+feature and adds no dependency, feature flag, module, binding package, or
+published crate. Its public pre-1.0 `rpptx` API requires rustdoc with warnings
+denied, both WASM checks, dependency-direction validation, the patched
+workspace publish dry run, archive-size enforcement, and separate release
+review before publication.
+
 The `oxml-layout` `--no-default-features` path disables host system font
 discovery while retaining bundled fonts for deterministic construction. This is
 also the same font-isolation path the WASM build needs.
@@ -137,6 +146,17 @@ flag.
 Builds otherwise stay native. There is no development container. The Linux-only
 work, manylinux wheels, `wasm32` checks and the LibreOffice render oracle, runs
 on CI runners as it always would have.
+
+ODP conversion adds no external production tool and reuses the workspace
+`zip`, `quick-xml`, and `oxml-media` dependencies. LibreOffice 26.2.5.2 remains
+an explicit ignored acceptance gate that runs with an isolated user profile.
+Publish dry runs and the 10 MiB archive ceiling cover the additive native API
+and private converter module.
+
+Modern presentation package classes add no dependency, feature, module, or
+asset. The additive pre-1.0 `rpptx` enum and methods plus the new `oxml-opc`
+content-type constants require rustdoc, README inventory, patched publish
+dry-run, archive-size, and release review before publication.
 
 ## Feature flags
 

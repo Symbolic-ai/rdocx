@@ -33,7 +33,7 @@ pub struct ResolvedShape {
     pub tail_end: Option<ResolvedLineEnd>,
     pub shadow: Option<Effect>,
     pub content: ResolvedContent,
-    /// Set when we fell back: unknown preset, SmartArt, chart, ink.
+    /// Set when we fell back: unknown preset, unsupported SmartArt, chart, ink.
     pub unsupported: Option<&'static str>,
 }
 
@@ -212,15 +212,20 @@ then apply rotation and centre flips in DrawingML order. A leaf outside a group
 carries `Transform::IDENTITY`.
 
 Unrepresentable content remains visible as a bounds fallback with a stable
-unsupported category and a diagnostic. This includes unsupported charts
-without a usable cached image, SmartArt, OLE without a supported resolved
+unsupported category and a diagnostic. Before resolution, the facade expands
+the six exact pinned SmartArt layout programs into transient ordinary shapes
+inside the producing scope. Other SmartArt remains in this fallback category.
+The category also includes unsupported charts
+without a usable cached image, OLE without a supported resolved
 static preview, unknown graphic frames,
 connectors with absent, unknown, or failed geometry,
 image media pending relationship resolution, preset geometry pending
 evaluation, and fill forms that the backend-neutral paint model cannot
 represent exactly. A connector preset uses the same generated preset evaluator
 as an ordinary shape and retains its transform, direct line, fill, and
-arrowheads. A horizontal or vertical connector may have a zero extent on its
+arrowheads. Connector custom geometry reuses the same checked DrawingML path
+evaluator as ordinary shape custom geometry. A horizontal or vertical
+connector may have a zero extent on its
 collapsed axis and remains a finite stroked path. A connector without a direct
 line keeps a visible default line and a diagnostic until its preserved
 `p:style` reference has a typed resolution path. Explicit
@@ -240,6 +245,14 @@ own and group transforms are unrotated and unflipped. A rotated or flipped
 shape continues to diagnose the independent rotation policy. Unsupported
 circle, rectangle, and shape path gradients, tile rectangles, and each
 non-none flip variant retain distinct diagnostic categories.
+
+Notes export resolves the notes master before the notes slide overlay. Master
+elements therefore remain behind slide thumbnails, metadata, and speaker-note
+content. Placeholder inheritance uses the same index-first and compatible-type
+fallback rule as PresentationML, but rejects multiple candidates or a source
+placeholder with no unique master owner. Notes-master and notes-slide
+relationships retain their original owners through transient id remapping, so
+equal relationship ids cannot resolve media from the wrong scope.
 
 **Freeze this contract when the resolver lands, or the resolver and renderer
 tracks diverge.** It is versioned with the crate.

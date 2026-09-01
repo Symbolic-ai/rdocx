@@ -21,6 +21,13 @@ essentially unchanged from `rdocx-opc`.
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.
 
+Modern presentation package identity is the main presentation part's exact
+content type. `oxml-opc` names the ordinary presentation, macro-enabled
+presentation, ordinary template, macro-enabled template, ordinary slideshow,
+and macro-enabled slideshow values. `rpptx` accepts only those six values.
+Changing an output class replaces only that override in a staged package.
+Executable and unrelated parts remain opaque and byte-preserved.
+
 ODT is a ZIP package but not an OPC package. The private `rdocx` ODT reader
 therefore indexes it directly with the workspace `zip` dependency and does not
 create an `OpcPackage`. The index rejects unsafe or duplicate names, non-files,
@@ -36,6 +43,13 @@ entries in encounter order, and deflated `META-INF/manifest.xml`. The manifest
 names exactly the root, content, and emitted images. Ordered style allocation,
 fixed namespace prefixes, fixed ZIP metadata, and bounded retained output make
 two writes of one document byte-identical.
+
+ODP uses the same non-OPC ownership rule in `rpptx`. Its reader requires the
+first stored presentation mimetype, indexes all safe unique entries before XML
+projection, and enforces caller-selected entry, part, and total expansion
+limits. Its writer emits `mimetype`, fixed-prefix `content.xml`, sorted image
+entries, and the exact manifest with deterministic ZIP metadata. Path saves
+stage and sync a sibling file before portable atomic replacement.
 
 EPUB output is also ZIP but not OPC. The private `rdocx` writer emits the
 uncompressed `mimetype` entry first, followed by the container, package,
@@ -272,6 +286,15 @@ the part, relationship, content-type override, typed XML, and reopen before
 commit. A matching MIME type does not make an unlinked conventional part safe
 to overwrite. The notes-master and handout-master roots are likewise resolved
 from the presentation relationship graph without assuming their filenames.
+
+Notes and handout export requires exactly one internal relationship of the
+expected type and content type at each required edge. This includes
+presentation to master, master to theme, notes slide to notes master, and notes
+slide back to its source slide. Noncanonical internal part names remain valid.
+Before layout, notes-master and notes-slide relationship scopes are copied into
+a collision-free transient owner scope with absolute normalized targets and
+rewritten relationship ids. This keeps equal source ids independent and never
+changes the opened package.
 
 Content-control data binding follows the existing package graph rather than a
 conventional filename. The main document's custom XML relationship resolves an

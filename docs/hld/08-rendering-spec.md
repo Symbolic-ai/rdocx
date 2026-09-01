@@ -80,6 +80,29 @@ passthrough, PNG inflate, soft masks, PDF assembly and the tiny-skia rasteriser
 all carry over unchanged. That is roughly 1,667 lines the presentation side does
 not have to write.
 
+The `rpptx` facade expands the six exact pinned authentic SmartArt layout
+programs into transient ordinary PresentationML groups before the shared
+resolver runs. Authoritative data-node text, layout-owned decorative shapes,
+quick styles, colours, connector paths, and the graphic-frame transform flow
+through the same text, paint, effect, geometry, group, and clipping machinery
+as ordinary shapes. Static, timeline, media, and animation entry points reuse
+that resolved group. Unsupported or invalid programs retain a visible bounds
+fallback and a stable diagnostic. The renderer never reads diagram XML or
+treats a cached diagram drawing as authoritative.
+
+The native notes and handout entry points compose ordinary presentation page
+frames and then call the existing deterministic PDF and raster backends. Notes
+pages use `notesSz`, master-first z-order, vector source-slide thumbnails, and
+typed header, footer, date, slide-number, and speaker-note content. Handouts use
+the six fixed one, two, three, four, six, and nine-up grids. Thumbnails preserve
+aspect ratio, clip to their assigned cells, carry a one-point border and slide
+label, and the three-up layout adds five note rules per slide.
+
+Raster notes and handout output accepts finite positive DPI up to 600 and
+rejects a decoded output estimate above 256 MiB before allocation. Deterministic
+font mode, shared paint and geometry resolution, PDF assembly, and PNG encoding
+are unchanged.
+
 `Group` recursively emits a saved graphics state, its local matrix, optional
 clip and opacity, its children, and a matching restore. `Path` emits geometry,
 solid fill and solid stroke operators. The font, image, and link collection
@@ -720,11 +743,17 @@ wrapping-drawing state. Numbering, drawings including `AlternateContent`,
 fields, hyperlinks, relationships, media, generated markers, content controls,
 preserved producer XML, and other traversal-sensitive input
 bypass body reuse. Encountering any such body block disables later
-retained-block reads for that layout, so inserting an earlier note or numbering
-input cannot leave a later generated marker stale. Cacheable paragraph and
-table entries share one immutable `Arc` block with the active layout
-transaction. A private concrete side overlay holds result-local provenance and
-the paragraph structure ids consumed by paginator emission. Public
+retained-block reads for that layout, so inserting earlier numbering input
+cannot leave a later generated marker stale. A direct footnote or endnote
+reference in an otherwise safe body paragraph remains cacheable. Its explicit
+note ID is part of the complete typed paragraph key, and the exact footnote and
+endnote parts remain part of the retained-work context. Changing the reference
+misses that paragraph. Changing either note part disables retained reads for
+the transaction. Note references inside tables, headers, or footers remain
+uncacheable because those retained payloads do not own body note placement.
+Cacheable paragraph and table entries share one immutable `Arc` block with the
+active layout transaction. A private concrete side overlay holds result-local
+provenance and the paragraph structure ids consumed by paginator emission. Public
 `ParagraphBlock`, `TableBlock`, `LayoutBlock`, and `Section` stay unchanged.
 The overlay preserves exact scalar ranges and the recursive `MarkedContent`
 tree without mutating cached payloads. Each entry owns its diagnostics and
@@ -738,13 +767,17 @@ inputs.
 Retained block and restart state share a 5,216-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 50 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
-aligned restart page and checkpoint slots receive 1,024 entries and 8 MiB. The
-published and transaction-pending queues enforce the same partitions using
-retained-capacity accounting for owned keys, resolved part bytes, rows, cells,
-recursive cell blocks, watermark media, diagnostics, font traces, and reflow
-buffers. Shared active references do not duplicate the cache-owned allocation
-in retained-byte accounting. Eviction follows insertion order without hit-time
-queue maintenance. Oversized entries bypass retention.
+aligned restart page and checkpoint slots receive 1,024 entries. Restart
+candidates have no independent byte partition. Admission uses checked
+arithmetic across the current and transaction-pending paragraph, table, header
+or footer queues plus the complete candidate, and rejects any state above the
+64 MiB aggregate ceiling or on arithmetic overflow. The published and
+transaction-pending queues use retained-capacity accounting for owned keys,
+resolved part bytes, rows, cells, recursive cell blocks, watermark media,
+diagnostics, font traces, and reflow buffers. Shared active references do not
+duplicate the cache-owned allocation in retained-byte accounting. Eviction
+follows insertion order without hit-time queue maintenance. Oversized entries
+bypass retention.
 
 Cache publication is a whole-layout transaction. A late error publishes none
 of the staged paragraph, table, header, or footer entries. A hit replays
@@ -756,15 +789,16 @@ font ids, font bytes, diagnostics, revision view, and resolved source provenance
 equal.
 
 The engine also records restart checkpoints for one safe section containing
-one-line or two-line context-independent paragraphs, safe paragraph note
-references, and cache-safe tables. A checkpoint exists only before a complete
-block at an empty page boundary after the current and pending note queues have
-drained. The paginator never records one inside a table. It records the next
-block, page count, and displayed header page number. Unchanged footnote,
-endnote, header, and footer stories participate through exact retained-context
-equality. A changed related story or body note-reference sequence uses the full
-paginator. Note-bearing tables, backgrounds, fields, headings, drawings,
-multi-section content, split paragraphs, keep constraints, and any
+ordinary context-independent paragraphs, safe paragraph note references, and
+cache-safe tables. Multi-line prose, headings, `keepNext`, and `keepLines` are
+eligible when pagination reaches a complete block boundary. A checkpoint
+exists only before a complete block at an empty page boundary after the current
+and pending note queues have drained. The paginator never records one inside a
+table or a split paragraph. It records the next block, page count, and displayed
+header page number. Unchanged footnote, endnote, header, and footer stories
+participate through exact retained-context equality. A changed related story or
+body note-reference sequence uses the full paginator. Note-bearing tables,
+backgrounds, fields, drawings, multi-section content, split paragraphs, and any
 unrepresented state also use the full paginator. A warm edit restarts at the
 last checkpoint before its first changed block. It stops at the first safe page
 boundary inside an unchanged suffix only when the complete retained context,
@@ -784,8 +818,8 @@ view, and every substitution input compare equal. Field-free output shares its
 pristine `Arc` directly. Field-bearing blocks still receive no pagination
 checkpoint, so this optimization cannot widen the restart-safe region. Page
 pairs and checkpoints occupy aligned slots inside the 1,024-entry partition, and
-all pair payloads and exact inputs count toward its 8 MiB ceiling. A mismatch
-reshapes the page. A bound failure drops the whole restart record.
+all pair payloads and exact inputs count toward the 64 MiB aggregate ceiling. A
+mismatch reshapes the page. A bound failure drops the whole restart record.
 
 A thousand-page document with one safe page-boundary paragraph per page keeps
 the complete restart record under these limits. Editing paragraph 500 through
@@ -911,6 +945,12 @@ for all 50 pinned decks, renders every page at 150 dpi, and writes one TSV row
 per slide. Each row records the positive-extent source leaf count, resolved
 shape count, dropped count, diagnostics, and PNG path. A panic or missing page
 fails the driver.
+
+ODP interchange does not add a rendering path. Imported content enters the
+existing presentation model, and exported content leaves from that model.
+LibreOffice is used only as the pinned two-direction structural and PDF record
+oracle. Existing deterministic presentation rendering and the 49-entry hash
+harness remain unchanged.
 
 The additive timeline path resolves the same slide into a
 `ResolvedTimelineSlide`, which pairs each resolved shape with its stable source

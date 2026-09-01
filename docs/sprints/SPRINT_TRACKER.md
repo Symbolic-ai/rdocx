@@ -77,6 +77,7 @@ defended.
 | S60 | M21 | 2 | 2 | 0 | 8 | 2 | Added a typed timing and transition model, deterministic timeline evaluation, ordinary transition rendering, and bounded explicit-name morph composition without changing static output. The nine-case PowerPoint differential passed within 0.96 point and 0.997866 SSIM, while the full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 2 clean. M21 continues in S61 with media playback and animated export |
 | S61 | M21 | 3 | 3 | 0 | 10 | 1 | Added relationship-safe audio and video package mutation, deterministic poster and playback state, and bounded animated GIF and Motion JPEG AVI export. The macOS and Linux arm64 manifests matched exactly. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and close-boundary sprint review pass 7 clean. M21 continues in S62 with embedded objects and SmartArt |
 | S62 | M21, X | 4 | 3 | 1 | 16 | 1 | Added relationship-safe OLE, ActiveX, and VBA inventory and mutation, a bounded typed SmartArt inspection and editing model, and hardened outcomes from PRs 61 through 64. F-220 carries to S63 after the ten-pass microscope bound found two remaining exact fail-closed SmartArt validator gaps. Its worker and evidence remain intact, and F-222 waits for its clean completion. The full close gate passed with all 49 hashes unchanged and every package archive below 10 MiB |
+| S63 | M21, X | 6 | 6 | 0 | 20 | 1 | Completed authentic SmartArt rendering, bounded ODP interchange, modern presentation package variants, notes and handout export, and the fixes for Issues 65 and 66. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 1 clean. M21 remains open for its representative-deck gate and later import work |
 
 ## Completed features
 
@@ -361,6 +362,12 @@ defended.
 | F-219 | S62 | L | 4 | 1 | 2026-09-01 | Added a bounded typed SmartArt model with atomic editing, graph-safe duplication and transfer, and exact unsupported XML preservation |
 | F-218 | S62 | L | 4 | 1 | 2026-09-01 | Added relationship-owned embedded-content inventory, byte-exact extraction, and atomic OLE, ActiveX, and VBA mutation with explicit signature policies |
 | F-X071 | S62 | L | 4 | 1 | 2026-09-01 | Integrated and hardened the reader outcomes from PRs 61 through 64 with contributor credit and exact namespace, schema-order, and effective-style preservation |
+| F-X072 | S63 | M | 2 | 1 | 2026-09-01 | Kept direct body footnote and endnote references cacheable through complete paragraph keys and exact note-part context |
+| F-X073 | S63 | L | 4 | 1 | 2026-09-01 | Restarted ordinary prose from complete block boundaries within the shared aggregate cache budget while keeping unsafe source content fail-closed |
+| F-220 | S63 | L | 5 | 1 | 2026-09-01 | Rendered six pinned authentic SmartArt families through bounded typed instruction evaluation and shared DrawingML paths, with an exact guarded cycle1 compatibility profile |
+| F-222 | S63 | L | 5 | 1 | 2026-09-01 | Added bounded namespace-aware ODP import and deterministic export for slides, text, rectangles, tables, images, names, and notes with explicit lossy diagnostics |
+| F-223 | S63 | M | 2 | 1 | 2026-09-01 | Preserved six modern PresentationML package classes and added staged output-only conversion without changing executable payloads or relationships |
+| F-226 | S63 | M | 2 | 1 | 2026-09-01 | Exported relationship-resolved notes pages and all six audience handout layouts through deterministic PDF and PNG paths |
 
 ## Velocity
 
@@ -438,6 +445,7 @@ five working days.
 | S60 | 2 | 2 | 5.00 |
 | S61 | 3 | 1 | 15.00 |
 | S62 | 3 | 1 | 15.00 |
+| S63 | 6 | 1 | 30.00 |
 
 ## Escalation record
 
@@ -503,3 +511,4 @@ was done about it. Empty is the expected state.
 | 2026-08-31 | Sprint estimate variance exceeded 30 percent | S60 | Record 2 actual days against 8 estimated. The strict dependency let F-214 reuse the completed F-213 model, while the user-supplied PowerPoint export and bounded review loop concentrated oracle calibration in one integrated path. The resulting 5.00 stories per week matches the long-run delivery velocity, so retain the dependency-defined S61 boundary |
 | 2026-08-31 | Sprint estimate variance exceeded 30 percent | S61 | Record 1 actual day against 10 estimated. Three strict dependency waves reused the completed timing, package, and rendering foundations, while the bounded reviews concentrated interaction corrections in one integrated facade and encoder path. The resulting 15.00 stories per week is not a sustainable forecast, so retain the dependency-defined S62 boundary |
 | 2026-09-01 | Sprint estimate variance exceeded 30 percent | S62 | Record 1 actual day against 16 estimated. Three isolated workers and the contribution-integration path allowed completed work to overlap, while F-220 reached the ten-pass review bound and carried with its worker intact. The resulting 15.00 stories per week is not a sustainable forecast, so retain the dependency-defined S63 boundary and complete F-220 before F-222 |
+| 2026-09-01 | Sprint estimate variance exceeded 30 percent | S63 | Record 1 actual day against 20 estimated. Retained F-220 evidence, established interchange and rendering paths, and tightly scoped cache fixes reduced repeated investigation while the bounded reviews preserved exact behavior. The resulting 30.00 stories per week is not a sustainable forecast, so retain milestone-defined future sprint boundaries |

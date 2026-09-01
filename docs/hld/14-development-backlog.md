@@ -1949,11 +1949,16 @@ the bounded SmartArt corpus while preserving unsupported algorithms.
 diagram parts remain byte-preserved after unrelated mutations.
 
 ### F-220, SmartArt layout and rendering (L)
-Resolve supported list, hierarchy, cycle, relationship, matrix, and pyramid
-layouts through the shared DrawingML and text engines.
+Resolve the six pinned authentic list, hierarchy, cycle, relationship, matrix,
+and pyramid programs through bounded private instruction evaluation and the
+shared DrawingML paint and text engines. The exact three-node `cycle1` resource
+uses a private PowerPoint 16.104 compatibility profile that rejects any
+identity, resource SHA-256, instruction, or node-count variation.
 **Depends on**: F-219.
-**Test gate**: differential. The supported corpus renders within the declared
-PowerPoint geometry and SSIM thresholds.
+**Test gate**: differential. The common-source PowerPoint corpus retains exact
+ownership, diagnostics, dimensions, and provenance, stays within 1 point for
+shape bounds and 3 points for ordered text ink metrics, and reaches at least
+0.90 symmetric text-masked non-text SSIM for every family.
 
 ### F-221, Presentation encryption and signatures (M)
 Expose password-based read and write plus signature inspection, verification,
@@ -1965,17 +1970,21 @@ verification matches the trusted certificate fixtures, and mutation never
 leaves a signature falsely reported as valid.
 
 ### F-222, ODP read and write (L)
-Import and export the supported presentation structure, text, tables, images,
-charts, notes, and animation metadata through a declared OpenDocument fidelity
-boundary with stable diagnostics.
+Import and export slides, ordinary rectangles and text boxes, tables, embedded
+images, slide names, and speaker notes through a declared OpenDocument fidelity
+boundary. Charts, transitions, media, animation, SmartArt, and unsupported
+appearance semantics produce stable diagnostics.
 **Depends on**: F-214, F-215, F-217, F-220.
 **Test gate**: differential. Source-built ODP and PPTX conversions match the
 pinned LibreOffice structural and render records in both directions.
 
 ### F-223, Modern presentation package variants (M)
-Support macro-enabled presentations and templates, ordinary templates, and
-slide-show packages without collapsing their content types or startup mode.
-Binary `.ppt` remains out of scope.
+The native facade maps the six exact PPTX, PPTM, POTX, POTM, PPSX, and PPSM
+main-part content types to `PresentationPackageClass`. Ordinary saves retain
+the opened class. Output-specific conversion changes only the staged main
+override, preserves opaque executable payloads and relationships, and records
+retained package signatures as invalidated. Binary `.ppt` remains out of
+scope.
 **Depends on**: F-218.
 **Test gate**: round-trip. PPTM, POTX, POTM, PPSX, and PPSM fixtures reopen in
 their original package class with preserved executable payloads.
@@ -1997,11 +2006,18 @@ operators remain explicit diagnostics.
 the source render, while the editable subset retains text and link mappings.
 
 ### F-226, Notes and handout export (M)
-Render speaker notes, notes pages, audience handouts, slide numbers, dates, and
-headers or footers to PDF and images using the declared master hierarchy.
+Render relationship-resolved speaker notes and all six audience handout grids
+to deterministic PDF and PNG. Notes pages use `notesSz`, master-first overlay,
+vector slide thumbnails, exact placeholder ownership, and typed slide numbers,
+dates, headers, and footers. Handouts preserve the handout master below
+aspect-fitted, clipped, bordered, and numbered thumbnails. The three-up layout
+adds ruled writing space.
 **Depends on**: F-217.
-**Test gate**: golden. Notes and handout pages match the pinned PowerPoint
-export in order, geometry, text, and repeated metadata.
+**Test gate**: source-built deterministic regression. Noncanonical relationship
+targets, cross-scope id collisions, absent notes, placeholder ambiguity, all six
+layouts, exact vector geometry, PDF text and page count, PNG dimensions and
+pixels, 1.01-point sensitivity, and source-byte preservation pass. The 49-entry
+render hash manifest remains unchanged.
 
 ### F-227, Animated GIF and video export (L)
 Sample deterministic timeline states into animated GIF and a bounded video
@@ -3512,6 +3528,42 @@ meaning to a foreign-namespace lookalike or weaken unmodelled XML preservation.
 **Test gate**: regression. Focused namespace, schema-order, default-style,
 revision-depth, and reader-projection fixtures pass after save and reopen, the
 complete Word suites pass, and all 49 output hashes remain unchanged.
+
+### F-X072, Keep paragraph caching across note references (M)
+
+Keep paragraph-cache reads available after an otherwise safe paragraph that
+contains a footnote or endnote reference. The cache key continues to include
+the complete typed paragraph and revision view, while cache-context reuse
+continues to compare the exact footnote and endnote parts. A changed reference
+ID or changed note part therefore invalidates the affected reuse boundary
+without poisoning later safe paragraphs. Fields, numbering, drawings, raw
+children, and other unsupported paragraph-cache content remain conservative.
+
+**Depends on**: F-X062.
+**Test gate**: regression. A 700-paragraph document with one early footnote or
+endnote reference records 699 paragraph-cache hits and one rebuild after a
+later paragraph edit. Warm and fresh layouts are byte-for-byte equal. Changing
+the reference or note part invalidates the required entry, and existing unsafe
+content remains excluded.
+
+### F-X073, Restart ordinary-prose pagination within the aggregate cache (L)
+
+Permit restart-pagination records for ordinary multi-line prose, headings, and
+keep-together paragraphs when the complete checkpoint state already represents
+their effects. Continue to reject unrepresented numbering, drawings,
+multilingual state, raw content, and other unsafe inputs. Field-bearing blocks
+retain substitution pairs but receive no pagination checkpoints. Charge restart
+records against the actual paragraph, table, header or footer, and restart
+cache bytes under the existing aggregate budget rather than an independent
+8 MiB ceiling. The existing entry caps and exact context fingerprints remain
+fail-closed.
+
+**Depends on**: F-202, F-X062, F-X072.
+**Test gate**: regression. A 700-paragraph ordinary-prose document containing
+a heading publishes a restart candidate larger than 8 MiB when the aggregate
+remains below 64 MiB. Late edit, insert, delete, and undo layouts reuse bounded
+work and remain byte-for-byte equal to fresh layout. A candidate above the
+aggregate budget is rejected without changing output.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

@@ -37,6 +37,15 @@ writes, exact whitespace elements, output and diagnostic bounds, stable lossy
 paths, and atomic path replacement. The writer does not use LibreOffice as a
 package-byte oracle.
 
+The ODP differential builds its presentation and ODF package in source. The
+exact pinned LibreOffice 26.2.5.2 build converts both directions in isolated
+profiles, and the gate checks slide count, supported text, successful PDF
+production, page count, and rendered text. Focused tests cover expanded-name
+aliases, schema-position lookalikes, unsafe entries, duplicate expanded
+attributes, archive and output limits, deterministic bytes, exact manifest
+ownership, diagnostic exhaustion, and atomic failure publication. Existing
+presentation hashes must remain 49 of 49 unchanged.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
@@ -496,9 +505,13 @@ paragraphs, edits one paragraph, and requires 699 warm hits with only the edit
 rebuilt. The complete warm result and source map equal a fresh cold result, and
 restart pagination reports a bounded rebuilt range. A forced fingerprint
 collision still requires exact typed paragraph equality. Focused cases prove
-that note, field, and numbering prefixes disable later reads, a late failure
-publishes nothing, hits preserve insertion order, and FIFO eviction holds at
-the independently pinned 4,096-entry and 50 MiB paragraph limits. Cacheable
+that an early direct footnote or endnote reference still permits 699 hits and
+one rebuild, while fields, numbering, drawings, and raw-child prefixes disable
+later reads. Changing the reference ID misses its paragraph key, changing a
+note part invalidates the exact retained context, note-bearing table and header
+or footer content remains conservative, a late failure publishes nothing, hits
+preserve insertion order, and FIFO eviction holds at the independently pinned
+4,096-entry and 50 MiB paragraph limits. Cacheable
 active paragraph and table blocks share immutable cache payloads through a
 private representation. Warm and fresh results must retain exact pages,
 structure, provenance, and nested table paths while public block APIs remain
@@ -516,9 +529,12 @@ headers, and page-number footers keep bounded restart work through both the
 engine and bundled-fallback facade. They also prove endnotes append once,
 changed related stories and note-reference sequences invalidate reuse, and a
 footnote continuation cannot publish a dirty checkpoint. Multi-section
-content, note-bearing tables, split paragraphs, floating drawings, keep
-constraints, backgrounds, and mismatched boundary state must use the full
-paginator.
+content, note-bearing tables, split paragraphs, floating drawings, backgrounds,
+and mismatched boundary state must use the full paginator. Ordinary multi-line
+prose, headings, `keepNext`, and `keepLines` must publish complete-boundary
+restart records. A 700-paragraph source-built case requires late edit, insert,
+delete, and undo results to equal fresh deterministic layout while recomputing
+only a bounded page region.
 
 The incremental-layout scale gate builds 1,000 one-page paragraphs through the
 public deterministic bundled-fallback facade, edits paragraph 500, and compares
@@ -526,7 +542,10 @@ the warm result with a fresh layout. It requires exactly 1,000 pages, at most
 two warm page-layout invocations, at least 998 retained page-frame `Arc`
 identities, 999 paragraph-cache hits, one paragraph build, and complete result
 equality. The paired engine gate requires a 1,024-page restart record to remain
-within 8 MiB and a 1,025-page record to fall back safely.
+within the aggregate cache budget and a 1,025-page record to fall back safely.
+An additional candidate larger than the former 8 MiB limit must publish when
+the actual aggregate remains within 64 MiB. A candidate above the aggregate or
+an arithmetic overflow must fail closed without changing output.
 
 The substituted-page regression gate proves that unchanged PAGE, NUMPAGES, and
 PAGEREF pages reuse their prior substituted frame only through pristine `Arc`
@@ -575,7 +594,8 @@ pages, and reflow parameters including tab stops. The combined retained state
 must stay within 5,216 entries and 64 MiB, with paragraph state capped at 4,096
 entries and 50 MiB, table state capped at 32 entries and 2 MiB, header and
 footer state capped at 64 entries and 4 MiB, and restart state capped at 1,024
-entries and 8 MiB. Oversized entries must bypass retention.
+entries. Restart candidates use the checked 64 MiB aggregate budget instead of
+an independent byte cap. Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and reviewed 49-entry hash harness are required riders.
@@ -798,6 +818,39 @@ Eight gates run against it:
    slides, layouts, and masters without interpreting their payloads. The gate
    requires exactly two layout owners and one master owner and proves each
    reported payload extracts to the reported byte length.
+9. **Notes and handout deterministic export**: a source-built package uses
+   noncanonical notes-master, handout-master, notes-slide, theme, and media
+   targets. PDF and PNG checks cover page order, `notesSz`, exact slide-image
+   edges, header and footer metadata, a slide without notes, all six handout
+   grids, master-behind-thumbnail z-order, three-up note rules, and package-byte
+   preservation. Relationship negatives cover missing, external, duplicate,
+   wrong-type, malformed, and equal-id cross-scope cases. Placeholder cases
+   prove index-first and type-fallback matching, ambiguity rejection, and
+   unmatched rejection. The geometry unit gate covers exact targets, clipping,
+   five rules, and rejection of a 1.01-point displacement. The 49-entry render
+   hash manifest remains unchanged.
+
+The native SmartArt render differential uses six one-slide source decks built
+from exact SHA-256-pinned PowerPoint 16.104 layout, quick-style, and colour
+resources. The same source deck feeds PowerPoint and the native facade. The
+manifest binds the source, PowerPoint PDF, normalized PNG, exact shape and text
+ownership, bounds, diagnostics, dimensions, and ordered text line counts.
+Every shape edge must remain within 1 point. Symmetric text-masked non-text
+SSIM must be at least 0.90. Owner-centered horizontal ink edges, raw vertical
+ink edges, and line widths must remain within 3 points. Full-image SSIM is a
+diagnostic because the oracle uses Calibri and deterministic mode uses the
+bundled metric-compatible Carlito font. A 1.01-point displacement and a
+calibrated decorative paint and size mutation prove the thresholds reject
+material divergence. Required-corpus mode fails when any manifest artifact or
+provenance hash is absent.
+
+Five supported layout programs use the bounded typed instruction evaluator.
+The exact three-node `cycle1` resource uses one private PowerPoint 16.104
+compatibility profile because its producer diameter and curved-connector solve
+is not specified by OOXML or the resource program. Production rendering
+requires the exact layout identity and resource SHA-256. A changed identity,
+resource byte, instruction, or node count fails closed. This exception adds no
+facade, binding, layout, or renderer API.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
 `placeholder-layout-color.pptx`, and
@@ -953,6 +1006,14 @@ application version. The ignored gate reruns the automatable PowerPoint and
 LibreOffice checks and validates all four SHA-bound evidence rows. It does not
 replace the Keynote or Google human-action evidence with unsupported UI
 automation.
+
+The modern package-class gate builds PPTM, POTX, POTM, PPSX, and PPSM packages
+from one valid PresentationML graph. Every class reopens with its exact main
+content type. Macro classes retain the relationship-owned VBA project and
+signature bytes, ordinary classes retain opaque producer parts, and all
+relationship scopes remain equal. A six-way conversion comparison proves the
+main override is the only package difference. A signed conversion separately
+proves evidence is retained and reported invalidated.
 
 The evidence bound to the reviewed SHA is:
 
