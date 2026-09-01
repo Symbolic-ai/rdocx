@@ -114,6 +114,13 @@ that same owner and emits deterministic ODF 1.3. It does not retain a second
 presentation model or shell out to LibreOffice. Unsupported safe content is
 represented only by stable diagnostics.
 
+**Inbound presentation HTML belongs to the `rpptx` facade.** Its private
+module uses `scraper` for bounded HTML5 tree repair and supported selector
+matching, then projects explicit absolute CSS boxes directly into a fresh
+owned `Presentation`. It reuses the existing shape, text, table, image,
+hyperlink, package, and validation owners. It retains no browser layout model,
+performs no resource fetch, and adds no `oxml-*`, binding, or CLI edge.
+
 **Outbound EPUB belongs to the `rdocx` facade.** The private writer projects
 the owned Word document through the established outbound HTML semantics, then
 packages deterministic EPUB 3 metadata, navigation, reflowable XHTML, shared

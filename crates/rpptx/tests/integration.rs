@@ -6,6 +6,270 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicU64;
 
+const F224_BROWSER_SSIM_FLOOR: f64 = 0.95;
+
+fn f224_browser_gate_accepts(
+    structure_matches: bool,
+    text_matches: bool,
+    maximum_geometry_error_px: u32,
+    ssim: f64,
+) -> bool {
+    structure_matches
+        && text_matches
+        && maximum_geometry_error_px <= 1
+        && ssim >= F224_BROWSER_SSIM_FLOOR
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn html_public_import_saves_reopens_and_remains_editable() {
+    let html = "<section data-slide><div style='position:absolute;left:10px;top:20px;width:240px;height:80px;background:#336699'><a href='https://example.com'><strong>editable HTML</strong></a></div><table style='position:absolute;left:10px;top:120px;width:240px;height:100px'><tr><td>one</td><td>two</td></tr></table></section>";
+    let imported = rpptx::Presentation::from_html(html, &[]).expect("HTML imports");
+    assert!(
+        imported.diagnostics.is_empty(),
+        "{:?}",
+        imported.diagnostics
+    );
+    assert_eq!(imported.presentation.len(), 1);
+    assert_eq!(imported.presentation.slide(0).unwrap().shapes().len(), 2);
+    assert_eq!(
+        imported.presentation.slide(0).unwrap().text(),
+        "editable HTML\none\ttwo"
+    );
+
+    let bytes = imported.presentation.to_bytes().expect("HTML deck saves");
+    let mut reopened = rpptx::Presentation::from_bytes(&bytes).expect("HTML deck reopens");
+    reopened
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("edited after reopen")
+        .expect("HTML shape remains editable");
+    assert_eq!(
+        reopened
+            .slide(0)
+            .unwrap()
+            .shape(0)
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("edited after reopen")
+    );
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+#[ignore = "requires Google Chrome 152.0.7977.65"]
+fn source_built_html_matches_pinned_chrome_after_save_and_reopen() {
+    const CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    const VERSION: &str = "Google Chrome 152.0.7977.65";
+    let version = Command::new(CHROME).arg("--version").output().unwrap();
+    assert!(version.status.success());
+    assert_eq!(String::from_utf8(version.stdout).unwrap().trim(), VERSION);
+
+    let root = std::env::temp_dir().join(format!("rpptx-f224-chrome-{}", std::process::id()));
+    if root.exists() {
+        fs::remove_dir_all(&root).unwrap();
+    }
+    fs::create_dir_all(&root).unwrap();
+    let profile = root.join("profile");
+    let source_path = root.join("source.html");
+    let screenshot_path = root.join("chrome.png");
+    let image_path = root.join("oracle.png");
+    let oracle_png = valid_one_pixel_png();
+    fs::write(&image_path, &oracle_png).unwrap();
+    let image_url = format!("file://{}", image_path.display());
+    let font_url = format!(
+        "file://{}",
+        workspace_root()
+            .join("crates/oxml-layout/fonts/Carlito-Regular.ttf")
+            .display()
+    );
+    let html = format!(
+        "<!doctype html><html><head><style>@font-face{{font-family:Carlito;src:url('{font_url}')}}html,body{{width:1280px;height:720px;margin:0;overflow:hidden;background:#fff}}</style></head><body><section data-slide><div style='position:absolute;left:96px;top:72px;width:320px;height:180px;background:#336699;color:#ffffff;font-family:Carlito;font-size:24pt'><a href='https://example.com'>Chrome oracle</a></div><img src='{image_url}' style='position:absolute;left:448px;top:72px;width:64px;height:64px'></section></body></html>"
+    );
+    fs::write(&source_path, &html).unwrap();
+    let source_url = format!("file://{}", source_path.display());
+    let screenshot_arg = format!("--screenshot={}", screenshot_path.display());
+    let profile_arg = format!("--user-data-dir={}", profile.display());
+    let mut chrome = Command::new(CHROME)
+        .args([
+            "--headless=new",
+            "--disable-gpu",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--hide-scrollbars",
+            "--metrics-recording-only",
+            "--no-first-run",
+            "--window-size=1280,720",
+            "--host-resolver-rules=MAP * ~NOTFOUND",
+            &profile_arg,
+            &screenshot_arg,
+            &source_url,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut exited = None;
+    for _ in 0..200 {
+        exited = chrome.try_wait().unwrap();
+        if exited.is_some() || screenshot_path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    match exited {
+        Some(status) => assert!(status.success()),
+        None => {
+            chrome.kill().unwrap();
+            let _ = chrome.wait();
+        }
+    }
+    assert!(
+        screenshot_path.exists(),
+        "Chrome did not produce a screenshot"
+    );
+    let chrome_png = fs::read(&screenshot_path).unwrap();
+
+    let imported = rpptx::Presentation::from_html(
+        &html,
+        &[rpptx::HtmlImageResource {
+            source: &image_url,
+            bytes: &oracle_png,
+            filename: "oracle.png",
+        }],
+    )
+    .unwrap();
+    let bytes = imported.presentation.to_bytes().unwrap();
+    let reopened = rpptx::Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert_eq!(reopened.slide(0).unwrap().shapes().len(), 2);
+    assert_eq!(
+        reopened.slide(0).unwrap().shape(0).unwrap().kind(),
+        rpptx::ShapeKind::Shape
+    );
+    assert_eq!(
+        reopened.slide(0).unwrap().shape(1).unwrap().kind(),
+        rpptx::ShapeKind::Picture
+    );
+    assert_eq!(reopened.slide(0).unwrap().text(), "Chrome oracle");
+    let text_shape = reopened.slide(0).unwrap().shape(0).unwrap();
+    let run = text_shape
+        .text_frame()
+        .unwrap()
+        .paragraph(0)
+        .unwrap()
+        .run(0)
+        .unwrap();
+    let properties = run.properties().unwrap();
+    assert_eq!(properties.font_size, Some(2_400));
+    assert_eq!(properties.latin.as_ref().unwrap().typeface, "Carlito");
+    assert_eq!(
+        properties.fill,
+        Some(
+            Fill::from_xml(
+                br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="FFFFFF"/></a:solidFill>"#,
+            )
+            .unwrap()
+        )
+    );
+    let package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+    assert!(
+        package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .items
+            .iter()
+            .any(|relationship| {
+                relationship.rel_type == rel_types::HYPERLINK
+                    && relationship.target == "https://example.com"
+                    && relationship.target_mode.as_deref() == Some("External")
+            })
+    );
+    let (_, layout) = reopened.render_deterministic().unwrap();
+    let rust_png = oxml_pdf::render_page_to_png(&layout, 0, 96.0).unwrap();
+    let chrome = tiny_skia::Pixmap::decode_png(&chrome_png).unwrap();
+    let rust = tiny_skia::Pixmap::decode_png(&rust_png).unwrap();
+    assert_eq!((rust.width(), rust.height()), (1_280, 720));
+    assert_eq!((chrome.width(), chrome.height()), (1_280, 720));
+    fn color_bounds(pixmap: &tiny_skia::Pixmap, color: [u8; 4]) -> (u32, u32, u32, u32) {
+        let mut left = pixmap.width();
+        let mut top = pixmap.height();
+        let mut right = 0_u32;
+        let mut bottom = 0_u32;
+        for (index, pixel) in pixmap.data().chunks_exact(4).enumerate() {
+            if pixel != color {
+                continue;
+            }
+            let x = index as u32 % pixmap.width();
+            let y = index as u32 / pixmap.width();
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x + 1);
+            bottom = bottom.max(y + 1);
+        }
+        assert!(left < right && top < bottom, "target color is absent");
+        (left, top, right - left, bottom - top)
+    }
+    let expected = [96_u32, 72_u32, 320_u32, 180_u32];
+    let chrome_bounds = color_bounds(&chrome, [0x33, 0x66, 0x99, 0xff]);
+    let rust_bounds = color_bounds(&rust, [0x33, 0x66, 0x99, 0xff]);
+    for (actual, expected) in [
+        chrome_bounds.0,
+        chrome_bounds.1,
+        chrome_bounds.2,
+        chrome_bounds.3,
+    ]
+    .into_iter()
+    .zip(expected)
+    {
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "Chrome geometry {chrome_bounds:?}"
+        );
+    }
+    for (actual, expected) in [rust_bounds.0, rust_bounds.1, rust_bounds.2, rust_bounds.3]
+        .into_iter()
+        .zip(expected)
+    {
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "Rust geometry {rust_bounds:?}"
+        );
+    }
+    let ssim = smartart_png_ssim(&rust_png, &chrome_png);
+    eprintln!("F-224 Chrome full-image luminance SSIM: {ssim:.9}");
+    assert!(
+        f224_browser_gate_accepts(true, true, 1, ssim),
+        "Chrome full-image luminance SSIM {ssim} is below {F224_BROWSER_SSIM_FLOOR}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn html_browser_differential_rejects_geometry_text_and_pixel_perturbations() {
+    let mut reference = tiny_skia::Pixmap::new(32, 32).unwrap();
+    reference.fill(tiny_skia::Color::from_rgba8(0x33, 0x66, 0x99, 0xff));
+    let mut perturbed = tiny_skia::Pixmap::new(32, 32).unwrap();
+    perturbed.fill(tiny_skia::Color::from_rgba8(0xff, 0xff, 0xff, 0xff));
+    let reference = reference.encode_png().unwrap();
+    let perturbed = perturbed.encode_png().unwrap();
+    let matching_ssim = smartart_png_ssim(&reference, &reference);
+    let perturbed_ssim = smartart_png_ssim(&reference, &perturbed);
+
+    assert!(f224_browser_gate_accepts(true, true, 1, matching_ssim));
+    assert!(!f224_browser_gate_accepts(false, true, 1, matching_ssim));
+    assert!(!f224_browser_gate_accepts(true, false, 1, matching_ssim));
+    assert!(!f224_browser_gate_accepts(true, true, 2, matching_ssim));
+    assert!(perturbed_ssim < F224_BROWSER_SSIM_FLOOR);
+    assert!(!f224_browser_gate_accepts(true, true, 1, perturbed_ssim));
+}
+
 #[test]
 fn embedded_inventory_reports_exact_hashes_relationships_and_signature_state() {
     let mut package = embedded_fixture_package(true);
@@ -11694,7 +11958,8 @@ fn rpptx_is_an_explicit_publication_candidate() {
     assert!(manifest.contains("version = \"0.8.0\""));
     assert!(manifest.contains("publish = true"));
     assert!(manifest.contains("default = [\"default-template\", \"render\", \"system-fonts\"]"));
-    assert!(manifest.contains("default-template = []"));
+    assert!(manifest.contains("default-template = [\"dep:scraper\"]"));
+    assert!(manifest.contains("scraper = { workspace = true, optional = true }"));
     for dependency in [
         "dep:gif",
         "dep:jpeg-encoder",

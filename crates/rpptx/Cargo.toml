@@ -20,7 +20,7 @@ tag-name = "rpptx-v{{version}}"
 [features]
 default = ["default-template", "render", "system-fonts"]
 agile-encryption = ["oxml-opc/agile-encryption"]
-default-template = []
+default-template = ["dep:scraper"]
 digital-signatures = ["oxml-opc/digital-signatures"]
 render = [
     "dep:gif",
@@ -49,6 +49,7 @@ rpptx-layout = { workspace = true, optional = true }
 rpptx-oxml.workspace = true
 rpptx-render = { workspace = true, default-features = false, optional = true }
 quick-xml.workspace = true
+scraper = { workspace = true, optional = true }
 sha2.workspace = true
 thiserror.workspace = true
 tiny-skia = { workspace = true, optional = true }

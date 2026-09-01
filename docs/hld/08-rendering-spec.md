@@ -952,6 +952,15 @@ LibreOffice is used only as the pinned two-direction structural and PDF record
 oracle. Existing deterministic presentation rendering and the 49-entry hash
 harness remain unchanged.
 
+HTML presentation import also adds no rendering path. Supported boxes become
+ordinary shapes, text boxes, tables, pictures, and hyperlink relationships
+before save and reopen. Explicit CSS pixels use 9,525 EMU and the imported deck
+uses a 1,280 by 720 CSS-pixel slide. Deterministic rendering therefore consumes
+the same PresentationML model as authored slides. The browser differential
+uses the bundled Carlito bytes, 96 DPI, at most one CSS pixel of geometry
+error, exact reopened structure and text facts, and a full-image luminance SSIM
+floor of 0.95.
+
 The additive timeline path resolves the same slide into a
 `ResolvedTimelineSlide`, which pairs each resolved shape with its stable source
 identity and carries the evaluated frame state. Evaluation accepts only finite

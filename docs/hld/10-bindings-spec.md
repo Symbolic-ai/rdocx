@@ -282,6 +282,14 @@ Native Rust callers can import and export OpenDocument Presentation through
 serialize fully before atomic replacement. This is an additive pre-1.0 native
 surface. Python, WASM, and CLI bindings gain no ODP entry point.
 
+Native Rust callers can import HTML5 documents and fragments as presentations
+through `Presentation::from_html` and `Presentation::open_html`. The additive
+pre-1.0 surface exposes concrete `HtmlReadResult`, `HtmlDiagnostic`, and
+`HtmlImageResource` values plus `Error::Html`. Conversion returns a fresh
+editable presentation only after save, reopen, and validation. Python, WASM,
+and CLI surfaces gain no presentation HTML entry point and retain their
+existing methods and errors.
+
 Native Rust callers can export EPUB 3 through `Document::to_epub_bytes` and
 `Document::save_epub`. The byte API returns `EpubWriteResult`, which carries
 the bounded deterministic publication and ordered location-aware

@@ -1,6 +1,6 @@
 # F-224, HTML slide content import
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S64
 **Size**: L
 **Depends on**: F-110, F-112
@@ -104,11 +104,14 @@ The bounded input contract is:
 - Relative targets and `http`, `https`, and `mailto` links are retained. Unsafe
   schemes are diagnosed while their visible text remains.
 - Input bytes, DOM depth and nodes, text, CSS rules, projected objects, table
-  dimensions, link count, image bytes, and diagnostics all have hard bounds.
-  Exceeding a bound fails before publication.
+  dimensions, link count, image bytes, diagnostics, and aggregate selector
+  match attempts all have hard bounds. Exceeding a bound fails before
+  publication.
 
 The parser records HTML5 repair notices and unsupported content in document
-order with stable DOM paths. The candidate uses existing shape IDs, media
+order with stable DOM paths. Unsupported positioned elements, semantic control
+or media elements, and elements carrying visual or semantic attributes remain
+diagnostic even when they contain no text. The candidate uses existing shape IDs, media
 deduplication, relationship ownership, text mutation, table mutation, and
 schema-ordered serialization. No public intermediate HTML or layout model is
 retained.
@@ -135,6 +138,8 @@ retained.
 | unit | `html_slide_import_applies_the_bounded_cascade_to_shapes_and_text` | Selector specificity, inline priority, source order, fills, lines, paragraphs, and runs are exact. |
 | unit | `html_slide_import_rejects_every_declared_resource_limit` | Every input, DOM, CSS, object, table, image, link, and diagnostic cap fails closed. |
 | regression | `unsupported_html_layout_and_styles_are_diagnosed_without_losing_supported_siblings` | Stable paths and property names accompany every safe loss. |
+| regression | `unsupported_empty_semantic_elements_are_diagnosed` | Positioned and semantic video, canvas, and input nodes remain diagnostic without text. |
+| regression | `html_diagnostics_follow_document_order_across_collection_phases` | Stylesheet, resource, and projection diagnostics publish in exact DOM order rather than collection-phase order. |
 | integration | `html_slide_import_projects_editable_shapes_tables_images_and_links_after_reopen` | Shape order, text, cells, media bytes, relationships, validation, save, and reopen agree. |
 | round-trip | `html_slide_import_preserves_unmodelled_template_xml_and_schema_order` | Opaque template content remains byte-preserved and generated XML reparses without repair. |
 | differential | `source_built_html_matches_pinned_chrome_after_save_and_reopen` | Exact structure and text, one-pixel geometry tolerance, and the declared image threshold match Chrome. |
@@ -193,16 +198,19 @@ re-recorded.
 
 ## Implementation checklist
 
-- [ ] Add the approved private module and optional direct `scraper` edge.
-- [ ] Add the native result, diagnostic, image resource, error, and constructor surfaces.
-- [ ] Bound HTML parsing, CSS parsing, resource lookup, projection, and diagnostics.
-- [ ] Implement explicit CSS geometry and the declared cascade.
-- [ ] Project shapes, formatted text, tables, images, and hyperlinks through existing owners.
-- [ ] Serialize, validate, reopen, and return only the complete candidate.
-- [ ] Add unit tests in the module and public coverage to the existing `rpptx` integration binary.
-- [ ] Run the pinned Chrome differential and perturbation checks.
-- [ ] Run every routed package, WASM, dependency, deterministic-render, and full verification gate.
-- [ ] Update exactly the listed HLD files.
+- [x] Add the approved private module and optional direct `scraper` edge.
+- [x] Add the native result, diagnostic, image resource, error, and constructor surfaces.
+- [x] Bound HTML parsing, CSS parsing, resource lookup, projection, and diagnostics.
+- [x] Implement explicit CSS geometry and the declared cascade.
+- [x] Project shapes, formatted text, tables, images, and hyperlinks through existing owners.
+- [x] Serialize, validate, reopen, and return only the complete candidate.
+- [x] Add unit tests in the module and public coverage to the existing `rpptx` integration binary.
+- [x] Run the pinned Chrome differential and perturbation checks.
+- [x] Run every routed package, WASM, dependency, deterministic-render, and full verification gate.
+- [x] Update exactly the listed HLD files.
+- [x] Bound aggregate selector-match work independently of node and CSS rule caps.
+- [x] Diagnose empty visual and semantic unsupported elements.
+- [x] Publish diagnostics in deterministic document order across collection phases.
 
 ## Open questions
 

@@ -98,6 +98,19 @@ the same subset without mutating the source. Charts, transitions, media,
 animation, SmartArt, and unsupported appearance semantics remain outside the
 editable ODP subset and produce stable source or model path diagnostics.
 
+The native facade also owns bounded HTML conversion through
+`Presentation::from_html` and `Presentation::open_html`. Both return
+`HtmlReadResult`, which contains a fresh editable `Presentation` and ordered
+`HtmlDiagnostic` values. `HtmlImageResource` supplies caller-owned image bytes.
+The supported model is HTML5 document or fragment structure, explicit absolute
+CSS geometry, bounded type, class, id, descendant, and child selectors,
+formatted text, tables without spanning semantics, images, and safe external
+or relative hyperlinks. Unsupported implicit layout, browser layout, resource
+fetching, scripts, transforms, table spans, and CSS produce stable DOM-path
+diagnostics. Limit or projection failures return `Error::Html` without a
+partial result. The surface is additive on the pre-1.0 facade and is available
+with `default-template`.
+
 Native collaboration, section, and master-setting access is also concrete and
 ordered:
 

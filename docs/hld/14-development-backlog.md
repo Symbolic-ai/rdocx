@@ -1990,12 +1990,17 @@ scope.
 their original package class with preserved executable payloads.
 
 ### F-224, HTML slide content import (L)
-Project a bounded HTML and CSS presentation subset into editable slide shapes,
-text, tables, images, and links with explicit layout and unsupported-style
-diagnostics.
+The native `rpptx` facade projects a bounded HTML5 and CSS subset into fresh,
+editable slide shapes, formatted text, tables, caller-supplied images, and
+links. Explicit absolute geometry, supported cascade semantics, stable DOM-path
+diagnostics, and closed resource limits define the conversion boundary. The
+candidate is serialized, reopened, and validated before publication. Browser
+layout, scripts, external fetching, transforms, and unsupported CSS remain out
+of scope and diagnostic.
 **Depends on**: F-110, F-112.
 **Test gate**: differential. Source-built HTML matches the browser reference at
-the declared shape, text, and pixel boundary after save and reopen.
+the declared structure, text, one-pixel geometry, and 0.95 full-image luminance
+SSIM boundary after save and reopen with Google Chrome 152.0.7977.65.
 
 ### F-225, PDF page content import (L)
 Import PDF pages as either preserved page graphics or a bounded editable subset

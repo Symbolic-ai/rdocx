@@ -153,6 +153,11 @@ an explicit ignored acceptance gate that runs with an isolated user profile.
 Publish dry runs and the 10 MiB archive ceiling cover the additive native API
 and private converter module.
 
+Presentation HTML import adds no production executable. The private `rpptx`
+module reuses workspace `scraper` 0.27 behind `default-template`. Google Chrome
+152.0.7977.65 is an ignored differential oracle only. The native archive,
+WASM, rustdoc, dependency policy, and 10 MiB package ceiling remain gates.
+
 Modern presentation package classes add no dependency, feature, module, or
 asset. The additive pre-1.0 `rpptx` enum and methods plus the new `oxml-opc`
 content-type constants require rustdoc, README inventory, patched publish
@@ -173,7 +178,7 @@ dry-run, archive-size, and release review before publication.
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
 | `rpptx-render` | `system-fonts` | on | Preserves host discovery for normal presentation rendering |
 | `rpptx` | `system-fonts` | on | Preserves native presentation font resolution |
-| `rpptx` | `default-template` | on | The bundled `default.pptx` |
+| `rpptx` | `default-template` | on | The bundled `default.pptx` and private bounded HTML importer |
 | `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
 | `rpptx-wasm` | `render` | off | Adds `toPdf` through the deterministic facade renderer |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |
@@ -759,13 +764,14 @@ an `rdocx` development dependency for the 150 dpi SSIM oracle only. It receives
 explicit layout fonts, never system fonts, and does not enter the runtime graph
 or generated `rdocx` archive.
 
-`scraper` 0.27 has one direct named consumer, the private inbound HTML importer
-inside `rdocx`. Default features are disabled and only `errors` is enabled so
-HTML5 parser repair diagnostics remain available without an unrelated feature
-surface. No `oxml-*`, `rdocx-html`, Presentation, Python, WASM, or CLI crate
-declares the dependency directly. The complete facade graph passes Rust 1.93,
-both wasm32 checks, the workspace dependency policy, and the `rdocx` package
-dry run. The packaged archive remains below the 10 MiB ceiling.
+`scraper` 0.27 has two direct named consumers, the private inbound HTML
+importers inside `rdocx` and `rpptx`. The `rdocx` edge disables default
+features and enables `errors`. The optional `rpptx` edge is activated only by
+`default-template`. HTML5 parser repair diagnostics remain available without a
+new public feature. No `oxml-*`, `rdocx-html`, Python, WASM, or CLI crate
+declares the dependency directly. Both facade graphs pass Rust 1.93, the wasm32
+checks, dependency policy, patched package dry runs, and the 10 MiB archive
+ceiling.
 
 The existing workspace `zip` 8.1 dependency has direct named consumers in the
 private ODT reader and writer inside `rdocx`. It retains the workspace's

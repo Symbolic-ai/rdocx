@@ -1595,6 +1595,7 @@ dependencies = [
  "rpptx-layout",
  "rpptx-oxml",
  "rpptx-render",
+ "scraper",
  "sha2",
  "thiserror",
  "tiny-skia",

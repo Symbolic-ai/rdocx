@@ -46,6 +46,20 @@ attributes, archive and output limits, deterministic bytes, exact manifest
 ownership, diagnostic exhaustion, and atomic failure publication. Existing
 presentation hashes must remain 49 of 49 unchanged.
 
+The presentation HTML differential builds one HTML document, image, and font
+reference in source and sends that same input to Google Chrome 152.0.7977.65
+and the native importer. Chrome runs headless at 1,280 by 720 with an isolated
+profile and host resolution disabled. After save and reopen, the gate compares
+shape kind and order, exact text and link relationships, selected run
+formatting, geometry within one CSS pixel, and deterministic 96 DPI output at
+a full-image luminance SSIM floor of 0.95. A paired regression passes real PNGs
+through the same SSIM helper and proves structural, text, two-pixel geometry,
+and calibrated pixel mutations fail the shared acceptance predicate. Focused
+tests cover every importer limit, CSS cascade and EMU conversion, stable lossy
+diagnostics, editable shape, table, image, and link projection, schema order,
+and byte-identical default template parts. The 49-entry hash harness remains
+unchanged.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,

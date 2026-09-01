@@ -115,12 +115,16 @@ mod animation;
 #[cfg(feature = "render")]
 mod diagram;
 #[cfg(feature = "default-template")]
+mod html;
+#[cfg(feature = "default-template")]
 mod odp;
 #[cfg(feature = "render")]
 pub use animation::{
     AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition,
     DeterministicAnimation, GifLoopBehavior,
 };
+#[cfg(feature = "default-template")]
+pub use html::{HtmlDiagnostic, HtmlImageResource, HtmlReadResult};
 #[cfg(feature = "default-template")]
 pub use odp::{OdpDiagnostic, OdpReadResult, OdpWriteResult};
 
@@ -295,6 +299,10 @@ pub struct MediaInfo {
 pub enum Error {
     #[error(transparent)]
     Package(#[from] OpcError),
+
+    #[cfg(feature = "default-template")]
+    #[error("HTML conversion error at {path}: {message}")]
+    Html { path: String, message: String },
 
     #[cfg(feature = "default-template")]
     #[error("ODP conversion error in {part:?} at byte {offset}: {message}")]
