@@ -1,91 +1,62 @@
-# Current Sprint, S63
+# Current Sprint, S64
 
-**Milestone**: M21 Presentation depth, plus reporter-confirmed Word editor
-performance cliffs.
+**Milestone**: M21 Presentation depth.
 
-**Goal**: broaden modern presentation interchange and complete the presenter
-and audience output surfaces. The sprint first completes the carried SmartArt
-renderer, then adds bounded ODP interchange, preserves modern presentation
-package variants, and exports notes pages and audience handouts through the
-shared rendering backends. Two cross-cutting fixes keep paragraph caching
-enabled across note references and let ordinary prose reuse pagination within
-the existing aggregate cache budget.
+**Goal**: turn common modern content sources into editable or explicitly
+preserved slide content. HTML maps a bounded DOM and CSS subset into ordinary
+slide shapes, while PDF import offers either a preserved page graphic or a
+declared editable subset. Neither path promises arbitrary browser or PDF-engine
+compatibility.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for the bounded SmartArt and modern
-  presentation scope, executable-content policy, and unsupported-content
-  preservation rules.
-- `docs/hld/03-architecture.md`, for package, model, resolver, conversion,
-  layout, and renderer ownership without a second format-specific engine.
-- `docs/hld/04-opc-and-packaging.md`, for relationship and content-type
-  ownership across macro-enabled, template, slide-show, notes, and handout
-  package graphs.
-- `docs/hld/06-presentationml-model.md`, for SmartArt graphic frames, notes and
-  handout master hierarchies, package variants, and raw PresentationML
-  preservation.
-- `docs/hld/07-inheritance-and-resolution.md`, for producing-scope SmartArt
-  resolution, master inheritance, visible fallbacks, and stable diagnostics.
-- `docs/hld/08-rendering-spec.md`, for shared DrawingML and text lowering,
-  deterministic SmartArt geometry, notes pages, handouts, PDF, and image
-  output.
+- `docs/hld/02-scope-and-non-goals.md`, for bounded format support, explicit
+  unsupported-content policy, and the prohibition on implied compatibility.
+- `docs/hld/03-architecture.md`, for facade-owned import, transactional model
+  publication, and reuse of existing package, layout, and rendering layers.
+- `docs/hld/04-opc-and-packaging.md`, for relationship-safe embedded resources,
+  MIME resolution, and package limits.
+- `docs/hld/06-presentationml-model.md`, for editable slide shapes, text,
+  tables, pictures, links, and preserved source content.
+- `docs/hld/08-rendering-spec.md`, for shared geometry, text, image, and path
+  lowering used by deterministic source comparisons.
 - `docs/hld/10-bindings-spec.md`, for additive native facade surfaces and the
   rule that Python, WASM, and CLI exposure is explicit rather than implied.
-- `docs/hld/12-testing-strategy.md`, for the pinned PowerPoint and LibreOffice
-  differentials, package round trips, deterministic fonts, and unchanged hash
-  harness requirements.
-- `docs/hld/14-development-backlog.md`, for the F-220, F-222, F-223, F-226,
-  F-X072, and F-X073 acceptance gates, dependency order, and the still-open M21
-  representative deck gate.
+- `docs/hld/12-testing-strategy.md`, for source-built differential fixtures,
+  deterministic fonts, external oracle discipline, and unchanged hash gates.
+- `docs/hld/14-development-backlog.md`, for the F-224 and F-225 acceptance
+  gates, dependency order, and the M21 completion boundary.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-220 | SmartArt layout and rendering | L | done | - |
-| F-222 | ODP read and write | L | done | - |
-| F-223 | Modern presentation package variants | M | done | - |
-| F-226 | Notes and handout export | M | done | - |
-| F-X072 | Keep paragraph caching across note references | M | done | - |
-| F-X073 | Restart ordinary-prose pagination within the aggregate cache | L | done | - |
+| F-224 | HTML slide content import | L | pending | - |
+| F-225 | PDF page content import | L | pending | - |
 
 ## Sequencing note
 
 Rows are listed in dependency order, not F-ID order.
 
-F-220 resumes from its retained S62 worker and must close the two remaining
-exact fail-closed validator gaps before obtaining a clean microscope pass.
-F-222 waits for that completion because ODP interchange must consume the
-supported SmartArt model and renderer rather than introduce another diagram
-path.
-
-F-223 depends only on the completed F-218 embedded-content inventory and can
-run independently once claimed. F-226 depends on the completed F-217 notes and
-handout model and can also run independently. Their integration still follows
-F-220 and F-222 where shared package or rendering interactions exist.
-
-F-X072 and F-X073 address issues 65 and 66. They run sequentially because both
-change the Word layout cache engine and its regression surface. F-X072 reuses
-the completed F-X062 note-context work. F-X073 follows F-X072 so its restart
-checkpoints are measured against the final paragraph-cache accounting.
+Both stories can begin independently because F-224 depends on the completed
+F-110 and F-112 authoring surfaces, while F-225 depends on the completed F-109,
+F-110, and F-111 shape and picture surfaces. Their designs must agree on shared
+image, text, path, link, diagnostic, and transactional publication semantics.
+The integrated sprint review validates those interactions before M21 closes.
 
 ## Definition of done for this sprint
 
-- Supported list, hierarchy, cycle, relationship, matrix, and pyramid SmartArt
-  render through the shared DrawingML and text engines within their declared
-  PowerPoint geometry and image thresholds.
-- Unsupported or ambiguous SmartArt programs fail closed and preserve source
-  bytes, while the carried worker finishes with a clean microscope review.
-- Source-built ODP and PPTX conversions match the pinned LibreOffice structure
-  and render records in both directions with stable diagnostics.
-- PPTM, POTX, POTM, PPSX, and PPSM fixtures reopen in their original package
-  class with executable payloads preserved and never executed.
-- Speaker notes, notes pages, and audience handouts render in order through the
-  declared master hierarchy with matching text, metadata, and geometry.
-- A footnote or endnote reference invalidates only its own paragraph cache
-  entry, while later safe paragraphs continue to reuse exact cached layout.
-- Long ordinary prose can publish restart checkpoints within the existing
-  aggregate cache budget, and edit, insert, delete, and undo paths remain
-  byte-for-byte equal to a fresh layout.
+- Source-built HTML projects the declared DOM and CSS subset into editable
+  shapes, text, tables, images, and links, then matches the pinned browser
+  structure and pixels after save and reopen.
+- Unsupported HTML structure and style produce stable source-path diagnostics
+  without publishing a partial presentation or implying browser compatibility.
+- PDF pages import through both the preserved page-graphic path and the
+  declared editable text, raster image, path, and link subset.
+- Imported PDF page geometry and source rendering match the pinned reference,
+  while font substitutions and unsupported operators remain explicit stable
+  diagnostics.
+- Both import paths reuse the existing PresentationML authoring, package,
+  layout, and rendering surfaces without introducing a second rendering engine.
 - Full verification passes with every deterministic hash explained, every
   package archive below 10 MiB, and the bounded sprint review clean.
