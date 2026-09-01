@@ -46,7 +46,7 @@ the existing aggregate cache budget.
 | F-222 | ODP read and write | L | pending | - |
 | F-223 | Modern presentation package variants | M | pending | - |
 | F-226 | Notes and handout export | M | pending | - |
-| F-X072 | Keep paragraph caching across note references | M | pending | - |
+| F-X072 | Keep paragraph caching across note references | M | in-progress | codex |
 | F-X073 | Restart ordinary-prose pagination within the aggregate cache | L | pending | - |
 
 ## Sequencing note
