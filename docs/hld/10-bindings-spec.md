@@ -721,6 +721,31 @@ models. This is an additive semver change for the published pre-1.0
 flag. Unsupported modern comment XML and all legacy comment parts remain
 preserved, so consumers do not need a parallel raw authoring API.
 
+## Native PowerPoint SmartArt model
+
+The published pre-1.0 `rpptx` facade exposes concrete `SmartArtInfo` and
+`DiagramPart<T>` values through `Presentation::smart_art`. The five concrete
+diagram part instantiations expose bounded data-model points and connections,
+layout family evidence, quick-style labels, colour labels, and cached drawing
+shape counts. Missing, external, wrong-type, malformed, and parsed resource
+states remain explicit rather than collapsing into an optional raw payload.
+
+Native callers edit supported node text with
+`Presentation::set_smart_art_node_text`. They may copy one placeholder-free
+SmartArt slide between presentations with
+`Presentation::transfer_smartart_slide_from`, supplying an explicit
+destination layout index. Both operations validate relationship roles and
+stage the complete package change before commit. Transfer is intentionally
+bounded to one source layout, the five SmartArt relationship types, and
+relationship-free internal images.
+
+The published pre-1.0 `rpptx-oxml` crate exposes the concrete `diagram` module,
+and `oxml-opc` exposes the diagram relationship constants. These additions are
+native Rust APIs only. Python, WASM, and CLI consumers gain no SmartArt methods
+and continue to preserve presentations already edited or transferred through
+the native owner. No production dependency, feature flag, trait, dynamic
+dispatch, generic parameter, or builder is added.
+
 ## Native PowerPoint media model
 
 The published pre-1.0 `rpptx` facade exposes concrete native Rust media values:

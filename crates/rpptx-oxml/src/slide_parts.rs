@@ -8,6 +8,8 @@ use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::text::CT_TextListStyle;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::NsReader;
 use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
@@ -368,6 +370,14 @@ impl CT_Slide {
         )
     }
 
+    /// Returns whether any retained slide XML contains a PresentationML placeholder.
+    ///
+    /// The scan covers typed children and preserved compatibility branches by
+    /// resolving expanded element names across the complete serialized slide.
+    pub fn contains_placeholder(&self) -> Result<bool> {
+        contains_presentationml_placeholder(&self.to_xml()?)
+    }
+
     /// Returns whether this slide is hidden from the slideshow.
     pub fn hidden(&self) -> bool {
         !self.show.unwrap_or(true)
@@ -470,6 +480,24 @@ impl CT_Slide {
         };
         *self = Self::from_xml(&rewritten)?;
         Ok(())
+    }
+}
+
+fn contains_presentationml_placeholder(xml: &[u8]) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_resolved_event_into(&mut buffer)? {
+            (
+                ResolveResult::Bound(Namespace(namespace)),
+                Event::Start(element) | Event::Empty(element),
+            ) if namespace == P_NS.as_bytes() && local_name(element.name().as_ref()) == b"ph" => {
+                return Ok(true);
+            }
+            (_, Event::Eof) => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 

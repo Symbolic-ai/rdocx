@@ -1,6 +1,6 @@
 # F-219, SmartArt typed model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S62
 **Size**: L
 **Depends on**: none
@@ -130,6 +130,12 @@ pub struct SmartArtInfo {
 
 impl Presentation {
     pub fn smart_art(&self, slide_index: usize) -> Result<Vec<SmartArtInfo>>;
+    pub fn transfer_smartart_slide_from(
+        &mut self,
+        source: &Presentation,
+        slide_index: usize,
+        destination_layout_index: usize,
+    ) -> Result<SlideRef<'_>>;
     pub fn set_smart_art_node_text(
         &mut self,
         slide_index: usize,
@@ -150,9 +156,32 @@ and commits only on success.
 Unsupported algorithms remain `Unsupported` and their raw layout part remains
 the sole serialization source. Unsupported point and connection kinds retain
 their lexical value and raw siblings. Unrelated mutations do not parse and
-rewrite diagram parts. Slide duplication and transfer remap all five retained
-diagram relationship ids and copy or deduplicate their complete owned graph
-without cross-scope aliasing.
+rewrite diagram parts. `Presentation::transfer_smartart_slide_from(
+&Presentation, index, destination_layout_index)` is the concrete surface for
+the approved bounded, placeholder-free cross-deck SmartArt transfer path. The
+caller selects a destination-owned layout. The operation accepts only internal
+slide-layout, image, and five SmartArt diagram relationship types. It
+rejects an external slide-layout relationship before preserving any other safe
+external relationship, and requires exactly one internal source slide-layout
+relationship. Before a checked text edit or transfer, each frame's data,
+layout, quick-style, and colour ids must resolve to internal relationships of
+their exact schema types. A schema-position-owned cached drawing id, when
+present in the data model, must resolve in the same producing scope to the
+Microsoft 2007 diagram-drawing relationship type.
+`CT_Slide::contains_placeholder()` scans the complete
+current slide XML by expanded name, including retained GraphicFrame non-visual
+children and every preserved compatibility branch. Every copied internal image
+must own no relationships. The complete diagram graph is recursively
+preflighted and copied with cycle protection and the same explicit 128-part
+ceiling in both phases. It rejects placeholders, notes, comments, charts,
+workbooks, embedded media, OLE, over-deep graphs, and every other internal
+dependency before mutation.
+Slide duplication and transfer remap all five retained diagram relationship ids
+and copy or deduplicate their complete owned graph without cross-scope aliasing.
+Checked data-model edits reject duplicate point or connection `modelId` values
+before mutation. Layout, style, colour, and cached-drawing projections traverse
+only their schema-owned child positions, never same-namespace lookalikes inside
+extension lists or opaque wrappers.
 
 Add the standard diagram relationship constants to `oxml-opc`. Add no new
 dependency, feature, trait, crate, integration binary, or binary fixture. This
@@ -180,6 +209,19 @@ is additive native Rust API for the pre-1.0 `rpptx-oxml`, `oxml-opc`, and
 | regression | `unsupported_smartart_algorithms_and_parts_remain_byte_preserved_after_unrelated_mutation` | An ordinary shape edit leaves every unsupported diagram part and relationship byte-identical. |
 | integration | `smartart_relationships_resolve_only_in_their_producing_scope` | Equal relationship ids on slide, layout, and master do not alias, and missing or external targets remain typed failures. |
 | regression | `duplicated_smartart_remaps_the_complete_diagram_relationship_graph` | Data, layout, style, colour, drawing, image, and nested diagram relationships resolve to the copied or deduplicated targets. |
+| regression | `transferred_smartart_copies_the_complete_graph_without_cross_presentation_aliasing` | Cross-presentation transfer copies all five diagram parts, remaps the cached drawing id, deduplicates image bytes, and does not alias destination diagram parts. |
+| regression | `cross_presentation_transfer_rejects_unsupported_owned_graphs_without_aliasing` | Explicit destination layout selection is required, and notes or nested diagram-owned ordinary relationships that collide with destination names reject without changing destination bytes. |
+| regression | `cross_presentation_smartart_transfer_rejects_placeholders_atomically` | A PresentationML placeholder in retained GraphicFrame non-visual XML or any preserved compatibility choice rejects before staging. |
+| regression | `cross_presentation_smartart_transfer_rejects_slide_images_with_owned_graphs_atomically` | A slide-owned internal image with any owned relationship rejects before byte deduplication and leaves the destination unchanged. |
+| regression | `cross_presentation_smartart_transfer_rejects_external_slide_layout_atomically` | An external source slide-layout relationship cannot bypass the selected destination-owned layout. |
+| regression | `cross_presentation_smartart_transfer_rejects_deep_diagram_graph_atomically` | A 130-part acyclic diagram chain reaches the common checked 128-part preflight and copy ceiling without stack failure or mutation, while the cycle regression still succeeds. |
+| regression | `smartart_node_mutation_validates_every_relationship_role_atomically` | Missing or wrong-type layout, style, colour, and cached-drawing relationships reject before the package changes. |
+| regression | `smartart_transfer_validates_relationship_roles_and_exactly_one_layout_atomically` | Transfer rejects invalid SmartArt roles and zero or multiple internal source slide-layout relationships before staging. |
+| regression | `smartart_checked_edits_reject_duplicate_graph_identities_without_mutation` | Duplicate point or connection model ids remain readable but reject checked edits without dirtying the data model. |
+| regression | `smartart_projections_ignore_same_namespace_lookalikes_outside_schema_positions` | Typed layout, style, colour, and cached-drawing projections ignore same-namespace lookalikes under extension or opaque wrappers, and remapping changes only the owned cached id. |
+| regression | `edited_smartart_text_retains_safe_root_attributes_and_namespaces` | Dirty node-text writing retains unrelated attributes and safe namespace declarations on the accepted `dgm:t` root. |
+| regression | `smartart_text_with_nested_fixed_namespace_shadow_stays_opaque_and_uneditable` | A nested producer-owned `a` binding cannot become typed DrawingML, remains byte-exact during another node edit, and rejects direct mutation. |
+| regression | `smartart_text_with_fixed_dgm_root_shadow_stays_opaque_and_uneditable` | A producer-owned `dgm` binding on an aliased text root remains opaque and byte-exact instead of changing the fixed writer root namespace. |
 | regression | `failed_smartart_node_mutation_leaves_the_package_unchanged` | Missing shape, point, target, invalid XML, and graph-validation failures are atomic. |
 
 The exact backlog **test gate is round-trip**: "Supported nodes remain
@@ -227,17 +269,17 @@ integration.
 
 ## Implementation checklist
 
-- [ ] Add the approved diagram model module and relationship constants.
-- [ ] Parse and write relationship ids and all five diagram part roots.
-- [ ] Type bounded point, connection, text, algorithm, style, and colour data.
-- [ ] Preserve unsupported algorithms, lexical values, attributes, and child
+- [x] Add the approved diagram model module and relationship constants.
+- [x] Parse and write relationship ids and all five diagram part roots.
+- [x] Type bounded point, connection, text, algorithm, style, and colour data.
+- [x] Preserve unsupported algorithms, lexical values, attributes, and child
   subtrees through raw capture.
-- [ ] Resolve complete diagram resources in their producing relationship scope.
-- [ ] Add inspection and atomic supported-node text mutation to the facade.
-- [ ] Extend slide duplication and transfer to the complete diagram graph.
-- [ ] Add corpus and source-built round-trip and preservation tests to existing
+- [x] Resolve complete diagram resources in their producing relationship scope.
+- [x] Add inspection and atomic supported-node text mutation to the facade.
+- [x] Extend slide duplication and transfer to the complete diagram graph.
+- [x] Add corpus and source-built round-trip and preservation tests to existing
   targets.
-- [ ] Run focused `oxml-opc`, `rpptx-oxml`, and `rpptx` checks plus every rider.
+- [x] Run focused `oxml-opc`, `rpptx-oxml`, and `rpptx` checks plus every rider.
 
 ## Open questions
 

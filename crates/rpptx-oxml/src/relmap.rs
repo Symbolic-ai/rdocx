@@ -20,7 +20,7 @@ struct Replacement {
 /// original bytes are copied around the replaced attribute values so all
 /// other syntax remains exact.
 pub fn rewrite_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<u8>> {
-    rewrite_rel_ids_inner(raw, map, true)
+    rewrite_rel_ids_inner(raw, map, true, &[])
 }
 
 /// Rewrites only relationship-namespace values present as exact keys in `map`.
@@ -29,18 +29,27 @@ pub fn rewrite_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<
 /// [`rewrite_rel_ids`] while allowing a caller to normalize a known
 /// nonnumeric relationship id without touching any other nonnumeric value.
 pub fn rewrite_exact_rel_ids(raw: &[u8], map: &HashMap<String, String>) -> Result<Vec<u8>> {
-    rewrite_rel_ids_inner(raw, map, false)
+    rewrite_rel_ids_inner(raw, map, false, &[])
+}
+
+pub(crate) fn rewrite_exact_rel_ids_with_namespaces(
+    raw: &[u8],
+    map: &HashMap<String, String>,
+    inherited: &[(String, String)],
+) -> Result<Vec<u8>> {
+    rewrite_rel_ids_inner(raw, map, false, inherited)
 }
 
 fn rewrite_rel_ids_inner(
     raw: &[u8],
     map: &HashMap<String, String>,
     numeric_only: bool,
+    inherited: &[(String, String)],
 ) -> Result<Vec<u8>> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().check_comments = true;
     let mut buffer = Vec::new();
-    let mut scopes = vec![NamespaceBindings::default()];
+    let mut scopes = vec![NamespaceBindings::from_entries(inherited)];
     let mut replacements = Vec::new();
     let mut depth = 0usize;
     let mut roots = 0usize;

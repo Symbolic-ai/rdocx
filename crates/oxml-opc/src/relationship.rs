@@ -56,6 +56,16 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
     pub const CHART: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+    pub const DIAGRAM_DATA: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData";
+    pub const DIAGRAM_LAYOUT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramLayout";
+    pub const DIAGRAM_QUICK_STYLE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle";
+    pub const DIAGRAM_COLORS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors";
+    pub const DIAGRAM_DRAWING: &str =
+        "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing";
     pub const PACKAGE: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package";
 
@@ -331,6 +341,10 @@ mod tests {
             rel_types::FOOTNOTES,
             rel_types::ENDNOTES,
             rel_types::CHART,
+            rel_types::DIAGRAM_DATA,
+            rel_types::DIAGRAM_LAYOUT,
+            rel_types::DIAGRAM_QUICK_STYLE,
+            rel_types::DIAGRAM_COLORS,
             rel_types::PACKAGE,
             rel_types::WORKSHEET,
             rel_types::SHARED_STRINGS,
@@ -361,6 +375,7 @@ mod tests {
         for value in [
             rel_types::POWERPOINT_COMMENTS,
             rel_types::POWERPOINT_AUTHORS,
+            rel_types::DIAGRAM_DRAWING,
         ] {
             assert!(value.starts_with("http://schemas.microsoft.com/office/"));
             assert!(!value.chars().any(char::is_whitespace));

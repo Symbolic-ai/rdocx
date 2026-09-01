@@ -42,6 +42,976 @@ fn slide_transitions_and_morph_metadata_survive_mutation_save_and_reopen() {
     assert!(written.contains("<x:before/>"));
     assert!(written.contains("<x:after/>"));
 }
+
+#[test]
+fn supported_smartart_nodes_remain_editable_after_save_and_reopen() {
+    let package = smartart_fixture_package();
+    let unsupported_parts = [
+        "/custom/diagrams/two/layout1.xml",
+        "/custom/diagrams/two/style1.xml",
+        "/custom/diagrams/two/colors1.xml",
+        "/custom/diagrams/two/drawing1.xml",
+    ]
+    .map(|part| (part, package.get_part(part).unwrap().to_vec()));
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .set_smart_art_node_text(0, 42, "n1", "Edited through facade")
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    let info = reopened
+        .smart_art(0)
+        .unwrap()
+        .into_iter()
+        .find(|info| info.shape_id == 42)
+        .unwrap();
+    let rpptx::DiagramPart::Parsed(data) = info.data else {
+        panic!("edited data part did not reparse");
+    };
+    assert_eq!(
+        data.points()[0].text.as_ref().unwrap().plain_text(),
+        "Edited through facade"
+    );
+    assert_eq!(data.connections().len(), 0);
+    assert!(matches!(info.layout, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(info.style, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(info.colors, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(info.drawing, Some(rpptx::DiagramPart::Parsed(_))));
+    let saved = open_opc(&bytes, "F-219 edited SmartArt");
+    for (part, expected) in unsupported_parts {
+        assert_eq!(saved.get_part(part).unwrap(), expected);
+    }
+}
+
+#[test]
+fn unsupported_smartart_algorithms_and_parts_remain_byte_preserved_after_unrelated_mutation() {
+    let package = smartart_fixture_package();
+    let before = [
+        "/custom/diagrams/two/data1.xml",
+        "/custom/diagrams/two/layout1.xml",
+        "/custom/diagrams/two/style1.xml",
+        "/custom/diagrams/two/colors1.xml",
+        "/custom/diagrams/two/drawing1.xml",
+    ]
+    .map(|part| (part, package.get_part(part).unwrap().to_vec()));
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_name("ordinary edit")
+        .unwrap();
+    let saved = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "F-219 unrelated mutation",
+    );
+    for (part, expected) in before {
+        assert_eq!(saved.get_part(part).unwrap(), expected);
+    }
+    let info = presentation
+        .smart_art(0)
+        .unwrap()
+        .into_iter()
+        .find(|info| info.shape_id == 42)
+        .unwrap();
+    let rpptx::DiagramPart::Parsed(layout) = info.layout else {
+        panic!("layout did not parse");
+    };
+    assert!(matches!(
+        layout.family,
+        rpptx::DiagramLayoutFamily::Unsupported(_)
+    ));
+}
+
+#[test]
+fn smartart_relationships_resolve_only_in_their_producing_scope() {
+    let presentation =
+        Presentation::from_bytes(&package_bytes(smartart_fixture_package())).unwrap();
+    let first = presentation.smart_art(0).unwrap();
+    let second = presentation.smart_art(1).unwrap();
+    assert_eq!(
+        first.iter().map(|info| info.shape_id).collect::<Vec<_>>(),
+        [42, 52, 62]
+    );
+    assert_eq!(
+        second.iter().map(|info| info.shape_id).collect::<Vec<_>>(),
+        [42, 52, 62]
+    );
+    for (infos, slide_text) in [(&first, "Two"), (&second, "One")] {
+        for (shape_id, expected_text) in
+            [(42, slide_text), (52, "Layout scope"), (62, "Master scope")]
+        {
+            let info = infos.iter().find(|info| info.shape_id == shape_id).unwrap();
+            assert_eq!(info.relationships.data, "smart-data");
+            assert_eq!(info.relationships.drawing.as_deref(), Some("drawing-link"));
+            let rpptx::DiagramPart::Parsed(data) = &info.data else {
+                panic!("shape {shape_id} data part did not parse");
+            };
+            assert_eq!(
+                data.points()[0].text.as_ref().unwrap().plain_text(),
+                expected_text
+            );
+            assert!(matches!(info.drawing, Some(rpptx::DiagramPart::Parsed(_))));
+        }
+    }
+
+    let mut missing = smartart_fixture_package();
+    missing.parts.remove("/custom/diagrams/two/data1.xml");
+    let missing = Presentation::from_bytes(&package_bytes(missing)).unwrap();
+    assert!(matches!(
+        missing
+            .smart_art(0)
+            .unwrap()
+            .iter()
+            .find(|info| info.shape_id == 42)
+            .unwrap()
+            .data,
+        rpptx::DiagramPart::MissingTarget(_)
+    ));
+
+    let mut external = smartart_fixture_package();
+    let relationship = external
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "smart-layout")
+        .unwrap();
+    relationship.target = "https://example.com/layout.xml".to_owned();
+    relationship.target_mode = Some("External".to_owned());
+    let external = Presentation::from_bytes(&package_bytes(external)).unwrap();
+    assert!(matches!(
+        external
+            .smart_art(0)
+            .unwrap()
+            .iter()
+            .find(|info| info.shape_id == 42)
+            .unwrap()
+            .layout,
+        rpptx::DiagramPart::External(ref target) if target == "https://example.com/layout.xml"
+    ));
+
+    let mut wrong_type = smartart_fixture_package();
+    wrong_type
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "smart-style")
+        .unwrap()
+        .rel_type = rel_types::IMAGE.to_owned();
+    let wrong_type = Presentation::from_bytes(&package_bytes(wrong_type)).unwrap();
+    assert!(matches!(
+        wrong_type
+            .smart_art(0)
+            .unwrap()
+            .iter()
+            .find(|info| info.shape_id == 42)
+            .unwrap()
+            .style,
+        rpptx::DiagramPart::Invalid(_)
+    ));
+}
+
+#[test]
+fn corpus_smartart_drawings_resolve_from_their_producing_scope() {
+    let Some(paths) = corpus_paths() else {
+        return;
+    };
+    let mut resolved_drawings = 0usize;
+    for path in paths {
+        let presentation =
+            Presentation::open(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        for slide_index in 0..presentation.len() {
+            for info in presentation.smart_art(slide_index).unwrap() {
+                let rpptx::DiagramPart::Parsed(data) = &info.data else {
+                    continue;
+                };
+                let Some(drawing_id) = data.drawing_relationship_id() else {
+                    continue;
+                };
+                resolved_drawings += 1;
+                assert_eq!(info.relationships.drawing.as_deref(), Some(drawing_id));
+                assert!(matches!(info.drawing, Some(rpptx::DiagramPart::Parsed(_))));
+            }
+        }
+    }
+    assert!(resolved_drawings > 0);
+}
+
+#[test]
+fn duplicated_smartart_remaps_the_complete_diagram_relationship_graph() {
+    let mut presentation =
+        Presentation::from_bytes(&package_bytes(smartart_fixture_package())).unwrap();
+    presentation.duplicate_slide(0).unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-219 duplicated SmartArt");
+    let root = CT_Presentation::from_xml(package.get_part(PRESENTATION_PART).unwrap()).unwrap();
+    let presentation_rels = package.get_part_rels(PRESENTATION_PART).unwrap();
+    let slide_parts = root
+        .slide_ids
+        .iter()
+        .take(2)
+        .map(|slide| {
+            let relationship = presentation_rels.get_by_id(&slide.relationship_id).unwrap();
+            OpcPackage::resolve_rel_target(PRESENTATION_PART, &relationship.target)
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(slide_parts[0], slide_parts[1]);
+    let source_rels = package.get_part_rels(&slide_parts[0]).unwrap();
+    let copied_rels = package.get_part_rels(&slide_parts[1]).unwrap();
+    for relationship_type in [
+        rel_types::DIAGRAM_DATA,
+        rel_types::DIAGRAM_LAYOUT,
+        rel_types::DIAGRAM_QUICK_STYLE,
+        rel_types::DIAGRAM_COLORS,
+        rel_types::DIAGRAM_DRAWING,
+    ] {
+        let source = source_rels.get_by_type(relationship_type).unwrap();
+        let copied = copied_rels.get_by_type(relationship_type).unwrap();
+        assert_ne!(
+            OpcPackage::resolve_rel_target(&slide_parts[0], &source.target),
+            OpcPackage::resolve_rel_target(&slide_parts[1], &copied.target)
+        );
+    }
+    let source_data = OpcPackage::resolve_rel_target(
+        &slide_parts[0],
+        &source_rels
+            .get_by_type(rel_types::DIAGRAM_DATA)
+            .unwrap()
+            .target,
+    );
+    let copied_data = OpcPackage::resolve_rel_target(
+        &slide_parts[1],
+        &copied_rels
+            .get_by_type(rel_types::DIAGRAM_DATA)
+            .unwrap()
+            .target,
+    );
+    let source_drawing = OpcPackage::resolve_rel_target(
+        &slide_parts[0],
+        &source_rels
+            .get_by_type(rel_types::DIAGRAM_DRAWING)
+            .unwrap()
+            .target,
+    );
+    let copied_drawing = OpcPackage::resolve_rel_target(
+        &slide_parts[1],
+        &copied_rels
+            .get_by_type(rel_types::DIAGRAM_DRAWING)
+            .unwrap()
+            .target,
+    );
+    assert_ne!(source_drawing, copied_drawing);
+    let source_data =
+        rpptx::CT_DiagramData::from_xml(package.get_part(&source_data).unwrap()).unwrap();
+    assert_eq!(
+        source_data.drawing_relationship_id(),
+        Some(
+            source_rels
+                .get_by_type(rel_types::DIAGRAM_DRAWING)
+                .unwrap()
+                .id
+                .as_str()
+        )
+    );
+    let copied_data =
+        rpptx::CT_DiagramData::from_xml(package.get_part(&copied_data).unwrap()).unwrap();
+    assert_eq!(
+        copied_data.drawing_relationship_id(),
+        Some(
+            copied_rels
+                .get_by_type(rel_types::DIAGRAM_DRAWING)
+                .unwrap()
+                .id
+                .as_str()
+        )
+    );
+    let source_drawing_rels = package.get_part_rels(&source_drawing).unwrap();
+    let copied_drawing_rels = package.get_part_rels(&copied_drawing).unwrap();
+    let source_image = OpcPackage::resolve_rel_target(
+        &source_drawing,
+        &source_drawing_rels
+            .get_by_type(rel_types::IMAGE)
+            .unwrap()
+            .target,
+    );
+    let copied_image = OpcPackage::resolve_rel_target(
+        &copied_drawing,
+        &copied_drawing_rels
+            .get_by_type(rel_types::IMAGE)
+            .unwrap()
+            .target,
+    );
+    assert_eq!(source_image, copied_image);
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+#[test]
+fn transferred_smartart_copies_the_complete_graph_without_cross_presentation_aliasing() {
+    let mut source_package = smartart_transfer_source_package();
+    source_package
+        .get_or_create_part_rels("/custom/diagrams/two/data1.xml")
+        .add_with_id("nested-layout", rel_types::DIAGRAM_LAYOUT, "layout1.xml");
+    source_package
+        .get_or_create_part_rels("/custom/diagrams/two/layout1.xml")
+        .add_with_id("nested-data", rel_types::DIAGRAM_DATA, "data1.xml");
+    let source_bytes = package_bytes(source_package);
+    let source = Presentation::from_bytes(&source_bytes).unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let mut destination_package = smartart_transfer_destination_package();
+    destination_package.set_part(
+        "/custom/diagrams/two/data1.xml",
+        smartart_data_xml("Destination decoy"),
+    );
+    let mut destination = Presentation::from_bytes(&package_bytes(destination_package)).unwrap();
+
+    destination
+        .transfer_smartart_slide_from(&source, 0, 0)
+        .expect("transfer SmartArt slide");
+
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+    let transferred = destination
+        .smart_art(0)
+        .unwrap()
+        .into_iter()
+        .find(|info| {
+            matches!(
+                &info.data,
+                rpptx::DiagramPart::Parsed(data)
+                    if data.points()[0].text.as_ref().unwrap().plain_text() == "Two"
+            )
+        })
+        .unwrap();
+    let rpptx::DiagramPart::Parsed(data) = transferred.data else {
+        panic!("transferred data part did not parse");
+    };
+    assert_eq!(data.points()[0].text.as_ref().unwrap().plain_text(), "Two");
+
+    let bytes = destination.to_bytes().unwrap();
+    let package = open_opc(&bytes, "F-219 transferred SmartArt");
+    let presentation_part = package.main_document_part().unwrap();
+    let root = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let presentation_rels = package.get_part_rels(&presentation_part).unwrap();
+    let slide_parts = root
+        .slide_ids
+        .iter()
+        .map(|slide| {
+            let relationship = presentation_rels.get_by_id(&slide.relationship_id).unwrap();
+            OpcPackage::resolve_rel_target(&presentation_part, &relationship.target)
+        })
+        .collect::<Vec<_>>();
+    let transferred_part = &slide_parts[0];
+    let transferred_rels = package.get_part_rels(transferred_part).unwrap();
+    for (relationship_type, colliding_source_part) in [
+        (rel_types::DIAGRAM_DATA, "/custom/diagrams/two/data1.xml"),
+        (
+            rel_types::DIAGRAM_LAYOUT,
+            "/custom/diagrams/two/layout1.xml",
+        ),
+        (
+            rel_types::DIAGRAM_QUICK_STYLE,
+            "/custom/diagrams/two/style1.xml",
+        ),
+        (
+            rel_types::DIAGRAM_COLORS,
+            "/custom/diagrams/two/colors1.xml",
+        ),
+        (
+            rel_types::DIAGRAM_DRAWING,
+            "/custom/diagrams/two/drawing1.xml",
+        ),
+    ] {
+        let transferred = transferred_rels.get_by_type(relationship_type).unwrap();
+        let transferred_target =
+            OpcPackage::resolve_rel_target(transferred_part, &transferred.target);
+        assert_ne!(transferred_target, colliding_source_part);
+        assert!(package.get_part(&transferred_target).is_some());
+    }
+    let transferred_data = transferred_rels
+        .get_by_type(rel_types::DIAGRAM_DATA)
+        .unwrap();
+    let transferred_data_part =
+        OpcPackage::resolve_rel_target(transferred_part, &transferred_data.target);
+    let transferred_data =
+        rpptx::CT_DiagramData::from_xml(package.get_part(&transferred_data_part).unwrap()).unwrap();
+    assert_eq!(
+        transferred_data.drawing_relationship_id(),
+        Some(
+            transferred_rels
+                .get_by_type(rel_types::DIAGRAM_DRAWING)
+                .unwrap()
+                .id
+                .as_str()
+        )
+    );
+    let copied_nested_layout = package
+        .get_part_rels(&transferred_data_part)
+        .unwrap()
+        .get_by_type(rel_types::DIAGRAM_LAYOUT)
+        .unwrap();
+    let copied_nested_layout =
+        OpcPackage::resolve_rel_target(&transferred_data_part, &copied_nested_layout.target);
+    let direct_layout = transferred_rels
+        .get_by_type(rel_types::DIAGRAM_LAYOUT)
+        .unwrap();
+    assert_eq!(
+        copied_nested_layout,
+        OpcPackage::resolve_rel_target(transferred_part, &direct_layout.target)
+    );
+    let transferred_drawing = transferred_rels
+        .get_by_type(rel_types::DIAGRAM_DRAWING)
+        .unwrap();
+    let transferred_drawing_part =
+        OpcPackage::resolve_rel_target(transferred_part, &transferred_drawing.target);
+    let image_relationship = package
+        .get_part_rels(&transferred_drawing_part)
+        .unwrap()
+        .get_by_type(rel_types::IMAGE)
+        .unwrap();
+    assert_eq!(
+        OpcPackage::resolve_rel_target(&transferred_drawing_part, &image_relationship.target),
+        "/ppt/media/image1.png"
+    );
+    assert!(
+        Presentation::from_bytes(&bytes)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+#[test]
+fn cross_presentation_transfer_rejects_unsupported_owned_graphs_without_aliasing() {
+    let source_with_notes =
+        Presentation::from_bytes(&package_bytes(smartart_fixture_package())).unwrap();
+    let mut destination =
+        Presentation::from_bytes(&package_bytes(smartart_transfer_destination_package())).unwrap();
+    let before = destination.to_bytes().unwrap();
+    assert!(
+        destination
+            .transfer_smartart_slide_from(&source_with_notes, 0, 0)
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+
+    let collision_part = "/custom/charts/shared.xml";
+    let mut source_package = smartart_transfer_source_package();
+    source_package.set_part(collision_part, b"source-only chart".to_vec());
+    source_package
+        .content_types
+        .add_override(collision_part, content_types::CHART);
+    source_package
+        .get_or_create_part_rels("/custom/diagrams/two/drawing1.xml")
+        .add_with_id("source-chart", rel_types::CHART, "../../charts/shared.xml");
+    let source = Presentation::from_bytes(&package_bytes(source_package)).unwrap();
+
+    let mut destination_package = smartart_transfer_destination_package();
+    destination_package.set_part(collision_part, b"destination chart".to_vec());
+    destination_package
+        .content_types
+        .add_override(collision_part, content_types::CHART);
+    let mut destination = Presentation::from_bytes(&package_bytes(destination_package)).unwrap();
+    let before = destination.to_bytes().unwrap();
+    assert!(
+        destination
+            .transfer_smartart_slide_from(&source, 0, 0)
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+    let saved = open_opc(&before, "bounded transfer destination");
+    assert_eq!(
+        saved.get_part(collision_part).unwrap(),
+        b"destination chart"
+    );
+
+    assert!(
+        destination
+            .transfer_smartart_slide_from(&source, 0, 999)
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn cross_presentation_smartart_transfer_rejects_placeholders_atomically() {
+    let original = String::from_utf8(
+        smartart_transfer_source_package()
+            .get_part(SLIDE_TWO_PART)
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let graphic_frame_placeholder = original.replacen(
+        "<p:nvPr/>",
+        r#"<p:nvPr><p:ph type="body" idx="7"/></p:nvPr>"#,
+        1,
+    );
+    let preserved_choice_placeholder = original.replace(
+        "</p:spTree>",
+        r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="p"><p:sp><p:nvSpPr><p:cNvPr id="43" name="Preserved Choice Placeholder"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="9"/></p:nvPr></p:nvSpPr><p:spPr/></p:sp></mc:Choice><mc:Fallback/></mc:AlternateContent></p:spTree>"#,
+    );
+
+    for slide in [graphic_frame_placeholder, preserved_choice_placeholder] {
+        let mut source_package = smartart_transfer_source_package();
+        source_package.set_part(SLIDE_TWO_PART, slide.into_bytes());
+        let source = Presentation::from_bytes(&package_bytes(source_package)).unwrap();
+        let mut destination =
+            Presentation::from_bytes(&package_bytes(smartart_transfer_destination_package()))
+                .unwrap();
+        let before = destination.to_bytes().unwrap();
+
+        assert!(
+            destination
+                .transfer_smartart_slide_from(&source, 0, 0)
+                .is_err()
+        );
+        assert_eq!(destination.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn cross_presentation_smartart_transfer_rejects_slide_images_with_owned_graphs_atomically() {
+    let image_part = "/ppt/media/slide-owned.png";
+    let dependency_part = "/custom/charts/image-owner.xml";
+    let mut source_package = smartart_transfer_source_package();
+    source_package.set_part(image_part, b"source slide image".to_vec());
+    source_package.set_part(dependency_part, b"source nested chart".to_vec());
+    source_package.content_types.add_default("png", "image/png");
+    source_package
+        .content_types
+        .add_override(dependency_part, content_types::CHART);
+    source_package
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .add_with_id(
+            "slide-owned-image",
+            rel_types::IMAGE,
+            "../../ppt/media/slide-owned.png",
+        );
+    source_package
+        .get_or_create_part_rels(image_part)
+        .add_with_id(
+            "image-owned-chart",
+            rel_types::CHART,
+            "../../custom/charts/image-owner.xml",
+        );
+    let source = Presentation::from_bytes(&package_bytes(source_package)).unwrap();
+
+    let mut destination =
+        Presentation::from_bytes(&package_bytes(smartart_transfer_destination_package())).unwrap();
+    let before = destination.to_bytes().unwrap();
+
+    assert!(
+        destination
+            .transfer_smartart_slide_from(&source, 0, 0)
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn cross_presentation_smartart_transfer_rejects_external_slide_layout_atomically() {
+    let mut source_package = smartart_transfer_source_package();
+    let source_layout = source_package
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::SLIDE_LAYOUT)
+        .unwrap();
+    source_layout.target = "https://example.com/source-layout.xml".to_owned();
+    source_layout.target_mode = Some("External".to_owned());
+    let source_bytes = package_bytes(source_package);
+    let source = Presentation::from_bytes(&source_bytes).unwrap();
+    let mut destination =
+        Presentation::from_bytes(&package_bytes(smartart_transfer_destination_package())).unwrap();
+    let before = destination.to_bytes().unwrap();
+
+    assert!(
+        destination
+            .transfer_smartart_slide_from(&source, 0, 0)
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn cross_presentation_smartart_transfer_rejects_deep_diagram_graph_atomically() {
+    let mut source_package = smartart_transfer_source_package();
+    let drawing_part = "/custom/diagrams/two/drawing1.xml";
+    source_package
+        .get_or_create_part_rels(drawing_part)
+        .add_with_id("deep-chain", rel_types::DIAGRAM_LAYOUT, "deep/part0.xml");
+    for index in 0..130 {
+        let part = format!("/custom/diagrams/two/deep/part{index}.xml");
+        source_package.set_part(
+            &part,
+            br#"<dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"/>"#
+                .to_vec(),
+        );
+        source_package.content_types.add_override(
+            &part,
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
+        );
+        if index < 129 {
+            source_package
+                .get_or_create_part_rels(&part)
+                .add(rel_types::DIAGRAM_LAYOUT, &format!("part{}.xml", index + 1));
+        }
+    }
+    let source_bytes = package_bytes(source_package);
+    let source = Presentation::from_bytes(&source_bytes).unwrap();
+    let mut destination =
+        Presentation::from_bytes(&package_bytes(smartart_transfer_destination_package())).unwrap();
+    let before = destination.to_bytes().unwrap();
+
+    let error = match destination.transfer_smartart_slide_from(&source, 0, 0) {
+        Ok(_) => panic!("deep graph transfer unexpectedly succeeded"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("128-part transfer bound"), "{error}");
+    assert_eq!(destination.to_bytes().unwrap(), before);
+
+    let mut duplicate = Presentation::from_bytes(&source_bytes).unwrap();
+    let before = duplicate.to_bytes().unwrap();
+    let error = match duplicate.duplicate_slide(0) {
+        Ok(_) => panic!("deep graph duplication unexpectedly succeeded"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("128-part copy bound"), "{error}");
+    assert_eq!(duplicate.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn failed_smartart_node_mutation_leaves_the_package_unchanged() {
+    let mut presentation =
+        Presentation::from_bytes(&package_bytes(smartart_fixture_package())).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .set_smart_art_node_text(0, 999, "n1", "fail")
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    assert!(
+        presentation
+            .set_smart_art_node_text(0, 42, "missing", "fail")
+            .is_err()
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let mut missing_target = smartart_fixture_package();
+    missing_target
+        .parts
+        .remove("/custom/diagrams/two/data1.xml");
+    let mut missing_target = Presentation::from_bytes(&package_bytes(missing_target)).unwrap();
+    let before = format!("{missing_target:?}");
+    assert!(
+        missing_target
+            .set_smart_art_node_text(0, 42, "n1", "fail")
+            .is_err()
+    );
+    assert_eq!(format!("{missing_target:?}"), before);
+
+    let mut malformed = smartart_fixture_package();
+    malformed.set_part("/custom/diagrams/two/data1.xml", b"<not-diagram/>".to_vec());
+    let mut malformed = Presentation::from_bytes(&package_bytes(malformed)).unwrap();
+    let before = malformed.to_bytes().unwrap();
+    assert!(
+        malformed
+            .set_smart_art_node_text(0, 42, "n1", "fail")
+            .is_err()
+    );
+    assert_eq!(malformed.to_bytes().unwrap(), before);
+
+    let mut invalid_graph = smartart_fixture_package();
+    invalid_graph
+        .parts
+        .remove("/custom/diagrams/two/drawing1.xml");
+    let mut invalid_graph = Presentation::from_bytes(&package_bytes(invalid_graph)).unwrap();
+    let before = format!("{invalid_graph:?}");
+    assert!(
+        invalid_graph
+            .set_smart_art_node_text(0, 42, "n1", "fail")
+            .is_err()
+    );
+    assert_eq!(format!("{invalid_graph:?}"), before);
+}
+
+#[test]
+fn smartart_node_mutation_validates_every_relationship_role_atomically() {
+    let mut variants = Vec::new();
+
+    let mut missing_style = smartart_fixture_package();
+    missing_style
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .retain(|relationship| relationship.id != "smart-style");
+    variants.push(("missing style id", missing_style));
+
+    let mut wrong_layout_type = smartart_fixture_package();
+    wrong_layout_type
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "smart-layout")
+        .unwrap()
+        .rel_type = rel_types::IMAGE.to_owned();
+    variants.push(("wrong layout type", wrong_layout_type));
+
+    let mut missing_drawing = smartart_fixture_package();
+    missing_drawing
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .retain(|relationship| relationship.id != "drawing-link");
+    variants.push(("missing cached drawing id", missing_drawing));
+
+    let mut wrong_drawing_type = smartart_fixture_package();
+    wrong_drawing_type
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "drawing-link")
+        .unwrap()
+        .rel_type = rel_types::IMAGE.to_owned();
+    variants.push(("wrong cached drawing type", wrong_drawing_type));
+
+    for (case, package) in variants {
+        let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let before = format!("{presentation:?}");
+        let error = presentation
+            .set_smart_art_node_text(0, 42, "n1", "must reject")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("relationship") || error.contains("Relationship"),
+            "{case}: {error}"
+        );
+        assert_eq!(format!("{presentation:?}"), before, "{case}");
+    }
+}
+
+#[test]
+fn smartart_transfer_validates_relationship_roles_and_exactly_one_layout_atomically() {
+    let mut variants = Vec::new();
+
+    let mut missing_colors = smartart_transfer_source_package();
+    missing_colors
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .retain(|relationship| relationship.id != "smart-colors");
+    variants.push(("missing colors id", missing_colors));
+
+    let mut wrong_drawing_type = smartart_transfer_source_package();
+    wrong_drawing_type
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "drawing-link")
+        .unwrap()
+        .rel_type = rel_types::IMAGE.to_owned();
+    variants.push(("wrong cached drawing type", wrong_drawing_type));
+
+    let mut no_layout = smartart_transfer_source_package();
+    no_layout
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .retain(|relationship| relationship.rel_type != rel_types::SLIDE_LAYOUT);
+    variants.push(("no source slide layout", no_layout));
+
+    let mut two_layouts = smartart_transfer_source_package();
+    two_layouts
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .add_with_id(
+            "second-slide-layout",
+            rel_types::SLIDE_LAYOUT,
+            "../slideLayouts/slideLayout1.xml",
+        );
+    variants.push(("two source slide layouts", two_layouts));
+
+    for (case, source_package) in variants {
+        let source = Presentation::from_bytes(&package_bytes(source_package)).unwrap();
+        let mut destination =
+            Presentation::from_bytes(&package_bytes(smartart_transfer_destination_package()))
+                .unwrap();
+        let before = destination.to_bytes().unwrap();
+        let error = match destination.transfer_smartart_slide_from(&source, 0, 0) {
+            Ok(_) => panic!("{case}: transfer unexpectedly succeeded"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("relationship") || error.contains("slide-layout"),
+            "{case}: {error}"
+        );
+        assert_eq!(destination.to_bytes().unwrap(), before, "{case}");
+    }
+}
+
+fn smartart_fixture_package() -> OpcPackage {
+    let mut package = fixture_package();
+    let master_part = "/custom/masters/scope.xml";
+    package.set_part(LAYOUT_PART, smartart_layout_xml());
+    package.set_part(master_part, smartart_master_xml());
+    package
+        .content_types
+        .add_override(master_part, content_types::SLIDE_MASTER);
+    package
+        .get_or_create_part_rels(LAYOUT_PART)
+        .add(rel_types::SLIDE_MASTER, "../masters/scope.xml");
+    for (slide_part, scope, text) in [
+        (SLIDE_ONE_PART, "one", "One"),
+        (SLIDE_TWO_PART, "two", "Two"),
+    ] {
+        package.set_part(slide_part, smartart_slide_xml());
+        add_smartart_scope(&mut package, slide_part, scope, text);
+    }
+    add_smartart_scope(&mut package, LAYOUT_PART, "layout-scope", "Layout scope");
+    add_smartart_scope(&mut package, master_part, "master-scope", "Master scope");
+    package.set_part("/ppt/media/image1.png", b"shared image bytes".to_vec());
+    package.content_types.add_default("png", "image/png");
+    package
+}
+
+fn smartart_transfer_source_package() -> OpcPackage {
+    let mut package = smartart_fixture_package();
+    package
+        .get_or_create_part_rels(SLIDE_TWO_PART)
+        .items
+        .retain(|relationship| relationship.rel_type != rel_types::NOTES_SLIDE);
+    package.parts.remove(NOTES_PART);
+    package.part_rels.remove(NOTES_PART);
+    package.content_types.overrides.remove(NOTES_PART);
+    package
+}
+
+fn smartart_transfer_destination_package() -> OpcPackage {
+    let bytes = Presentation::new().unwrap().to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+    for (part, content_type) in [
+        (
+            "/custom/diagrams/two/data1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml",
+        ),
+        (
+            "/custom/diagrams/two/layout1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
+        ),
+        (
+            "/custom/diagrams/two/style1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
+        ),
+        (
+            "/custom/diagrams/two/colors1.xml",
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml",
+        ),
+        (
+            "/custom/diagrams/two/drawing1.xml",
+            "application/vnd.ms-office.drawingml.diagramDrawing+xml",
+        ),
+    ] {
+        package.set_part(part, b"destination diagram decoy".to_vec());
+        package.content_types.add_override(part, content_type);
+    }
+    package
+}
+
+fn add_smartart_scope(package: &mut OpcPackage, owner_part: &str, scope: &str, text: &str) {
+    let base = format!("/custom/diagrams/{scope}");
+    let data = format!("{base}/data1.xml");
+    let layout = format!("{base}/layout1.xml");
+    let style = format!("{base}/style1.xml");
+    let colors = format!("{base}/colors1.xml");
+    let drawing = format!("{base}/drawing1.xml");
+    package.set_part(&data, smartart_data_xml(text));
+    package.set_part(&layout, br#"<dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="urn:unsupported"><dgm:layoutNode><dgm:alg type="snake"/><dgm:extLst><x:keep xmlns:x="urn:f219"/></dgm:extLst></dgm:layoutNode></dgm:layoutDef>"#.to_vec());
+    package.set_part(&style, br#"<dgm:styleDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="urn:style"><dgm:styleLbl name="node0"><dgm:style val="moderate"/></dgm:styleLbl></dgm:styleDef>"#.to_vec());
+    package.set_part(&colors, br#"<dgm:colorsDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="urn:colors"><dgm:styleLbl name="node0"><dgm:fillClrLst><a:srgbClr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" val="112233"/></dgm:fillClrLst></dgm:styleLbl></dgm:colorsDef>"#.to_vec());
+    package.set_part(&drawing, br#"<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dsp:spTree><dsp:sp/><a:blip r:embed="image-link"/></dsp:spTree></dsp:drawing>"#.to_vec());
+    for (part, content_type) in [
+        (
+            &data,
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml",
+        ),
+        (
+            &layout,
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
+        ),
+        (
+            &style,
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
+        ),
+        (
+            &colors,
+            "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml",
+        ),
+        (
+            &drawing,
+            "application/vnd.ms-office.drawingml.diagramDrawing+xml",
+        ),
+    ] {
+        package.content_types.add_override(part, content_type);
+    }
+    let relative_base = format!("../diagrams/{scope}");
+    let relationships = package.get_or_create_part_rels(owner_part);
+    relationships.add_with_id(
+        "smart-data",
+        rel_types::DIAGRAM_DATA,
+        &format!("{relative_base}/data1.xml"),
+    );
+    relationships.add_with_id(
+        "smart-layout",
+        rel_types::DIAGRAM_LAYOUT,
+        &format!("{relative_base}/layout1.xml"),
+    );
+    relationships.add_with_id(
+        "smart-style",
+        rel_types::DIAGRAM_QUICK_STYLE,
+        &format!("{relative_base}/style1.xml"),
+    );
+    relationships.add_with_id(
+        "smart-colors",
+        rel_types::DIAGRAM_COLORS,
+        &format!("{relative_base}/colors1.xml"),
+    );
+    relationships.add_with_id(
+        "drawing-link",
+        rel_types::DIAGRAM_DRAWING,
+        &format!("{relative_base}/drawing1.xml"),
+    );
+    package.get_or_create_part_rels(&drawing).add_with_id(
+        "image-link",
+        rel_types::IMAGE,
+        "../../../ppt/media/image1.png",
+    );
+}
+
+fn smartart_slide_xml() -> Vec<u8> {
+    format!(r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="42" name="SmartArt"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="smart-data" r:lo="smart-layout" r:qs="smart-style" r:cs="smart-colors"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>"#).into_bytes()
+}
+
+fn smartart_layout_xml() -> Vec<u8> {
+    smartart_owned_root_xml("sldLayout", 52, "Layout SmartArt", "")
+}
+
+fn smartart_master_xml() -> Vec<u8> {
+    smartart_owned_root_xml(
+        "sldMaster",
+        62,
+        "Master SmartArt",
+        r#"<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst/><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>"#,
+    )
+}
+
+fn smartart_owned_root_xml(root: &str, shape_id: u32, name: &str, tail: &str) -> Vec<u8> {
+    format!(r#"<p:{root} xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="smart-data" r:lo="smart-layout" r:qs="smart-style" r:cs="smart-colors"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld>{tail}</p:{root}>"#).into_bytes()
+}
+
+fn smartart_data_xml(text: &str) -> Vec<u8> {
+    format!(r#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="{A_NS}" xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram"><dgm:ptLst><dgm:pt modelId="n1"><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst><dgm:cxnLst/><dgm:extLst><a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt relId="drawing-link" minVer="http://schemas.openxmlformats.org/drawingml/2006/diagram"/></a:ext><x:keep xmlns:x="urn:f219"/></dgm:extLst></dgm:dataModel>"#).into_bytes()
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]

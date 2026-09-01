@@ -135,6 +135,373 @@ fn media_model_reads_aliases_and_writes_schema_order_without_losing_raw_siblings
 }
 
 #[test]
+fn smartart_parts_read_aliases_write_schema_order_and_preserve_raw_children() {
+    use rpptx_oxml::diagram::{
+        CT_DiagramColorsDefinition, CT_DiagramData, CT_DiagramDrawing, CT_DiagramLayoutDefinition,
+        CT_DiagramStyleDefinition,
+    };
+
+    let data_xml = br#"<q:dataModel xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:f219" xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" x:root="kept"><?root-before keep?><!--root-before-->root&amp;text<x:before/><x:ptLst><x:pt modelId="foreign"/></x:ptLst><q:ptLst x:list="kept"><?points keep?><!--points-note-->points&amp;text<x:list-child/><q:pt modelId="n1" x:modelId="foreign-shadow" x:type="pres" x:point="kept"><q:prSet/><x:before-text/><?point keep?><!--point-note-->point&amp;text<q:t><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Before</a:t></a:r></a:p></q:t><x:after-text/></q:pt><x:after-point/></q:ptLst><x:between/><x:cxnLst><x:cxn modelId="foreign"/></x:cxnLst><q:cxnLst x:list="kept"><?connections keep?><!--connections-note-->connections&amp;text<x:list-child/><q:cxn modelId="c1" x:modelId="foreign-shadow" srcId="n1" x:srcId="foreign" destId="n1" type="parOf" srcOrd="2" destOrd="3"/><x:after-connection/></q:cxnLst><x:bg><x:foreign/></x:bg><q:bg><x:background/></q:bg><q:whole><x:whole/></q:whole><q:extLst><a:ext><dsp:dataModelExt relId="drawing-scope-id" x:relId="foreign-drawing"/></a:ext></q:extLst><x:after/><?root-after keep?><!--root-after-->tail&amp;text</q:dataModel>"#;
+    let mut data = CT_DiagramData::from_xml(data_xml).unwrap();
+    assert_eq!(data.to_xml().unwrap(), data_xml);
+    assert_eq!(data.points().len(), 1);
+    assert_eq!(data.connections().len(), 1);
+    assert_eq!(data.points()[0].model_id, "n1");
+    assert!(data.background_xml().unwrap().starts_with(b"<q:bg>"));
+    assert_eq!(data.drawing_relationship_id(), Some("drawing-scope-id"));
+    data.set_node_text("n1", "After").unwrap();
+    let written = data.to_xml().unwrap();
+    let written_text = String::from_utf8(written.clone()).unwrap();
+    assert!(written_text.starts_with("<dgm:dataModel"));
+    assert!(
+        written_text
+            .contains("xmlns:dgm=\"http://schemas.openxmlformats.org/drawingml/2006/diagram\"")
+    );
+    assert!(written_text.contains("<dgm:t><a:bodyPr/>"));
+    assert!(written_text.contains("<a:t>After</a:t>"));
+    assert!(written_text.contains("<x:before-text/>"));
+    assert!(written_text.contains("<x:after-text/>"));
+    assert!(written_text.contains("x:list=\"kept\""));
+    assert!(
+        written_text.contains("<?points keep?><!--points-note-->points&amp;text<x:list-child/>")
+    );
+    assert!(written_text.contains("<?point keep?><!--point-note-->point&amp;text"));
+    assert!(written_text.contains(
+        "<?connections keep?><!--connections-note-->connections&amp;text<x:list-child/>"
+    ));
+    assert!(written_text.contains("<x:after-point/>"));
+    assert!(written_text.contains("<x:after-connection/>"));
+    assert!(written_text.contains("<?root-before keep?><!--root-before-->root&amp;text"));
+    assert!(written_text.contains("<?root-after keep?><!--root-after-->tail&amp;text"));
+    assert!(written_text.contains("<x:ptLst><x:pt modelId=\"foreign\"/></x:ptLst>"));
+    assert!(written_text.contains("<x:cxnLst><x:cxn modelId=\"foreign\"/></x:cxnLst>"));
+    assert!(written_text.contains("<q:bg><x:background/></q:bg>"));
+    assert_order(
+        &written,
+        &[
+            "<dgm:ptLst",
+            "<dgm:cxnLst",
+            "<q:bg",
+            "<q:whole",
+            "<q:extLst",
+        ],
+    );
+    let reparsed = CT_DiagramData::from_xml(&written).unwrap();
+    assert_eq!(
+        reparsed.points()[0].text.as_ref().unwrap().plain_text(),
+        "After"
+    );
+
+    let conflicting_prefix_xml = br#"<q:dataModel xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:dgm="urn:producer" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><q:ptLst><q:pt modelId="n1"><q:t><a:bodyPr/><a:lstStyle/><a:p/></q:t></q:pt><q:pt modelId="n2"><q:t xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"><a:bodyPr/><a:lstStyle/><a:p/></q:t></q:pt></q:ptLst><q:cxnLst/><dgm:preserved/></q:dataModel>"#;
+    let mut conflicting = CT_DiagramData::from_xml(conflicting_prefix_xml).unwrap();
+    assert!(conflicting.points()[0].text.is_none());
+    assert!(conflicting.set_node_text("n1", "Unsafe").is_err());
+    conflicting.set_node_text("n2", "Unsafe").unwrap();
+    let error = conflicting.to_xml().unwrap_err().to_string();
+    assert!(error.contains("xmlns:dgm conflicts"));
+    assert!(CT_DiagramData::from_xml(br#"<d:dataModel xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:ptLst/><d:bg/><d:cxnLst/></d:dataModel>"#).is_err());
+    assert!(CT_DiagramData::from_xml(br#"<d:dataModel xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:ptLst/><d:extLst/><d:whole/></d:dataModel>"#).is_err());
+
+    let layout_xml = br#"<x:layoutDef xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:f="urn:foreign" uniqueId="urn:list" f:uniqueId="urn:matrix"><f:title val="Foreign Matrix"/><x:title f:val="Foreign" val="Vertical List"/><x:catLst><f:cat type="matrix"/><x:cat f:type="cycle" type="list"/></x:catLst><x:layoutNode><f:alg type="cycle"/><x:alg f:type="cycle" type="lin"/><x:constrLst><f:constr type="foreign"/><x:constr f:type="foreign" type="w"/></x:constrLst><x:extLst><f:raw/></x:extLst></x:layoutNode></x:layoutDef>"#;
+    let style_xml = br#"<x:styleDef xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:f="urn:foreign" uniqueId="urn:style" f:uniqueId="foreign"><f:styleLbl name="foreign"><a:lnRef idx="99"/></f:styleLbl><x:styleLbl name="node0" f:name="foreign"><x:style><f:lnRef idx="99"/><a:lnRef idx="2" f:idx="99"/><a:fillRef idx="1"/><a:effectRef idx="0"/><a:fontRef idx="minor"/></x:style><f:raw/></x:styleLbl></x:styleDef>"#;
+    let colors_xml = br#"<x:colorsDef xmlns:x="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:f="urn:foreign" uniqueId="urn:colors" f:uniqueId="foreign"><f:styleLbl name="foreign"><f:fillClrLst><f:srgbClr val="FFFFFF"/></f:fillClrLst></f:styleLbl><x:styleLbl name="node0" f:name="foreign"><f:fillClrLst><a:srgbClr val="FFFFFF"/></f:fillClrLst><x:fillClrLst><f:srgbClr val="FFFFFF"/><a:srgbClr f:val="FFFFFF" val="112233"/></x:fillClrLst></x:styleLbl></x:colorsDef>"#;
+    let drawing_xml = br#"<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:f="urn:foreign"><dsp:spTree><f:sp/><dsp:sp/><f:raw/></dsp:spTree></dsp:drawing>"#;
+    let layout = CT_DiagramLayoutDefinition::from_xml(layout_xml).unwrap();
+    let style = CT_DiagramStyleDefinition::from_xml(style_xml).unwrap();
+    let colors = CT_DiagramColorsDefinition::from_xml(colors_xml).unwrap();
+    let drawing = CT_DiagramDrawing::from_xml(drawing_xml).unwrap();
+    assert_eq!(layout.to_xml(), layout_xml);
+    assert_eq!(style.to_xml(), style_xml);
+    assert_eq!(colors.to_xml(), colors_xml);
+    assert_eq!(drawing.to_xml(), drawing_xml);
+    assert_eq!(layout.categories, ["list"]);
+    let shape_style = style.labels[0].shape_style.as_ref().unwrap();
+    assert_eq!(shape_style.line_reference, Some(2));
+    assert_eq!(shape_style.fill_reference, Some(1));
+    assert_eq!(shape_style.font_reference.as_deref(), Some("minor"));
+    assert_eq!(colors.labels[0].fill_colors, ["112233"]);
+    assert_eq!(style.labels.len(), 1);
+    assert_eq!(colors.labels.len(), 1);
+    assert_eq!(drawing.shape_count, 1);
+    assert!(
+        CT_DiagramDrawing::from_xml(br#"<f:drawing xmlns:f="urn:foreign"><f:sp/></f:drawing>"#)
+            .is_err()
+    );
+    assert!(CT_DiagramData::from_xml(br#"<d:dataModel xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:ptLst/></d:dataModel><d:dataModel/>"#).is_err());
+    assert!(CT_DiagramLayoutDefinition::from_xml(br#"<d:layoutDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:layoutNode/></d:layoutDef>trailing"#).is_err());
+    assert!(CT_DiagramStyleDefinition::from_xml(br#"<d:styleDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:styleLbl>"#).is_err());
+    assert!(CT_DiagramColorsDefinition::from_xml(br#"<d:colorsDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:styleLbl/></d:colorsDef><d:colorsDef/>"#).is_err());
+    assert!(CT_DiagramDrawing::from_xml(br#"<d:drawing xmlns:d="http://schemas.microsoft.com/office/drawing/2008/diagram"/>after"#).is_err());
+}
+
+#[test]
+fn smartart_checked_edits_reject_duplicate_graph_identities_without_mutation() {
+    use rpptx_oxml::diagram::CT_DiagramData;
+
+    let duplicate_points = br#"<d:dataModel xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><d:ptLst><d:pt modelId="same"><d:t><a:bodyPr/><a:lstStyle/><a:p/></d:t></d:pt><d:pt modelId="same"><d:t><a:bodyPr/><a:lstStyle/><a:p/></d:t></d:pt></d:ptLst><d:cxnLst/></d:dataModel>"#;
+    let mut data = CT_DiagramData::from_xml(duplicate_points).unwrap();
+    let error = data
+        .set_node_text("same", "ambiguous")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("duplicate diagram point modelId same"),
+        "{error}"
+    );
+    assert_eq!(data.to_xml().unwrap(), duplicate_points);
+
+    let duplicate_connections = br#"<d:dataModel xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><d:ptLst><d:pt modelId="one"><d:t><a:bodyPr/><a:lstStyle/><a:p/></d:t></d:pt></d:ptLst><d:cxnLst><d:cxn modelId="same" srcId="one" destId="one"/><d:cxn modelId="same" srcId="one" destId="one"/></d:cxnLst></d:dataModel>"#;
+    let mut data = CT_DiagramData::from_xml(duplicate_connections).unwrap();
+    let error = data
+        .set_node_text("one", "ambiguous")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("duplicate diagram connection modelId same"),
+        "{error}"
+    );
+    assert_eq!(data.to_xml().unwrap(), duplicate_connections);
+}
+
+#[test]
+fn smartart_projections_ignore_same_namespace_lookalikes_outside_schema_positions() {
+    use std::collections::HashMap;
+
+    use rpptx_oxml::diagram::{
+        CT_DiagramColorsDefinition, CT_DiagramData, CT_DiagramDrawing, CT_DiagramLayoutDefinition,
+        CT_DiagramStyleDefinition, DiagramLayoutFamily,
+    };
+
+    let data_xml = br#"<d:dataModel xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram"><d:ptLst/><d:extLst><a:ext><d:opaque><dsp:dataModelExt relId="lookalike"/></d:opaque><dsp:dataModelExt relId="owned"/></a:ext></d:extLst></d:dataModel>"#;
+    let mut data = CT_DiagramData::from_xml(data_xml).unwrap();
+    assert_eq!(data.drawing_relationship_id(), Some("owned"));
+    data.remap_drawing_relationship(&HashMap::from([
+        ("owned".to_owned(), "copied".to_owned()),
+        ("lookalike".to_owned(), "must-not-change".to_owned()),
+    ]))
+    .unwrap();
+    let remapped = String::from_utf8(data.to_xml().unwrap()).unwrap();
+    assert!(remapped.contains("relId=\"lookalike\""));
+    assert!(remapped.contains("relId=\"copied\""));
+    assert!(!remapped.contains("must-not-change"));
+
+    let layout = CT_DiagramLayoutDefinition::from_xml(br#"<d:layoutDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:title val="Vertical List"/><d:catLst><d:cat type="list"/></d:catLst><d:layoutNode><d:alg type="lin"/><d:constrLst><d:constr type="w"/></d:constrLst><d:extLst><d:alg type="pyra"/><d:constr type="fake"/></d:extLst></d:layoutNode><d:extLst><d:title val="Pyramid"/><d:cat type="pyramid"/><d:layoutNode><d:alg type="pyra"/></d:layoutNode></d:extLst></d:layoutDef>"#).unwrap();
+    assert_eq!(layout.title.as_deref(), Some("Vertical List"));
+    assert_eq!(layout.categories, ["list"]);
+    assert_eq!(layout.algorithms, ["lin"]);
+    assert_eq!(layout.constraints, ["w"]);
+    assert_eq!(layout.family, DiagramLayoutFamily::List);
+
+    let style = CT_DiagramStyleDefinition::from_xml(br#"<d:styleDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><d:styleLbl name="owned"><d:style><a:lnRef idx="2"/><d:extLst><a:fillRef idx="99"/></d:extLst></d:style></d:styleLbl><d:extLst><d:styleLbl name="lookalike"><d:style><a:lnRef idx="99"/></d:style></d:styleLbl></d:extLst></d:styleDef>"#).unwrap();
+    assert_eq!(style.labels.len(), 1);
+    assert_eq!(style.labels[0].name, "owned");
+    let shape_style = style.labels[0].shape_style.as_ref().unwrap();
+    assert_eq!(shape_style.line_reference, Some(2));
+    assert_eq!(shape_style.fill_reference, None);
+
+    let colors = CT_DiagramColorsDefinition::from_xml(br#"<d:colorsDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><d:styleLbl name="owned"><d:fillClrLst><a:srgbClr val="112233"/><d:opaque><a:srgbClr val="FFFFFF"/></d:opaque></d:fillClrLst></d:styleLbl><d:extLst><d:styleLbl name="lookalike"><d:fillClrLst><a:srgbClr val="FFFFFF"/></d:fillClrLst></d:styleLbl></d:extLst></d:colorsDef>"#).unwrap();
+    assert_eq!(colors.labels.len(), 1);
+    assert_eq!(colors.labels[0].name, "owned");
+    assert_eq!(colors.labels[0].fill_colors, ["112233"]);
+
+    let drawing_xml = br#"<x:drawing xmlns:x="http://schemas.microsoft.com/office/drawing/2008/diagram"><x:sp/><x:opaque><x:sp/></x:opaque><x:spTree><x:sp/><x:opaque><x:sp/></x:opaque><x:sp/></x:spTree><x:extLst><x:sp/><x:spTree><x:sp/></x:spTree></x:extLst></x:drawing>"#;
+    let drawing = CT_DiagramDrawing::from_xml(drawing_xml).unwrap();
+    assert_eq!(drawing.shape_count, 2);
+    assert_eq!(drawing.to_xml(), drawing_xml);
+}
+
+#[test]
+fn smartart_text_with_nested_fixed_namespace_shadow_stays_opaque_and_uneditable() {
+    use rpptx_oxml::diagram::CT_DiagramData;
+
+    let unsafe_text = r#"<dgm:t><a:bodyPr/><a:lstStyle/><a:p xmlns:a="urn:producer"><a:r><a:t>Foreign</a:t></a:r></a:p></dgm:t>"#;
+    let xml = format!(
+        r#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst><dgm:pt modelId="unsafe">{unsafe_text}</dgm:pt><dgm:pt modelId="safe"><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Before</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst><dgm:cxnLst/></dgm:dataModel>"#
+    );
+    let mut data = CT_DiagramData::from_xml(xml.as_bytes()).unwrap();
+    assert!(data.points()[0].text.is_none());
+    assert_eq!(data.to_xml().unwrap(), xml.as_bytes());
+    assert!(data.set_node_text("unsafe", "Must reject").is_err());
+    assert_eq!(data.to_xml().unwrap(), xml.as_bytes());
+
+    data.set_node_text("safe", "After").unwrap();
+    let written = String::from_utf8(data.to_xml().unwrap()).unwrap();
+    assert!(written.contains(unsafe_text));
+    assert!(written.contains("<a:t>After</a:t>"));
+    let reopened = CT_DiagramData::from_xml(written.as_bytes()).unwrap();
+    assert!(reopened.points()[0].text.is_none());
+    assert_eq!(
+        reopened.points()[1].text.as_ref().unwrap().plain_text(),
+        "After"
+    );
+}
+
+#[test]
+fn smartart_text_with_fixed_dgm_root_shadow_stays_opaque_and_uneditable() {
+    use rpptx_oxml::diagram::CT_DiagramData;
+
+    let unsafe_text = r#"<q:t xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:dgm="urn:producer" xmlns:x="urn:safe" x:keep="producer"><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Foreign</a:t></a:r></a:p></q:t>"#;
+    let xml = format!(
+        r#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst><dgm:pt modelId="shadow">{unsafe_text}</dgm:pt><dgm:pt modelId="safe"><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Before</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst><dgm:cxnLst/></dgm:dataModel>"#
+    );
+    let mut data = CT_DiagramData::from_xml(xml.as_bytes()).unwrap();
+    assert!(data.points()[0].text.is_none());
+    assert_eq!(data.to_xml().unwrap(), xml.as_bytes());
+
+    assert!(data.set_node_text("shadow", "Must reject").is_err());
+    assert_eq!(data.to_xml().unwrap(), xml.as_bytes());
+
+    data.set_node_text("safe", "After").unwrap();
+    let written = String::from_utf8(data.to_xml().unwrap()).unwrap();
+    assert!(written.contains(unsafe_text));
+    assert!(written.contains("<a:t>After</a:t>"));
+}
+
+#[test]
+fn edited_smartart_text_retains_safe_root_attributes_and_namespaces() {
+    use rpptx_oxml::diagram::CT_DiagramData;
+
+    let xml = br#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst><dgm:pt modelId="safe"><dgm:t xmlns:x="urn:producer" xmlns:y="urn:unused" x:keep="producer"><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Before</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst><dgm:cxnLst/></dgm:dataModel>"#;
+    let mut data = CT_DiagramData::from_xml(xml).unwrap();
+    data.set_node_text("safe", "After").unwrap();
+    let written = String::from_utf8(data.to_xml().unwrap()).unwrap();
+    assert!(
+        written.contains(
+            "<dgm:t xmlns:x=\"urn:producer\" xmlns:y=\"urn:unused\" x:keep=\"producer\">"
+        )
+    );
+    assert!(written.contains("<a:t>After</a:t>"));
+
+    let reopened = CT_DiagramData::from_xml(written.as_bytes()).unwrap();
+    assert_eq!(
+        reopened.points()[0].text.as_ref().unwrap().plain_text(),
+        "After"
+    );
+}
+
+#[test]
+fn supported_smartart_nodes_remain_editable_after_save_and_reopen() {
+    use rpptx_oxml::diagram::{
+        CT_DiagramData, CT_DiagramLayoutDefinition, DiagramConnectionKind, DiagramLayoutFamily,
+        DiagramPointKind, DiagramRelationshipIds,
+    };
+    use std::collections::HashMap;
+
+    let xml = br#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst><dgm:pt modelId="n1"><dgm:t><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>One</a:t></a:r></a:p></dgm:t></dgm:pt><dgm:pt modelId="a1" type="asst"><dgm:t><a:bodyPr/><a:lstStyle/><a:p/></dgm:t></dgm:pt></dgm:ptLst><dgm:cxnLst><dgm:cxn modelId="c1" srcId="n1" destId="a1" type="presOf" srcOrd="4" destOrd="5"/></dgm:cxnLst></dgm:dataModel>"#;
+    let mut data = CT_DiagramData::from_xml(xml).unwrap();
+    assert_eq!(data.points()[0].kind, DiagramPointKind::Node);
+    assert_eq!(data.points()[1].kind, DiagramPointKind::Assistant);
+    assert_eq!(
+        data.connections()[0].kind,
+        DiagramConnectionKind::PresentationOf
+    );
+    assert_eq!(
+        (
+            data.connections()[0].source_order,
+            data.connections()[0].destination_order
+        ),
+        (4, 5)
+    );
+    data.set_node_text("n1", "Edited").unwrap();
+    data.move_point(1, 0).unwrap();
+    let reopened = CT_DiagramData::from_xml(&data.to_xml().unwrap()).unwrap();
+    assert_eq!(reopened.points()[0].model_id, "a1");
+    assert_eq!(
+        reopened.points()[1].text.as_ref().unwrap().plain_text(),
+        "Edited"
+    );
+
+    let layout = CT_DiagramLayoutDefinition::from_xml(br#"<d:layoutDef xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" uniqueId="urn:hierarchy4"><d:layoutNode><d:alg type="hierRoot"/></d:layoutNode></d:layoutDef>"#).unwrap();
+    assert_eq!(layout.family, DiagramLayoutFamily::Hierarchy);
+
+    let mut ids = DiagramRelationshipIds::from_xml(br#"<d:relIds xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:x="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="urn:producer" p:keep='A&#x20;B' x:dm="same" x:lo="same-layout" x:qs="same-style" x:cs="same-colors"><p:child x:id="unmapped"/></d:relIds>"#).unwrap();
+    ids.drawing = Some("same-drawing".to_owned());
+    ids.remap(&HashMap::from([
+        ("same".to_owned(), "rId9".to_owned()),
+        ("same-drawing".to_owned(), "rId10".to_owned()),
+    ]))
+    .unwrap();
+    assert_eq!(ids.data, "rId9");
+    assert_eq!(ids.drawing.as_deref(), Some("rId10"));
+    let remapped = String::from_utf8(ids.to_xml()).unwrap();
+    assert!(remapped.contains("x:dm=\"rId9\""));
+    assert!(remapped.contains("p:keep='A&#x20;B'"));
+    assert!(remapped.contains("<p:child x:id=\"unmapped\"/>"));
+    assert!(!remapped.contains("r:draw"));
+
+    let frame_xml = br#"<p:graphicFrame xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:nvGraphicFramePr><p:cNvPr id="2" name="SmartArt"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><d:relIds rel:dm="inherited-data" rel:lo="inherited-layout" rel:qs="inherited-style" rel:cs="inherited-colors"><d:ext rel:id="unmapped"/></d:relIds></a:graphicData></a:graphic></p:graphicFrame>"#;
+    let frame = rpptx_oxml::graphic_frame::CT_GraphicFrame::from_xml(frame_xml).unwrap();
+    let rpptx_oxml::graphic_frame::GraphicDataPayload::SmartArt(inherited) =
+        frame.graphic_data.payload()
+    else {
+        panic!("expected inherited SmartArt relationship ids");
+    };
+    let mut inherited = (**inherited).clone();
+    inherited
+        .remap(&HashMap::from([
+            ("inherited-data".to_owned(), "copied-data".to_owned()),
+            ("inherited-layout".to_owned(), "copied-layout".to_owned()),
+        ]))
+        .unwrap();
+    let remapped = String::from_utf8(inherited.to_xml()).unwrap();
+    assert!(remapped.contains("rel:dm=\"copied-data\""));
+    assert!(remapped.contains("rel:lo=\"copied-layout\""));
+    assert!(remapped.contains("rel:qs=\"inherited-style\""));
+    assert!(remapped.contains("<d:ext rel:id=\"unmapped\"/>"));
+
+    assert!(DiagramRelationshipIds::from_xml(br#"<d:relIds xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:dm="a" r:lo="b" r:qs="c" r:cs="d">"#).is_err());
+}
+
+#[test]
+fn every_corpus_smartart_part_projects_without_rewriting_source_bytes() {
+    use rpptx_oxml::diagram::{
+        CT_DiagramColorsDefinition, CT_DiagramData, CT_DiagramDrawing, CT_DiagramLayoutDefinition,
+        CT_DiagramStyleDefinition,
+    };
+
+    let Some(corpus) = require_or_skip_corpus() else {
+        return;
+    };
+    verify_fetched_corpus();
+    let mut coverage = [0usize; 5];
+    for entry in manifest_entries() {
+        let package = OpcPackage::open(corpus.join(entry.path)).unwrap();
+        for (part, content_type) in &package.content_types.overrides {
+            let Some(xml) = package.get_part(part) else {
+                continue;
+            };
+            if content_type.contains("diagramData") {
+                let parsed = CT_DiagramData::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                assert_eq!(parsed.to_xml().unwrap(), xml, "{} {part}", entry.path);
+                coverage[0] += 1;
+            } else if content_type.contains("diagramLayout") {
+                let parsed = CT_DiagramLayoutDefinition::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                assert_eq!(parsed.to_xml(), xml, "{} {part}", entry.path);
+                coverage[1] += 1;
+            } else if content_type.contains("diagramStyle") {
+                let parsed = CT_DiagramStyleDefinition::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                assert_eq!(parsed.to_xml(), xml, "{} {part}", entry.path);
+                coverage[2] += 1;
+            } else if content_type.contains("diagramColors") {
+                let parsed = CT_DiagramColorsDefinition::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                assert_eq!(parsed.to_xml(), xml, "{} {part}", entry.path);
+                coverage[3] += 1;
+            } else if content_type.contains("diagramDrawing") {
+                let parsed = CT_DiagramDrawing::from_xml(xml)
+                    .unwrap_or_else(|error| panic!("{} {part}: {error}", entry.path));
+                assert_eq!(parsed.to_xml(), xml, "{} {part}", entry.path);
+                coverage[4] += 1;
+            }
+        }
+    }
+    assert!(coverage.iter().all(|count| *count > 0), "{coverage:?}");
+}
+
+#[test]
 fn media_trigger_uses_ancestor_click_sequence_context() {
     use rpptx_oxml::timing::{CT_Timing, MediaPlaybackTrigger};
 
@@ -3380,7 +3747,7 @@ fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
     let table =
         r#"<a:tbl><a:tblGrid><a:gridCol w="100"/></a:tblGrid><a:tr h="200"><a:tc/></a:tr></a:tbl>"#;
     let chart = r#"<c:chart xmlns:c="urn:chart" r:id="rId1"/>"#;
-    let smartart = r#"<dgm:relIds xmlns:dgm="urn:diagram" r:dm="rId2"/>"#;
+    let smartart = r#"<dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId2" r:lo="rId3" r:qs="rId4" r:cs="rId5"/>"#;
     let ole = r#"<mc:AlternateContent><mc:Choice Requires="p14"><p:oleObj name="object"/></mc:Choice></mc:AlternateContent>"#;
 
     let table_frame = CT_GraphicFrame::from_xml(
@@ -3419,9 +3786,9 @@ fn graphic_data_uri_dispatch_recognises_table_chart_smartart_and_ole() {
             CT_GraphicFrame::from_xml(graphic_frame_fixture(uri, payload).as_bytes()).unwrap();
         let raw = match (frame.graphic_data.payload(), expected) {
             (GraphicDataPayload::Chart(raw), "chart")
-            | (GraphicDataPayload::SmartArt(raw), "smartart")
-            | (GraphicDataPayload::Other(raw), "other") => raw,
-            (GraphicDataPayload::Ole { raw, .. }, "ole") => raw,
+            | (GraphicDataPayload::Other(raw), "other") => raw.clone(),
+            (GraphicDataPayload::SmartArt(relationships), "smartart") => relationships.to_xml(),
+            (GraphicDataPayload::Ole { raw, .. }, "ole") => raw.clone(),
             (actual, _) => panic!("{uri} selected the wrong branch: {actual:?}"),
         };
         assert_eq!(raw, payload.as_bytes());

@@ -732,7 +732,7 @@ slide text, and optional speaker-note text. Empty python-pptx names and shape
 text capability without a stored `p:txBody` are normalized to the facade's
 explicit `Option` contract.
 
-Five gates run against it:
+Seven gates run against it:
 
 1. **DrawingML structural round-trip**: every `a:txBody` and `a:spPr` parses,
    serialises and reparses to a structurally equal value. The pinned corpus has
@@ -764,6 +764,13 @@ Five gates run against it:
    preserve exact media bytes, relationships, content types, poster ownership,
    playback settings, unsupported metadata, and part counts through save and
    reopen without duplication.
+7. **SmartArt typed projection and preservation**: every diagram data, layout,
+   quick-style, colour, and cached drawing part projects through its bounded
+   namespace-aware model without rewriting source bytes. Source-built fixtures
+   prove producing-scope ownership, relationship-role validation, checked node
+   editing, complete graph remapping, schema-position sensitivity, and failure
+   atomicity. The gate requires nonzero coverage for all five part families
+   when the pinned corpus is required.
 
 The M9 resolver gate selects `WithMaster.pptx`, `backgrounds.pptx`,
 `placeholder-layout-color.pptx`, and

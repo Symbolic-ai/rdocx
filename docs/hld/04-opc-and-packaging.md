@@ -124,12 +124,21 @@ CORE_PROPERTIES, THUMBNAIL, DIGITAL_SIGNATURE_ORIGIN, DIGITAL_SIGNATURE
 EXTENDED_PROPERTIES   // docProps/app.xml
 CUSTOM_PROPERTIES     // docProps/custom.xml
 COMMENTS              // Word comments part
+DIAGRAM_DATA, DIAGRAM_LAYOUT, DIAGRAM_QUICK_STYLE, DIAGRAM_COLORS
+DIAGRAM_DRAWING       // Microsoft 2007 cached diagram drawing
 
 // PresentationML
 SLIDE, SLIDE_LAYOUT, SLIDE_MASTER, NOTES_SLIDE, NOTES_MASTER,
 PRES_PROPS, VIEW_PROPS, TABLE_STYLES, HANDOUT_MASTER,
 POWERPOINT_COMMENTS, POWERPOINT_AUTHORS, AUDIO, VIDEO, POWERPOINT_MEDIA
 ```
+
+The four `dgm:relIds` values resolve only in the relationship scope that owns
+their graphic frame. A schema-position-owned `dsp:dataModelExt/@relId`, when
+present, resolves in that same scope through the Microsoft 2007
+`diagramDrawing` relationship. Checked node editing and cross-presentation
+transfer require every present role to be internal and to have its exact
+relationship type before staging package changes.
 
 A `content_types` constants module is added alongside, so neither format crate
 hand-types the long MIME strings. It includes the modern PowerPoint comments
@@ -292,6 +301,13 @@ docx                      pptx
                           /ppt/comments/commentN.xml
 ```
 
+Diagram parts retain producer-selected names while they remain owned by their
+original scope. Slide duplication and bounded SmartArt transfer allocate a
+fresh positive suffix beside each source diagram part when its resolved target
+would collide in the destination. Equal image bytes may reuse a compatible
+destination media part, but diagram XML parts never alias an unrelated
+destination part merely because their names or bytes match.
+
 Word comment part creation uses the conventional names when free and scans
 numbered alternatives when either path is occupied. It never overwrites an
 unrelated part merely because the conventional comment path exists.
@@ -425,6 +441,13 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+The bounded SmartArt copy graph accepts only the five diagram relationship
+types and internal images whose parts own no relationships. Traversal has cycle
+protection and a shared 128-part ceiling in preflight and copy. Unsupported
+internal charts, packages, media, OLE, custom parts, missing targets, and
+external slide layouts reject before any destination part or relationship is
+published.
 
 Word table widths, cell widths, table indents, and default cell margins share
 one exact signed-integer projection. The parser accepts integer lexical forms

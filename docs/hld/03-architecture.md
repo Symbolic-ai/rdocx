@@ -782,6 +782,15 @@ cells. Consuming mutable accessors transfer a facade borrow into its nested
 handle, which lets the Python binding re-resolve a path without exposing
 PresentationML internals or storing a Rust borrow in a pyclass.
 
+SmartArt follows the same ownership split. `rpptx-oxml::diagram` owns the five
+namespace-aware diagram part models and raw-preserving relationship payload.
+`oxml-opc` owns the standard diagram relationship constants and the Microsoft
+cached-drawing relationship constant. The `rpptx` facade alone resolves those
+parts in the producing slide, layout, or master scope, stages checked node-text
+edits, and copies the bounded owned graph for duplication or explicitly
+layout-bound cross-presentation transfer. No diagram model depends back on the
+facade, layout resolver, or renderer.
+
 The facade also owns package-to-render-input assembly. Its deterministic render
 entry points resolve the current package once and return either the shared
 render input and layout or a complete PDF. The corpus example and

@@ -528,6 +528,38 @@ The graphic-data payload is exposed read-only. Typed table payloads retain a
 dedicated mutable accessor, while chart and opaque payload bytes cannot be
 mutated independently of their relationship projection.
 
+SmartArt graphic data carries a typed `DiagramRelationshipIds` payload for the
+data, layout, quick-style, and colour relationships while retaining the exact
+`dgm:relIds` subtree. The five diagram part roots live in
+`rpptx-oxml::diagram`: `CT_DiagramData`, `CT_DiagramLayoutDefinition`,
+`CT_DiagramStyleDefinition`, `CT_DiagramColorsDefinition`, and
+`CT_DiagramDrawing`. Readers are prefix-tolerant and namespace-aware. Untouched
+parts serialize from their original bytes.
+
+The data model exposes points, connections, supported node text, optional
+background XML, and the schema-position-owned cached drawing id. Dirty writes
+retain ordered raw events and unmodelled attributes while emitting `ptLst`,
+`cxnLst`, `bg`, `whole`, and `extLst` in schema order. Checked edits reject
+duplicate point or connection model ids. Layout, style, colour, cached drawing
+id, and cached shape-count projections traverse only their schema-owned paths,
+so same-namespace lookalikes in opaque or extension content remain raw.
+
+`Presentation::smart_art` inspects graphic frames in the producing slide,
+layout, and master relationship scopes. `set_smart_art_node_text` validates all
+four frame roles and any present cached drawing role against their exact
+internal relationship types, serializes and reparses only the selected data
+part, validates the staged graph, and reopens before commit. A rejected edit
+leaves the package unchanged.
+
+Slide duplication remaps all four frame relationship attributes plus the
+schema-owned cached drawing id and copies the complete bounded diagram graph.
+`transfer_smartart_slide_from` additionally requires an explicit destination
+layout, exactly one internal source layout, and a placeholder-free source
+slide. Notes, comments, unsupported internal dependencies, relationship-owning
+images, and graphs beyond 128 diagram parts reject during preflight. Cycles are
+allowed and terminate through the visited-part map. Fresh part allocation and
+content-aware image deduplication prevent cross-scope aliasing.
+
 `CT_ConnectionShape` types the connector's required `p:spPr` and its optional
 start and end connections. Each present `a:stCxn` or `a:endCxn` carries the
 required unqualified shape `id` and connection-site `idx` as `u32` values.
@@ -575,7 +607,8 @@ This is the scope control for a format that is otherwise unbounded.
 through `oxml_core::raw_xml::capture_element`.
 
 Preserved as opaque bytes in v1: `p:custShowLst`, legacy comments, ink,
-`p:contentPart`, SmartArt `dgm:` payloads, OLE and ActiveX.
+`p:contentPart`, unsupported SmartArt algorithms and unmodelled diagram
+content, OLE and ActiveX.
 
 Slide, layout, and master roots expose optional typed `p:timing` and
 `p:transition` values. The timing projection covers parallel and sequence
@@ -667,6 +700,13 @@ blobs*. Without this function, a duplicated slide's SmartArt or embedded video
 silently points at the source slide's relationships. The preservation strategy
 that makes round-tripping possible is exactly what makes deep copy dangerous,
 and this is the mitigation.
+
+The typed `dgm:relIds` payload uses the same expanded-name rule and rewrites
+its four existing relationship attributes in place, including inherited alias
+prefixes. Diagram data separately rewrites only the unqualified `relId` on the
+schema-owned `dgm:dataModel/dgm:extLst/a:ext/dsp:dataModelExt` path. It never
+invents a drawing attribute or changes same-name content under an opaque
+wrapper.
 
 Media replacement does not apply that general raw rewrite to the complete
 picture. It changes only the direct standard media relationship attribute and
