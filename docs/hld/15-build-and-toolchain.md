@@ -95,9 +95,11 @@ entries and 128 MiB, and coverage, resolution, and paragraph traces by explicit
 entry ceilings. The reusable Word engine bounds paragraph state at 4,096
 entries and 50 MiB, table state at 32 entries and 2 MiB, header and footer state
 at 64 entries and 4 MiB, and aligned restart page and checkpoint state at 1,024
-entries and 8 MiB. Its aggregate retained state stays within 5,216 entries and
-64 MiB. Both pending and published queues use retained-capacity accounting.
-The thousand-page incremental gate exercises the deterministic bundled-fallback
+entries. Restart candidates have no independent byte partition. Checked
+admission charges current and pending block caches plus the complete candidate
+against the 5,216-entry and 64 MiB aggregate limits, and arithmetic overflow
+fails closed. Both pending and published queues use retained-capacity
+accounting. The thousand-page incremental gate exercises the deterministic bundled-fallback
 facade and requires a middle edit to paginate at most two pages while matching
 a fresh layout exactly. The related-story gate source-builds 700 paragraphs
 with a footnote, endnote, default header, and page-number footer. An unchanged

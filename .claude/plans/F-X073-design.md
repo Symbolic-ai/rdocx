@@ -1,6 +1,6 @@
 # F-X073, Restart ordinary-prose pagination within the aggregate cache
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S63
 **Size**: L
 **Depends on**: F-202, F-X062, F-X072
@@ -74,6 +74,7 @@ affected suites, the deterministic hash harness, and every routed rider.
 - `docs/hld/08-rendering-spec.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/14-development-backlog.md`
+- `docs/hld/15-build-and-toolchain.md`
 
 ## Risk routing
 
@@ -93,14 +94,14 @@ and reuse only, not rendered output. Any output delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add discriminating ordinary-prose restart and aggregate-budget regressions.
-- [ ] Separate record representability from complete checkpoint placement.
-- [ ] Admit multi-line, heading, and keep-together ordinary prose safely.
-- [ ] Charge restart candidates against current and pending aggregate cache bytes.
-- [ ] Preserve entry caps, exact contexts, checked arithmetic, and fail-closed unsafe content.
-- [ ] Prove bounded late edit, insert, delete, and undo work with exact fresh equality.
-- [ ] Run affected suites, full verification, routed riders, and the unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Add discriminating ordinary-prose restart and aggregate-budget regressions.
+- [x] Separate record representability from complete checkpoint placement.
+- [x] Admit multi-line, heading, and keep-together ordinary prose safely.
+- [x] Charge restart candidates against current and pending aggregate cache bytes.
+- [x] Preserve entry caps, exact contexts, checked arithmetic, and fail-closed unsafe content.
+- [x] Prove bounded late edit, insert, delete, and undo work with exact fresh equality.
+- [x] Run affected suites, full verification, routed riders, and the unchanged hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

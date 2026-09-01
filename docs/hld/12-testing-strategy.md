@@ -520,9 +520,12 @@ headers, and page-number footers keep bounded restart work through both the
 engine and bundled-fallback facade. They also prove endnotes append once,
 changed related stories and note-reference sequences invalidate reuse, and a
 footnote continuation cannot publish a dirty checkpoint. Multi-section
-content, note-bearing tables, split paragraphs, floating drawings, keep
-constraints, backgrounds, and mismatched boundary state must use the full
-paginator.
+content, note-bearing tables, split paragraphs, floating drawings, backgrounds,
+and mismatched boundary state must use the full paginator. Ordinary multi-line
+prose, headings, `keepNext`, and `keepLines` must publish complete-boundary
+restart records. A 700-paragraph source-built case requires late edit, insert,
+delete, and undo results to equal fresh deterministic layout while recomputing
+only a bounded page region.
 
 The incremental-layout scale gate builds 1,000 one-page paragraphs through the
 public deterministic bundled-fallback facade, edits paragraph 500, and compares
@@ -530,7 +533,10 @@ the warm result with a fresh layout. It requires exactly 1,000 pages, at most
 two warm page-layout invocations, at least 998 retained page-frame `Arc`
 identities, 999 paragraph-cache hits, one paragraph build, and complete result
 equality. The paired engine gate requires a 1,024-page restart record to remain
-within 8 MiB and a 1,025-page record to fall back safely.
+within the aggregate cache budget and a 1,025-page record to fall back safely.
+An additional candidate larger than the former 8 MiB limit must publish when
+the actual aggregate remains within 64 MiB. A candidate above the aggregate or
+an arithmetic overflow must fail closed without changing output.
 
 The substituted-page regression gate proves that unchanged PAGE, NUMPAGES, and
 PAGEREF pages reuse their prior substituted frame only through pristine `Arc`
@@ -579,7 +585,8 @@ pages, and reflow parameters including tab stops. The combined retained state
 must stay within 5,216 entries and 64 MiB, with paragraph state capped at 4,096
 entries and 50 MiB, table state capped at 32 entries and 2 MiB, header and
 footer state capped at 64 entries and 4 MiB, and restart state capped at 1,024
-entries and 8 MiB. Oversized entries must bypass retention.
+entries. Restart candidates use the checked 64 MiB aggregate budget instead of
+an independent byte cap. Oversized entries must bypass retention.
 Repeated and concurrent focused tests preserve `Document: Send + Sync`. The
 no-default feature test, both WASM checks, committed-graph package dry-runs,
 archive-size ceiling, and reviewed 49-entry hash harness are required riders.

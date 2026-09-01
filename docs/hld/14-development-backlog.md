@@ -3534,11 +3534,13 @@ content remains excluded.
 
 Permit restart-pagination records for ordinary multi-line prose, headings, and
 keep-together paragraphs when the complete checkpoint state already represents
-their effects. Continue to reject unrepresented numbering, drawings, fields,
-multilingual state, raw content, and other unsafe inputs. Charge restart records
-against the actual paragraph, table, header or footer, and restart cache bytes
-under the existing aggregate budget rather than an independent 8 MiB ceiling.
-The existing entry caps and exact context fingerprints remain fail-closed.
+their effects. Continue to reject unrepresented numbering, drawings,
+multilingual state, raw content, and other unsafe inputs. Field-bearing blocks
+retain substitution pairs but receive no pagination checkpoints. Charge restart
+records against the actual paragraph, table, header or footer, and restart
+cache bytes under the existing aggregate budget rather than an independent
+8 MiB ceiling. The existing entry caps and exact context fingerprints remain
+fail-closed.
 
 **Depends on**: F-202, F-X062, F-X072.
 **Test gate**: regression. A 700-paragraph ordinary-prose document containing

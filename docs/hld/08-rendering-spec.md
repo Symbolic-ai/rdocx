@@ -744,13 +744,17 @@ inputs.
 Retained block and restart state share a 5,216-entry and 64 MiB ceiling.
 Paragraph blocks receive 4,096 entries and 50 MiB, table blocks receive 32
 entries and 2 MiB, header and footer variants receive 64 entries and 4 MiB, and
-aligned restart page and checkpoint slots receive 1,024 entries and 8 MiB. The
-published and transaction-pending queues enforce the same partitions using
-retained-capacity accounting for owned keys, resolved part bytes, rows, cells,
-recursive cell blocks, watermark media, diagnostics, font traces, and reflow
-buffers. Shared active references do not duplicate the cache-owned allocation
-in retained-byte accounting. Eviction follows insertion order without hit-time
-queue maintenance. Oversized entries bypass retention.
+aligned restart page and checkpoint slots receive 1,024 entries. Restart
+candidates have no independent byte partition. Admission uses checked
+arithmetic across the current and transaction-pending paragraph, table, header
+or footer queues plus the complete candidate, and rejects any state above the
+64 MiB aggregate ceiling or on arithmetic overflow. The published and
+transaction-pending queues use retained-capacity accounting for owned keys,
+resolved part bytes, rows, cells, recursive cell blocks, watermark media,
+diagnostics, font traces, and reflow buffers. Shared active references do not
+duplicate the cache-owned allocation in retained-byte accounting. Eviction
+follows insertion order without hit-time queue maintenance. Oversized entries
+bypass retention.
 
 Cache publication is a whole-layout transaction. A late error publishes none
 of the staged paragraph, table, header, or footer entries. A hit replays
@@ -762,15 +766,16 @@ font ids, font bytes, diagnostics, revision view, and resolved source provenance
 equal.
 
 The engine also records restart checkpoints for one safe section containing
-one-line or two-line context-independent paragraphs, safe paragraph note
-references, and cache-safe tables. A checkpoint exists only before a complete
-block at an empty page boundary after the current and pending note queues have
-drained. The paginator never records one inside a table. It records the next
-block, page count, and displayed header page number. Unchanged footnote,
-endnote, header, and footer stories participate through exact retained-context
-equality. A changed related story or body note-reference sequence uses the full
-paginator. Note-bearing tables, backgrounds, fields, headings, drawings,
-multi-section content, split paragraphs, keep constraints, and any
+ordinary context-independent paragraphs, safe paragraph note references, and
+cache-safe tables. Multi-line prose, headings, `keepNext`, and `keepLines` are
+eligible when pagination reaches a complete block boundary. A checkpoint
+exists only before a complete block at an empty page boundary after the current
+and pending note queues have drained. The paginator never records one inside a
+table or a split paragraph. It records the next block, page count, and displayed
+header page number. Unchanged footnote, endnote, header, and footer stories
+participate through exact retained-context equality. A changed related story or
+body note-reference sequence uses the full paginator. Note-bearing tables,
+backgrounds, fields, drawings, multi-section content, split paragraphs, and any
 unrepresented state also use the full paginator. A warm edit restarts at the
 last checkpoint before its first changed block. It stops at the first safe page
 boundary inside an unchanged suffix only when the complete retained context,
@@ -790,8 +795,8 @@ view, and every substitution input compare equal. Field-free output shares its
 pristine `Arc` directly. Field-bearing blocks still receive no pagination
 checkpoint, so this optimization cannot widen the restart-safe region. Page
 pairs and checkpoints occupy aligned slots inside the 1,024-entry partition, and
-all pair payloads and exact inputs count toward its 8 MiB ceiling. A mismatch
-reshapes the page. A bound failure drops the whole restart record.
+all pair payloads and exact inputs count toward the 64 MiB aggregate ceiling. A
+mismatch reshapes the page. A bound failure drops the whole restart record.
 
 A thousand-page document with one safe page-boundary paragraph per page keeps
 the complete restart record under these limits. Editing paragraph 500 through

@@ -10722,3 +10722,50 @@ nitpicks.
 because both the complete paragraph and exact note-part context are compared.
 Do not reduce either identity, and do not widen table or related-story caching
 without making body note placement part of that payload's ownership.
+
+### F-X073, Restart ordinary-prose pagination within the aggregate cache
+
+**Sprint.** S63
+**Completed.** 2026-09-01
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Ordinary multi-line prose, headings, and paragraphs using
+`keepNext` or `keepLines` can now publish restart checkpoints at complete block
+boundaries. Restart candidates use available capacity in the existing 64 MiB
+aggregate cache budget instead of failing at an independent 8 MiB ceiling.
+Late edit, insert, delete, and undo operations can therefore reuse the exact
+complete prefix while remaining byte-for-byte equal to fresh layout.
+
+**Non-obvious choices.** Record representability is separate from checkpoint
+placement. A paragraph split across pages falls back through the normal
+paginator and discards that restart candidate. Source-level fields, numbering,
+drawings, multilingual state, raw children, anchored empty paragraphs, and
+unsupported line items remain fail-closed. Bookmark safety compares complete
+namespace-aware raw elements, exact expanded-name attribute cardinality, and
+the retained `raw_before` position rather than trusting rendered projections.
+
+**Deviations from the design plan.** None. The implementation changes private
+layout and paginator logic only. It adds no public API, dependency, feature,
+module, file, trait, or generic.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built regressions cover multi-line prose, headings,
+`keepNext`, `keepLines`, aggregate-budget admission and rejection, exact warm
+and fresh edit, insert, delete, and undo equality, bounded recomputation, split
+paragraph fallback, unsafe fields, and exact bookmark raw XML. Full integrated
+workspace verification passed, including the 225-test `rdocx-layout` suite,
+LibreOffice and corpus gates, no-default fonts, both WASM facades, rustdoc,
+README inventories, publish dry-runs, archive limits, and supply-chain checks.
+The release-mode 1,000-page performance rider passed. Microscope pass 4
+reported zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Publish restart records only at complete block
+boundaries, and account for every current and pending cache class under the one
+aggregate limit with checked arithmetic. Keep source-level safety conservative.
+Rendered output alone is not proof that a restart record owns every effect.

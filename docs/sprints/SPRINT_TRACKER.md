@@ -362,6 +362,7 @@ defended.
 | F-218 | S62 | L | 4 | 1 | 2026-09-01 | Added relationship-owned embedded-content inventory, byte-exact extraction, and atomic OLE, ActiveX, and VBA mutation with explicit signature policies |
 | F-X071 | S62 | L | 4 | 1 | 2026-09-01 | Integrated and hardened the reader outcomes from PRs 61 through 64 with contributor credit and exact namespace, schema-order, and effective-style preservation |
 | F-X072 | S63 | M | 2 | 1 | 2026-09-01 | Kept direct body footnote and endnote references cacheable through complete paragraph keys and exact note-part context |
+| F-X073 | S63 | L | 4 | 1 | 2026-09-01 | Restarted ordinary prose from complete block boundaries within the shared aggregate cache budget while keeping unsafe source content fail-closed |
 
 ## Velocity
 
