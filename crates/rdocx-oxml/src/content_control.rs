@@ -572,9 +572,14 @@ fn parse_content(
                         reader, &prefixes,
                     )?));
                 } else if is_word_element(child.name().as_ref(), b"tr", &prefixes) {
-                    content.push(SdtContent::Row(CT_Row::from_xml_with_prefixes(
-                        reader, &prefixes,
-                    )?));
+                    let owner_bindings = local_namespace_overrides(&child, inherited)?;
+                    content.push(SdtContent::Row(
+                        CT_Row::from_xml_with_prefixes_and_owner_bindings(
+                            reader,
+                            &prefixes,
+                            &owner_bindings,
+                        )?,
+                    ));
                 } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
                     let owner_bindings = local_namespace_overrides(&child, inherited)?;
                     content.push(SdtContent::Cell(
