@@ -30,7 +30,7 @@ use rdocx_oxml::numbering::{CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::settings::{CT_Settings, DocumentProtection};
 use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
-use rdocx_oxml::styles::CT_Styles;
+use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
@@ -3742,7 +3742,7 @@ impl Document {
     /// concrete paragraph.
     pub fn effective_paragraph_properties(&self, paragraph: &ParagraphRef<'_>) -> CT_PPr {
         let direct = paragraph.inner.properties.as_ref();
-        let style_id = direct.and_then(|properties| properties.style_id.as_deref());
+        let style_id = self.effective_paragraph_style_id(direct);
         let mut effective = style::resolve_paragraph_properties(style_id, &self.styles);
 
         effective.num_id = direct
@@ -3768,6 +3768,16 @@ impl Document {
             effective.merge_from(properties);
         }
         effective
+    }
+
+    fn effective_paragraph_style_id<'a>(&'a self, direct: Option<&'a CT_PPr>) -> Option<&'a str> {
+        direct
+            .and_then(|properties| properties.style_id.as_deref())
+            .or_else(|| {
+                self.styles
+                    .get_default(StyleType::Paragraph)
+                    .map(|style| style.style_id.as_str())
+            })
     }
 
     /// Resolve the effective run properties for the given paragraph and character styles,
@@ -11235,6 +11245,52 @@ mod tests {
         assert_eq!(disabled.num_id, Some(0));
         assert_eq!(disabled.keep_next, None);
         assert_eq!(disabled.keep_lines, None);
+    }
+
+    #[test]
+    fn effective_paragraph_properties_use_default_style_for_numbering_level_association() {
+        let mut doc = Document::new();
+        let num_id = doc.add_list_definition(&[
+            ListLevel::decimal(),
+            ListLevel::decimal(),
+            ListLevel::decimal(),
+        ]);
+        let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[2];
+        level.p_style = Some("Normal".to_owned());
+        level.ppr = Some(CT_PPr {
+            keep_next: Some(true),
+            ..Default::default()
+        });
+        let default_style = doc
+            .styles
+            .styles
+            .iter_mut()
+            .find(|style| style.style_type == StyleType::Paragraph && style.is_default)
+            .expect("default paragraph style");
+        default_style.ppr = Some(CT_PPr {
+            num_id: Some(num_id),
+            ..Default::default()
+        });
+
+        doc.add_paragraph("without properties");
+        doc.add_paragraph("without a paragraph style");
+        let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[1] else {
+            panic!("expected paragraph");
+        };
+        paragraph.properties = Some(CT_PPr {
+            ind_left: Some(Twips(720)),
+            ..Default::default()
+        });
+
+        for index in 0..2 {
+            let properties =
+                doc.effective_paragraph_properties(&doc.paragraph(index).expect("paragraph"));
+            assert_eq!(properties.num_id, Some(num_id));
+            assert_eq!(properties.num_ilvl, Some(2));
+            assert_eq!(properties.keep_next, Some(true));
+        }
+        let direct = doc.effective_paragraph_properties(&doc.paragraph(1).expect("paragraph"));
+        assert_eq!(direct.ind_left, Some(Twips(720)));
     }
 
     #[test]
