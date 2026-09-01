@@ -116,4 +116,3 @@ hash harness passed directly.
 - **Structure** produced zero findings. The two new source modules had explicit
   plan approval, and no unapproved crate, feature, trait, generic, dynamic
   dispatch, wrapper, integration binary, or binary fixture was added.
-
