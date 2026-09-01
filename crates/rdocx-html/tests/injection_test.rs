@@ -28,6 +28,8 @@ fn linked_paragraph(url: &str) -> HtmlInput {
     p.hyperlinks.push(HyperlinkSpan {
         rel_id: Some("rId7".to_string()),
         anchor: None,
+        tooltip: None,
+        doc_location: None,
         run_start: 0,
         run_end: 1,
         extra_attributes: Vec::new(),

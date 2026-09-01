@@ -97,6 +97,18 @@ while `Run::language` and `Run::set_language` assign the direct `w:lang` value.
 additions do not create a parallel binding model or make language inference
 part of the API contract.
 
+The native pre-1.0 Word reader surface is additive. `Document` reports
+document-background and section-layout completeness, resolves one numbering
+level, and computes effective paragraph and run properties. Borrowed paragraph,
+run, table, row, and cell handles expose hyperlink metadata, drawing and field
+kinds, embedded or linked drawing relationships, ordered complex-field display
+segments, numbering facts, table formatting, row grid offsets, horizontal
+merge state, and unmodelled-content flags. `NumberingFormat`,
+`ListLevelSuffix`, `NumberingLevel`, `DrawingKind`,
+`DrawingRelationshipKind`, `FieldKind`, and `FieldDisplaySegmentRef` are
+concrete native Rust values. Python, WASM, and CLI surfaces do not gain these
+reader methods.
+
 At the public low-level Rust boundary, `CT_RPr` includes the complete language
 attribute set and its retained foreign attributes, while `LayoutInput` includes
 the document automatic-hyphenation boolean. Full struct literals must provide
@@ -686,6 +698,15 @@ constructors. These are intentional pre-1.0 source breaks. Python, WASM, and
 CLI consumers continue through the package-preserving facade and do not
 construct these low-level structs. Existing Python import error mapping uses
 the generic `RdocxError` exception and gains no new exception type.
+
+The same intentional low-level pre-1.0 boundary includes retained document
+background children, linked drawing relationship ids, numbering style and
+producer identifiers with raw namespace context, table, border, row, and cell
+raw sidecars, row revision positions, grid offsets, horizontal merge state,
+table-property exceptions, and insertion paragraph projection. Exhaustive
+`rdocx-oxml` struct literals must provide the new fields or use existing
+constructors. These preservation fields do not create new Python, WASM, or CLI
+surface.
 
 `CT_TabStop` also exposes `source_occurrence: Option<usize>`. Parsed numbering
 tabs use this provenance to retain producer XML on the same occurrence after

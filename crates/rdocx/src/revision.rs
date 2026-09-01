@@ -7,7 +7,7 @@ use quick_xml::{Reader, XmlVersion};
 pub use rdocx_oxml::RevisionKind;
 use rdocx_oxml::{CT_Document, CT_Revision};
 
-use crate::{Document, Error, Result};
+use crate::{Document, Error, ParagraphRef, Result};
 
 const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -35,6 +35,16 @@ impl RevisionRef<'_> {
 
     pub fn kind(&self) -> RevisionKind {
         self.inner.kind()
+    }
+
+    /// Return the insertion content as a paragraph reader projection.
+    ///
+    /// This retains runs, hyperlinks, fields, and preserved XML in their
+    /// original inline order. Non-insertion revisions return `None`.
+    pub fn insertion_paragraph(&self) -> Option<ParagraphRef<'_>> {
+        self.inner
+            .content_paragraph()
+            .map(|inner| ParagraphRef { inner })
     }
 }
 

@@ -1089,6 +1089,8 @@ mod tests {
         paragraph.hyperlinks.push(HyperlinkSpan {
             rel_id: Some("rIdLink".to_owned()),
             anchor: None,
+            tooltip: None,
+            doc_location: None,
             run_start: 0,
             run_end: 2,
             extra_attributes: Vec::new(),

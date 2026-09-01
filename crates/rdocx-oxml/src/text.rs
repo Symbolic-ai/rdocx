@@ -11,7 +11,7 @@ use crate::drawing::CT_Drawing;
 use crate::error::{OxmlError, Result};
 use crate::namespace::{R_NS, matches_local_name};
 use crate::numbering::{namespace_bindings, parse_scoped_ppr, word_prefixes_at};
-use crate::properties::{CT_PPr, CT_RPr, is_word_element};
+use crate::properties::{CT_PPr, CT_RPr, is_word_attribute, is_word_element};
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
 
@@ -199,11 +199,34 @@ impl Field {
         )
     }
 
+    /// Whether this field was parsed from a complex `w:fldChar` sequence.
+    #[doc(hidden)]
+    pub fn is_complex(&self) -> bool {
+        self.is_parsed_complex()
+    }
+
     /// Return the text this field contributes to [`CT_R::text`].
     #[doc(hidden)]
     pub fn projected_text(&self) -> Option<&str> {
         self.is_parsed_complex()
             .then_some(self.cached_result.as_str())
+    }
+
+    /// Whether the retained field source carries semantic attributes outside
+    /// the modeled instruction, type, and dirty-state projection.
+    pub fn has_unmodeled_semantic_attributes(&self) -> bool {
+        let FieldSource::Parsed {
+            form,
+            raw_xml,
+            word_prefixes,
+            ..
+        } = &self.source
+        else {
+            return false;
+        };
+
+        field_source_has_unmodeled_semantic_attributes(raw_xml, *form, word_prefixes)
+            .unwrap_or(true)
     }
 
     /// Return the stored display split by its original result-run formatting.
@@ -801,7 +824,9 @@ impl CT_R {
                         }));
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"drawing", &prefixes) {
-                        content.push(RunContent::Drawing(CT_Drawing::from_xml(reader)?));
+                        content.push(RunContent::Drawing(CT_Drawing::from_xml_with_prefixes(
+                            reader, &prefixes,
+                        )?));
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
                         let id = required_word_i32_attribute(e, b"id", &prefixes)?;
@@ -1045,6 +1070,10 @@ pub struct HyperlinkSpan {
     pub rel_id: Option<String>,
     /// Optional anchor within the document (for internal links).
     pub anchor: Option<String>,
+    /// Optional user-facing hover text.
+    pub tooltip: Option<String>,
+    /// Optional location in the hyperlink target document.
+    pub doc_location: Option<String>,
     /// Index of the first run in the hyperlink (inclusive).
     pub run_start: usize,
     /// Index of the last run in the hyperlink (exclusive).
@@ -1077,7 +1106,13 @@ pub struct ComplexFieldHyperlink {
     pub target: String,
 }
 
-type ParsedHyperlinkAttributes = (Option<String>, Option<String>, Vec<(String, String)>);
+type ParsedHyperlinkAttributes = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Vec<(String, String)>,
+);
 
 pub(crate) fn hyperlink_revision_slot(hyperlink_index: usize) -> usize {
     HYPERLINK_REVISION_FLAG | hyperlink_index
@@ -1852,6 +1887,8 @@ impl CT_P {
                 let suffix = HyperlinkSpan {
                     rel_id: hyperlink.rel_id.clone(),
                     anchor: hyperlink.anchor.clone(),
+                    tooltip: hyperlink.tooltip.clone(),
+                    doc_location: hyperlink.doc_location.clone(),
                     run_start: run_index + 1,
                     run_end: hyperlink.run_end + 1,
                     extra_attributes: hyperlink.extra_attributes.clone(),
@@ -2228,7 +2265,7 @@ impl CT_P {
                             extra_xml.push((runs.len(), raw));
                         }
                     } else if is_word_element(name.as_ref(), b"hyperlink", &prefixes) {
-                        let (rel_id, anchor, extra_attributes) =
+                        let (rel_id, anchor, tooltip, doc_location, extra_attributes) =
                             parse_hyperlink_attributes(e, &prefixes)?;
                         let raw = capture_element(reader, e)?;
                         let parsed = parse_hyperlink_children(&raw, &prefixes)?;
@@ -2247,6 +2284,8 @@ impl CT_P {
                             hyperlinks.push(HyperlinkSpan {
                                 rel_id,
                                 anchor,
+                                tooltip,
+                                doc_location,
                                 run_start,
                                 run_end,
                                 extra_attributes,
@@ -2792,6 +2831,62 @@ fn scan_complex_source(raw: &[u8], word_prefixes: &[String]) -> Result<ComplexSo
                 }
             }
             Event::Eof => return Ok(ComplexSourceScan { runs, nested }),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn field_source_has_unmodeled_semantic_attributes(
+    raw: &[u8],
+    form: FieldForm,
+    word_prefixes: &[String],
+) -> Result<bool> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) | Event::Empty(element) => {
+                let prefixes = word_prefixes_at(&element, word_prefixes)?;
+                let allowed = match form {
+                    FieldForm::Simple
+                        if is_word_element(element.name().as_ref(), b"fldSimple", &prefixes) =>
+                    {
+                        &[b"instr".as_slice(), b"dirty".as_slice()][..]
+                    }
+                    FieldForm::Complex
+                        if is_word_element(element.name().as_ref(), b"fldChar", &prefixes) =>
+                    {
+                        &[b"fldCharType".as_slice(), b"dirty".as_slice()][..]
+                    }
+                    _ => {
+                        buffer.clear();
+                        continue;
+                    }
+                };
+
+                for attribute in element.attributes() {
+                    let attribute = attribute?;
+                    let key = attribute.key.as_ref();
+                    if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                        continue;
+                    }
+                    if allowed
+                        .iter()
+                        .any(|local| is_word_attribute(key, local, &prefixes))
+                    {
+                        continue;
+                    }
+                    return Ok(true);
+                }
+
+                if matches!(form, FieldForm::Simple) {
+                    return Ok(false);
+                }
+            }
+            Event::Eof => return Ok(false),
             _ => {}
         }
         buffer.clear();
@@ -4087,6 +4182,8 @@ fn parse_hyperlink_attributes(
 ) -> Result<ParsedHyperlinkAttributes> {
     let mut rel_id = None;
     let mut anchor = None;
+    let mut tooltip = None;
+    let mut doc_location = None;
     let mut extra = Vec::new();
     for attribute in element.attributes() {
         let attribute = attribute?;
@@ -4098,11 +4195,15 @@ fn parse_hyperlink_attributes(
             rel_id = Some(value);
         } else if attribute_in_namespace(name, b"anchor", crate::namespace::W_NS, scope) {
             anchor = Some(value);
+        } else if attribute_in_namespace(name, b"tooltip", crate::namespace::W_NS, scope) {
+            tooltip = Some(value);
+        } else if attribute_in_namespace(name, b"docLocation", crate::namespace::W_NS, scope) {
+            doc_location = Some(value);
         } else {
             extra.push((std::str::from_utf8(name)?.to_owned(), value));
         }
     }
-    Ok((rel_id, anchor, extra))
+    Ok((rel_id, anchor, tooltip, doc_location, extra))
 }
 
 fn attribute_in_namespace(name: &[u8], local: &[u8], namespace: &str, scope: &[String]) -> bool {
@@ -4304,6 +4405,14 @@ fn write_hyperlink_start<W: std::io::Write>(
     }
     if let Some(anchor) = &hyperlink.anchor {
         element.push_attribute((anchor_name.as_str(), anchor.as_str()));
+    }
+    if let Some(tooltip) = &hyperlink.tooltip {
+        let tooltip_name = format!("{word_prefix}:tooltip");
+        element.push_attribute((tooltip_name.as_str(), tooltip.as_str()));
+    }
+    if let Some(doc_location) = &hyperlink.doc_location {
+        let doc_location_name = format!("{word_prefix}:docLocation");
+        element.push_attribute((doc_location_name.as_str(), doc_location.as_str()));
     }
     for (name, value) in &hyperlink.extra_attributes {
         element.push_attribute((name.as_str(), value.as_str()));
@@ -5129,11 +5238,35 @@ mod tests {
     #[test]
     fn parse_hyperlink_with_anchor() {
         let p = parse_paragraph(
-            r#"<w:hyperlink w:anchor="section1"><w:r><w:t>Go to section</w:t></w:r></w:hyperlink>"#,
+            r#"<w:hyperlink w:anchor="section1" w:tooltip="Jump" w:docLocation="target"><w:r><w:t>Go to section</w:t></w:r></w:hyperlink>"#,
         );
         assert_eq!(p.hyperlinks.len(), 1);
         assert_eq!(p.hyperlinks[0].anchor, Some("section1".to_string()));
+        assert_eq!(p.hyperlinks[0].tooltip.as_deref(), Some("Jump"));
+        assert_eq!(p.hyperlinks[0].doc_location.as_deref(), Some("target"));
         assert!(p.hyperlinks[0].rel_id.is_none());
+    }
+
+    #[test]
+    fn parse_hyperlink_uses_local_namespace_aliases_without_reporting_declarations() {
+        let p = parse_paragraph(concat!(
+            r#"<q:hyperlink xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"q:tooltip="Jump" q:docLocation="target" q:history="1">"#,
+            r#"<q:r><q:t>Go</q:t></q:r></q:hyperlink>"#,
+        ));
+        assert_eq!(p.hyperlinks[0].tooltip.as_deref(), Some("Jump"));
+        assert_eq!(p.hyperlinks[0].doc_location.as_deref(), Some("target"));
+        assert!(
+            p.hyperlinks[0]
+                .extra_attributes
+                .contains(&("q:history".to_owned(), "1".to_owned()))
+        );
+        assert!(
+            p.hyperlinks[0]
+                .extra_attributes
+                .iter()
+                .any(|(name, _)| name == "xmlns:q")
+        );
     }
 
     #[test]
@@ -5157,6 +5290,8 @@ mod tests {
         p.hyperlinks.push(HyperlinkSpan {
             rel_id: Some("rId7".to_string()),
             anchor: None,
+            tooltip: None,
+            doc_location: None,
             run_start: 1,
             run_end: 2,
             extra_attributes: Vec::new(),

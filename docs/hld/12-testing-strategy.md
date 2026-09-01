@@ -137,6 +137,17 @@ subtree, including namespace shadowing and owner insertion, removal, and
 reordering. Unsafe namespace replay must fail closed without changing the
 opened package.
 
+The Word reader-fact regression gate combines source-built drawing,
+document, table, numbering, revision, and field fixtures. It requires Office
+relationship expanded names, inherited namespace replay, table schema slots,
+default-style numbering association, direct numbering overrides and
+cancellation, bounded nested revisions, and ordered complex-field display
+segments. Mixed owner-dependent and independently self-bound same-URI element
+or attribute uses retain exact marker cardinality. Same-URI and different-URI
+decoys still fail closed. The complete `rdocx-oxml` and `rdocx` suites, public
+package dry runs, archive ceiling, and unchanged 49-entry hash harness complete
+the gate.
+
 The legacy horizontal-rule reader regression classifies canonical, aliased,
 default, locally shadowed, and ancestor-bound Word, VML, and Office names by
 expanded namespace URI. Its negative matrix keeps false, numeric, missing,

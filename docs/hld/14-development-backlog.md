@@ -3495,6 +3495,9 @@ unchanged. The integrated hosted Word job remains a sprint-completion rider.
 
 Adopt the current reviewed outcomes of PRs 61 through 64 as one current-tree
 Word reader integration while retaining authenticated contributor credit.
+The adopted contributor heads are `7c40c2e`, `fa48a39`, `60bc663`, and
+`5cb5cba` from `@pedroassumpcao`, followed by separately labelled maintainer
+hardening on the F-X071 worker branch.
 Expose hyperlink and drawing safety facts, document and table completeness
 facts, numbering and effective-formatting facts, and tracked insertion and
 field facts. Harden the submitted table reader so retained XML carries every

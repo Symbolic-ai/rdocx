@@ -45,7 +45,8 @@ pub use comparison::ComparisonDiagnostic;
 pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
-    ListLevel, ListNumberFormat, OutlineNode, RenderOptions, UnsupportedXmlRef,
+    ListLevel, ListLevelSuffix, ListNumberFormat, NumberingFormat, NumberingLevel, OutlineNode,
+    RenderOptions, UnsupportedXmlRef,
 };
 pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
@@ -72,12 +73,14 @@ pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{
-    BreakKind, DrawingRef, FieldRef, LegacyHorizontalRuleRef, Run, RunItemRef, RunRef,
-    UnderlineStyle,
+    BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldDisplaySegmentRef, FieldKind,
+    FieldRef, LegacyHorizontalRuleRef, Run, RunItemRef, RunProperties, RunRef, UnderlineStyle,
 };
 pub use style::{Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};
-pub use table::{Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VerticalAlignment};
+pub use table::{
+    Cell, CellItemRef, CellRef, Row, RowRef, Table, TableRef, VMerge, VerticalAlignment,
+};
 
 #[cfg(test)]
 mod tests {

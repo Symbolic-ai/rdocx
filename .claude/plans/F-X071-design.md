@@ -1,6 +1,6 @@
 # F-X071, Integrate PRs 61 through 64
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S62
 **Size**: L
 **Depends on**: none
@@ -106,9 +106,12 @@ suites plus every focused regression above.
   inherited-scope, fixed-prefix, schema-order, raw-subtree, and repeated
   save-reopen regressions.
 - **Public API of a published crate**. Read HLD 10 and the structural rules.
-  State that the reader additions are additive pre-1.0 API, run rustdoc with
-  warnings denied, inspect the API diff, run workspace publish dry-runs, and
-  enforce the package archive size limit.
+  The native `rdocx` reader methods and enums are additive pre-1.0 API. The
+  low-level `rdocx-oxml` preservation fields are intentional pre-1.0 source
+  breaks for exhaustive struct literals, consistent with the numbering
+  preservation contract already recorded in HLD 10. Run rustdoc with warnings
+  denied, inspect the API diff, run workspace publish dry-runs, and enforce the
+  package archive size limit.
 
 No dependency-graph, layout, font, unit, colour, binding, feature, oracle,
 release-script, module, or file-move row is triggered.
@@ -120,17 +123,17 @@ fail-closed malformed-input repairs. Any output delta blocks integration.
 
 ## Implementation checklist
 
-- [ ] Pin and audit the four exact contributor source heads.
-- [ ] Adopt PR 61 relationship-safe hyperlink and drawing facts.
-- [ ] Adopt PR 62 document and table facts.
-- [ ] Propagate namespace bindings through every retained table owner boundary.
-- [ ] Preserve raw row properties and malformed revisions in schema slots.
-- [ ] Adopt PR 63 numbering and effective-formatting facts.
-- [ ] Resolve default-style numbering-level association.
-- [ ] Adopt and audit PR 64 revision and field facts at its current head.
-- [ ] Add every focused regression to existing test binaries or source modules.
-- [ ] Run focused suites, full verification, risk riders, and the unchanged hash harness.
-- [ ] Update exactly the listed HLD files and record all four contribution sources.
+- [x] Pin and audit the four exact contributor source heads.
+- [x] Adopt PR 61 relationship-safe hyperlink and drawing facts.
+- [x] Adopt PR 62 document and table facts.
+- [x] Propagate namespace bindings through every retained table owner boundary.
+- [x] Preserve raw row properties and malformed revisions in schema slots.
+- [x] Adopt PR 63 numbering and effective-formatting facts.
+- [x] Resolve default-style numbering-level association.
+- [x] Adopt and audit PR 64 revision and field facts at its current head.
+- [x] Add every focused regression to existing test binaries or source modules.
+- [x] Run focused suites, full verification, risk riders, and the unchanged hash harness.
+- [x] Update exactly the listed HLD files and record all four contribution sources.
 
 ## Open questions
 

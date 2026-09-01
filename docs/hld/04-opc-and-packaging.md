@@ -186,6 +186,22 @@ namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
 
+Logical owner identity includes exact normalized raw marker multiplicity and
+the resolved namespace facts of owner-dependent element and attribute uses.
+A same-URI declaration already local to a retained subtree remains independent
+and does not inflate the owner marker set. Candidate replay promotes only the
+captured marker multiset, including when preservation made an inherited use
+self-contained. Same-URI and different-URI decoys, duplicate owners, fixed
+prefix shadows, and undeclared nested prefixes remain fail-closed.
+
+Word table readers carry ancestor bindings through tables, rows, cells,
+content controls, borders, and raw properties. Their writers retain unknown
+table, row, and cell facts at insertion-aware schema boundaries and keep
+malformed row revision markers in their original slots. Drawing relationship
+projection requires the direct WordprocessingML and DrawingML picture path and
+the Office relationships namespace. Foreign attributes, descendant
+lookalikes, ambiguous pictures, and ambiguous blips remain opaque.
+
 Raw Word run children receive semantic classification only at the OXML parse
 boundary. A WordprocessingML `pict` is classified as a legacy horizontal rule
 only when its in-scope expanded names identify exactly one VML `rect` with an

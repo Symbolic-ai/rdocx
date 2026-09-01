@@ -314,6 +314,16 @@ footnotes, comments, settings, placeholder replacement, and `drawing.rs`. The
 `wp:` inline and anchor code in the latter is Word-only and has no pptx value,
 so it is not migrated.
 
+That grammar also owns the bounded reader projections for document and section
+completeness, table, row, and cell formatting, numbering metadata, tracked
+insertions, complex-field display, and drawing relationship safety. Expanded
+names and schema positions decide typed meaning. Ancestor namespace bindings
+travel with retained table and document content, while malformed row revisions
+and every unmodelled property remain in their original schema slots. The
+`rdocx` facade exposes borrowed reader facts and computes effective paragraph
+and run properties from the final direct, style, and numbering identities. It
+does not maintain a second reader model.
+
 The low-level text reader decodes visible `w:t` and `w:delText` content
 fallibly and rejects malformed encoded values instead of publishing partial
 text. The numbering grammar retains producer-defined `w:numFmt` tokens in
@@ -346,6 +356,10 @@ boundaries while retaining every marker as ordered raw XML. Simple and complex
 fields share one recursive `Field` grammar with a normalized name, text or
 nested arguments, switches, cached result, and optional dirty state. Its private
 source records the original field form, run partition, and producer XML.
+Complex fields expose ordered cached-display segments with each segment's
+direct run properties. Tracked insertion projection retains inline paragraph
+structure and nested revision boundaries, with a fixed depth ceiling checked
+before recursive projection.
 Unchanged fields therefore write their original bytes. Cache and dirty updates
 rewrite only the typed values while preserving run formatting and unmodelled
 neighbours. Markers are recognized only as direct run children through their
