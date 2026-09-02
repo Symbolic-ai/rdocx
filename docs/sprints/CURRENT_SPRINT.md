@@ -33,7 +33,7 @@ compatibility.
 |------|-------|------|--------|-------|
 | F-224 | HTML slide content import | L | done | - |
 | F-225 | PDF page content import | L | done | - |
-| F-X074 | Tag rpptx-v0.9.0 | S | pending | - |
+| F-X074 | Tag rpptx-v0.9.0 | S | in-progress | codex |
 
 ## Sequencing note
 
