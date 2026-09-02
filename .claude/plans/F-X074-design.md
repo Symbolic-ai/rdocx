@@ -3,7 +3,8 @@
 **Status**: approved
 **Sprint**: S64
 **Size**: S
-**Depends on**: F-224, F-225, F-X068
+**Depends on**: F-213, F-214, F-215, F-216, F-217, F-218, F-219, F-220,
+F-221, F-222, F-223, F-224, F-225, F-226, F-227, F-X068
 
 ## Problem
 
@@ -16,9 +17,10 @@ need one coherent registry boundary before S64 closes.
 
 The release must move the exact 15-package incubating family in lockstep and
 must not publish the stable Word, binding, WASM, Python, or npm packages. The
-selected-family contribution inventory since `rpptx-v0.8.0` is empty. PRs 61
-through 64 and Issues 65 and 66 changed only the stable Word family and must
-not be claimed or notified by this release.
+selected-family contribution inventory since `rpptx-v0.8.0` is empty. PRs 59
+and 60 are disposable internal CI-gate proofs with no shipped user outcome.
+PRs 61 through 64 and Issues 65 through 67 changed only the stable Word family.
+None may be claimed or notified by this release.
 
 ## Spec reference
 
@@ -64,8 +66,8 @@ before completing the story.
   tag and no reviewed stable release is requested.
 - Publish bindings, WASM, npm, Python, or PyPI packages. This story grants no
   such authority.
-- Attribute stable-only issues or pull requests. The selected-family
-  contribution inventory is empty.
+- Attribute internal CI proofs or stable-only issues or pull requests. The
+  selected-family contribution inventory is empty.
 
 ## Test plan
 
@@ -116,12 +118,12 @@ only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Confirm F-224, F-225, F-X068, and all M21 implementation stories are completed.
-- [ ] Move every incubating version carrier and shared dependency pin to 0.9.0.
-- [ ] Update exact carrier, isolation, workflow, and release-note regressions.
-- [ ] Prepare reviewed M21 release notes with an empty selected-family contribution inventory.
-- [ ] Update exactly the five listed HLD files.
-- [ ] Run `/verify --full`, packaging, assets, bindings, WASM, dependency, supply-chain, oracle, notes, and hash gates.
+- [x] Confirm F-X068 and all 15 M21 implementation stories are completed.
+- [x] Move every incubating version carrier and shared dependency pin to 0.9.0.
+- [x] Update exact carrier, isolation, workflow, and release-note regressions.
+- [x] Prepare reviewed M21 release notes with an empty selected-family contribution inventory.
+- [x] Update exactly the five listed HLD files.
+- [x] Run `/verify --full`, packaging, assets, bindings, WASM, dependency, supply-chain, oracle, notes, and hash gates.
 - [ ] Stop at `/release rpptx-v0.9.0` for separate final approval.
 - [ ] Verify every publication, owner, tag, body, and exclusion before completion.
 

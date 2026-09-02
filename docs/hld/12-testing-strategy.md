@@ -1426,21 +1426,21 @@ The stable 0.11.1 carrier regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
-are 0.8.0 while `rpptx-wasm` remains ineligible for publication.
+are 0.9.0 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.8.0. It separately proves the stable
+15-package publication preflight at 0.9.0. It separately proves the stable
 workspace remains at its published 0.11.1 boundary and `rpptx-wasm` remains
 ineligible for publication.
-The stable shared-family gate packages and verifies `rdocx-layout@0.11.1`, requires its
-normalized archive dependency on `oxml-layout@0.8.0` to contain no local path,
-and compiles the packaged crate against the exact shared registry version
-without an `oxml-layout` patch.
+The current stable shared-family gate packages and verifies
+`rdocx-layout@0.11.1`, requires its normalized archive dependency on
+`oxml-layout@0.9.0` to contain no local path, and compiles the packaged crate
+against the exact shared registry version without an `oxml-layout` patch.
 That registry consumer is excluded from the incubating tag preflight because
-0.8.0 does not exist before its own publication. The stable tag preflight runs
-it with explicit published-shared authority, and the F-X068 post-publication
-gate runs it independently before stable recovery starts.
+0.9.0 does not exist before its own publication. The stable tag preflight runs
+it only with explicit published-shared authority. The earlier F-X068
+post-publication proof against 0.8.0 remains immutable release evidence.
 A separate recovery gate constructs an isolated registry consumer of exact
 `rdocx-layout@0.10.1` and inspects its unpatched normal dependency tree. It
 requires registry `oxml-layout@0.6.0` and rejects 0.7.0, so the immutable
@@ -1468,6 +1468,13 @@ reviewed SHA `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`, stable-family exclusion
 byte-identical GitHub release notes, the published stable shared-family graph,
 and the absence of `rpptx-wasm@0.8.0` from crates.io. Its selected contribution
 inventory is empty, so it requires no external notification.
+The 0.9.0 preparation gate covers the complete M21 presentation boundary. It
+requires full workspace verification, exact 22-package dry runs, archive and
+asset inventories, both WASM profiles, unchanged 49-entry hashes, and the
+pinned Chrome and Poppler differential riders at one reviewed SHA. Its
+selected-family inventory is empty. Disposable CI proof PRs 59 and 60, stable
+Word PRs 61 through 64, and stable Word Issues 65 through 67 are excluded and
+receive no `rpptx-v0.9.0` notification.
 The failed stable 0.11.0 release gate is not a passing family gate. Its
 annotated tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full

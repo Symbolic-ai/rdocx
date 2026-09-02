@@ -2,7 +2,71 @@
 
 ## Unreleased
 
-No changes have been recorded since the v0.11.1 preparation.
+No changes have been recorded since the rpptx-v0.9.0 preparation.
+
+## rpptx-v0.9.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family completes the M21 presentation-depth
+boundary at 0.9.0. Native Rust callers can inspect and edit modern
+collaboration, timing, media, SmartArt, embedded-content, security, and package
+variant state. They can also exchange presentations through bounded ODP, HTML,
+and PDF workflows and export deterministic animations, notes, and handouts.
+
+### Added
+
+- Read and author modern comments, threaded replies, sections, slide numbers,
+  dates, footers, and notes-master and handout-master settings.
+- Inspect, create, and invalidate presentation signatures, and read or write
+  password-protected packages through explicit optional security features.
+- Model animation timing, transitions, morph metadata, audio and video,
+  posters, playback settings, and deterministic timeline state.
+- Export animated GIF or Motion JPEG AVI output with bounded frame rate,
+  dimensions, duration, and media fallback policy.
+- Inspect and edit the supported SmartArt data and layout subset, retain
+  unsupported diagram content, and render six pinned layout families.
+- Inventory, extract, replace, and remove relationship-owned OLE, ActiveX, and
+  VBA payloads without executing them.
+- Read and write the declared ODP subset, preserve PPTX, PPTM, POTX, POTM,
+  PPSX, and PPSM package identity, and export deterministic notes pages and all
+  six handout grids.
+- Import a bounded HTML5 and CSS subset as editable slide content with pinned
+  Chrome structure and render comparisons.
+- Import PDF pages as preserved graphics or as the declared editable text,
+  image, path, and URI-link subset with strict resource limits and pinned
+  Poppler render comparisons.
+
+### Fixed
+
+- Preserve relationship ownership, raw unsupported XML, executable payloads,
+  package signatures, and source package class across the new mutation and
+  conversion paths.
+- Keep unsupported HTML, PDF, SmartArt, media, animation, and interchange
+  content explicit through stable diagnostics or retained opaque content
+  instead of silently approximating it.
+- Keep ordinary static rendering and the 49-entry deterministic output harness
+  unchanged while adding the new presentation-depth paths.
+
+### Compatibility
+
+The exact 15-package shared OOXML and PowerPoint crates.io family moves
+together from 0.8.0 to 0.9.0. The selected set is `oxml-core`, `oxml-opc`,
+`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`,
+`oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
+`rpptx-render`, `rpptx`, and `rpptx-cli`.
+
+The native Rust facade and model additions are additive pre-1.0 APIs. Existing
+callers need no migration unless they opt into the new methods. HTML import
+uses the existing default-template boundary and PDF import uses the existing
+render boundary. The stable Word family remains at 0.11.1. Python, WASM, npm,
+and PyPI publication authority is unchanged, and `rpptx-wasm@0.9.0` is not a
+crates.io package.
+
+### Contributors
+
+Atul Sharma maintained the release. No external issue or pull request belongs
+to the selected PowerPoint family for this release.
 
 ## v0.11.1
 

@@ -623,10 +623,11 @@ an endnote sharing a number.
 
 The 15 shared and PowerPoint publication candidates use the explicit common
 incubating version in their manifests and workspace pins. All 15 candidates
-are published coherently at 0.8.0 from the immutable annotated
-`rpptx-v0.8.0` tag at reviewed SHA
+are prepared coherently at 0.9.0 for the separately approved
+`rpptx-v0.9.0` release. The last published family remains the immutable 0.8.0
+release from annotated tag `rpptx-v0.8.0` at reviewed SHA
 `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The unpublished `rpptx-wasm`
-preparation member is also at 0.8.0 without gaining a crates.io publication
+preparation member is also at 0.9.0 without gaining a crates.io publication
 path. The family includes
 `oxml-chart` as the format-neutral owner while retaining `rpptx-chart` as a
 source-compatible deprecated shim. The released `rdocx-*` crates use the
@@ -639,8 +640,9 @@ v0.11.0 attempt at reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published `rdocx-opc` and
 `rdocx-oxml`, then stopped before the other five packages and GitHub release
 when `rdocx-layout` proved it needed `TextSegment.direction` from a newer
-shared registry family. Stable source pins the published shared 0.8.0
-boundary. The complete 0.11.1 recovery is published and verified. The
+shared registry family. Stable source pins the prepared shared 0.9.0 boundary,
+while the published stable 0.11.1 archives retain their shared 0.8.0 registry
+requirements. The complete 0.11.1 recovery is published and verified. The
 separately approved cleanup yanked exactly the incomplete
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries. Complete coherent stable
 releases remain live and unyanked. The v0.11.0 tag remains immutable, and no
