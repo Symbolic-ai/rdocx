@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 78 | 68 | 4 | 3  |
-| **Total** | **325** | **279** | **7** | **36** |
+| X, Cross-cutting (opportunistic)            | 78 | 68 | 5 | 2  |
+| **Total** | **325** | **279** | **8** | **35** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -527,5 +527,5 @@ regenerated, never hand-edited.
 | F-X072 | Keep paragraph caching across note references | S63 | M | done |
 | F-X073 | Restart ordinary-prose pagination within the aggregate cache | S63 | L | done |
 | F-X074 | Tag rpptx-v0.9.0                          | S64 | S | in-progress |
-| F-X075 | Preserve restart pagination across page-spanning paragraphs | S64 | M | pending |
+| F-X075 | Preserve restart pagination across page-spanning paragraphs | S64 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
