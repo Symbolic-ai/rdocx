@@ -33,6 +33,7 @@ compatibility.
 |------|-------|------|--------|-------|
 | F-224 | HTML slide content import | L | done | - |
 | F-225 | PDF page content import | L | done | - |
+| F-X074 | Tag rpptx-v0.9.0 | S | pending | - |
 
 ## Sequencing note
 
@@ -60,3 +61,5 @@ The integrated sprint review validates those interactions before M21 closes.
   layout, and rendering surfaces without introducing a second rendering engine.
 - Full verification passes with every deterministic hash explained, every
   package archive below 10 MiB, and the bounded sprint review clean.
+- The reviewed `rpptx-v0.9.0` release publishes and independently verifies the
+  exact 15-package incubating family before sprint closure.

@@ -3581,6 +3581,27 @@ remains below 64 MiB. Late edit, insert, delete, and undo layouts reuse bounded
 work and remain byte-for-byte equal to fresh layout. A candidate above the
 aggregate budget is rejected without changing output.
 
+### F-X074, Tag rpptx-v0.9.0 (S)
+
+Publish the completed M21 PresentationML depth boundary as the exact
+15-package incubating family at 0.9.0. Move every selected manifest, workspace
+pin, lock record, README requirement, source assertion, CI literal, and the
+unpublished `rpptx-wasm` preparation carrier in lockstep. Stable packages,
+bindings, WASM, Python, npm, and PyPI remain outside publication authority.
+
+The reviewed changelog covers collaboration, security, timing, media,
+SmartArt, interchange, package variants, notes and handouts, animated export,
+and bounded HTML and PDF import. The selected-family contribution inventory is
+empty. PRs 61 through 64 and Issues 65 and 66 remain attributed only to the
+stable Word family.
+
+**Depends on**: F-224, F-225, F-X068.
+**Test gate**: release. After one clean full verification and sprint review at
+the exact prepared SHA, `/release rpptx-v0.9.0` obtains separate final approval
+and publishes exactly the 15 incubating crates. Every registry entry, owner,
+tag target, release-body byte, stable exclusion, and absent
+`rpptx-wasm@0.9.0` must verify before completion.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

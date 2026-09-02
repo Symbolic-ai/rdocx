@@ -1197,10 +1197,13 @@ preserved slide content.
 |------|-------|------|
 | F-224 | HTML slide content import | L |
 | F-225 | PDF page content import | L |
+| F-X074 | Tag rpptx-v0.9.0 | S |
 
 HTML maps a bounded DOM and CSS subset into shapes. PDF imports either a
 preserved page graphic or the declared editable text, image, path, and link
 subset. Neither path promises arbitrary browser or PDF-engine compatibility.
+F-X074 publishes the completed M21 boundary as the exact 15-package
+incubating 0.9.0 family after review and separate final approval.
 
 ### M22, Word depth
 
