@@ -3625,6 +3625,34 @@ and publishes exactly the 15 incubating crates. Every registry entry, owner,
 tag target, release-body byte, stable exclusion, and absent
 `rpptx-wasm@0.9.0` must verify before completion.
 
+### F-X075, Preserve restart pagination across page-spanning paragraphs (M)
+
+Keep the recorded pagination pass when an otherwise eligible ordinary-prose
+paragraph spans a page boundary. A split continuation still creates no
+checkpoint inside the paragraph. The next checkpoint may be recorded only
+after the whole paragraph completes and the existing note, wrap, and resolved
+state is clean. Numbering, drawings, raw XML, fields, unsafe tables,
+backgrounds, multiple sections, dirty note state, and every other existing
+restart exclusion remain fail-closed.
+
+Remove the document-wide split veto that discards the completed recorded pass
+and immediately paginates the whole document again. Retain the existing exact
+context fingerprints, aggregate cache budget, checkpoint bounds, and
+transactional publication. This is the hardened fix for Issue 67 and does not
+add a mid-paragraph continuation model or a public API.
+
+**Depends on**: F-X073.
+**Test gate**: regression. A deterministic 175-paragraph source-built document
+whose four-line paragraphs span 16 pages completes one recorded pass, retains
+a restart record, and records no checkpoint inside a paragraph. Ten warm
+middle edits produce 174 paragraph-cache hits and one rebuild, paginate only a
+bounded affected page range, and equal fresh layout exactly. Late edit,
+insert, delete, undo, note-bearing split, and displayed page-number footer
+cases remain exact. Existing unsafe inputs still reject restart publication.
+An interleaved release-mode comparison for the 175 and 700 paragraph native
+and bundled-fallback paths is no worse than 1.25 times v0.11.1 and materially
+faster than the pinned `0582da0` regression boundary.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

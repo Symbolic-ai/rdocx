@@ -1198,12 +1198,18 @@ preserved slide content.
 | F-224 | HTML slide content import | L |
 | F-225 | PDF page content import | L |
 | F-X074 | Tag rpptx-v0.9.0 | S |
+| F-X075 | Preserve restart pagination across page-spanning paragraphs | M |
 
 HTML maps a bounded DOM and CSS subset into shapes. PDF imports either a
 preserved page graphic or the declared editable text, image, path, and link
 subset. Neither path promises arbitrary browser or PDF-engine compatibility.
 F-X074 publishes the completed M21 boundary as the exact 15-package
 incubating 0.9.0 family after review and separate final approval.
+F-X075 is a late cross-cutting correction for Issue 67. It preserves the
+recorded pagination pass across page-spanning ordinary prose while retaining
+only complete-block restart checkpoints and every existing unsafe-state
+exclusion. Its stable package release follows the presentation release under a
+separate reviewed release story.
 
 ### M22, Word depth
 
