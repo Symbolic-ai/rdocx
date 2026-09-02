@@ -862,6 +862,79 @@ Eight gates run against it:
    five rules, and rejection of a 1.01-point displacement. The 49-entry render
    hash manifest remains unchanged.
 
+The portable M21 core test source-builds one macro-enabled signed deck that
+combines modern comments, sections, the self-contained minimal SmartArt
+preservation fixture, exact embedded audio and poster bytes, a typed fade
+timeline, three notes pages, and a three-up handout. Save and reopen preserve
+those semantic surfaces and real source mutations change the static, animated,
+notes, and handout outputs. This portable test classifies the minimal SmartArt
+render as an unsupported fallback and does not claim authentic SmartArt raster
+fidelity. A separate ignored macOS reference-only writer reads SHA-256-pinned
+authentic layout, quick-style, and colour resources and emits corrected signed
+and signature-free sources for manual oracle capture. The mandatory ignored
+release oracle does not read those installed resources. It reads the captured
+signed source and four outputs from one configured oracle directory. Its
+embedded manifest records PowerPoint 16.104 build 16.104.25121423 and
+AppleScript build 1214, `signed=true`, exact source and output SHA-256 values,
+and `open_no_repair=true` for an observation whose active name was exactly
+`m21-corrected-signed.pptm` and whose hash was the canonical signed source hash.
+The signed macro-enabled source
+with SHA-256 `74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9`
+is canonical. Every Rust semantic and output check starts from its bytes. The
+shared semantic assertion repeats after save and reopen. It pins slide IDs and
+order, notes ownership, comment author and reply cardinality, section identity
+and slide membership, WAV and poster bytes and content types, playback
+settings, typed fade target and duration, complete signature coverage, and the
+exact SmartArt relationship IDs, data topology and text, layout identity, and
+style and colour identities. Authentic mode also rejects any unsupported
+SmartArt fallback. The
+portable source-built signature-free package
+differs only by the empty signature origin, the XML signature, their owning
+relationship, the package origin relationship, and their two content-type
+overrides. Every other package part and relationship is byte-identical,
+including presentation, media, theme, SmartArt, timing, notes, handout, macro,
+and render relationships. The directly bound signed outputs have SHA-256
+values `aebe97df20d029a611afa935fad0e96653e0b515396ce7ec1f5e2c665d92f8de`
+for the three-page static PDF,
+`4643c6cb25222b343067364a8983673c79962e32378809206b7f9e6f5306e5e9`
+for the movie,
+`d940316865a28e626c2cc7756d9bef4f132c516d03cba63387e1f6f0ca0dba2a`
+for the three-page A4 portrait notes PDF, and
+`77345fd00914bb2b233bf548530bd2f6de05c25b53a08cd7392bf38be696d05f`
+for the one-page A4 portrait handout PDF. The movie is sampled at 0, 297,
+and 594 of 600 ticks. The
+static visual gate compares all three pages and masks only the declared
+audio-poster rectangle on page one. Each page has exact normalized token
+cardinality and order, full-page ink geometry within 6 pixels at 150 DPI, and
+at least 0.45 SSIM in each union ink region. Page three must retain the complete
+SmartArt graph, relationships, three-node text, and visible ink. The movie
+manifest records the exact visible token vector and ink-band count observed at
+each of its three samples. The movie gate compares that observation with the
+actual Rust frame text and applies the same page-one visual boundaries.
+The low regional SSIM floor accounts only for deterministic Carlito versus
+PowerPoint font rasterization and is paired with exact text and geometry gates.
+Real shifted-raster geometry, source text, extra-token, duplicate-token,
+reordered-token, token-containing, and solid-raster mutations fail their
+applicable predicates across the three static pages, animated output, notes,
+and handout output. Notes require three Rust pages and three A4 portrait
+PowerPoint pages with exact per-page token vectors and exact bounded
+monochrome-band cardinality. The semantic note component on each side compares
+by normalized width and height within 0.06 of one page dimension and by
+monochrome ink occupancy within 0.35. Absolute component placement is not
+equated because the two notes masters and page sizes differ. Extending or
+solid-filling the semantic component on either side fails the combined notes
+predicate. All three handout thumbnail bounds compare in normalized page
+coordinates within 0.05 of one page dimension. Geometry mutations beyond that
+boundary fail.
+
+The earlier minimal SmartArt source remains a local regression for an explicit
+unsupported fallback. An independent ignored classification requires only its
+one recorded static PDF to prove that PowerPoint 16.104 renders a blank third
+page where Rust renders `Unsupported SmartArt`. Neither result is
+representative acceptance evidence. The corrected captured-source oracle and
+the native SmartArt render differential below supply the visible-render
+evidence for authentic SmartArt resources.
+
 The native SmartArt render differential uses six one-slide source decks built
 from exact SHA-256-pinned PowerPoint 16.104 layout, quick-style, and colour
 resources. The same source deck feeds PowerPoint and the native facade. The

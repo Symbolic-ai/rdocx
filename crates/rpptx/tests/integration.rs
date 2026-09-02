@@ -7669,9 +7669,13 @@ fn f226_picture(id: u32, relationship_id: &str, bounds: (i64, i64, i64, i64)) ->
     )
 }
 
+fn f226_group_scaffold() -> &'static str {
+    r#"<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>"#
+}
+
 fn f226_notes_master_xml() -> Vec<u8> {
     let shapes = [
-        f226_background_shape(1),
+        f226_background_shape(9),
         f226_picture(8, "image", (3_200_400, 152_400, 304_800, 304_800)),
         f226_shape(
             2,
@@ -7723,15 +7727,16 @@ fn f226_notes_master_xml() -> Vec<u8> {
         ),
     ]
     .join("");
+    let group = f226_group_scaffold();
     format!(
-        r#"<p:notesMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{shapes}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf dt="1" hdr="1" ftr="1" sldNum="1"/><p:notesStyle><a:lvl1pPr><a:defRPr sz="1400"/></a:lvl1pPr></p:notesStyle></p:notesMaster>"#
+        r#"<p:notesMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree>{group}{shapes}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf dt="1" hdr="1" ftr="1" sldNum="1"/><p:notesStyle><a:lvl1pPr><a:defRPr sz="1400"/></a:lvl1pPr></p:notesStyle></p:notesMaster>"#
     )
     .into_bytes()
 }
 
 fn f226_handout_master_xml() -> Vec<u8> {
     let shapes = [
-        f226_background_shape(1),
+        f226_background_shape(7),
         f226_picture(6, "image", (3_200_400, 152_400, 304_800, 304_800)),
         f226_shape(
             2,
@@ -7767,8 +7772,9 @@ fn f226_handout_master_xml() -> Vec<u8> {
         ),
     ]
     .join("");
+    let group = f226_group_scaffold();
     format!(
-        r#"<p:handoutMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{shapes}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf dt="1" hdr="1" ftr="1" sldNum="1"/></p:handoutMaster>"#
+        r#"<p:handoutMaster xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree>{group}{shapes}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/><p:hf dt="1" hdr="1" ftr="1" sldNum="1"/></p:handoutMaster>"#
     )
     .into_bytes()
 }
@@ -7778,8 +7784,9 @@ fn f226_notes_slide_xml(text: &str) -> Vec<u8> {
         r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="3"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>{text}</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>"#
     );
     let picture = f226_picture(3, "image", (3_657_600, 152_400, 304_800, 304_800));
+    let group = f226_group_scaffold();
     format!(
-        r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{body}{picture}</p:spTree></p:cSld></p:notes>"#
+        r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree>{group}{body}{picture}</p:spTree></p:cSld></p:notes>"#
     )
     .into_bytes()
 }
@@ -7891,6 +7898,103 @@ fn f226_fixture_bytes() -> Vec<u8> {
     package_bytes(package)
 }
 
+fn m21_notes_handout_fixture_bytes() -> Vec<u8> {
+    let mut source = Presentation::new().unwrap();
+    for (index, text) in ["M21 slide one", "M21 slide two"].into_iter().enumerate() {
+        source.add_slide(0).unwrap();
+        source
+            .slide_mut(index)
+            .unwrap()
+            .add_textbox(Emu(914_400), Emu(914_400), Emu(4_572_000), Emu(914_400))
+            .unwrap()
+            .set_text(text)
+            .unwrap();
+    }
+    let mut package = open_opc(&source.to_bytes().unwrap(), "M21 output fixture");
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let presentation_relationships = package.get_part_rels(&presentation_part).unwrap().clone();
+    let slide_parts = model
+        .slide_ids
+        .iter()
+        .map(|slide| {
+            let relationship = presentation_relationships
+                .get_by_id(&slide.relationship_id)
+                .unwrap();
+            OpcPackage::resolve_rel_target(&presentation_part, &relationship.target)
+        })
+        .collect::<Vec<_>>();
+    let notes_master_relationship = package
+        .get_or_create_part_rels(&presentation_part)
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::NOTES_MASTER)
+        .unwrap()
+        .clone();
+    let notes_master_part =
+        OpcPackage::resolve_rel_target(&presentation_part, &notes_master_relationship.target);
+    package.set_part(&notes_master_part, f226_notes_master_xml());
+    package
+        .content_types
+        .add_override(&notes_master_part, content_types::NOTES_MASTER);
+    let notes_master_rels = package.get_or_create_part_rels(&notes_master_part);
+    notes_master_rels.items.clear();
+    notes_master_rels.add_with_id("theme", rel_types::THEME, "../theme/theme2.xml");
+    notes_master_rels.add_with_id("image", rel_types::IMAGE, "../media/m21-master.png");
+    let handout_master_part = "/ppt/handoutMasters/handoutMaster1.xml";
+    package.set_part(handout_master_part, f226_handout_master_xml());
+    package
+        .content_types
+        .add_override(handout_master_part, content_types::HANDOUT_MASTER);
+    package
+        .get_or_create_part_rels(handout_master_part)
+        .add_with_id("theme", rel_types::THEME, "../theme/theme2.xml");
+    package
+        .get_or_create_part_rels(handout_master_part)
+        .add_with_id("image", rel_types::IMAGE, "../media/m21-master.png");
+    package
+        .get_or_create_part_rels(&presentation_part)
+        .add_with_id(
+            "handout",
+            rel_types::HANDOUT_MASTER,
+            "handoutMasters/handoutMaster1.xml",
+        );
+    package.set_part("/ppt/media/m21-master.png", valid_one_pixel_png());
+    package.set_part("/ppt/media/m21-notes.png", f226_blue_pixel_png());
+    package.content_types.add_default("png", "image/png");
+    for (index, slide_part) in slide_parts.iter().enumerate() {
+        let notes_part = format!("/ppt/notesSlides/notesSlide{}.xml", index + 1);
+        package.set_part(
+            &notes_part,
+            f226_notes_slide_xml(&format!("M21 speaker note {}", index + 1)),
+        );
+        package
+            .content_types
+            .add_override(&notes_part, content_types::NOTES_SLIDE);
+        package.get_or_create_part_rels(slide_part).add_with_id(
+            &format!("notes-{}", index + 1),
+            rel_types::NOTES_SLIDE,
+            &format!("../notesSlides/notesSlide{}.xml", index + 1),
+        );
+        package.get_or_create_part_rels(&notes_part).add_with_id(
+            "master",
+            rel_types::NOTES_MASTER,
+            "../notesMasters/notesMaster1.xml",
+        );
+        package.get_or_create_part_rels(&notes_part).add_with_id(
+            "slide",
+            rel_types::SLIDE,
+            &format!("../slides/slide{}.xml", index + 1),
+        );
+        package.get_or_create_part_rels(&notes_part).add_with_id(
+            "image",
+            rel_types::IMAGE,
+            "../media/m21-notes.png",
+        );
+    }
+    package_bytes(package)
+}
+
 fn f226_pdf_text(pdf: &[u8], label: &str) -> String {
     let path = std::env::temp_dir().join(format!("rpptx-f226-{label}-{}.pdf", std::process::id()));
     fs::write(&path, pdf).unwrap();
@@ -7922,12 +8026,620 @@ fn f226_pdf_page_count(pdf: &[u8], label: &str) -> usize {
         .unwrap()
 }
 
+fn m21_pdf_page_size_path(pdf: &Path) -> (f64, f64) {
+    let output = Command::new("pdfinfo").arg(pdf).output().unwrap();
+    assert!(
+        output.status.success(),
+        "pdfinfo {}: {}",
+        pdf.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let fields = text
+        .lines()
+        .find(|line| line.starts_with("Page size:"))
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    (fields[2].parse().unwrap(), fields[4].parse().unwrap())
+}
+
+fn m21_pdf_page_size(pdf: &[u8], label: &str) -> (f64, f64) {
+    let path =
+        std::env::temp_dir().join(format!("rpptx-m21-{label}-size-{}.pdf", std::process::id()));
+    fs::write(&path, pdf).unwrap();
+    let size = m21_pdf_page_size_path(&path);
+    fs::remove_file(path).unwrap();
+    size
+}
+
 fn f226_png_dimensions(png: &[u8]) -> (u32, u32) {
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     (
         u32::from_be_bytes(png[16..20].try_into().unwrap()),
         u32::from_be_bytes(png[20..24].try_into().unwrap()),
     )
+}
+
+fn m21_pdf_page_pngs(pdf: &Path, output_prefix: &Path, dpi: u32) -> Vec<Vec<u8>> {
+    let output = Command::new("pdftoppm")
+        .args(["-r", &dpi.to_string(), "-png"])
+        .arg(pdf)
+        .arg(output_prefix)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "render PowerPoint PDF: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut pages = Vec::new();
+    for page_number in 1.. {
+        let path = output_prefix.with_file_name(format!(
+            "{}-{page_number}",
+            output_prefix.file_name().unwrap().to_string_lossy()
+        ));
+        let path = path.with_extension("png");
+        if !path.is_file() {
+            break;
+        }
+        pages.push(fs::read(path).unwrap());
+    }
+    assert!(!pages.is_empty(), "PowerPoint PDF produced no raster pages");
+    pages
+}
+
+fn m21_normalized_tokens(text: &str) -> Vec<String> {
+    text.split_whitespace().map(str::to_owned).collect()
+}
+
+fn m21_pdf_text_pages(pdf: &[u8], label: &str) -> Vec<String> {
+    let text = f226_pdf_text(pdf, label);
+    let mut pages = text.split('\u{c}').map(str::to_owned).collect::<Vec<_>>();
+    if pages.last().is_some_and(|page| page.trim().is_empty()) {
+        pages.pop();
+    }
+    pages
+}
+
+fn m21_pdf_token_pages(pdf: &[u8], label: &str) -> Vec<Vec<String>> {
+    m21_pdf_text_pages(pdf, label)
+        .iter()
+        .map(|page| m21_normalized_tokens(page))
+        .collect()
+}
+
+fn m21_assert_text_mutations_fail(actual: &str, expected: &[&str]) {
+    assert!(m21_tokens_match(actual, expected));
+    assert!(!m21_tokens_match(&format!("{actual} unexpected"), expected));
+    assert!(!m21_tokens_match(&format!("{actual} {actual}"), expected));
+    if let Some(first) = expected.first() {
+        assert!(!m21_tokens_match(
+            &actual.replacen(first, &format!("{first}extra"), 1),
+            expected
+        ));
+    }
+    if expected.len() >= 2 {
+        let mut reordered = m21_normalized_tokens(actual);
+        reordered.swap(0, 1);
+        assert!(!m21_tokens_match(&reordered.join(" "), expected));
+    }
+}
+
+fn m21_normalize_movie_frame(png: &[u8]) -> Vec<u8> {
+    let info = oxml_media::probe(png).unwrap();
+    assert_eq!(u64::from(info.width_px) * 9, u64::from(info.height_px) * 16);
+    let image = PositionedElement::Image {
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 960.0,
+            height: 540.0,
+        },
+        data: png.to_vec(),
+        content_type: "image/png".to_owned(),
+        media_id: MediaId(1),
+    };
+    let page = PageFrame::new(1, 960.0, 540.0, vec![image]);
+    let layout = oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(page)],
+        Vec::new(),
+        None,
+        Vec::new(),
+    );
+    oxml_pdf::render_page_to_png(&layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap()
+}
+
+fn m21_mask_audio_poster(png: &[u8]) -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::decode_png(png).unwrap();
+    for y in 598..772 {
+        for x in 823..1_128 {
+            let offset = (y * pixmap.width() as usize + x) * 4;
+            pixmap.data_mut()[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
+        }
+    }
+    pixmap.encode_png().unwrap()
+}
+
+fn m21_ink_mass(png: &[u8], bounds: (u32, u32, u32, u32)) -> u64 {
+    let pixmap = tiny_skia::Pixmap::decode_png(png).unwrap();
+    let (left, top, width, height) = bounds;
+    (top..top + height)
+        .flat_map(|y| (left..left + width).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            let pixel = pixmap.pixel(x, y).unwrap();
+            let alpha_gap = 255 - pixel.alpha();
+            let lightest_dark_channel = pixel
+                .red()
+                .min(pixel.green())
+                .min(pixel.blue())
+                .saturating_add(alpha_gap);
+            u64::from(255 - lightest_dark_channel)
+        })
+        .sum()
+}
+
+fn m21_timeline_layout(
+    frame: &rpptx::DeterministicTimelineFrame,
+    deterministic_fonts: &[oxml_layout::FontData],
+) -> oxml_layout::LayoutResult {
+    let font_ids = deterministic_fonts
+        .iter()
+        .map(|font| font.id)
+        .collect::<HashSet<_>>();
+    let mut glyph_run_count = 0;
+    oxml_layout::walk(&frame.page.elements, &mut |element, _| {
+        let font_id = match element {
+            PositionedElement::Text(run) => Some(run.font_id),
+            PositionedElement::MultilingualText(run) => Some(run.font_id),
+            _ => None,
+        };
+        if let Some(font_id) = font_id {
+            glyph_run_count += 1;
+            assert!(
+                font_ids.contains(&font_id),
+                "timeline FontId {font_id:?} must resolve through static deterministic fonts"
+            );
+        }
+    });
+    assert!(
+        glyph_run_count > 0,
+        "timeline frame must retain visible text"
+    );
+    oxml_layout::LayoutResult::new(
+        vec![std::sync::Arc::new(frame.page.clone())],
+        deterministic_fonts.to_vec(),
+        None,
+        Vec::new(),
+    )
+}
+
+fn m21_visible_page_text(page: &PageFrame) -> String {
+    fn visit(elements: &[PositionedElement], opacity: f64, output: &mut Vec<String>) {
+        for element in elements {
+            match element {
+                PositionedElement::Text(run) if opacity > 0.0 => output.push(run.text.clone()),
+                PositionedElement::MultilingualText(run) if opacity > 0.0 => {
+                    output.push(run.logical_text.clone());
+                }
+                PositionedElement::Group(group) => {
+                    visit(&group.children, opacity * group.opacity, output);
+                }
+                PositionedElement::MarkedContent { children, .. } => {
+                    visit(children, opacity, output);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    visit(&page.elements, 1.0, &mut output);
+    output.join("\n")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct M21InkBounds {
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+}
+
+fn m21_page_ink_bounds(png: &[u8], monochrome_only: bool) -> Vec<M21InkBounds> {
+    const INK_CUTOFF: u8 = 245;
+    const MAX_ROW_GAP: u32 = 8;
+    let pixmap = tiny_skia::Pixmap::decode_png(png).unwrap();
+    let row_has_ink = (0..pixmap.height())
+        .map(|y| {
+            (0..pixmap.width()).any(|x| {
+                let pixel = pixmap.pixel(x, y).unwrap();
+                pixel.red().min(pixel.green()).min(pixel.blue()) < INK_CUTOFF
+                    && (!monochrome_only
+                        || pixel.red().abs_diff(pixel.green()) < 16
+                            && pixel.green().abs_diff(pixel.blue()) < 16)
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut row_bands = Vec::new();
+    let mut active = None;
+    let mut last_ink = 0;
+    for (y, has_ink) in row_has_ink.into_iter().enumerate() {
+        let y = y as u32;
+        if !has_ink {
+            continue;
+        }
+        match active {
+            Some(top) if y - last_ink > MAX_ROW_GAP => {
+                row_bands.push((top, last_ink + 1));
+                active = Some(y);
+            }
+            None => active = Some(y),
+            Some(_) => {}
+        }
+        last_ink = y;
+    }
+    if let Some(top) = active {
+        row_bands.push((top, last_ink + 1));
+    }
+    row_bands
+        .into_iter()
+        .map(|(top, bottom)| {
+            let mut left = pixmap.width();
+            let mut right = 0;
+            for y in top..bottom {
+                for x in 0..pixmap.width() {
+                    let pixel = pixmap.pixel(x, y).unwrap();
+                    if pixel.red().min(pixel.green()).min(pixel.blue()) < INK_CUTOFF
+                        && (!monochrome_only
+                            || pixel.red().abs_diff(pixel.green()) < 16
+                                && pixel.green().abs_diff(pixel.blue()) < 16)
+                    {
+                        left = left.min(x);
+                        right = right.max(x + 1);
+                    }
+                }
+            }
+            M21InkBounds {
+                left,
+                top,
+                right,
+                bottom,
+            }
+        })
+        .collect()
+}
+
+fn m21_full_page_ink_bounds(png: &[u8]) -> Vec<M21InkBounds> {
+    m21_page_ink_bounds(png, false)
+}
+
+fn m21_crop_png(png: &[u8], bounds: M21InkBounds) -> Vec<u8> {
+    let source = tiny_skia::Pixmap::decode_png(png).unwrap();
+    let width = bounds.right - bounds.left;
+    let height = bounds.bottom - bounds.top;
+    let mut cropped = tiny_skia::Pixmap::new(width, height).unwrap();
+    for y in 0..height {
+        let source_start = (((bounds.top + y) * source.width() + bounds.left) * 4) as usize;
+        let source_end = source_start + (width * 4) as usize;
+        let target_start = (y * width * 4) as usize;
+        let target_end = target_start + (width * 4) as usize;
+        cropped.data_mut()[target_start..target_end]
+            .copy_from_slice(&source.data()[source_start..source_end]);
+    }
+    cropped.encode_png().unwrap()
+}
+
+#[derive(Clone, Debug)]
+struct M21InkComparison {
+    actual: Vec<M21InkBounds>,
+    expected: Vec<M21InkBounds>,
+    geometry_error_px: u32,
+    region_ssim: Vec<f64>,
+}
+
+const M21_MAX_FULL_PAGE_INK_ERROR_PX: u32 = 6;
+const M21_MIN_INK_REGION_SSIM: f64 = 0.45;
+
+fn m21_visual_gate(text_order_matches: bool, comparison: &M21InkComparison) -> bool {
+    text_order_matches
+        && !comparison.actual.is_empty()
+        && comparison.actual.len() == comparison.expected.len()
+        && comparison.geometry_error_px <= M21_MAX_FULL_PAGE_INK_ERROR_PX
+        && comparison
+            .region_ssim
+            .iter()
+            .all(|score| *score >= M21_MIN_INK_REGION_SSIM)
+}
+
+fn m21_static_page_gate(
+    text_matches: bool,
+    actual_png: &[u8],
+    expected_png: &[u8],
+    comparison: &M21InkComparison,
+) -> bool {
+    if comparison.expected.is_empty() {
+        text_matches
+            && comparison.actual.is_empty()
+            && f226_png_dimensions(actual_png) == f226_png_dimensions(expected_png)
+            && smartart_png_ssim(actual_png, expected_png) >= 0.999_999
+    } else {
+        m21_visual_gate(text_matches, comparison)
+    }
+}
+
+fn m21_solidify_first_ink_region(png: &[u8]) -> Vec<u8> {
+    let bounds = m21_full_page_ink_bounds(png)[0];
+    m21_solidify_ink_region(png, bounds)
+}
+
+fn m21_solidify_ink_region(png: &[u8], bounds: M21InkBounds) -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::decode_png(png).unwrap();
+    for y in bounds.top..bounds.bottom {
+        for x in bounds.left..bounds.right {
+            let offset = ((y * pixmap.width() + x) * 4) as usize;
+            pixmap.data_mut()[offset..offset + 4].copy_from_slice(&[0, 0, 0, 255]);
+        }
+    }
+    pixmap.encode_png().unwrap()
+}
+
+fn m21_extend_ink_region(png: &[u8], bounds: M21InkBounds, pixels: u32) -> Vec<u8> {
+    let mut pixmap = tiny_skia::Pixmap::decode_png(png).unwrap();
+    let right = bounds.right.saturating_add(pixels).min(pixmap.width());
+    assert!(
+        right > bounds.right,
+        "ink extension must remain inside the page"
+    );
+    for y in bounds.top..bounds.bottom {
+        for x in bounds.right..right {
+            let offset = ((y * pixmap.width() + x) * 4) as usize;
+            pixmap.data_mut()[offset..offset + 4].copy_from_slice(&[0, 0, 0, 255]);
+        }
+    }
+    pixmap.encode_png().unwrap()
+}
+
+fn m21_shift_ink_up(png: &[u8], pixels: u32) -> Vec<u8> {
+    let source = tiny_skia::Pixmap::decode_png(png).unwrap();
+    let mut shifted = source.clone();
+    for bounds in m21_full_page_ink_bounds(png) {
+        let padded = M21InkBounds {
+            left: bounds.left.saturating_sub(2),
+            top: bounds.top.saturating_sub(2),
+            right: (bounds.right + 2).min(source.width()),
+            bottom: (bounds.bottom + 2).min(source.height()),
+        };
+        for y in padded.top..padded.bottom {
+            for x in padded.left..padded.right {
+                let target_offset = ((y * shifted.width() + x) * 4) as usize;
+                shifted.data_mut()[target_offset..target_offset + 4]
+                    .copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+        for y in padded.top..padded.bottom {
+            let Some(target_y) = y.checked_sub(pixels) else {
+                continue;
+            };
+            for x in padded.left..padded.right {
+                let source_offset = ((y * source.width() + x) * 4) as usize;
+                let target_offset = ((target_y * shifted.width() + x) * 4) as usize;
+                shifted.data_mut()[target_offset..target_offset + 4]
+                    .copy_from_slice(&source.data()[source_offset..source_offset + 4]);
+            }
+        }
+    }
+    shifted.encode_png().unwrap()
+}
+
+fn m21_tokens_match(text: &str, expected: &[&str]) -> bool {
+    m21_normalized_tokens(text) == expected
+}
+
+#[derive(Clone, Copy, Debug)]
+struct M21NormalizedBounds {
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+}
+
+fn m21_normalized_geometry_error(
+    actual: &[M21NormalizedBounds],
+    expected: &[M21NormalizedBounds],
+) -> f64 {
+    assert_eq!(actual.len(), expected.len());
+    actual
+        .iter()
+        .zip(expected)
+        .flat_map(|(actual, expected)| {
+            [
+                (actual.left - expected.left).abs(),
+                (actual.top - expected.top).abs(),
+                (actual.right - expected.right).abs(),
+                (actual.bottom - expected.bottom).abs(),
+            ]
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+fn m21_handout_thumbnail_bounds(png: &[u8]) -> Vec<M21NormalizedBounds> {
+    let pixmap = tiny_skia::Pixmap::decode_png(png).unwrap();
+    let minimum_run = pixmap.width() * 3 / 10;
+    let maximum_left = pixmap.width() * 2 / 5;
+    let maximum_right = pixmap.width() * 3 / 5;
+    let mut horizontal_edges = Vec::new();
+    for y in 0..pixmap.height() {
+        let mut start = None;
+        let mut best = None;
+        for x in 0..=pixmap.width() {
+            let black = x < pixmap.width() && {
+                let pixel = pixmap.pixel(x, y).unwrap();
+                pixel.red() < 192 && pixel.green() < 192 && pixel.blue() < 192
+            };
+            match (start, black) {
+                (None, true) => start = Some(x),
+                (Some(run_start), false) => {
+                    if x - run_start >= minimum_run && run_start < maximum_left && x < maximum_right
+                    {
+                        best = Some((run_start, x));
+                    }
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some((left, right)) = best {
+            if horizontal_edges
+                .last()
+                .is_some_and(|(previous_y, _, _)| y - previous_y <= 2)
+            {
+                continue;
+            }
+            horizontal_edges.push((y, left, right));
+        }
+    }
+    assert_eq!(
+        horizontal_edges.len(),
+        6,
+        "expected three thumbnail border pairs: {horizontal_edges:?}"
+    );
+    horizontal_edges
+        .chunks_exact(2)
+        .map(|pair| M21NormalizedBounds {
+            left: f64::from(pair[0].1) / f64::from(pixmap.width()),
+            top: f64::from(pair[0].0) / f64::from(pixmap.height()),
+            right: f64::from(pair[0].2) / f64::from(pixmap.width()),
+            bottom: f64::from(pair[1].0 + 1) / f64::from(pixmap.height()),
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+struct M21NotesInkComparison {
+    rust_band_count: usize,
+    powerpoint_band_count: usize,
+    component_size_error: f64,
+    rust_ink_occupancy: f64,
+    powerpoint_ink_occupancy: f64,
+    component_raster_error: f64,
+}
+
+const M21_MAX_NOTES_COMPONENT_SIZE_ERROR: f64 = 0.06;
+const M21_MAX_NOTES_COMPONENT_RASTER_ERROR: f64 = 0.35;
+
+fn m21_component_ink_occupancy(png: &[u8], bounds: M21InkBounds) -> f64 {
+    const INK_CUTOFF: u8 = 245;
+    let width = bounds.right - bounds.left;
+    let height = bounds.bottom - bounds.top;
+    let pixmap = tiny_skia::Pixmap::decode_png(png).unwrap();
+    let ink_pixels = (bounds.top..bounds.bottom)
+        .flat_map(|y| (bounds.left..bounds.right).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let pixel = pixmap.pixel(*x, *y).unwrap();
+            pixel.red().min(pixel.green()).min(pixel.blue()) < INK_CUTOFF
+                && pixel.red().abs_diff(pixel.green()) < 16
+                && pixel.green().abs_diff(pixel.blue()) < 16
+        })
+        .count();
+    ink_pixels as f64 / (f64::from(width) * f64::from(height))
+}
+
+fn m21_compare_notes_ink(
+    rust_png: &[u8],
+    powerpoint_png: &[u8],
+    rust_component_index: usize,
+) -> M21NotesInkComparison {
+    let rust_bands = m21_page_ink_bounds(rust_png, true);
+    let powerpoint_bands = m21_page_ink_bounds(powerpoint_png, true);
+    let rust_component = rust_bands[rust_component_index];
+    let powerpoint_component = powerpoint_bands[0];
+    let (rust_width, rust_height) = f226_png_dimensions(rust_png);
+    let (powerpoint_width, powerpoint_height) = f226_png_dimensions(powerpoint_png);
+    let rust_component_size = (
+        f64::from(rust_component.right - rust_component.left) / f64::from(rust_width),
+        f64::from(rust_component.bottom - rust_component.top) / f64::from(rust_height),
+    );
+    let powerpoint_component_size = (
+        f64::from(powerpoint_component.right - powerpoint_component.left)
+            / f64::from(powerpoint_width),
+        f64::from(powerpoint_component.bottom - powerpoint_component.top)
+            / f64::from(powerpoint_height),
+    );
+    let rust_ink_occupancy = m21_component_ink_occupancy(rust_png, rust_component);
+    let powerpoint_ink_occupancy =
+        m21_component_ink_occupancy(powerpoint_png, powerpoint_component);
+    M21NotesInkComparison {
+        rust_band_count: rust_bands.len(),
+        powerpoint_band_count: powerpoint_bands.len(),
+        component_size_error: (rust_component_size.0 - powerpoint_component_size.0)
+            .abs()
+            .max((rust_component_size.1 - powerpoint_component_size.1).abs()),
+        rust_ink_occupancy,
+        powerpoint_ink_occupancy,
+        component_raster_error: (rust_ink_occupancy - powerpoint_ink_occupancy).abs(),
+    }
+}
+
+fn m21_notes_ink_gate(
+    text_matches: bool,
+    comparison: &M21NotesInkComparison,
+    expected_rust_bands: usize,
+) -> bool {
+    text_matches
+        && comparison.rust_band_count == expected_rust_bands
+        && comparison.powerpoint_band_count == 1
+        && comparison.component_size_error <= M21_MAX_NOTES_COMPONENT_SIZE_ERROR
+        && comparison.rust_ink_occupancy > 0.0
+        && comparison.rust_ink_occupancy <= 1.0
+        && comparison.powerpoint_ink_occupancy > 0.0
+        && comparison.powerpoint_ink_occupancy <= 1.0
+        && comparison.component_raster_error <= M21_MAX_NOTES_COMPONENT_RASTER_ERROR
+}
+
+fn m21_assert_page_size(actual: (f64, f64), expected: (f64, f64)) {
+    assert!(
+        (actual.0 - expected.0).abs() <= 0.01 && (actual.1 - expected.1).abs() <= 0.01,
+        "page size {actual:?} differs from {expected:?}"
+    );
+}
+
+fn m21_compare_full_page_ink(actual_png: &[u8], expected_png: &[u8]) -> M21InkComparison {
+    let actual = m21_full_page_ink_bounds(actual_png);
+    let expected = m21_full_page_ink_bounds(expected_png);
+    let mut geometry_error_px = 0;
+    let region_ssim = actual
+        .iter()
+        .zip(&expected)
+        .map(|(actual, expected)| {
+            for delta in [
+                actual.left.abs_diff(expected.left),
+                actual.top.abs_diff(expected.top),
+                actual.right.abs_diff(expected.right),
+                actual.bottom.abs_diff(expected.bottom),
+            ] {
+                geometry_error_px = geometry_error_px.max(delta);
+            }
+            let union = M21InkBounds {
+                left: actual.left.min(expected.left).saturating_sub(8),
+                top: actual.top.min(expected.top).saturating_sub(8),
+                right: (actual.right.max(expected.right) + 8)
+                    .min(f226_png_dimensions(actual_png).0),
+                bottom: (actual.bottom.max(expected.bottom) + 8)
+                    .min(f226_png_dimensions(actual_png).1),
+            };
+            smartart_png_ssim(
+                &m21_crop_png(actual_png, union),
+                &m21_crop_png(expected_png, union),
+            )
+        })
+        .collect();
+    M21InkComparison {
+        actual,
+        expected,
+        geometry_error_px,
+        region_ssim,
+    }
 }
 
 #[test]
@@ -8203,6 +8915,1433 @@ fn notes_and_handout_export_leave_the_opened_package_byte_identical() {
     assert_eq!(presentation.to_bytes().unwrap(), before);
 }
 
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_AUDIO_WAV: &[u8] = b"RIFF\x26\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x40\x1f\0\0\x01\0\x08\0data\x02\0\0\0\x80\x80";
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+fn m21_representative_unsigned_deck_bytes_from_smartart(smartart_bytes: Option<&[u8]>) -> Vec<u8> {
+    use rpptx::{Comment, CommentAuthor, Section};
+
+    let mut presentation = Presentation::from_bytes(&m21_notes_handout_fixture_bytes())
+        .expect("open source-built notes and handout deck");
+    if let Some(smartart_bytes) = smartart_bytes {
+        let smartart = Presentation::from_bytes(smartart_bytes).expect("open SmartArt source");
+        presentation
+            .transfer_smartart_slide_from(&smartart, 0, 0)
+            .expect("transfer representative SmartArt slide");
+    }
+    let mut representative_slide = presentation.slide_mut(0).unwrap();
+    let mut animated_shape = representative_slide
+        .add_textbox(Emu(914_400), Emu(4_114_800), Emu(3_657_600), Emu(685_800))
+        .unwrap();
+    animated_shape
+        .set_name("M21 representative animated text")
+        .unwrap();
+    animated_shape.set_text("M21 representative").unwrap();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: M21_AUDIO_WAV,
+                filename: "m21-audio.wav",
+                content_type: "audio/wav",
+            }),
+            MediaPoster {
+                bytes: &valid_one_pixel_png(),
+                filename: "m21-poster.png",
+            },
+            Emu(5_029_200),
+            Emu(3_657_600),
+            Emu(1_828_800),
+            Emu(1_028_700),
+            MediaPlaybackSettings {
+                trigger: rpptx::MediaPlaybackTrigger::OnClick,
+                ..MediaPlaybackSettings::default()
+            },
+        )
+        .unwrap();
+    presentation
+        .add_comment_author(
+            CommentAuthor::new(
+                "{11111111-1111-1111-1111-111111111111}",
+                "M21 reviewer",
+                Some("M21"),
+                "m21@example.test",
+                "representative gate",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    presentation
+        .add_comment(
+            0,
+            Comment::new(
+                "{22222222-2222-2222-2222-222222222222}",
+                "{11111111-1111-1111-1111-111111111111}",
+                "2026-09-02T11:00:00Z",
+                "M21 representative comment",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let slide_ids = presentation
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<Vec<_>>();
+    presentation
+        .set_sections(vec![
+            Section::new(
+                "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}",
+                "Modern content",
+                slide_ids,
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "M21 representative timing source",
+    );
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_relationship = package
+        .get_part_rels(&presentation_part)
+        .unwrap()
+        .get_by_id(&model.slide_ids[0].relationship_id)
+        .unwrap();
+    let slide_part = OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+    let mut slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+    let animated_shape_id = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .find(|child| {
+            child.non_visual_name().as_deref() == Some("M21 representative animated text")
+        })
+        .and_then(ShapeTreeChild::non_visual_id)
+        .unwrap();
+    slide.timing = Some(
+        rpptx_oxml::timing::CT_Timing::from_xml(
+            format!(
+                r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="100" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{animated_shape_id}"/></p:tgtEl></p:cBhvr></p:animEffect></p:tnLst></p:timing>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap(),
+    );
+    package.set_part(&slide_part, slide.to_xml().unwrap());
+
+    let timed = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    timed
+        .to_bytes_as(PresentationPackageClass::MacroEnabledPresentation)
+        .unwrap()
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+fn m21_representative_unsigned_deck_bytes(include_smartart: bool) -> Vec<u8> {
+    let smartart = include_smartart.then(|| authentic_smartart_oracle_source_bytes("list"));
+    m21_representative_unsigned_deck_bytes_from_smartart(smartart.as_deref())
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+fn m21_minimal_smartart_fallback_deck_bytes() -> Vec<u8> {
+    let minimal_smartart = smartart_rust_source_bytes("list");
+    m21_representative_unsigned_deck_bytes_from_smartart(Some(&minimal_smartart))
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+fn m21_sign_deck(unsigned: &[u8]) -> Vec<u8> {
+    let mut signed = Presentation::from_bytes(unsigned).unwrap();
+    let (private_key, certificate) = f221_signing_material();
+    let report = signed.sign(&private_key, &certificate).unwrap();
+    assert!(report.cryptographically_valid);
+    assert!(report.coverage_complete);
+    signed.to_bytes().unwrap()
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+#[derive(Clone, Copy)]
+enum M21SmartArtExpectation {
+    MinimalFallback,
+    Authentic,
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+fn m21_assert_representative_semantics(
+    bytes: &[u8],
+    smartart_expectation: M21SmartArtExpectation,
+) -> Presentation {
+    let opened = Presentation::from_bytes(bytes).expect("open representative modern deck bytes");
+    assert!(opened.validate().is_empty());
+    let saved = opened.to_bytes().expect("save representative modern deck");
+    let reopened =
+        Presentation::from_bytes(&saved).expect("reopen saved representative modern deck");
+    assert!(reopened.validate().is_empty());
+
+    let assert_loaded = |presentation: &Presentation, package_bytes: &[u8]| {
+        assert_eq!(
+            presentation.package_class().unwrap(),
+            PresentationPackageClass::MacroEnabledPresentation
+        );
+        assert_eq!(
+            presentation
+                .slides()
+                .map(|slide| slide.id())
+                .collect::<Vec<_>>(),
+            [256, 257, 258]
+        );
+        assert_eq!(presentation.len(), 3);
+        assert_eq!(
+            presentation
+                .slide(0)
+                .unwrap()
+                .shapes()
+                .filter_map(|shape| shape.text())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>(),
+            ["M21 slide one", "M21 representative"]
+        );
+        assert_eq!(
+            presentation
+                .slide(1)
+                .unwrap()
+                .shapes()
+                .filter_map(|shape| shape.text())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>(),
+            ["M21 slide two"]
+        );
+        assert_eq!(
+            presentation.slide(0).unwrap().notes_text().as_deref(),
+            Some("M21 speaker note 1")
+        );
+        assert_eq!(
+            presentation.slide(1).unwrap().notes_text().as_deref(),
+            Some("M21 speaker note 2")
+        );
+        assert_eq!(presentation.slide(2).unwrap().notes_text(), None);
+
+        let authors = presentation.comment_authors();
+        assert_eq!(authors.len(), 1);
+        assert_eq!(authors[0].id, "{11111111-1111-1111-1111-111111111111}");
+        assert_eq!(authors[0].name, "M21 reviewer");
+        assert_eq!(authors[0].initials.as_deref(), Some("M21"));
+        assert_eq!(authors[0].user_id, "m21@example.test");
+        assert_eq!(authors[0].provider_id, "representative gate");
+        let comments = presentation.comments(0).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].id, "{22222222-2222-2222-2222-222222222222}");
+        assert_eq!(comments[0].author_id, authors[0].id);
+        assert_eq!(comments[0].created, "2026-09-02T11:00:00Z");
+        assert_eq!(comments[0].text(), "M21 representative comment");
+        assert!(comments[0].replies().is_empty());
+        assert_eq!(presentation.comments(1), None);
+        assert_eq!(presentation.comments(2), None);
+
+        let sections = presentation.sections();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(
+            sections[0].id.as_deref(),
+            Some("{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}")
+        );
+        assert_eq!(sections[0].name.as_deref(), Some("Modern content"));
+        assert_eq!(sections[0].slide_ids, [256, 257, 258]);
+
+        let media = presentation.media(0).unwrap();
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].slide_index, 0);
+        assert_eq!(media[0].kind, MediaKind::Audio);
+        let rpptx::MediaLocation::Embedded {
+            part_name,
+            content_type,
+        } = &media[0].source
+        else {
+            panic!("representative audio must remain embedded")
+        };
+        assert_eq!(part_name, "/ppt/media/media1.wav");
+        assert_eq!(content_type, "audio/wav");
+        assert_eq!(media[0].settings, MediaPlaybackSettings::default());
+        assert_eq!(
+            media[0].diagnostics,
+            [rpptx::MediaDiagnostic::MissingPlaybackTiming]
+        );
+        assert_eq!(
+            presentation
+                .extract_media(0, media[0].shape_id)
+                .unwrap()
+                .as_deref(),
+            Some(M21_AUDIO_WAV)
+        );
+
+        let signatures = presentation.verify_signatures().unwrap();
+        assert_eq!(signatures.len(), 1);
+        assert!(signatures[0].cryptographically_valid);
+        assert!(signatures[0].coverage_complete);
+
+        assert!(presentation.smart_art(0).unwrap().is_empty());
+        assert!(presentation.smart_art(1).unwrap().is_empty());
+        let smartart = presentation.smart_art(2).unwrap();
+        assert_eq!(smartart.len(), 1);
+        assert_eq!(smartart[0].relationships.data, "smart-data");
+        assert_eq!(smartart[0].relationships.layout, "smart-layout");
+        assert_eq!(smartart[0].relationships.style, "smart-style");
+        assert_eq!(smartart[0].relationships.colors, "smart-colors");
+        assert!(smartart[0].relationships.drawing.is_none());
+        let rpptx::DiagramPart::Parsed(data) = &smartart[0].data else {
+            panic!("representative SmartArt data must parse")
+        };
+        assert_eq!(
+            data.points()
+                .iter()
+                .filter_map(|point| point.text.as_ref().map(|_| point.model_id.as_str()))
+                .collect::<Vec<_>>(),
+            ["1", "2", "3"]
+        );
+        assert_eq!(
+            data.points()
+                .iter()
+                .filter_map(|point| point.text.as_ref().map(|text| text.plain_text()))
+                .collect::<Vec<_>>(),
+            ["F220 list 1", "F220 list 2", "F220 list 3"]
+        );
+        let connections = data
+            .connections()
+            .iter()
+            .map(|connection| {
+                (
+                    connection.model_id.as_str(),
+                    connection.source_id.as_str(),
+                    connection.destination_id.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let rpptx::DiagramPart::Parsed(layout) = &smartart[0].layout else {
+            panic!("representative SmartArt layout must parse")
+        };
+        let rpptx::DiagramPart::Parsed(style) = &smartart[0].style else {
+            panic!("representative SmartArt style must parse")
+        };
+        let rpptx::DiagramPart::Parsed(colors) = &smartart[0].colors else {
+            panic!("representative SmartArt colours must parse")
+        };
+        assert!(smartart[0].drawing.is_none());
+        let (expected_connections, expected_layout_id, expected_style_id, expected_colors_id) =
+            match smartart_expectation {
+                M21SmartArtExpectation::MinimalFallback => (
+                    vec![
+                        ("201", "0", "1"),
+                        ("202", "1", "101"),
+                        ("203", "2", "102"),
+                        ("204", "3", "103"),
+                        ("205", "1", "2"),
+                        ("206", "1", "3"),
+                    ],
+                    "urn:f220:list",
+                    "urn:f220:style",
+                    "urn:f220:colors",
+                ),
+                M21SmartArtExpectation::Authentic => (
+                    vec![("4", "0", "1"), ("5", "0", "2"), ("6", "0", "3")],
+                    "urn:microsoft.com/office/officeart/2005/8/layout/list1",
+                    "urn:microsoft.com/office/officeart/2005/8/quickstyle/simple1",
+                    "urn:microsoft.com/office/officeart/2005/8/colors/accent1_1",
+                ),
+            };
+        assert_eq!(connections, expected_connections);
+        assert_eq!(layout.unique_id.as_deref(), Some(expected_layout_id));
+        match smartart_expectation {
+            M21SmartArtExpectation::MinimalFallback => assert_eq!(
+                layout.family,
+                rpptx_oxml::diagram::DiagramLayoutFamily::Unsupported(
+                    expected_layout_id.to_owned()
+                )
+            ),
+            M21SmartArtExpectation::Authentic => assert_eq!(
+                layout.family,
+                rpptx_oxml::diagram::DiagramLayoutFamily::List
+            ),
+        }
+        assert_eq!(style.unique_id.as_deref(), Some(expected_style_id));
+        assert_eq!(colors.unique_id.as_deref(), Some(expected_colors_id));
+
+        let package = open_opc(package_bytes, "M21 representative semantic contract");
+        assert_eq!(package.get_part(part_name).unwrap(), M21_AUDIO_WAV);
+        assert_eq!(
+            package.content_types.content_type_for(part_name),
+            Some("audio/wav")
+        );
+        let presentation_part = package.main_document_part().unwrap();
+        let presentation_model =
+            CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+        let slide_relationship = package
+            .get_part_rels(&presentation_part)
+            .unwrap()
+            .get_by_id(&presentation_model.slide_ids[0].relationship_id)
+            .unwrap();
+        let slide_part =
+            OpcPackage::resolve_rel_target(&presentation_part, &slide_relationship.target);
+        let slide_relationships = package.get_part_rels(&slide_part).unwrap();
+        let poster_relationship = slide_relationships
+            .get_by_id(media[0].poster_relationship_id.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(poster_relationship.rel_type, rel_types::IMAGE);
+        assert_eq!(poster_relationship.target_mode, None);
+        let poster_part = OpcPackage::resolve_rel_target(&slide_part, &poster_relationship.target);
+        assert_eq!(
+            package.get_part(&poster_part).unwrap(),
+            valid_one_pixel_png()
+        );
+        assert_eq!(
+            package.content_types.content_type_for(&poster_part),
+            Some("image/png")
+        );
+        let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+        let animated_shape_id = slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find(|child| {
+                child.non_visual_name().as_deref() == Some("M21 representative animated text")
+            })
+            .and_then(ShapeTreeChild::non_visual_id)
+            .unwrap();
+        let timing = slide.timing.as_ref().expect("representative typed timing");
+        assert_eq!(timing.nodes().len(), 1);
+        let rpptx_oxml::timing::TimingNode::Effect(effect) = &timing.nodes()[0] else {
+            panic!("representative timing must be one fade effect")
+        };
+        assert_eq!(effect.common.id, 100);
+        assert_eq!(
+            effect.common.duration,
+            rpptx_oxml::timing::TimingDuration::Finite(1_000)
+        );
+        assert_eq!(
+            effect.target,
+            rpptx_oxml::timing::TimingTarget::Shape(animated_shape_id)
+        );
+        assert_eq!(effect.transition.as_deref(), Some("in"));
+        assert_eq!(effect.filter.as_deref(), Some("fade"));
+
+        let (input, layout_result) = presentation.render_deterministic().unwrap();
+        let visible_tokens = m21_normalized_tokens(&m21_visible_page_text(&layout_result.pages[2]));
+        match smartart_expectation {
+            M21SmartArtExpectation::MinimalFallback => {
+                assert_eq!(visible_tokens, ["Unsupported", "SmartArt"]);
+                assert!(
+                    input.slides[2]
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.message.contains("unsupported SmartArt"))
+                );
+            }
+            M21SmartArtExpectation::Authentic => {
+                assert_eq!(visible_tokens, M21_RUST_STATIC_TOKENS[2]);
+                assert!(
+                    input.slides[2]
+                        .diagnostics
+                        .iter()
+                        .all(|diagnostic| !diagnostic.message.contains("unsupported SmartArt"))
+                );
+            }
+        }
+    };
+
+    assert_loaded(&opened, bytes);
+    assert_loaded(&reopened, &saved);
+    reopened
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+#[test]
+fn m21_minimal_smartart_source_classifies_the_unsupported_fallback() {
+    let bytes = m21_minimal_smartart_fallback_deck_bytes();
+    assert_eq!(sha256_bytes(&bytes), M21_UNSIGNED_SOURCE_SHA256);
+    let presentation = Presentation::from_bytes(&bytes).unwrap();
+    let (_, layout) = presentation.render_deterministic().unwrap();
+    assert_eq!(
+        m21_normalized_tokens(&m21_visible_page_text(&layout.pages[2])),
+        ["Unsupported", "SmartArt"]
+    );
+    assert_eq!(
+        m21_full_page_ink_bounds(&oxml_pdf::render_page_to_png(&layout, 2, 150.0).unwrap()).len(),
+        1
+    );
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+#[test]
+#[ignore = "macOS reference-only generator requiring pinned external SmartArt resources"]
+fn m21_write_corrected_representative_source_candidates() {
+    let output_dir = PathBuf::from(
+        std::env::var_os("RPPTX_M21_CORRECTED_SOURCE_OUTPUT_DIR")
+            .expect("set RPPTX_M21_CORRECTED_SOURCE_OUTPUT_DIR to an output-only directory"),
+    );
+    fs::create_dir_all(&output_dir).unwrap();
+    let unsigned = m21_representative_unsigned_deck_bytes(true);
+    let signed = m21_sign_deck(&unsigned);
+    let unsigned_path = output_dir.join("m21-representative-corrected-unsigned.pptm");
+    let signed_path = output_dir.join("m21-representative-corrected-signed.pptm");
+    fs::write(&unsigned_path, &unsigned).unwrap();
+    fs::write(&signed_path, &signed).unwrap();
+
+    let reopened = Presentation::from_bytes(&signed).unwrap();
+    assert!(reopened.validate().is_empty());
+    let signatures = reopened.verify_signatures().unwrap();
+    assert_eq!(signatures.len(), 1);
+    assert!(signatures[0].cryptographically_valid);
+    assert!(signatures[0].coverage_complete);
+    let smartart = reopened.smart_art(2).unwrap();
+    assert_eq!(smartart.len(), 1);
+    assert_eq!(smartart[0].relationships.data, "smart-data");
+    assert_eq!(smartart[0].relationships.layout, "smart-layout");
+    assert_eq!(smartart[0].relationships.style, "smart-style");
+    assert_eq!(smartart[0].relationships.colors, "smart-colors");
+    assert!(smartart[0].relationships.drawing.is_none());
+    assert!(matches!(smartart[0].data, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(smartart[0].layout, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(smartart[0].style, rpptx::DiagramPart::Parsed(_)));
+    assert!(matches!(smartart[0].colors, rpptx::DiagramPart::Parsed(_)));
+    let (_, layout) = reopened.render_deterministic().unwrap();
+    assert_eq!(
+        m21_normalized_tokens(&m21_visible_page_text(&layout.pages[2])),
+        M21_RUST_STATIC_TOKENS[2]
+    );
+    assert!(
+        !m21_full_page_ink_bounds(&oxml_pdf::render_page_to_png(&layout, 2, 150.0).unwrap())
+            .is_empty()
+    );
+    eprintln!(
+        "M21 corrected source candidates: unsigned={} sha256={} signed={} sha256={}",
+        unsigned_path.display(),
+        sha256(&unsigned_path),
+        signed_path.display(),
+        sha256(&signed_path),
+    );
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+#[test]
+fn m21_portable_representative_package_round_trips_and_outputs_are_sensitive() {
+    let unsigned = m21_minimal_smartart_fallback_deck_bytes();
+    let bytes = m21_sign_deck(&unsigned);
+    m21_assert_signature_surrogate(&unsigned, &bytes);
+    let reopened =
+        m21_assert_representative_semantics(&bytes, M21SmartArtExpectation::MinimalFallback);
+
+    let (_, static_layout) = reopened.render_deterministic().unwrap();
+    assert_eq!(static_layout.pages.len(), 3);
+    let static_tokens = static_layout
+        .pages
+        .iter()
+        .map(|page| m21_normalized_tokens(&m21_visible_page_text(page)))
+        .collect::<Vec<_>>();
+    let portable_static_tokens: [&[&str]; 3] = [
+        M21_RUST_STATIC_TOKENS[0],
+        M21_RUST_STATIC_TOKENS[1],
+        &["Unsupported", "SmartArt"],
+    ];
+    assert_eq!(static_tokens, portable_static_tokens);
+    for (page, expected) in static_layout.pages.iter().zip(portable_static_tokens) {
+        m21_assert_text_mutations_fail(&m21_visible_page_text(page), expected);
+    }
+    assert_eq!(static_tokens[2], ["Unsupported", "SmartArt"]);
+    let static_png = oxml_pdf::render_page_to_png(&static_layout, 0, 150.0).unwrap();
+    let smartart_png = oxml_pdf::render_page_to_png(&static_layout, 2, 150.0).unwrap();
+    assert!(!m21_full_page_ink_bounds(&smartart_png).is_empty());
+    for (page_index, source_text, replacement) in [
+        (0, "M21 slide one", "M21 slide one extra"),
+        (1, "M21 slide two", "M21 slide two two"),
+    ] {
+        let mut page_mutated = Presentation::from_bytes(&bytes).unwrap();
+        let shape_index = page_mutated
+            .slide(page_index)
+            .unwrap()
+            .shapes()
+            .position(|shape| shape.text().as_deref() == Some(source_text))
+            .unwrap();
+        page_mutated
+            .slide_mut(page_index)
+            .unwrap()
+            .shape_mut(shape_index)
+            .unwrap()
+            .set_text(replacement)
+            .unwrap();
+        let (_, page_mutated_layout) = page_mutated.render_deterministic().unwrap();
+        assert_ne!(
+            m21_normalized_tokens(&m21_visible_page_text(
+                &page_mutated_layout.pages[page_index]
+            )),
+            portable_static_tokens[page_index]
+        );
+        assert_ne!(
+            oxml_pdf::render_page_to_png(&page_mutated_layout, page_index, 150.0).unwrap(),
+            oxml_pdf::render_page_to_png(&static_layout, page_index, 150.0).unwrap()
+        );
+    }
+    let mut smartart_mutated = Presentation::from_bytes(&bytes).unwrap();
+    smartart_mutated
+        .slide_mut(2)
+        .unwrap()
+        .add_textbox(Emu(914_400), Emu(4_114_800), Emu(3_657_600), Emu(685_800))
+        .unwrap()
+        .set_text("F220 list extra")
+        .unwrap();
+    let (_, smartart_mutated_layout) = smartart_mutated.render_deterministic().unwrap();
+    assert_ne!(
+        m21_normalized_tokens(&m21_visible_page_text(&smartart_mutated_layout.pages[2])),
+        portable_static_tokens[2]
+    );
+    assert_ne!(
+        oxml_pdf::render_page_to_png(&smartart_mutated_layout, 2, 150.0).unwrap(),
+        smartart_png
+    );
+    let animation = reopened
+        .export_animation_deterministic(
+            &[rpptx::AnimationSegment {
+                slide_index: 0,
+                duration_ms: 1_000,
+                click_count: 0,
+                transition: rpptx::AnimationTransition::None,
+            }],
+            rpptx::AnimationExportOptions {
+                frame_rate: 2,
+                width_px: 320,
+                height_px: 180,
+                format: rpptx::AnimationFormat::Gif {
+                    loop_behavior: rpptx::GifLoopBehavior::Once,
+                },
+                media_fallback: MediaFallbackPolicy::PosterFrame,
+            },
+        )
+        .unwrap();
+    assert!(animation.bytes.starts_with(b"GIF89a"));
+    let mut timeline_ink = Vec::new();
+    for elapsed_ms in [0, 495, 1_000] {
+        let frame = reopened
+            .render_timeline_deterministic(
+                0,
+                TimelinePosition {
+                    elapsed_ms,
+                    click_count: 0,
+                },
+                None,
+            )
+            .unwrap();
+        let expected_text = if elapsed_ms == 0 {
+            &["M21", "slide", "one"][..]
+        } else {
+            &["M21", "slide", "one", "M21", "representative"][..]
+        };
+        m21_assert_text_mutations_fail(&m21_visible_page_text(&frame.page), expected_text);
+        let layout = m21_timeline_layout(&frame, &static_layout.fonts);
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 150.0).unwrap();
+        timeline_ink.push((
+            m21_ink_mass(&png, (150, 140, 350, 100)),
+            m21_ink_mass(&png, (150, 650, 600, 100)),
+        ));
+    }
+    assert!(timeline_ink.iter().all(|(stable, _)| *stable > 100_000));
+    assert_eq!(timeline_ink[0].0, timeline_ink[1].0);
+    assert_eq!(timeline_ink[1].0, timeline_ink[2].0);
+    assert_eq!(timeline_ink[0].1, 0);
+    assert!(timeline_ink[1].1 > 0);
+    assert!(timeline_ink[2].1 > timeline_ink[1].1);
+    let notes_pdf = reopened.to_notes_pdf_deterministic().unwrap();
+    let notes_pngs = reopened.notes_page_pngs_deterministic(72.0).unwrap();
+    assert_eq!(f226_pdf_page_count(&notes_pdf, "m21-notes"), 3);
+    assert_eq!(notes_pngs.len(), 3);
+    let handout_pdf = reopened
+        .to_handout_pdf_deterministic(HandoutLayout::Three)
+        .unwrap();
+    let handout_pngs = reopened
+        .handout_page_pngs_deterministic(HandoutLayout::Three, 72.0)
+        .unwrap();
+    assert_eq!(f226_pdf_page_count(&handout_pdf, "m21-handout"), 1);
+    assert_eq!(handout_pngs.len(), 1);
+    assert_eq!(m21_handout_thumbnail_bounds(&handout_pngs[0]).len(), 3);
+    let mut mutated = Presentation::from_bytes(&bytes).unwrap();
+    let animated_shape_index = mutated
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .position(|shape| shape.text().as_deref() == Some("M21 representative"))
+        .unwrap();
+    mutated
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(animated_shape_index)
+        .unwrap()
+        .set_text("M21 sensitivity mutation")
+        .unwrap();
+    let (_, mutated_layout) = mutated.render_deterministic().unwrap();
+    assert_ne!(
+        oxml_pdf::render_page_to_png(&mutated_layout, 0, 150.0).unwrap(),
+        static_png
+    );
+    assert_ne!(
+        mutated
+            .export_animation_deterministic(
+                &[rpptx::AnimationSegment {
+                    slide_index: 0,
+                    duration_ms: 1_000,
+                    click_count: 0,
+                    transition: rpptx::AnimationTransition::None,
+                }],
+                rpptx::AnimationExportOptions {
+                    frame_rate: 2,
+                    width_px: 320,
+                    height_px: 180,
+                    format: rpptx::AnimationFormat::Gif {
+                        loop_behavior: rpptx::GifLoopBehavior::Once,
+                    },
+                    media_fallback: MediaFallbackPolicy::PosterFrame,
+                },
+            )
+            .unwrap()
+            .bytes,
+        animation.bytes
+    );
+    assert_ne!(mutated.to_notes_pdf_deterministic().unwrap(), notes_pdf);
+    assert_ne!(
+        mutated
+            .to_handout_pdf_deterministic(HandoutLayout::Three)
+            .unwrap(),
+        handout_pdf
+    );
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+#[derive(Clone, Copy)]
+struct M21RecordedArtifact {
+    file_name: &'static str,
+    sha256: &'static str,
+    source_sha256: &'static str,
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+struct M21RecordedMovieSample {
+    movie_time: i64,
+    rust_time_ms: u64,
+    observed_visible_text: &'static [&'static str],
+    observed_ink_band_count: usize,
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_UNSIGNED_SOURCE_SHA256: &str =
+    "00c98ad616bd4cc851065dca65c7252d964c1b66eedbf620027ace6341fbabde";
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_LEGACY_STATIC_PDF_SHA256: &str =
+    "42800576d3e9fc3c265ad57fb863d0aef7a5a670c81ee342b96b43f3b2a179de";
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+struct M21CorrectedPowerPointManifest {
+    version: &'static str,
+    bundle_build: &'static str,
+    app_build: &'static str,
+    signed: bool,
+    signed_open_no_repair: bool,
+    observed_active_name: &'static str,
+    observed_source_sha256: &'static str,
+    signed_source: M21RecordedArtifact,
+    static_pdf: M21RecordedArtifact,
+    movie: M21RecordedArtifact,
+    notes_pdf: M21RecordedArtifact,
+    handout_pdf: M21RecordedArtifact,
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_CORRECTED_POWERPOINT_MANIFEST: M21CorrectedPowerPointManifest =
+    M21CorrectedPowerPointManifest {
+        version: "16.104",
+        bundle_build: "16.104.25121423",
+        app_build: "1214",
+        signed: true,
+        signed_open_no_repair: true,
+        observed_active_name: "m21-corrected-signed.pptm",
+        observed_source_sha256: "74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9",
+        signed_source: M21RecordedArtifact {
+            file_name: "m21-corrected-signed.pptm",
+            sha256: "74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9",
+            source_sha256: "74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9",
+        },
+        static_pdf: M21RecordedArtifact {
+            file_name: "m21-corrected-static.pdf",
+            sha256: "aebe97df20d029a611afa935fad0e96653e0b515396ce7ec1f5e2c665d92f8de",
+            source_sha256: "74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9",
+        },
+        movie: M21RecordedArtifact {
+            file_name: "m21-corrected-signed.mp4",
+            sha256: "4643c6cb25222b343067364a8983673c79962e32378809206b7f9e6f5306e5e9",
+            source_sha256: "74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9",
+        },
+        notes_pdf: M21RecordedArtifact {
+            file_name: "m21-corrected-notes.pdf",
+            sha256: "d940316865a28e626c2cc7756d9bef4f132c516d03cba63387e1f6f0ca0dba2a",
+            source_sha256: "74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9",
+        },
+        handout_pdf: M21RecordedArtifact {
+            file_name: "m21-corrected-handout.pdf",
+            sha256: "77345fd00914bb2b233bf548530bd2f6de05c25b53a08cd7392bf38be696d05f",
+            source_sha256: "74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9",
+        },
+    };
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_POWERPOINT_MOVIE_SAMPLES: [M21RecordedMovieSample; 3] = [
+    M21RecordedMovieSample {
+        movie_time: 0,
+        rust_time_ms: 0,
+        observed_visible_text: &["M21", "slide", "one"],
+        observed_ink_band_count: 1,
+    },
+    M21RecordedMovieSample {
+        movie_time: 297,
+        rust_time_ms: 495,
+        observed_visible_text: &["M21", "slide", "one", "M21", "representative"],
+        observed_ink_band_count: 2,
+    },
+    M21RecordedMovieSample {
+        movie_time: 594,
+        rust_time_ms: 990,
+        observed_visible_text: &["M21", "slide", "one", "M21", "representative"],
+        observed_ink_band_count: 2,
+    },
+];
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_POWERPOINT_STATIC_TOKENS: [&[&str]; 3] = [
+    &["M21", "slide", "one", "M21", "representative"],
+    &["M21", "slide", "two"],
+    &[
+        "F220", "list", "1", "F220", "list", "2", "F220", "list", "3",
+    ],
+];
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_RUST_STATIC_TOKENS: [&[&str]; 3] = [
+    &["M21", "slide", "one", "M21", "representative"],
+    &["M21", "slide", "two"],
+    &[
+        "F220", "list", "1", "F220", "list", "2", "F220", "list", "3",
+    ],
+];
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_POWERPOINT_NOTES_TOKENS: [&[&str]; 3] = [
+    &["M21", "speaker", "note", "1"],
+    &["M21", "speaker", "note", "2"],
+    &[
+        "F220", "list", "1", "F220", "list", "2", "F220", "list", "3",
+    ],
+];
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_POWERPOINT_HANDOUT_TOKENS: &[&str] = &[
+    "9/2/26",
+    "M21",
+    "slide",
+    "one",
+    "M21",
+    "representative",
+    "1",
+    "M21",
+    "slide",
+    "two",
+    "2",
+    "F220",
+    "list",
+    "1",
+    "F220",
+    "list",
+    "2",
+    "F220",
+    "list",
+    "3",
+    "3",
+    "1",
+];
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_RUST_NOTES_TOKENS: [&[&str]; 3] = [
+    &[
+        "representative",
+        "one",
+        "slide",
+        "M21",
+        "2030-01-02",
+        "M21",
+        "F-226",
+        "header",
+        "M21",
+        "speaker",
+        "note",
+        "1",
+        "F-226",
+        "footer",
+        "1",
+    ],
+    &[
+        "two",
+        "slide",
+        "2030-01-02",
+        "M21",
+        "F-226",
+        "header",
+        "M21",
+        "speaker",
+        "note",
+        "2",
+        "F-226",
+        "footer",
+        "2",
+    ],
+    &[
+        "F-226",
+        "footer",
+        "3",
+        "list",
+        "1",
+        "2",
+        "list",
+        "F220",
+        "F220",
+        "list",
+        "2030-01-02",
+        "F220",
+        "F-226",
+        "header",
+        "3",
+    ],
+];
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+const M21_RUST_HANDOUT_TOKENS: &[&str] = &[
+    "1",
+    "footer",
+    "handout",
+    "226",
+    "-",
+    "F",
+    "2",
+    "list",
+    "3",
+    "list",
+    "F220",
+    "F220",
+    "1",
+    "list",
+    "F220",
+    "two",
+    "representative",
+    "M21",
+    "slide",
+    "M21",
+    "1",
+    "2",
+    "3",
+    "one",
+    "slide",
+    "M21",
+    "02",
+    "-",
+    "01",
+    "-",
+    "2030",
+    "header",
+    "handout",
+    "226",
+    "-",
+    "F",
+];
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+fn m21_assert_signature_surrogate(unsigned_bytes: &[u8], signed_bytes: &[u8]) {
+    let unsigned = open_opc(unsigned_bytes, "M21 unsigned signature surrogate");
+    let signed = open_opc(signed_bytes, "M21 signed signature surrogate");
+    let signature_parts = ["/_xmlsignatures/origin.sigs", "/_xmlsignatures/sig1.xml"];
+    let mut signed_only_parts = signed
+        .parts
+        .keys()
+        .filter(|name| !unsigned.parts.contains_key(*name))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    signed_only_parts.sort_unstable();
+    assert_eq!(signed_only_parts, signature_parts);
+    assert_eq!(signed.parts[signature_parts[0]], []);
+    assert!(!signed.parts[signature_parts[1]].is_empty());
+    assert_eq!(
+        unsigned.parts.len() + signature_parts.len(),
+        signed.parts.len()
+    );
+    for (name, data) in &unsigned.parts {
+        assert_eq!(
+            signed.parts.get(name),
+            Some(data),
+            "non-signature part changed: {name}"
+        );
+    }
+
+    assert_eq!(
+        unsigned.content_types.defaults,
+        signed.content_types.defaults
+    );
+    let mut signed_overrides = signed.content_types.overrides.clone();
+    assert_eq!(
+        signed_overrides.remove(signature_parts[0]),
+        Some("application/vnd.openxmlformats-package.digital-signature-origin".to_owned())
+    );
+    assert_eq!(
+        signed_overrides.remove(signature_parts[1]),
+        Some(
+            "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml".to_owned()
+        )
+    );
+    assert_eq!(signed_overrides, unsigned.content_types.overrides);
+
+    let non_signature_package_rels = signed
+        .package_rels
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type != rel_types::DIGITAL_SIGNATURE_ORIGIN)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(non_signature_package_rels, unsigned.package_rels.items);
+    let signature_origin = signed
+        .package_rels
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == rel_types::DIGITAL_SIGNATURE_ORIGIN)
+        .collect::<Vec<_>>();
+    assert_eq!(signature_origin.len(), 1);
+    assert_eq!(signature_origin[0].id, "rId5");
+    assert_eq!(signature_origin[0].target, "_xmlsignatures/origin.sigs");
+    assert_eq!(signature_origin[0].target_mode, None);
+
+    let mut signed_only_rel_owners = signed
+        .part_rels
+        .keys()
+        .filter(|owner| !unsigned.part_rels.contains_key(*owner))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    signed_only_rel_owners.sort_unstable();
+    assert_eq!(signed_only_rel_owners, ["/_xmlsignatures/origin.sigs"]);
+    for (owner, relationships) in &unsigned.part_rels {
+        assert_eq!(
+            signed.part_rels.get(owner).map(|signed| &signed.items),
+            Some(&relationships.items),
+            "non-signature relationships changed: {owner}"
+        );
+    }
+    let signature_rels = &signed.part_rels["/_xmlsignatures/origin.sigs"].items;
+    assert_eq!(signature_rels.len(), 1);
+    assert_eq!(signature_rels[0].id, "rId0");
+    assert_eq!(signature_rels[0].rel_type, rel_types::DIGITAL_SIGNATURE);
+    assert_eq!(signature_rels[0].target, "sig1.xml");
+    assert_eq!(signature_rels[0].target_mode, None);
+
+    for required_part in [
+        "/ppt/presentation.xml",
+        "/ppt/media/media1.wav",
+        "/ppt/theme/theme1.xml",
+        "/ppt/theme/theme2.xml",
+        "/ppt/diagrams/data1.xml",
+        "/ppt/diagrams/layout1.xml",
+        "/ppt/diagrams/quickStyle1.xml",
+        "/ppt/diagrams/colors1.xml",
+        "/ppt/slides/slide1.xml",
+        "/ppt/notesMasters/notesMaster1.xml",
+        "/ppt/notesSlides/notesSlide1.xml",
+        "/ppt/handoutMasters/handoutMaster1.xml",
+    ] {
+        assert_eq!(signed.parts[required_part], unsigned.parts[required_part]);
+    }
+    assert!(String::from_utf8_lossy(&signed.parts["/ppt/slides/slide1.xml"]).contains("<p:timing"));
+    for relationship_owner in [
+        "/ppt/presentation.xml",
+        "/ppt/slides/slide1.xml",
+        "/ppt/notesMasters/notesMaster1.xml",
+        "/ppt/notesSlides/notesSlide1.xml",
+        "/ppt/handoutMasters/handoutMaster1.xml",
+    ] {
+        assert_eq!(
+            signed.part_rels[relationship_owner].items,
+            unsigned.part_rels[relationship_owner].items
+        );
+    }
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+#[test]
+#[ignore = "requires RPPTX_M21_CORRECTED_POWERPOINT_ORACLE_DIR"]
+fn m21_corrected_signed_outputs_match_powerpoint() {
+    let manifest = &M21_CORRECTED_POWERPOINT_MANIFEST;
+    assert_eq!(manifest.version, POWERPOINT_VERSION);
+    assert_eq!(manifest.bundle_build, POWERPOINT_BUILD);
+    assert_eq!(manifest.app_build, POWERPOINT_APP_BUILD);
+    assert!(manifest.signed);
+    assert!(manifest.signed_open_no_repair);
+    assert_eq!(
+        manifest.observed_active_name,
+        manifest.signed_source.file_name
+    );
+    assert_eq!(
+        manifest.observed_source_sha256,
+        manifest.signed_source.sha256
+    );
+    assert_eq!(
+        manifest.static_pdf.source_sha256,
+        manifest.signed_source.sha256
+    );
+    assert_eq!(manifest.movie.source_sha256, manifest.signed_source.sha256);
+    assert_eq!(
+        manifest.notes_pdf.source_sha256,
+        manifest.signed_source.sha256
+    );
+    assert_eq!(
+        manifest.handout_pdf.source_sha256,
+        manifest.signed_source.sha256
+    );
+    let oracle_dir = PathBuf::from(
+        std::env::var_os("RPPTX_M21_CORRECTED_POWERPOINT_ORACLE_DIR")
+            .expect("set RPPTX_M21_CORRECTED_POWERPOINT_ORACLE_DIR"),
+    );
+    let source = oracle_dir.join(manifest.signed_source.file_name);
+    let static_pdf = oracle_dir.join(manifest.static_pdf.file_name);
+    let movie = oracle_dir.join(manifest.movie.file_name);
+    let notes_pdf = oracle_dir.join(manifest.notes_pdf.file_name);
+    let handout_pdf = oracle_dir.join(manifest.handout_pdf.file_name);
+    for path in [&source, &static_pdf, &movie, &notes_pdf, &handout_pdf] {
+        assert!(
+            path.is_file(),
+            "missing corrected oracle {}",
+            path.display()
+        );
+    }
+    assert_eq!(sha256(&source), manifest.signed_source.sha256);
+    assert_eq!(sha256(&static_pdf), manifest.static_pdf.sha256);
+    assert_eq!(sha256(&movie), manifest.movie.sha256);
+    assert_eq!(sha256(&notes_pdf), manifest.notes_pdf.sha256);
+    assert_eq!(sha256(&handout_pdf), manifest.handout_pdf.sha256);
+
+    let source_bytes = fs::read(&source).unwrap();
+    let presentation =
+        m21_assert_representative_semantics(&source_bytes, M21SmartArtExpectation::Authentic);
+    let (_, static_layout) = presentation.render_deterministic().unwrap();
+    let powerpoint_static_tokens =
+        m21_pdf_token_pages(&fs::read(&static_pdf).unwrap(), "m21-corrected-static-text");
+    assert_eq!(powerpoint_static_tokens, M21_POWERPOINT_STATIC_TOKENS);
+
+    let root =
+        std::env::temp_dir().join(format!("rpptx-m21-corrected-oracle-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let powerpoint_pages = m21_pdf_page_pngs(&static_pdf, &root.join("m21-corrected-static"), 150)
+        .iter()
+        .map(|page| m21_normalize_movie_frame(page))
+        .collect::<Vec<_>>();
+    assert_eq!(powerpoint_pages.len(), 3);
+    let mut static_scores = Vec::new();
+    for page_index in 0..3 {
+        let rust_page = oxml_pdf::render_page_to_png(&static_layout, page_index, 150.0).unwrap();
+        let rust_page = if page_index == 0 {
+            m21_mask_audio_poster(&rust_page)
+        } else {
+            rust_page
+        };
+        let powerpoint_page = if page_index == 0 {
+            m21_mask_audio_poster(&powerpoint_pages[page_index])
+        } else {
+            powerpoint_pages[page_index].clone()
+        };
+        let rust_text = m21_visible_page_text(&static_layout.pages[page_index]);
+        m21_assert_text_mutations_fail(&rust_text, M21_RUST_STATIC_TOKENS[page_index]);
+        let comparison = m21_compare_full_page_ink(&rust_page, &powerpoint_page);
+        assert!(
+            m21_static_page_gate(true, &rust_page, &powerpoint_page, &comparison),
+            "corrected static page {}: {comparison:?}",
+            page_index + 1
+        );
+        let shifted = m21_shift_ink_up(&rust_page, 7);
+        let shifted_comparison = m21_compare_full_page_ink(&shifted, &powerpoint_page);
+        assert!(!m21_static_page_gate(
+            true,
+            &shifted,
+            &powerpoint_page,
+            &shifted_comparison,
+        ));
+        let solidified = m21_solidify_first_ink_region(&powerpoint_page);
+        let solid_comparison = m21_compare_full_page_ink(&rust_page, &solidified);
+        assert!(!m21_static_page_gate(
+            true,
+            &rust_page,
+            &solidified,
+            &solid_comparison,
+        ));
+        static_scores.push((
+            page_index + 1,
+            smartart_png_ssim(&rust_page, &powerpoint_page),
+            comparison,
+        ));
+    }
+
+    let mut movie_text_mutated = Presentation::from_bytes(&source_bytes).unwrap();
+    let movie_title_index = movie_text_mutated
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .position(|shape| shape.text().as_deref() == Some("M21 slide one"))
+        .unwrap();
+    movie_text_mutated
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(movie_title_index)
+        .unwrap()
+        .set_text("M21 slide one extra")
+        .unwrap();
+    let (_, movie_text_mutated_static) = movie_text_mutated.render_deterministic().unwrap();
+    let mut movie_scores = Vec::new();
+    for sample in &M21_POWERPOINT_MOVIE_SAMPLES {
+        let movie_frame = root.join(format!("m21-corrected-movie-{}.png", sample.movie_time));
+        let extraction =
+            extract_powerpoint_movie_frame(&movie, &movie_frame, sample.movie_time, 600);
+        assert!(
+            extraction.status.success(),
+            "extract corrected movie frame: {}",
+            String::from_utf8_lossy(&extraction.stderr)
+        );
+        let powerpoint_frame =
+            m21_mask_audio_poster(&m21_normalize_movie_frame(&fs::read(&movie_frame).unwrap()));
+        let rust_frame = presentation
+            .render_timeline_deterministic(
+                0,
+                TimelinePosition {
+                    elapsed_ms: sample.rust_time_ms,
+                    click_count: 0,
+                },
+                None,
+            )
+            .unwrap();
+        let rust_movie_text = m21_visible_page_text(&rust_frame.page);
+        m21_assert_text_mutations_fail(&rust_movie_text, sample.observed_visible_text);
+        let rust_layout = m21_timeline_layout(&rust_frame, &static_layout.fonts);
+        let rust_frame_png = m21_mask_audio_poster(
+            &oxml_pdf::render_page_to_png(&rust_layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap(),
+        );
+        let comparison = m21_compare_full_page_ink(&rust_frame_png, &powerpoint_frame);
+        let movie_text_matches = m21_tokens_match(&rust_movie_text, sample.observed_visible_text)
+            && comparison.expected.len() == sample.observed_ink_band_count;
+        assert!(m21_visual_gate(movie_text_matches, &comparison));
+
+        let shifted_powerpoint = m21_shift_ink_up(&powerpoint_frame, 7);
+        let shifted_comparison = m21_compare_full_page_ink(&rust_frame_png, &shifted_powerpoint);
+        assert!(!m21_visual_gate(movie_text_matches, &shifted_comparison));
+        let solid_powerpoint = m21_solidify_first_ink_region(&powerpoint_frame);
+        let solid_comparison = m21_compare_full_page_ink(&rust_frame_png, &solid_powerpoint);
+        assert!(!m21_visual_gate(movie_text_matches, &solid_comparison));
+
+        let mutated_frame = movie_text_mutated
+            .render_timeline_deterministic(
+                0,
+                TimelinePosition {
+                    elapsed_ms: sample.rust_time_ms,
+                    click_count: 0,
+                },
+                None,
+            )
+            .unwrap();
+        let mutated_text = m21_visible_page_text(&mutated_frame.page);
+        let mutated_layout = m21_timeline_layout(&mutated_frame, &movie_text_mutated_static.fonts);
+        let mutated_png = m21_mask_audio_poster(
+            &oxml_pdf::render_page_to_png(&mutated_layout, 0, F214_POWERPOINT_COMPARISON_DPI)
+                .unwrap(),
+        );
+        let mutated_comparison = m21_compare_full_page_ink(&mutated_png, &powerpoint_frame);
+        let mutated_text_matches = m21_tokens_match(&mutated_text, sample.observed_visible_text)
+            && mutated_comparison.expected.len() == sample.observed_ink_band_count;
+        assert!(!mutated_text_matches);
+        assert!(!m21_visual_gate(mutated_text_matches, &mutated_comparison));
+        movie_scores.push((sample.movie_time, comparison));
+    }
+
+    let notes_bytes = fs::read(&notes_pdf).unwrap();
+    let handout_bytes = fs::read(&handout_pdf).unwrap();
+    assert_eq!(f226_pdf_page_count(&notes_bytes, "m21-corrected-notes"), 3);
+    assert_eq!(
+        f226_pdf_page_count(&handout_bytes, "m21-corrected-handout"),
+        1
+    );
+    m21_assert_page_size(m21_pdf_page_size_path(&notes_pdf), (595.276, 841.89));
+    m21_assert_page_size(m21_pdf_page_size_path(&handout_pdf), (595.276, 841.89));
+    let powerpoint_note_text_pages = m21_pdf_text_pages(&notes_bytes, "m21-corrected-notes-text");
+    assert_eq!(powerpoint_note_text_pages.len(), 3);
+    for (page, expected) in powerpoint_note_text_pages
+        .iter()
+        .zip(M21_POWERPOINT_NOTES_TOKENS)
+    {
+        m21_assert_text_mutations_fail(page, expected);
+    }
+    let powerpoint_handout_text_pages =
+        m21_pdf_text_pages(&handout_bytes, "m21-corrected-handout-text");
+    assert_eq!(powerpoint_handout_text_pages.len(), 1);
+    m21_assert_text_mutations_fail(
+        &powerpoint_handout_text_pages[0],
+        M21_POWERPOINT_HANDOUT_TOKENS,
+    );
+
+    let rust_notes = presentation.to_notes_pdf_deterministic().unwrap();
+    let rust_handout = presentation
+        .to_handout_pdf_deterministic(HandoutLayout::Three)
+        .unwrap();
+    let rust_note_tokens = m21_pdf_token_pages(&rust_notes, "m21-corrected-rust-notes");
+    assert_eq!(rust_note_tokens, M21_RUST_NOTES_TOKENS);
+    assert_eq!(
+        m21_pdf_token_pages(&rust_handout, "m21-corrected-rust-handout")[0],
+        M21_RUST_HANDOUT_TOKENS
+    );
+    m21_assert_page_size(
+        m21_pdf_page_size(&rust_notes, "m21-rust-notes-size"),
+        (540.0, 720.0),
+    );
+    m21_assert_page_size(
+        m21_pdf_page_size(&rust_handout, "m21-rust-handout-size"),
+        (540.0, 720.0),
+    );
+    let rust_note_pngs = presentation.notes_page_pngs_deterministic(72.0).unwrap();
+    let rust_handout_pngs = presentation
+        .handout_page_pngs_deterministic(HandoutLayout::Three, 72.0)
+        .unwrap();
+    let powerpoint_note_pngs = m21_pdf_page_pngs(&notes_pdf, &root.join("m21-corrected-notes"), 72);
+    let powerpoint_handout_pngs =
+        m21_pdf_page_pngs(&handout_pdf, &root.join("m21-corrected-handout"), 72);
+    assert_eq!(rust_note_pngs.len(), 3);
+    assert_eq!(powerpoint_note_pngs.len(), 3);
+    assert_eq!(rust_handout_pngs.len(), 1);
+    assert_eq!(powerpoint_handout_pngs.len(), 1);
+    let mut notes_scores = Vec::new();
+    for (page_index, ((rust_component_index, expected_rust_bands), powerpoint_page)) in
+        [(3, 5), (2, 4), (1, 3)]
+            .into_iter()
+            .zip(&powerpoint_note_pngs)
+            .enumerate()
+    {
+        let rust_page = &rust_note_pngs[page_index];
+        let text_matches = rust_note_tokens[page_index] == M21_RUST_NOTES_TOKENS[page_index]
+            && m21_normalized_tokens(&powerpoint_note_text_pages[page_index])
+                == M21_POWERPOINT_NOTES_TOKENS[page_index];
+        let comparison = m21_compare_notes_ink(rust_page, powerpoint_page, rust_component_index);
+        assert!(
+            m21_notes_ink_gate(text_matches, &comparison, expected_rust_bands),
+            "corrected notes page {} semantic-component gate: {comparison:?}",
+            page_index + 1
+        );
+
+        let rust_component = m21_page_ink_bounds(rust_page, true)[rust_component_index];
+        let rust_geometry_mutation = m21_extend_ink_region(rust_page, rust_component, 80);
+        let rust_geometry_comparison = m21_compare_notes_ink(
+            &rust_geometry_mutation,
+            powerpoint_page,
+            rust_component_index,
+        );
+        assert!(!m21_notes_ink_gate(
+            text_matches,
+            &rust_geometry_comparison,
+            expected_rust_bands,
+        ));
+        let powerpoint_component = m21_page_ink_bounds(powerpoint_page, true)[0];
+        let powerpoint_geometry_mutation =
+            m21_extend_ink_region(powerpoint_page, powerpoint_component, 80);
+        let powerpoint_geometry_comparison = m21_compare_notes_ink(
+            rust_page,
+            &powerpoint_geometry_mutation,
+            rust_component_index,
+        );
+        assert!(!m21_notes_ink_gate(
+            text_matches,
+            &powerpoint_geometry_comparison,
+            expected_rust_bands,
+        ));
+
+        let rust_paint_mutation = m21_solidify_ink_region(rust_page, rust_component);
+        let rust_paint_comparison =
+            m21_compare_notes_ink(&rust_paint_mutation, powerpoint_page, rust_component_index);
+        assert!(!m21_notes_ink_gate(
+            text_matches,
+            &rust_paint_comparison,
+            expected_rust_bands,
+        ));
+        let powerpoint_paint_mutation =
+            m21_solidify_ink_region(powerpoint_page, powerpoint_component);
+        let powerpoint_paint_comparison =
+            m21_compare_notes_ink(rust_page, &powerpoint_paint_mutation, rust_component_index);
+        assert!(!m21_notes_ink_gate(
+            text_matches,
+            &powerpoint_paint_comparison,
+            expected_rust_bands,
+        ));
+        notes_scores.push((page_index + 1, comparison));
+    }
+    let rust_thumbnails = m21_handout_thumbnail_bounds(&rust_handout_pngs[0]);
+    let powerpoint_thumbnails = m21_handout_thumbnail_bounds(&powerpoint_handout_pngs[0]);
+    let handout_geometry_error =
+        m21_normalized_geometry_error(&rust_thumbnails, &powerpoint_thumbnails);
+    assert!(
+        handout_geometry_error <= 0.05,
+        "corrected normalized handout geometry differs by {handout_geometry_error}: rust={rust_thumbnails:?} PowerPoint={powerpoint_thumbnails:?}"
+    );
+    let mut handout_geometry_mutation = powerpoint_thumbnails.clone();
+    handout_geometry_mutation[0].top += 0.051;
+    assert!(m21_normalized_geometry_error(&rust_thumbnails, &handout_geometry_mutation) > 0.05);
+    eprintln!(
+        "M21 corrected signed oracle: source_sha256={} static_sha256={} movie_sha256={} notes_sha256={} handout_sha256={} static_scores={static_scores:?} movie_scores={movie_scores:?} notes_scores={notes_scores:?} handout_geometry_error={handout_geometry_error}",
+        sha256(&source),
+        sha256(&static_pdf),
+        sha256(&movie),
+        sha256(&notes_pdf),
+        sha256(&handout_pdf),
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(all(feature = "digital-signatures", feature = "render"))]
+#[test]
+#[ignore = "requires RPPTX_M21_LEGACY_STATIC_PDF"]
+fn m21_recorded_minimal_smartart_oracle_classifies_blank_powerpoint_page() {
+    let unsigned_source_bytes = m21_minimal_smartart_fallback_deck_bytes();
+    assert_eq!(
+        sha256_bytes(&unsigned_source_bytes),
+        M21_UNSIGNED_SOURCE_SHA256
+    );
+    let static_pdf = PathBuf::from(
+        std::env::var_os("RPPTX_M21_LEGACY_STATIC_PDF")
+            .expect("set RPPTX_M21_LEGACY_STATIC_PDF to the recorded minimal-source static PDF"),
+    );
+    assert_eq!(sha256(&static_pdf), M21_LEGACY_STATIC_PDF_SHA256);
+    let presentation = Presentation::from_bytes(&unsigned_source_bytes).unwrap();
+    let (_, legacy_layout) = presentation.render_deterministic().unwrap();
+    assert_eq!(
+        m21_normalized_tokens(&m21_visible_page_text(&legacy_layout.pages[2])),
+        ["Unsupported", "SmartArt"]
+    );
+    let rust_page = oxml_pdf::render_page_to_png(&legacy_layout, 2, 150.0).unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "rpptx-m21-minimal-smartart-classification-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let powerpoint_pages = m21_pdf_page_pngs(&static_pdf, &root.join("m21-legacy-static"), 150);
+    assert_eq!(powerpoint_pages.len(), 3);
+    assert_eq!(m21_full_page_ink_bounds(&powerpoint_pages[2]), []);
+    assert_eq!(m21_full_page_ink_bounds(&rust_page).len(), 1);
+    assert_ne!(rust_page, powerpoint_pages[2]);
+    eprintln!(
+        "M21 legacy minimal SmartArt classification: Rust renders the unsupported fallback and PowerPoint renders a blank third page"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
 #[cfg(feature = "agile-encryption")]
 #[test]
 fn encrypted_presentation_round_trips_with_password_and_preserves_package() {

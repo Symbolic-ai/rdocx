@@ -1894,9 +1894,30 @@ does not add the legacy binary `.ppt` format. Executable VBA, ActiveX controls,
 and arbitrary embedded objects remain inventory and preservation surfaces.
 
 **End-of-milestone gate**: one representative modern deck round-trips its
-comments, sections, SmartArt, media, animation timeline, signatures, and package
-variant without repair. Its static frames, animated export, notes, and handouts
-match the pinned PowerPoint oracle at their declared fidelity boundaries.
+comments, sections, authentic pinned-resource SmartArt, media, animation
+timeline, signatures, and package variant without repair. Its static frames,
+animated export, notes, and handouts
+match the pinned PowerPoint 16.104 oracle at their declared fidelity boundaries.
+An embedded manifest pins the no-repair signed canonical source, its exact
+observed active file name, and its four directly bound outputs. The release
+oracle consumes only the captured bundle from a configured directory. An
+ignored macOS reference-only writer owns access to external authentic SmartArt
+resources. The portable source-built signature proof has byte-identical
+non-signature parts and relationships. One shared assertion applies the full
+package, collaboration, section, media, playback, timing, signature, slide, and
+SmartArt semantic contract to both exact source bytes and their save/reopen
+result. Authentic mode rejects unsupported SmartArt fallback. All three static
+pages and the three aligned movie samples require exact normalized token
+cardinality and order, all non-media ink within 6 pixels at 150 DPI, and at
+least 0.45 SSIM per complete ink region after masking only the page-one
+audio-poster rectangle. The third static page must prove the complete SmartArt
+graph and relationships plus visible three-node SmartArt text and ink. Notes
+and handout page sizes are recorded absolutely. Notes require exact per-page
+tokens and bounded monochrome-band cardinality. Corresponding semantic notes
+components compare by normalized size within 0.06 and ink occupancy within
+0.35. Placement is not equated across different notes masters and page sizes.
+Handout text and thumbnail geometry compare in normalized coordinates within
+0.05 of one page dimension.
 
 ### F-213, Animation and transition timing model (L)
 Typed timing nodes, sequences, parallel groups, triggers, entrance and exit

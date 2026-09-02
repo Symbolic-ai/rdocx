@@ -59,6 +59,23 @@ The integrated sprint review validates those interactions before M21 closes.
   diagnostics.
 - Both import paths reuse the existing PresentationML authoring, package,
   layout, and rendering surfaces without introducing a second rendering engine.
+- A portable source-built representative deck combines comments, sections,
+  minimal SmartArt preservation, exact media bytes, timeline fade, signatures,
+  the macro-enabled package variant, notes, and a three-up handout. A separate
+  captured no-repair signed deck supplies authentic SmartArt release evidence.
+  Recorded PowerPoint 16.104 static, movie, A4 portrait notes, and A4 portrait
+  handout outputs bind directly to that signed source through one configured
+  oracle directory. The exact captured bytes and their saved/reopened form both
+  pass the complete package, collaboration, section, media, playback, timing,
+  signature, slide-order, and authentic SmartArt semantic contract. All three
+  static pages pass exact normalized token
+  cardinality and order, 6-pixel full-page ink, and per-region raster
+  boundaries, with only the page-one audio rectangle masked. Page three proves
+  the complete SmartArt graph and relationships plus visible three-node text
+  and ink. Notes pass exact per-page tokens, exact band cardinality, 0.06
+  normalized semantic-component size, and 0.35 ink-occupancy boundaries without
+  equating placement across different notes masters. Handout output passes
+  exact token and 0.05 normalized thumbnail geometry boundaries.
 - Full verification passes with every deterministic hash explained, every
   package archive below 10 MiB, and the bounded sprint review clean.
 - The reviewed `rpptx-v0.9.0` release publishes and independently verifies the
