@@ -11061,3 +11061,52 @@ Charge every XObject member and every previously unseen indirect-reference hop
 against the shared work budget. Preserve the common normalized layout path
 between modes, and add editable operators only with explicit fail-closed state
 semantics and differential evidence.
+
+### F-X075, Preserve restart pagination across page-spanning paragraphs
+
+**Sprint.** S64
+**Completed.** 2026-09-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The Word layout engine now keeps the completed recorded
+pagination pass when otherwise safe ordinary prose spans page boundaries. A
+split continuation still emits no checkpoint. Restart state is published only
+at later complete block boundaries after note, wrap, and resolved state is
+clean. The obsolete document-wide split veto and its private flag were
+removed.
+
+**Non-obvious choices.** The existing source-safety predicates, exact retained
+context, aggregate cache budget, checkpoint limit, field substitution rules,
+and transactional publication remain authoritative. The performance harness
+authenticates each historical HEAD and hashes the complete measured production
+source plus the exact injected harness. It rejects production, harness,
+same-line suffix, duplicate-pin, and untracked-source mutations before timing.
+
+**Deviations from the design plan.** None. Review expanded the planned exact
+result proof to cover metadata, logical structure, and result-local provenance,
+and strengthened the planned pinned performance evidence with source-content
+authentication.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The deterministic Issue 67 fixture contains 175 four-line
+paragraphs across exactly 16 pages. Ten sourced middle edits retain 174
+paragraph-cache hits, rebuild one paragraph, paginate at most two pages, and
+match a fresh result across pages, fonts, diagnostics, outlines, metadata,
+structure, and provenance. Late edit, insert, delete, undo, note-bearing split,
+displayed page-number footer, unsafe-state, aggregate-bound, and 1,000-page
+gates remain green. The authenticated 48-run release comparison measured
+current-to-v0.11.1 ratios from 0.341 to 0.389 and
+current-to-`0582da0` ratios from 0.175 to 0.203 across the 175 and 700 paragraph
+native and bundled-fallback paths. Full integrated non-fast verification and
+all routed riders passed. Microscope pass 4 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep restart checkpoints at complete block
+boundaries. A split page is not itself unsafe, but any state absent from the
+checkpoint identity remains a reason to fall back. Performance evidence must
+authenticate measured source content rather than trusting a checkout label.

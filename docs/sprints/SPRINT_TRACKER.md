@@ -370,6 +370,7 @@ defended.
 | F-226 | S63 | M | 2 | 1 | 2026-09-01 | Exported relationship-resolved notes pages and all six audience handout layouts through deterministic PDF and PNG paths |
 | F-224 | S64 | L | 4 | 1 | 2026-09-02 | Imported bounded HTML and CSS into editable slide shapes, text, tables, images, and links with pinned Chrome parity |
 | F-225 | S64 | L | 4 | 1 | 2026-09-02 | Imported PDF pages as preserved graphics or editable text, paths, images, and links with pinned Poppler parity |
+| F-X075 | S64 | M | 2 | 1 | 2026-09-02 | Preserved complete-boundary restart pagination across page-spanning prose with exact sourced reuse and authenticated performance evidence |
 
 ## Velocity
 
