@@ -1,6 +1,6 @@
 # F-X075, Preserve restart pagination across page-spanning paragraphs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S64
 **Size**: M
 **Depends on**: F-X073
@@ -71,7 +71,7 @@ not as a normal unit-test wall-clock assertion.
 | Category | Test | Asserts |
 |---|---|---|
 | regression | `page_spanning_prose_publishes_complete_boundary_restart_records` | A deterministic 175-paragraph, four-line source fixture spans 16 pages, runs one recorded pass, retains restart state, and has no checkpoint inside a paragraph. |
-| regression | `page_spanning_prose_restarts_warm_edits_exactly` | Ten middle edits retain 174 paragraph-cache hits and one build, bound the repaginated page range, and equal fresh deterministic results exactly. |
+| regression | `page_spanning_prose_restarts_warm_edits_exactly` | Ten sourced middle edits retain 174 paragraph-cache hits and one build, bound the repaginated page range, and equal every fresh deterministic layout, metadata, structure, and provenance field exactly. |
 | regression | complete-boundary split siblings | A split paragraph followed by ordinary blocks records its first eligible checkpoint only after the paragraph completes. |
 | regression | edit operation matrix | Late edit, insert, delete, and undo remain warm-to-fresh exact for page-spanning prose. |
 | regression | notes and displayed page numbers | A note-bearing split and a displayed page-number footer preserve exact warm output and clean checkpoint rules. |
@@ -82,8 +82,9 @@ not as a normal unit-test wall-clock assertion.
 The **test gate is regression**. A deterministic 175-paragraph source-built
 document whose four-line paragraphs span 16 pages completes one recorded pass,
 retains a restart record, and records no checkpoint inside a paragraph. Ten
-warm middle edits produce 174 paragraph-cache hits and one rebuild, paginate
-only a bounded affected page range, and equal fresh layout exactly. Late edit,
+warm sourced middle edits produce 174 paragraph-cache hits and one rebuild,
+paginate only a bounded affected page range, and equal every fresh layout,
+metadata, structure, and provenance field exactly. Late edit,
 insert, delete, undo, note-bearing split, and displayed page-number footer
 cases remain exact. Existing unsafe inputs still reject restart publication.
 An interleaved release-mode comparison for the 175 and 700 paragraph native
@@ -103,8 +104,10 @@ faster than the pinned `0582da0` regression boundary.
   fixture and require complete warm-to-fresh equality plus bounded page work.
 - **External oracle comparison**. Pin v0.11.1 and `0582da0`, use identical
   source-built fixtures and alternating release-mode rounds, report medians and
-  classify variance. Keep timing evidence outside the published crate and out
-  of the normal unit-test pass threshold.
+  classify variance. Authenticate the complete measured crate graph,
+  surrounding test source, and exact injected harness by content before every
+  measurement. Keep timing evidence outside the published crate and out of the
+  normal unit-test pass threshold.
 - **WASM verification rider**. No binding code changes, but `rdocx-wasm`
   consumes the changed engine. Run default and bundled-fallback wasm32 checks
   at the integrated gate.
@@ -117,15 +120,15 @@ blocks integration.
 
 ## Implementation checklist
 
-- [ ] Add the exact source-built 175-paragraph Issue 67 regression and observe the current double-pass failure.
-- [ ] Remove the blanket split fallback and any private state made dead by that removal.
-- [ ] Prove complete-block checkpoint placement and the absence of mid-paragraph checkpoints.
-- [ ] Prove ten middle edits, late edit, insert, delete, and undo against fresh deterministic layouts.
-- [ ] Prove note-bearing split and displayed page-number footer behavior.
-- [ ] Preserve every existing unsafe-state exclusion and aggregate bound.
-- [ ] Run the interleaved pinned release-performance comparison.
-- [ ] Run focused crates, both Word WASM checks, full verification, and the 49-entry hash harness.
-- [ ] Update exactly the three listed HLD files.
+- [x] Add the exact source-built 175-paragraph Issue 67 regression and observe the current double-pass failure.
+- [x] Remove the blanket split fallback and any private state made dead by that removal.
+- [x] Prove complete-block checkpoint placement and the absence of mid-paragraph checkpoints.
+- [x] Prove ten middle edits, late edit, insert, delete, and undo against fresh deterministic layouts.
+- [x] Prove note-bearing split and displayed page-number footer behavior.
+- [x] Preserve every existing unsafe-state exclusion and aggregate bound.
+- [x] Run the interleaved pinned release-performance comparison.
+- [x] Run focused crates, both Word WASM checks, full verification, and the 49-entry hash harness.
+- [x] Update exactly the three listed HLD files.
 
 ## Open questions
 

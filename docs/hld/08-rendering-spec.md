@@ -791,14 +791,18 @@ equal.
 The engine also records restart checkpoints for one safe section containing
 ordinary context-independent paragraphs, safe paragraph note references, and
 cache-safe tables. Multi-line prose, headings, `keepNext`, and `keepLines` are
-eligible when pagination reaches a complete block boundary. A checkpoint
-exists only before a complete block at an empty page boundary after the current
-and pending note queues have drained. The paginator never records one inside a
-table or a split paragraph. It records the next block, page count, and displayed
-header page number. Unchanged footnote, endnote, header, and footer stories
-participate through exact retained-context equality. A changed related story or
-body note-reference sequence uses the full paginator. Note-bearing tables,
-backgrounds, fields, drawings, multi-section content, split paragraphs, and any
+eligible when pagination reaches a complete block boundary. An otherwise safe
+paragraph may span one or more pages without invalidating the completed
+recorded pass. A checkpoint exists only before a complete block at an empty
+page boundary after the current and pending note queues have drained. A split
+continuation finishes pages without recording a checkpoint. The first later
+checkpoint is eligible only after the entire paragraph completes and the
+existing note, wrap, and resolved state is clean. The paginator never records
+one inside a table or a paragraph. It records the next block, page count, and
+displayed header page number. Unchanged footnote, endnote, header, and footer
+stories participate through exact retained-context equality. A changed related
+story or body note-reference sequence uses the full paginator. Note-bearing
+tables, backgrounds, fields, drawings, multi-section content, and any
 unrepresented state also use the full paginator. A warm edit restarts at the
 last checkpoint before its first changed block. It stops at the first safe page
 boundary inside an unchanged suffix only when the complete retained context,

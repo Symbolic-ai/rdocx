@@ -159,7 +159,6 @@ pub(crate) struct RecordedPagination {
     pub outlines: Vec<OutlineEntry>,
     pub checkpoints: Vec<PaginationCheckpoint>,
     pub stopped_at: Option<PaginationCheckpoint>,
-    pub had_split_paragraph: bool,
 }
 
 /// Paginate across multiple sections, each with its own geometry and header/footer.
@@ -333,7 +332,6 @@ pub(crate) fn paginate_shared_single_section_recorded(
         outlines: result.outlines,
         checkpoints,
         stopped_at: result.stopped_at,
-        had_split_paragraph: result.had_split_paragraph,
     }
 }
 
@@ -439,7 +437,6 @@ struct PassResult {
     resolved: ResolvedWraps,
     checkpoints: Vec<PaginationCheckpoint>,
     stopped_at: Option<PaginationCheckpoint>,
-    had_split_paragraph: bool,
 }
 
 /// Everything a pass needs that is the same for both passes.
@@ -481,7 +478,6 @@ fn paginate_pass_from<B: LayoutBlockLike>(
             resolved: resolved_in.clone(),
             checkpoints: Vec::new(),
             stopped_at: None,
-            had_split_paragraph: false,
         };
     }
     let geometry = context.geometry;
@@ -581,7 +577,6 @@ fn paginate_pass_from<B: LayoutBlockLike>(
     let resolved = std::mem::take(&mut pager.resolved_out);
     let checkpoints = std::mem::take(&mut pager.checkpoints);
     let stopped_at = pager.stopped_at;
-    let had_split_paragraph = pager.had_split_paragraph;
     let (pages, outlines) = if stopped_at.is_some() {
         (
             std::mem::take(&mut pager.pages),
@@ -596,7 +591,6 @@ fn paginate_pass_from<B: LayoutBlockLike>(
         resolved,
         checkpoints,
         stopped_at,
-        had_split_paragraph,
     }
 }
 
@@ -652,7 +646,6 @@ struct Pager<'a> {
     checkpoints: Vec<PaginationCheckpoint>,
     stop_at: Option<PaginationCheckpoint>,
     stopped_at: Option<PaginationCheckpoint>,
-    had_split_paragraph: bool,
 }
 
 impl<'a> Pager<'a> {
@@ -697,7 +690,6 @@ impl<'a> Pager<'a> {
             checkpoints: Vec::new(),
             stop_at,
             stopped_at: None,
-            had_split_paragraph: false,
         }
     }
 
@@ -2167,7 +2159,6 @@ fn render_para_split(
     pager: &mut Pager,
     block_idx: usize,
 ) {
-    pager.had_split_paragraph = true;
     // Render lines before split on current page
     pager.cursor_y += space_before;
     // A split paragraph anchors its drawings to where it starts.

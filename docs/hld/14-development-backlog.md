@@ -3650,8 +3650,10 @@ bounded affected page range, and equal fresh layout exactly. Late edit,
 insert, delete, undo, note-bearing split, and displayed page-number footer
 cases remain exact. Existing unsafe inputs still reject restart publication.
 An interleaved release-mode comparison for the 175 and 700 paragraph native
-and bundled-fallback paths is no worse than 1.25 times v0.11.1 and materially
-faster than the pinned `0582da0` regression boundary.
+and bundled-fallback paths is no worse than 1.25 times v0.11.1 and at most 0.75
+times the pinned `0582da0` regression median. Each timing run first
+authenticates the complete measured crate graph and exact injected harness by
+content manifest. Reference runs also authenticate their pinned commit.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

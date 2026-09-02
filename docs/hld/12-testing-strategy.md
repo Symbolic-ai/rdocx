@@ -561,12 +561,32 @@ headers, and page-number footers keep bounded restart work through both the
 engine and bundled-fallback facade. They also prove endnotes append once,
 changed related stories and note-reference sequences invalidate reuse, and a
 footnote continuation cannot publish a dirty checkpoint. Multi-section
-content, note-bearing tables, split paragraphs, floating drawings, backgrounds,
-and mismatched boundary state must use the full paginator. Ordinary multi-line
-prose, headings, `keepNext`, and `keepLines` must publish complete-boundary
-restart records. A 700-paragraph source-built case requires late edit, insert,
-delete, and undo results to equal fresh deterministic layout while recomputing
-only a bounded page region.
+content, note-bearing tables, floating drawings, backgrounds, and mismatched
+boundary state must use the full paginator. Ordinary multi-line prose,
+headings, `keepNext`, and `keepLines` must publish complete-boundary restart
+records. A deterministic Issue 67 fixture requires 175 naturally wrapped
+four-line paragraphs to span 16 pages, keep the completed recorded pass, and
+publish no checkpoint on a page ending inside a paragraph. Ten middle edits
+must each produce 174 paragraph-cache hits and one build, recompute at most two
+pages, and equal every field of a fresh deterministic result, including
+metadata, logical structure, and the result-local Word source map. Late edit,
+insert, delete, undo, note-bearing split, and displayed PAGE footer cases
+remain exact. A 700-paragraph source-built case requires late edit, insert,
+delete, and undo
+results to equal fresh deterministic layout while recomputing only a bounded
+page region.
+
+The Issue 67 release-performance rider is an ignored timing-only regression.
+It runs identical 175-paragraph and 700-paragraph sources through the reusable
+native and deterministic bundled-fallback paths in four alternating rounds.
+Before timing, each run authenticates a deterministic manifest of every
+tracked crate and workspace-manifest byte, the surrounding regression source,
+and the exact benchmark harness. Reference runs also require the pinned commit
+identity. The current manifest is content-bound instead of parent-SHA-bound,
+so committing or integrating the reviewed bytes does not invalidate it.
+The median of each build's per-edit medians must be no worse than 1.25 times
+the immutable v0.11.1 release and at most 0.75 times pinned commit `0582da0`.
+Wall-clock thresholds do not run in the normal unit-test pass.
 
 The incremental-layout scale gate builds 1,000 one-page paragraphs through the
 public deterministic bundled-fallback facade, edits paragraph 500, and compares

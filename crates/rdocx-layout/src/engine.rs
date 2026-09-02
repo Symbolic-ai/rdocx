@@ -1387,7 +1387,7 @@ impl Engine {
         )?;
 
         let mut font_trace = self.font_manager.current_layout_fonts().to_vec();
-        let mut restart_record_eligible = sections.len() == 1
+        let restart_record_eligible = sections.len() == 1
             && input.document.background_xml.is_none()
             && !document_wraps
             && input
@@ -1519,118 +1519,90 @@ impl Engine {
             {
                 self.page_layout_invocations = recorded.pages.len();
             }
-            if recorded.had_split_paragraph {
-                restart_record_eligible = false;
-                let (mut pages, outlines) = paginator::paginate_shared_sections(
-                    &sections,
-                    &self.font_manager,
-                    &media,
-                    &notes,
-                );
-                #[cfg(test)]
-                {
-                    self.page_layout_invocations = pages.len();
+            if recorded.stopped_at.is_none() {
+                if let Some(checkpoint) = restart_checkpoint {
+                    let references = body_note_references(input);
+                    paginator::append_endnote_pages_for_references(
+                        &mut recorded.pages,
+                        &references,
+                        &notes,
+                        final_geometry,
+                        checkpoint.page_count,
+                    );
+                } else {
+                    paginator::append_endnote_pages(&mut recorded.pages, &notes, final_geometry);
                 }
-                paginator::append_endnote_pages(&mut pages, &notes, final_geometry);
-                apply_page_background(&mut pages, input);
-                for page in &mut pages {
-                    mark_remaining_artifacts(&mut page.elements);
-                }
-                (
-                    pages.into_iter().map(Arc::new).collect(),
-                    outlines,
-                    Vec::new(),
-                )
-            } else {
-                if recorded.stopped_at.is_none() {
-                    if let Some(checkpoint) = restart_checkpoint {
-                        let references = body_note_references(input);
-                        paginator::append_endnote_pages_for_references(
-                            &mut recorded.pages,
-                            &references,
-                            &notes,
-                            final_geometry,
-                            checkpoint.page_count,
-                        );
-                    } else {
-                        paginator::append_endnote_pages(
-                            &mut recorded.pages,
-                            &notes,
-                            final_geometry,
-                        );
-                    }
-                }
-                for page in &mut recorded.pages {
-                    mark_remaining_artifacts(&mut page.elements);
-                }
-                let mut pages = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
-                    self.restart_cache
-                        .as_ref()
-                        .expect("a restart checkpoint belongs to retained pages")
-                        .raw_pages[..checkpoint.page_count]
+            }
+            for page in &mut recorded.pages {
+                mark_remaining_artifacts(&mut page.elements);
+            }
+            let mut pages = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                self.restart_cache
+                    .as_ref()
+                    .expect("a restart checkpoint belongs to retained pages")
+                    .raw_pages[..checkpoint.page_count]
+                    .iter()
+                    .map(Arc::clone)
+                    .collect()
+            });
+            pages.extend(recorded.pages.into_iter().map(Arc::new));
+            let mut outlines = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                self.restart_cache
+                    .as_ref()
+                    .expect("a restart checkpoint belongs to retained outlines")
+                    .outlines
+                    .iter()
+                    .filter(|outline| outline.page_index < checkpoint.page_count)
+                    .cloned()
+                    .collect()
+            });
+            outlines.extend(recorded.outlines);
+            let mut checkpoints = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
+                self.restart_cache
+                    .as_ref()
+                    .expect("a restart checkpoint belongs to retained state")
+                    .checkpoints
+                    .iter()
+                    .copied()
+                    .filter(|candidate| candidate.page_count <= checkpoint.page_count)
+                    .collect()
+            });
+            checkpoints.extend(recorded.checkpoints);
+            if let (Some(stopped), Some((_, old_tail))) = (recorded.stopped_at, tail_source) {
+                debug_assert_eq!(stopped.page_count, old_tail.page_count);
+                let cache = self.restart_cache.as_ref().expect("restart cache exists");
+                pages.extend(
+                    cache.raw_pages[old_tail.page_count..]
                         .iter()
-                        .map(Arc::clone)
-                        .collect()
-                });
-                pages.extend(recorded.pages.into_iter().map(Arc::new));
-                let mut outlines = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
-                    self.restart_cache
-                        .as_ref()
-                        .expect("a restart checkpoint belongs to retained outlines")
+                        .map(Arc::clone),
+                );
+                outlines.extend(
+                    cache
                         .outlines
                         .iter()
-                        .filter(|outline| outline.page_index < checkpoint.page_count)
-                        .cloned()
-                        .collect()
-                });
-                outlines.extend(recorded.outlines);
-                let mut checkpoints = restart_checkpoint.map_or_else(Vec::new, |checkpoint| {
-                    self.restart_cache
-                        .as_ref()
-                        .expect("a restart checkpoint belongs to retained state")
+                        .filter(|outline| outline.page_index >= old_tail.page_count)
+                        .cloned(),
+                );
+                let block_delta =
+                    stopped.next_block_index as isize - old_tail.next_block_index as isize;
+                checkpoints.extend(
+                    cache
                         .checkpoints
                         .iter()
-                        .copied()
-                        .filter(|candidate| candidate.page_count <= checkpoint.page_count)
-                        .collect()
-                });
-                checkpoints.extend(recorded.checkpoints);
-                if let (Some(stopped), Some((_, old_tail))) = (recorded.stopped_at, tail_source) {
-                    debug_assert_eq!(stopped.page_count, old_tail.page_count);
-                    let cache = self.restart_cache.as_ref().expect("restart cache exists");
-                    pages.extend(
-                        cache.raw_pages[old_tail.page_count..]
-                            .iter()
-                            .map(Arc::clone),
-                    );
-                    outlines.extend(
-                        cache
-                            .outlines
-                            .iter()
-                            .filter(|outline| outline.page_index >= old_tail.page_count)
-                            .cloned(),
-                    );
-                    let block_delta =
-                        stopped.next_block_index as isize - old_tail.next_block_index as isize;
-                    checkpoints.extend(
-                        cache
-                            .checkpoints
-                            .iter()
-                            .filter(|candidate| candidate.page_count > old_tail.page_count)
-                            .map(|candidate| paginator::PaginationCheckpoint {
-                                next_block_index: candidate
-                                    .next_block_index
-                                    .checked_add_signed(block_delta)
-                                    .expect("common suffix block index remains in range"),
-                                page_count: candidate.page_count,
-                                next_header_page_number: candidate.next_header_page_number,
-                            }),
-                    );
-                }
-                checkpoints.sort_unstable_by_key(|checkpoint| checkpoint.next_block_index);
-                checkpoints.dedup();
-                (pages, outlines, checkpoints)
+                        .filter(|candidate| candidate.page_count > old_tail.page_count)
+                        .map(|candidate| paginator::PaginationCheckpoint {
+                            next_block_index: candidate
+                                .next_block_index
+                                .checked_add_signed(block_delta)
+                                .expect("common suffix block index remains in range"),
+                            page_count: candidate.page_count,
+                            next_header_page_number: candidate.next_header_page_number,
+                        }),
+                );
             }
+            checkpoints.sort_unstable_by_key(|checkpoint| checkpoint.next_block_index);
+            checkpoints.dedup();
+            (pages, outlines, checkpoints)
         } else {
             let (mut pages, outlines) =
                 paginator::paginate_shared_sections(&sections, &self.font_manager, &media, &notes);
@@ -10786,6 +10758,17 @@ mod tests {
             assert_eq!(left.bold, right.bold);
             assert_eq!(left.italic, right.italic);
         }
+        match (&left.metadata, &right.metadata) {
+            (Some(left), Some(right)) => {
+                assert_eq!(left.title, right.title);
+                assert_eq!(left.author, right.author);
+                assert_eq!(left.subject, right.subject);
+                assert_eq!(left.keywords, right.keywords);
+                assert_eq!(left.creator, right.creator);
+            }
+            (None, None) => {}
+            _ => panic!("layout metadata presence differs"),
+        }
         assert_eq!(left.diagnostics, right.diagnostics);
         assert_eq!(left.outlines.len(), right.outlines.len());
         for (left, right) in left.outlines.iter().zip(&right.outlines) {
@@ -10794,6 +10777,8 @@ mod tests {
             assert_eq!(left.page_index, right.page_index);
             assert_eq!(left.y_position, right.y_position);
         }
+        assert_eq!(left.structure, right.structure);
+        assert_eq!(format!("{left:#?}"), format!("{right:#?}"));
     }
 
     #[test]
@@ -10990,6 +10975,256 @@ mod tests {
             input.document.body.add_paragraph(paragraph);
         }
         input
+    }
+
+    fn page_spanning_prose_paragraph(index: usize) -> CT_P {
+        let mut paragraph = CT_P::new();
+        paragraph.add_run(&format!(
+            "Paragraph {index}: the quick brown fox jumps over the lazy dog, pack my box \
+             with five dozen liquor jugs, and a mixed sentence that keeps going. \
+             Sphinx of black quartz, judge my vow across line breaks and pages. \
+             Waltz, bad nymph, for quick jigs vex. Glib jocks quiz nymph to vex dwarf. \
+             Bright vixens jump, dozy fowl quack."
+        ));
+        paragraph
+    }
+
+    fn page_spanning_prose_restart_input(paragraph_count: usize) -> LayoutInput {
+        let mut input = make_input_with_text("");
+        input.document.body.content = (0..paragraph_count)
+            .map(|index| BodyContent::Paragraph(page_spanning_prose_paragraph(index)))
+            .collect();
+        input.core_properties = Some(rdocx_oxml::core_properties::CoreProperties {
+            title: Some("Issue 67 page-spanning prose".to_owned()),
+            creator: Some("rdocx-layout regression".to_owned()),
+            subject: Some("restart pagination".to_owned()),
+            keywords: Some("page-spanning,provenance".to_owned()),
+            ..Default::default()
+        });
+        input
+    }
+
+    fn change_page_spanning_paragraph(input: &mut LayoutInput, index: usize, revision: usize) {
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[index] else {
+            panic!("page-spanning body entry is a paragraph");
+        };
+        let RunContent::Text(text) = &mut paragraph.runs[0].content[0] else {
+            panic!("page-spanning paragraph begins with text");
+        };
+        text.text.push_str(&format!(" edit{revision}"));
+    }
+
+    #[test]
+    fn page_spanning_prose_publishes_complete_boundary_restart_records() {
+        let input = page_spanning_prose_restart_input(175);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let result = engine.layout(&input).expect("page-spanning prose layout");
+
+        assert_eq!(result.pages.len(), 16, "Issue 67 source page count");
+        assert_eq!(engine.paragraph_cache.len(), 175);
+        assert!(
+            engine
+                .paragraph_cache
+                .iter()
+                .all(|entry| entry.block.lines.len() == 4),
+            "every Issue 67 source paragraph must wrap to exactly four lines"
+        );
+        assert_eq!(
+            engine.page_layout_invocation_count(),
+            result.pages.len(),
+            "the completed recorded pass must be the published pass"
+        );
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("page-spanning prose must retain restart state");
+        let boundaries = retained
+            .checkpoints
+            .iter()
+            .map(|checkpoint| (checkpoint.next_block_index, checkpoint.page_count))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            boundaries,
+            [
+                (0, 0),
+                (23, 2),
+                (46, 4),
+                (69, 6),
+                (92, 8),
+                (115, 10),
+                (138, 12),
+                (161, 14),
+            ],
+            "the first page ends inside paragraph 11, so its first eligible complete boundary is block 23 after page 2"
+        );
+    }
+
+    #[test]
+    fn page_spanning_prose_restarts_warm_edits_exactly() {
+        let mut input = page_spanning_prose_restart_input(175);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced page-spanning prose");
+
+        for revision in 0..10 {
+            let index = 80 + revision;
+            change_page_spanning_paragraph(&mut input, index, revision);
+            let before = engine.paragraph_cache_counts();
+            let (warm, warm_sources) = engine
+                .layout_with_provenance(&input)
+                .expect("warm sourced middle edit");
+            let after = engine.paragraph_cache_counts();
+            assert_eq!(after.0 - before.0, 174, "warm hits for edit {revision}");
+            assert_eq!(after.1 - before.1, 1, "warm build for edit {revision}");
+            assert!(
+                engine.page_layout_invocation_count() <= 2,
+                "edit {revision} repaginated {} pages",
+                engine.page_layout_invocation_count()
+            );
+            let rebuilt = engine
+                .last_rebuilt_page_range
+                .clone()
+                .expect("warm edit reports its rebuilt range");
+            assert!(
+                rebuilt.end.saturating_sub(rebuilt.start) <= 2,
+                "edit {revision}: {rebuilt:?}"
+            );
+            let (fresh, fresh_sources) = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout_with_provenance(&input)
+                .expect("fresh sourced middle edit");
+            assert_layout_results_equal(&warm, &fresh);
+            assert_eq!(warm_sources, fresh_sources);
+        }
+    }
+
+    #[test]
+    fn page_spanning_prose_edit_matrix_matches_fresh_layout() {
+        let original_input = page_spanning_prose_restart_input(175);
+        let mut input = original_input.clone();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let original = engine.layout(&input).expect("prime page-spanning prose");
+
+        change_page_spanning_paragraph(&mut input, 170, 1);
+        let warm_edit = engine.layout(&input).expect("warm late edit");
+        let fresh_edit = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh late edit");
+        assert_layout_results_equal(&warm_edit, &fresh_edit);
+        assert!(engine.page_layout_invocation_count() <= 2);
+
+        input.document.body.content.insert(
+            160,
+            BodyContent::Paragraph(page_spanning_prose_paragraph(999)),
+        );
+        let warm_insert = engine.layout(&input).expect("warm insertion");
+        let fresh_insert = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh insertion");
+        assert_layout_results_equal(&warm_insert, &fresh_insert);
+
+        input.document.body.content.remove(160);
+        let warm_delete = engine.layout(&input).expect("warm deletion");
+        let fresh_delete = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh deletion");
+        assert_layout_results_equal(&warm_delete, &fresh_delete);
+
+        input = original_input;
+        let warm_undo = engine.layout(&input).expect("warm undo");
+        let fresh_undo = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh undo");
+        assert_layout_results_equal(&warm_undo, &fresh_undo);
+        assert_layout_results_equal(&warm_undo, &original);
+    }
+
+    #[test]
+    fn page_spanning_note_and_page_footer_restart_only_at_clean_boundaries() {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+        use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef};
+
+        let mut input = page_spanning_prose_restart_input(175);
+        let BodyContent::Paragraph(split) = &mut input.document.body.content[11] else {
+            panic!("split body entry is a paragraph");
+        };
+        let mut marker = CT_R::new("");
+        marker.content = vec![RunContent::FootnoteRef { id: 1 }];
+        split.runs.push(marker);
+        let mut note = CT_P::new();
+        note.add_run("page-spanning footnote");
+        input.footnotes = Some(CT_Footnotes {
+            footnotes: vec![CT_Footnote {
+                id: 1,
+                note_type: NoteType::Normal,
+                paragraphs: vec![note],
+            }],
+        });
+        let section = input
+            .document
+            .body
+            .sect_pr
+            .get_or_insert_with(CT_SectPr::default_letter);
+        section.footer_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdPageFooter".to_owned(),
+        });
+        let mut footer = CT_HdrFtr::new();
+        let mut footer_paragraph = CT_P::new();
+        let mut page = CT_R::new("");
+        page.content = vec![RunContent::Field(Field::new("PAGE", "1"))];
+        footer_paragraph.runs.push(page);
+        footer.paragraphs.push(footer_paragraph);
+        input.footers.insert("rIdPageFooter".to_owned(), footer);
+
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let initial = engine.layout(&input).expect("prime note and footer layout");
+        let retained = engine
+            .restart_cache
+            .as_ref()
+            .expect("clean complete boundaries retain restart state");
+        assert!(page_text(&initial.pages[0]).contains("Paragraph  11:"));
+        assert!(
+            page_text(&initial.pages[1]).starts_with("Waltz"),
+            "page 2 must begin with paragraph 11's split continuation"
+        );
+        let first_complete = retained
+            .checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.page_count > 0)
+            .expect("a clean boundary follows the split paragraph");
+        assert!(
+            first_complete.page_count > 1 && first_complete.next_block_index > 11,
+            "no boundary may be retained inside the split note-bearing paragraph"
+        );
+        for page in &initial.pages {
+            let displayed = compatibility_page_elements(page)
+                .into_iter()
+                .find_map(|element| match element {
+                    PositionedElement::Text(run)
+                        if matches!(run.field_kind, Some(FieldKind::Page)) =>
+                    {
+                        Some(run.text.as_str())
+                    }
+                    _ => None,
+                })
+                .expect("each page has a displayed PAGE footer");
+            assert_eq!(displayed, page.page_number.to_string());
+        }
+
+        change_page_spanning_paragraph(&mut input, 80, 1);
+        let warm = engine.layout(&input).expect("warm note and footer edit");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("fresh note and footer edit");
+        assert_layout_results_equal(&warm, &fresh);
+        assert!(engine.page_layout_invocation_count() <= 2);
     }
 
     #[test]
@@ -12072,18 +12307,6 @@ mod tests {
             .num_id = Some(1);
         table.document.body.add_table(unsafe_table);
         assert_fallback("traversal-sensitive table", table);
-
-        let split = make_input_with_text(&"split paragraph content ".repeat(2_000));
-        let mut split_engine = Engine::new_deterministic().expect("bundled fonts load");
-        let split_result = split_engine.layout(&split).expect("split paragraph layout");
-        assert!(
-            split_result.pages.len() > 1,
-            "fixture must split across pages"
-        );
-        assert!(
-            split_engine.restart_cache.is_none(),
-            "split paragraphs must not publish restart state"
-        );
 
         assert_fallback(
             "floating drawing",
