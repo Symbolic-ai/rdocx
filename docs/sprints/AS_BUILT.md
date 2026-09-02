@@ -10959,3 +10959,105 @@ and zero nitpicks.
 facade-owned package assembly stage. Do not resolve notes-slide media in the
 notes-master relationship scope, and do not replace vector thumbnails with a
 raster intermediate.
+
+### F-224, HTML slide content import
+
+**Sprint.** S64
+**Completed.** 2026-09-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native presentation facade now imports bounded HTML5
+and CSS into a fresh presentation. Top-level slide sections or one document
+body project explicit absolute geometry into editable shapes, formatted text,
+tables, caller-supplied images, and slide-owned links. Stable ordered
+diagnostics retain safe unsupported content, and the candidate validates,
+saves, and reopens before publication.
+
+**Non-obvious choices.** The private importer follows the existing
+`default-template` boundary and keeps `scraper` as an optional direct `rpptx`
+dependency. Images resolve only from the caller-provided resource slice, with
+no network or filesystem fetch. Aggregate selector work has its own bound.
+Unsupported empty semantic elements remain diagnostic, and diagnostics are
+published in document order across collection phases.
+
+**Deviations from the design plan.** None. The completed plan includes the
+review-driven selector-work bound, empty semantic-element handling, and
+cross-phase diagnostic ordering.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The ten source-built unit, regression, integration, round-trip, and
+differential tests cover exact CSS geometry, the bounded cascade, every
+declared resource limit, unsupported-content diagnostics, document-order
+diagnostics, editable content after reopen, opaque XML and schema order, and
+geometry, text, and pixel sensitivity. The gate
+`source_built_html_matches_pinned_chrome_after_save_and_reopen` passed against
+Google Chrome 152.0.7977.65 at 0.984628993 full-image luminance SSIM. Full
+non-fast verification and all routed riders passed. Microscope pass 4 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep browser semantics limited to the declared
+absolute-position and CSS subset. New layout behavior needs an explicit
+contract, a hard work bound, and a pinned differential. Keep image resolution
+caller-owned and publication transactional.
+
+### F-225, PDF page content import
+
+**Sprint.** S64
+**Completed.** 2026-09-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native presentation facade now imports bounded PDF
+pages in preserved and editable modes. Preserved mode emits one deterministic
+full-slide PNG per page. Editable mode projects supported text, paths, raster
+images, and URI links into ordinary slide content. Strict parsing, stable
+diagnostics, checked geometry, and candidate save and reopen keep publication
+transactional.
+
+**Non-obvious choices.** The private importer follows the existing `render`
+boundary and uses no-default `lopdf` only for PDF syntax and object decoding.
+Both modes share one normalized layout path. Resource traversal is iterative,
+cycle checked, depth bounded, and charged through one cached reference
+resolver. Unsupported state is isolated until reset. Active content and
+malformed URI actions fail closed. Dash phases are accepted only at zero or an
+exact representable boundary.
+
+**Deviations from the design plan.** None. The completed plan records the exact
+dash boundary, affine behavior, resource accounting, active-content policy, and
+strict URI decoding established during review.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built unit and regression coverage proves exact point-to-EMU
+geometry, affine text and image placement, dash isolation, font decoding and
+widths, image typing, iterative resource traversal, shared reference-work
+accounting, strict page and annotation graphs, active-content rejection,
+fallible URI decoding, every declared limit, diagnostics, and transactional
+publication. Both modes and editable content pass save and reopen coverage.
+The gate
+`pdf_page_import_matches_pinned_poppler_geometry_pixels_text_and_links` passed
+against Poppler 26.01.0 at raw full-image luminance SSIM 0.999557935 for
+preserved mode and 0.998561398 for editable mode. Its geometry, text, link, and
+pixel perturbation regression also passed. Full canonical non-fast
+verification, all routed riders, and all 22 package dry-runs passed. Microscope
+pass 11 reported zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep PDF engines out of the production graph.
+Charge every XObject member and every previously unseen indirect-reference hop
+against the shared work budget. Preserve the common normalized layout path
+between modes, and add editable operators only with explicit fail-closed state
+semantics and differential evidence.

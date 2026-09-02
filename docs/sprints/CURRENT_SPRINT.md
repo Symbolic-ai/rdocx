@@ -31,8 +31,8 @@ compatibility.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-224 | HTML slide content import | L | in-progress | codex |
-| F-225 | PDF page content import | L | in-progress | codex |
+| F-224 | HTML slide content import | L | done | - |
+| F-225 | PDF page content import | L | done | - |
 
 ## Sequencing note
 

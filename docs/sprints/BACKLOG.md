@@ -36,10 +36,10 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
-| M21, Presentation depth                        | 15 | 11 | 2 | 2  |
+| M21, Presentation depth                        | 15 | 13 | 0 | 2  |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
 | X, Cross-cutting (opportunistic)            | 76 | 68 | 3 | 2  |
-| **Total** | **323** | **275** | **8** | **37** |
+| **Total** | **323** | **277** | **6** | **37** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -420,8 +420,8 @@ regenerated, never hand-edited.
 | F-221 | Presentation encryption and signatures      | S59 | M | done |
 | F-222 | ODP read and write                           | S63 | L | done |
 | F-223 | Modern presentation package variants        | S63 | M | done |
-| F-224 | HTML slide content import                    | S64 | L | in-progress |
-| F-225 | PDF page content import                      | S64 | L | in-progress |
+| F-224 | HTML slide content import                    | S64 | L | done |
+| F-225 | PDF page content import                      | S64 | L | done |
 | F-226 | Notes and handout export                     | S63 | M | done |
 | F-227 | Animated GIF and video export                | S61 | L | done |
 <!-- AUTOGEN:backlog-M21 END -->
