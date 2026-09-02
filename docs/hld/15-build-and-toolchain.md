@@ -158,6 +158,12 @@ module reuses workspace `scraper` 0.27 behind `default-template`. Google Chrome
 152.0.7977.65 is an ignored differential oracle only. The native archive,
 WASM, rustdoc, dependency policy, and 10 MiB package ceiling remain gates.
 
+PDF presentation import adds no production executable. The private `rpptx`
+module uses `lopdf` 0.44.0 with default features disabled behind the existing
+`render` feature. Poppler 26.01.0 is an ignored differential oracle only. The
+native archive, both WASM graphs, rustdoc, dependency policy, patched publish
+dry run, and 10 MiB package ceiling remain gates.
+
 Modern presentation package classes add no dependency, feature, module, or
 asset. The additive pre-1.0 `rpptx` enum and methods plus the new `oxml-opc`
 content-type constants require rustdoc, README inventory, patched publish
@@ -179,7 +185,7 @@ dry-run, archive-size, and release review before publication.
 | `rpptx-render` | `system-fonts` | on | Preserves host discovery for normal presentation rendering |
 | `rpptx` | `system-fonts` | on | Preserves native presentation font resolution |
 | `rpptx` | `default-template` | on | The bundled `default.pptx` and private bounded HTML importer |
-| `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
+| `rpptx` | `render` | on | Pulls in `rpptx-render`, `oxml-pdf`, and the private bounded PDF importer |
 | `rpptx-wasm` | `render` | off | Adds `toPdf` through the deterministic facade renderer |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |
 
@@ -772,6 +778,12 @@ new public feature. No `oxml-*`, `rdocx-html`, Python, WASM, or CLI crate
 declares the dependency directly. Both facade graphs pass Rust 1.93, the wasm32
 checks, dependency policy, patched package dry runs, and the 10 MiB archive
 ceiling.
+
+`lopdf` 0.44.0 has one direct named consumer, the private inbound PDF importer
+inside `rpptx`. The optional edge disables default features and is activated
+only by `render`. It owns strict bounded PDF object, page, resource, stream,
+font-encoding, image, annotation, and content decoding. It does not render and
+does not enter an `oxml-*`, Python, WASM, or CLI crate directly.
 
 The existing workspace `zip` 8.1 dependency has direct named consumers in the
 private ODT reader and writer inside `rdocx`. It retains the workspace's

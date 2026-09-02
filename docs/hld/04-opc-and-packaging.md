@@ -454,6 +454,12 @@ closed, and no URL or filesystem path from markup is fetched. Successful
 images enter the normal presentation media insertion path with caller-supplied
 filenames and explicit CSS geometry.
 
+The PDF importer routes decoded JPEG and PNG image content through the same
+package-wide presentation media store. JPEG bytes with `DCTDecode` are retained
+directly. Bounded 8-bit `DeviceGray` and `DeviceRGB` image streams become PNG.
+Each imported slide owns its image and external URI relationships, while equal
+image bytes still deduplicate package-wide.
+
 Slide removal considers only `/ppt/media/` targets reached from the removed
 slide and its removed notes relationship scopes. A candidate part is deleted
 only when no remaining internal package relationship reaches it. Pre-existing
@@ -496,6 +502,12 @@ candidate. Projection failure returns `Error::Html` or an existing package
 error before any partial presentation escapes. Default master, layout, and
 theme parts remain byte-identical while new slide children follow the existing
 fixed-prefix PresentationML serializers and shape-tree sequence.
+
+PDF conversion has the same publication boundary. It builds a fresh candidate,
+adds every source page in order, serializes, reopens, validates, and only then
+returns `PdfImportResult`. Mixed effective page sizes, malformed graphs, active
+JavaScript, and any declared resource-limit failure return `Error::PdfImport`
+before a partial presentation can escape.
 
 Executable presentation payloads are selected only through normalized internal
 relationships with the exact expected type. OLE, control, ActiveX binary, VBA

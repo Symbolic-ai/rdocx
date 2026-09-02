@@ -7,6 +7,7 @@ use std::process::Command;
 use std::sync::atomic::AtomicU64;
 
 const F224_BROWSER_SSIM_FLOOR: f64 = 0.95;
+const F225_PDF_SSIM_FLOOR: f64 = 0.995;
 
 fn f224_browser_gate_accepts(
     structure_matches: bool,
@@ -18,6 +19,20 @@ fn f224_browser_gate_accepts(
         && text_matches
         && maximum_geometry_error_px <= 1
         && ssim >= F224_BROWSER_SSIM_FLOOR
+}
+
+fn f225_pdf_gate_accepts(
+    geometry_matches: bool,
+    text_matches: bool,
+    link_matches: bool,
+    point_error: f64,
+    ssim: f64,
+) -> bool {
+    geometry_matches
+        && text_matches
+        && link_matches
+        && point_error <= 1.0
+        && ssim >= F225_PDF_SSIM_FLOOR
 }
 
 #[test]
@@ -56,6 +71,531 @@ fn html_public_import_saves_reopens_and_remains_editable() {
             .as_deref(),
         Some("edited after reopen")
     );
+}
+
+#[cfg(feature = "render")]
+fn source_built_pdf_for_import() -> Vec<u8> {
+    use lopdf::content::{Content, Operation};
+    use lopdf::{Document, Object, Stream, dictionary};
+
+    let mut document = Document::with_version("1.7");
+    let pages_id = document.new_object_id();
+    let carlito = oxml_layout::bundled_fonts::bundled_font_data()[0].1;
+    let font_file_id = document.add_object(Stream::new(
+        dictionary! { "Length1" => carlito.len() as i64 },
+        carlito.to_vec(),
+    ));
+    let descriptor_id = document.add_object(dictionary! {
+        "Type" => "FontDescriptor",
+        "FontName" => "Carlito",
+        "Flags" => 32,
+        "FontBBox" => vec![(-500).into(), (-300).into(), 1500.into(), 1200.into()],
+        "ItalicAngle" => 0,
+        "Ascent" => 1000,
+        "Descent" => -300,
+        "CapHeight" => 700,
+        "StemV" => 80,
+        "FontFile2" => font_file_id,
+    });
+    let font_id = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "TrueType",
+        "BaseFont" => "Carlito",
+        "FirstChar" => 0,
+        "LastChar" => 255,
+        "Widths" => (0..=255).map(|_| Object::Integer(500)).collect::<Vec<_>>(),
+        "FontDescriptor" => descriptor_id,
+        "Encoding" => "WinAnsiEncoding",
+    });
+    let image_id = document.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 1,
+            "Height" => 1,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+        },
+        vec![255, 0, 0],
+    ));
+    let content = Content {
+        operations: vec![
+            Operation::new("rg", vec![0.into(), 0.into(), 1.into()]),
+            Operation::new("re", vec![0.into(), 0.into(), 720.into(), 720.into()]),
+            Operation::new("f", vec![]),
+            Operation::new("RG", vec![1.into(), 1.into(), 1.into()]),
+            Operation::new("w", vec![Object::Real(1.92)]),
+            Operation::new("J", vec![1.into()]),
+            Operation::new("j", vec![2.into()]),
+            Operation::new(
+                "d",
+                vec![
+                    Object::Array(vec![Object::Real(4.8), Object::Real(1.92)]),
+                    0.into(),
+                ],
+            ),
+            Operation::new(
+                "re",
+                vec![96.into(), 96.into(), Object::Real(38.4), Object::Real(38.4)],
+            ),
+            Operation::new("S", vec![]),
+            Operation::new("rg", vec![1.into(), 1.into(), 1.into()]),
+            Operation::new("BT", vec![]),
+            Operation::new("Tf", vec![Object::Name(b"F1".to_vec()), 12.into()]),
+            Operation::new(
+                "Tm",
+                vec![
+                    1.into(),
+                    0.into(),
+                    0.into(),
+                    1.into(),
+                    24.into(),
+                    684.into(),
+                ],
+            ),
+            Operation::new("Tj", vec![Object::string_literal("I")]),
+            Operation::new("ET", vec![]),
+            Operation::new("BT", vec![]),
+            Operation::new("Tf", vec![Object::Name(b"F1".to_vec()), 12.into()]),
+            Operation::new(
+                "Tm",
+                vec![
+                    0.into(),
+                    1.into(),
+                    (-1).into(),
+                    0.into(),
+                    360.into(),
+                    360.into(),
+                ],
+            ),
+            Operation::new("Tj", vec![Object::string_literal("R")]),
+            Operation::new("ET", vec![]),
+            Operation::new("q", vec![]),
+            Operation::new(
+                "cm",
+                vec![
+                    (-24).into(),
+                    0.into(),
+                    0.into(),
+                    (-12).into(),
+                    696.into(),
+                    36.into(),
+                ],
+            ),
+            Operation::new("Do", vec![Object::Name(b"Im1".to_vec())]),
+            Operation::new("Q", vec![]),
+        ],
+    }
+    .encode()
+    .unwrap();
+    let content_id = document.add_object(Stream::new(dictionary! {}, content));
+    let action_id = document.add_object(dictionary! {
+        "S" => "URI",
+        "URI" => Object::string_literal("https://example.com/pdf"),
+    });
+    let annotation_id = document.add_object(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Link",
+        "Rect" => vec![12.into(), 12.into(), 72.into(), 42.into()],
+        "Border" => vec![0.into(), 0.into(), 0.into()],
+        "A" => action_id,
+    });
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 720.into(), 720.into()],
+        "Resources" => dictionary! {
+            "Font" => dictionary! { "F1" => font_id },
+            "XObject" => dictionary! { "Im1" => image_id },
+        },
+        "Contents" => content_id,
+        "Annots" => vec![annotation_id.into()],
+    });
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+#[cfg(feature = "render")]
+fn pdf_source_with_uri(source: &[u8], uri: &str) -> Vec<u8> {
+    use lopdf::{Document, Object};
+
+    let mut document = Document::load_mem(source).unwrap();
+    for object in document.objects.values_mut() {
+        let Object::Dictionary(dictionary) = object else {
+            continue;
+        };
+        if dictionary.get(b"S").and_then(Object::as_name).ok() == Some(b"URI") {
+            dictionary.set("URI", Object::string_literal(uri));
+        }
+    }
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+#[cfg(feature = "render")]
+fn f225_actual_link_matches(presentation: &rpptx::Presentation, expected: &str) -> bool {
+    let bytes = presentation.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+    package
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .items
+        .iter()
+        .any(|relationship| {
+            relationship.target == expected
+                && relationship.target_mode.as_deref() == Some("External")
+        })
+}
+
+#[cfg(feature = "render")]
+fn f225_first_shape_x_points(presentation: &rpptx::Presentation) -> f64 {
+    let bytes = presentation.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let shape = xml.split("<p:sp>").nth(1).unwrap();
+    let offset = shape.split("<a:off x=\"").nth(1).unwrap();
+    offset.split('"').next().unwrap().parse::<f64>().unwrap() / 12_700.0
+}
+
+#[cfg(feature = "render")]
+fn f225_first_image_x_points(presentation: &rpptx::Presentation) -> f64 {
+    let bytes = presentation.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let picture_start = xml.find("<p:pic>").unwrap();
+    let group_start = xml[..picture_start].rfind("<p:grpSp>").unwrap();
+    let group = &xml[group_start..picture_start];
+    let offset = group.split("<a:off x=\"").nth(1).unwrap();
+    offset.split('"').next().unwrap().parse::<f64>().unwrap() / 12_700.0
+}
+
+#[cfg(feature = "render")]
+fn f225_render_png(presentation: &rpptx::Presentation) -> Vec<u8> {
+    let (_, layout) = presentation.render_deterministic().unwrap();
+    oxml_pdf::render_page_to_png(&layout, 0, 150.0).unwrap()
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn both_pdf_import_modes_publish_valid_reopenable_presentations() {
+    let source = source_built_pdf_for_import();
+    for mode in [
+        rpptx::PdfImportMode::Editable,
+        rpptx::PdfImportMode::PreservedGraphic { dpi: 96.0 },
+    ] {
+        let imported = rpptx::Presentation::from_pdf_bytes(&source, mode).expect("PDF imports");
+        assert_eq!(imported.presentation.len(), 1);
+        assert_eq!(
+            imported.presentation.slide_size(),
+            Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000)))
+        );
+        assert!(imported.presentation.validate().is_empty());
+        let saved = imported.presentation.to_bytes().expect("PDF deck saves");
+        let reopened = rpptx::Presentation::from_bytes(&saved).expect("PDF deck reopens");
+        assert_eq!(reopened.len(), 1);
+        if mode == rpptx::PdfImportMode::Editable {
+            assert_eq!(reopened.slide(0).unwrap().text(), "I\nR");
+            assert_eq!(reopened.slide(0).unwrap().shapes().len(), 6);
+            let package = OpcPackage::from_reader(Cursor::new(&saved)).unwrap();
+            let slide_xml =
+                String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec())
+                    .unwrap();
+            assert!(slide_xml.contains("<a:custGeom>"));
+            assert!(slide_xml.contains(r#"<a:srgbClr val="0000FF""#));
+            assert!(slide_xml.contains(r#"<a:ln w="24383" cap="rnd""#));
+            assert!(slide_xml.contains("<a:custDash>"));
+            assert!(slide_xml.contains("<a:bevel"));
+            assert!(slide_xml.matches("rot=\"").count() >= 2, "{slide_xml}");
+            assert!(slide_xml.contains("flipV=\"1\""), "{slide_xml}");
+            assert!(slide_xml.contains(r#"<a:off x="152400" y="8610600""#));
+            assert!(slide_xml.contains(r#"<a:ext cx="762000" cy="381000""#));
+            let relationships = package.get_part_rels("/ppt/slides/slide1.xml").unwrap();
+            assert!(relationships.items.iter().any(|relationship| {
+                relationship.target == "https://example.com/pdf"
+                    && relationship.target_mode.as_deref() == Some("External")
+            }));
+            let image_relationship = relationships
+                .items
+                .iter()
+                .find(|relationship| relationship.rel_type == rel_types::IMAGE)
+                .unwrap();
+            let image_part = OpcPackage::resolve_rel_target(
+                "/ppt/slides/slide1.xml",
+                &image_relationship.target,
+            );
+            let image = tiny_skia::Pixmap::decode_png(package.get_part(&image_part).unwrap())
+                .expect("editable imported image stays a valid PNG");
+            assert_eq!((image.width(), image.height()), (1, 1));
+        } else {
+            assert_eq!(reopened.slide(0).unwrap().shapes().len(), 1);
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "render")]
+#[ignore = "requires Poppler 26.01.0"]
+fn pdf_page_import_matches_pinned_poppler_geometry_pixels_text_and_links() {
+    let version = Command::new("pdfinfo").arg("-v").output().unwrap();
+    let version_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&version.stdout),
+        String::from_utf8_lossy(&version.stderr)
+    );
+    assert!(version_text.contains("pdfinfo version 26.01.0"));
+    let version = Command::new("pdftoppm").arg("-v").output().unwrap();
+    let version_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&version.stdout),
+        String::from_utf8_lossy(&version.stderr)
+    );
+    assert!(version_text.contains("pdftoppm version 26.01.0"));
+    let root = std::env::temp_dir().join(format!("rpptx-f225-poppler-{}", std::process::id()));
+    if root.exists() {
+        fs::remove_dir_all(&root).unwrap();
+    }
+    fs::create_dir_all(&root).unwrap();
+    let source_path = root.join("source.pdf");
+    let oracle_prefix = root.join("oracle");
+    let source = source_built_pdf_for_import();
+    fs::write(&source_path, &source).unwrap();
+
+    let info = Command::new("pdfinfo").arg(&source_path).output().unwrap();
+    assert!(info.status.success());
+    let info = String::from_utf8(info.stdout).unwrap();
+    assert!(info.contains("Pages:           1"));
+    assert!(info.contains("Page size:       720 x 720 pts"));
+    let render = Command::new("pdftoppm")
+        .args(["-png", "-singlefile", "-r", "150"])
+        .arg(&source_path)
+        .arg(&oracle_prefix)
+        .output()
+        .unwrap();
+    assert!(
+        render.status.success(),
+        "pdftoppm failed: {}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+    let oracle_png = fs::read(root.join("oracle.png")).unwrap();
+
+    let preserved = rpptx::Presentation::from_pdf_bytes(
+        &source,
+        rpptx::PdfImportMode::PreservedGraphic { dpi: 150.0 },
+    )
+    .unwrap();
+    let preserved_bytes = preserved.presentation.to_bytes().unwrap();
+    let preserved_package = OpcPackage::from_reader(Cursor::new(&preserved_bytes)).unwrap();
+    let image_relationship = preserved_package
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::IMAGE)
+        .unwrap();
+    let image_part =
+        OpcPackage::resolve_rel_target("/ppt/slides/slide1.xml", &image_relationship.target);
+    let rust_png = preserved_package.get_part(&image_part).unwrap().to_vec();
+    let rust = tiny_skia::Pixmap::decode_png(&rust_png).unwrap();
+    let oracle = tiny_skia::Pixmap::decode_png(&oracle_png).unwrap();
+    assert_eq!(
+        (rust.width(), rust.height()),
+        (oracle.width(), oracle.height())
+    );
+    let ssim = smartart_png_ssim(&rust_png, &oracle_png);
+    eprintln!("F-225 Poppler raw full-image luminance SSIM: {ssim:.9}");
+
+    let editable =
+        rpptx::Presentation::from_pdf_bytes(&source, rpptx::PdfImportMode::Editable).unwrap();
+    let (_, editable_layout) = editable.presentation.render_deterministic().unwrap();
+    let editable_png = oxml_pdf::render_page_to_png(&editable_layout, 0, 150.0).unwrap();
+    let editable_ssim = smartart_png_ssim(&editable_png, &oracle_png);
+    eprintln!("F-225 Poppler editable raw luminance SSIM: {editable_ssim:.9}");
+    let saved = editable.presentation.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(Cursor::new(&saved)).unwrap();
+    let link_matches = package
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .items
+        .iter()
+        .any(|relationship| {
+            relationship.target == "https://example.com/pdf"
+                && relationship.target_mode.as_deref() == Some("External")
+        });
+    let slide_xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let geometry_matches = editable.presentation.slide_size()
+        == Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000)))
+        && slide_xml.contains(r#"<a:off x="152400" y="8610600""#)
+        && slide_xml.contains(r#"<a:ext cx="762000" cy="381000""#);
+    assert!(f225_pdf_gate_accepts(
+        geometry_matches,
+        editable.presentation.slide(0).unwrap().text() == "I\nR",
+        link_matches,
+        0.0,
+        ssim,
+    ));
+    assert!(f225_pdf_gate_accepts(
+        geometry_matches,
+        editable.presentation.slide(0).unwrap().text() == "I\nR",
+        link_matches,
+        0.0,
+        editable_ssim,
+    ));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn pdf_import_differential_rejects_geometry_text_link_and_pixel_perturbations() {
+    let source = source_built_pdf_for_import();
+    let imported =
+        rpptx::Presentation::from_pdf_bytes(&source, rpptx::PdfImportMode::Editable).unwrap();
+    let baseline_png = f225_render_png(&imported.presentation);
+    assert!(f225_pdf_gate_accepts(
+        imported.presentation.slide_size() == Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000)))
+            && f225_first_image_x_points(&imported.presentation) == 672.0,
+        imported.presentation.slide(0).unwrap().text() == "I\nR",
+        f225_actual_link_matches(&imported.presentation, "https://example.com/pdf"),
+        f225_first_shape_x_points(&imported.presentation),
+        smartart_png_ssim(&baseline_png, &baseline_png),
+    ));
+
+    let mut geometry = rpptx::Presentation::from_pdf_bytes(&source, rpptx::PdfImportMode::Editable)
+        .unwrap()
+        .presentation;
+    geometry
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_position(rpptx::Emu(12_827), rpptx::Emu(0))
+        .unwrap();
+    assert!(!f225_pdf_gate_accepts(
+        geometry.slide_size() == Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000))),
+        geometry.slide(0).unwrap().text() == "I\nR",
+        f225_actual_link_matches(&geometry, "https://example.com/pdf"),
+        f225_first_shape_x_points(&geometry),
+        smartart_png_ssim(&f225_render_png(&geometry), &baseline_png),
+    ));
+
+    let mut one_pixel_shift =
+        rpptx::Presentation::from_pdf_bytes(&source, rpptx::PdfImportMode::Editable)
+            .unwrap()
+            .presentation;
+    one_pixel_shift
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_position(rpptx::Emu(6_096), rpptx::Emu(0))
+        .unwrap();
+    let one_pixel_at_150_dpi = 72.0 / 150.0;
+    let point_error = f225_first_shape_x_points(&one_pixel_shift).abs();
+    assert!((point_error - one_pixel_at_150_dpi).abs() < 1.0 / 12_700.0);
+    let shifted_ssim = smartart_png_ssim(&f225_render_png(&one_pixel_shift), &baseline_png);
+    eprintln!("F-225 one-pixel imported geometry raw SSIM: {shifted_ssim:.9}");
+    assert!(
+        shifted_ssim < F225_PDF_SSIM_FLOOR,
+        "raw SSIM {shifted_ssim}"
+    );
+    let geometry_matches = one_pixel_shift.slide_size()
+        == Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000)))
+        && f225_first_image_x_points(&one_pixel_shift) == 672.0;
+    let text_matches = one_pixel_shift.slide(0).unwrap().text() == "I\nR";
+    let link_matches = f225_actual_link_matches(&one_pixel_shift, "https://example.com/pdf");
+    assert!(geometry_matches && text_matches && link_matches && point_error <= 1.0);
+    assert!(!f225_pdf_gate_accepts(
+        geometry_matches,
+        text_matches,
+        link_matches,
+        point_error,
+        shifted_ssim,
+    ));
+
+    let mut text = rpptx::Presentation::from_pdf_bytes(&source, rpptx::PdfImportMode::Editable)
+        .unwrap()
+        .presentation;
+    text.slide_mut(0)
+        .unwrap()
+        .shape_mut(2)
+        .unwrap()
+        .child_mut(0)
+        .unwrap()
+        .set_text("changed")
+        .unwrap();
+    assert!(!f225_pdf_gate_accepts(
+        text.slide_size() == Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000))),
+        text.slide(0).unwrap().text() == "I\nR",
+        f225_actual_link_matches(&text, "https://example.com/pdf"),
+        f225_first_shape_x_points(&text),
+        smartart_png_ssim(&f225_render_png(&text), &baseline_png),
+    ));
+
+    let wrong_link = rpptx::Presentation::from_pdf_bytes(
+        &pdf_source_with_uri(&source, "https://example.com/changed"),
+        rpptx::PdfImportMode::Editable,
+    )
+    .unwrap()
+    .presentation;
+    assert!(!f225_pdf_gate_accepts(
+        wrong_link.slide_size() == Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000))),
+        wrong_link.slide(0).unwrap().text() == "I\nR",
+        f225_actual_link_matches(&wrong_link, "https://example.com/pdf"),
+        f225_first_shape_x_points(&wrong_link),
+        smartart_png_ssim(&f225_render_png(&wrong_link), &baseline_png),
+    ));
+
+    let mut calibrated = None;
+    for blue in [
+        250_u8, 245, 240, 235, 230, 220, 210, 200, 180, 160, 128, 64, 0,
+    ] {
+        let mut pixels =
+            rpptx::Presentation::from_pdf_bytes(&source, rpptx::PdfImportMode::Editable)
+                .unwrap()
+                .presentation;
+        let fill = rpptx::Fill::from_xml(
+            format!(
+                r#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="0000{blue:02X}"/></a:solidFill>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        pixels
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(0)
+            .unwrap()
+            .set_fill(fill)
+            .unwrap();
+        let ssim = smartart_png_ssim(&f225_render_png(&pixels), &baseline_png);
+        if ssim < F225_PDF_SSIM_FLOOR {
+            calibrated = Some((pixels, ssim));
+            break;
+        }
+    }
+    let (pixels, ssim) = calibrated.expect("a real editable fill perturbation crosses the floor");
+    assert!(F225_PDF_SSIM_FLOOR - ssim < 0.05, "calibrated SSIM {ssim}");
+    assert!(!f225_pdf_gate_accepts(
+        pixels.slide_size() == Some((rpptx::Emu(9_144_000), rpptx::Emu(9_144_000))),
+        pixels.slide(0).unwrap().text() == "I\nR",
+        f225_actual_link_matches(&pixels, "https://example.com/pdf"),
+        f225_first_shape_x_points(&pixels),
+        ssim,
+    ));
 }
 
 #[test]

@@ -121,6 +121,14 @@ owned `Presentation`. It reuses the existing shape, text, table, image,
 hyperlink, package, and validation owners. It retains no browser layout model,
 performs no resource fetch, and adds no `oxml-*`, binding, or CLI edge.
 
+**Inbound PDF belongs to the `rpptx` facade.** Its private module uses `lopdf`
+for strict bounded syntax, page-tree, resource, stream, and content decoding.
+It normalizes the supported operator subset into existing `oxml-layout` values,
+then projects through the ordinary presentation owner. Preserved mode uses the
+existing `oxml-pdf` rasterizer. Editable mode creates ordinary text, picture,
+custom-geometry, and URI-link shapes. No PDF model or renderer crosses the
+facade boundary, and no `oxml-*`, binding, or CLI dependency edge is added.
+
 **Outbound EPUB belongs to the `rdocx` facade.** The private writer projects
 the owned Word document through the established outbound HTML semantics, then
 packages deterministic EPUB 3 metadata, navigation, reflowable XHTML, shared

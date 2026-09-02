@@ -961,6 +961,23 @@ uses the bundled Carlito bytes, 96 DPI, at most one CSS pixel of geometry
 error, exact reopened structure and text facts, and a full-image luminance SSIM
 floor of 0.95.
 
+PDF presentation import also adds no rendering path. The private interpreter
+lowers supported PDF graphics state, paths, text, raster images, and links into
+`PageFrame` and `PositionedElement` values. Preserved mode rasterizes that page
+through `oxml_pdf::render_page_to_png` before normal picture insertion.
+Editable mode projects the same normalized geometry into ordinary slide
+content. The shared PDF dash state accepts strictly positive arrays whose phase
+is zero or lands on an exactly representable dash boundary. Zero members,
+interior phases, and positive members that would become zero DrawingML stops
+diagnose and omit affected strokes until a valid dash state or graphics-state
+restore. The differential oracle is Poppler 26.01.0 at 150 DPI with exact page
+dimensions and a raw full-image luminance SSIM floor of 0.995. Pixel-aligned
+representative geometry includes a 38.4-point styled square so renderer-only
+antialiasing does not weaken the metric while stroke, text, and image content
+remain painted. Deterministic embedded Carlito bytes and
+explicit geometry, image, text, link, and fill perturbation checks make that
+boundary reproducible.
+
 The additive timeline path resolves the same slide into a
 `ResolvedTimelineSlide`, which pairs each resolved shape with its stable source
 identity and carries the evaluated frame state. Evaluation accepts only finite

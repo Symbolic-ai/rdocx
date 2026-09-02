@@ -290,6 +290,14 @@ editable presentation only after save, reopen, and validation. Python, WASM,
 and CLI surfaces gain no presentation HTML entry point and retain their
 existing methods and errors.
 
+Native Rust callers can import PDF pages through
+`Presentation::from_pdf_bytes`, `from_pdf_bytes_with_limits`, and `open_pdf`.
+The additive pre-1.0 surface exposes concrete `PdfImportMode`,
+`PdfImportLimits`, `PdfImportDiagnostic`, and `PdfImportResult` values plus
+`Error::PdfImport`. Conversion returns a fresh presentation only after save,
+reopen, and validation. Python, WASM, and CLI surfaces gain no PDF import entry
+point and retain their existing methods and errors.
+
 Native Rust callers can export EPUB 3 through `Document::to_epub_bytes` and
 `Document::save_epub`. The byte API returns `EpubWriteResult`, which carries
 the bounded deterministic publication and ordered location-aware

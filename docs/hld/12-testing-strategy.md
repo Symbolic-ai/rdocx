@@ -302,6 +302,24 @@ gate serializes and reopens the generated DOCX before comparing its public
 structure. No binary fixture or sample is added, so all 49 hash entries remain
 unchanged.
 
+The PDF import regression gate builds PDF objects, content streams, embedded
+Carlito bytes, paths, text, and URI annotations in source. Unit coverage locks
+strict parsing, page and object bounds, aggregate decompression, operation,
+pixel, shape, and diagnostic limits, CropBox and rotation normalization, exact
+12,700 EMU point conversion, comment-safe content decoding, explicit font
+substitution, ordered unsupported-operator diagnostics, strictly positive dash
+arrays at representable boundaries, zero-member and interior-phase isolation,
+positive stops that convert to zero, and valid sibling recovery. Both modes
+save, reopen, and validate in the existing `rpptx` integration binary. The ignored
+differential pins Poppler 26.01.0 at 150 DPI, exact dimensions, exact editable
+text and link facts, and a raw full-image luminance SSIM floor of 0.995.
+Pixel-aligned representative geometry includes a 38.4-point styled square so
+renderer-only antialiasing does not weaken the acceptance metric. An unchanged
+source passes, while a 1.01-point geometry change, one-pixel imported geometry
+shift at 150 DPI, and calibrated
+pixel, text, and link mutations fail the same final predicate. No binary
+fixture or hash baseline is added.
+
 The EPUB regression gate builds the complete publication in source. It checks
 the stored first `mimetype` entry, fixed timestamps and metadata, byte-identical
 repeated output, front matter, outline-root spine splitting, nested navigation,

@@ -119,6 +119,8 @@ mod html;
 #[cfg(feature = "default-template")]
 mod odp;
 #[cfg(feature = "render")]
+mod pdf;
+#[cfg(feature = "render")]
 pub use animation::{
     AnimationExportOptions, AnimationFormat, AnimationSegment, AnimationTransition,
     DeterministicAnimation, GifLoopBehavior,
@@ -127,8 +129,10 @@ pub use animation::{
 pub use html::{HtmlDiagnostic, HtmlImageResource, HtmlReadResult};
 #[cfg(feature = "default-template")]
 pub use odp::{OdpDiagnostic, OdpReadResult, OdpWriteResult};
+#[cfg(feature = "render")]
+pub use pdf::{PdfImportDiagnostic, PdfImportLimits, PdfImportMode, PdfImportResult};
 
-#[cfg(feature = "default-template")]
+#[cfg(any(feature = "default-template", feature = "render"))]
 const DEFAULT_TEMPLATE: &[u8] = include_bytes!("../assets/default.pptx");
 const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
 
@@ -315,6 +319,14 @@ pub enum Error {
     #[cfg(feature = "render")]
     #[error("PDF conformance error: {0}")]
     Pdf(#[from] oxml_pdf::PdfError),
+
+    #[cfg(feature = "render")]
+    #[error("PDF import error on page {page:?} at operation {offset:?}: {message}")]
+    PdfImport {
+        page: Option<u32>,
+        offset: Option<usize>,
+        message: String,
+    },
 
     #[error("presentation package has no officeDocument relationship")]
     MissingMainDocument,

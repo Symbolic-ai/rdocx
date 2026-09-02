@@ -25,6 +25,8 @@ digital-signatures = ["oxml-opc/digital-signatures"]
 render = [
     "dep:gif",
     "dep:jpeg-encoder",
+    "dep:lopdf",
+    "lopdf/wasm_js",
     "dep:miniz_oxide",
     "dep:oxml-pdf",
     "dep:rpptx-layout",
@@ -44,6 +46,7 @@ oxml-sml.workspace = true
 gif = { workspace = true, optional = true }
 jpeg-encoder = { workspace = true, optional = true, features = ["std"] }
 miniz_oxide = { workspace = true, optional = true }
+lopdf = { workspace = true, optional = true }
 oxml-chart.workspace = true
 rpptx-layout = { workspace = true, optional = true }
 rpptx-oxml.workspace = true

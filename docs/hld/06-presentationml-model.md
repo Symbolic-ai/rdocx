@@ -111,6 +111,21 @@ diagnostics. Limit or projection failures return `Error::Html` without a
 partial result. The surface is additive on the pre-1.0 facade and is available
 with `default-template`.
 
+The native facade also owns bounded PDF conversion through
+`Presentation::from_pdf_bytes`, `from_pdf_bytes_with_limits`, and `open_pdf`.
+`PdfImportMode` selects one preserved full-slide graphic or the editable text,
+raster-image, nonzero path, and URI-link subset. Page points convert at exactly
+12,700 EMU per point with truncation toward zero. CropBox origin and page
+rotation are normalized before projection, and every page must have the same
+effective size. Editable dashes require strictly positive PDF arrays at phase
+zero or an exactly representable dash boundary. A zero member, interior phase,
+or positive member that converts to a zero DrawingML stop produces an ordered
+diagnostic and omits affected strokes until a valid dash state or
+graphics-state restore. Unsupported safe operators and deterministic font
+replacement produce ordered `PdfImportDiagnostic` values. Limit, parse, or projection
+failure publishes no presentation. The additive pre-1.0 surface is available
+with `render`.
+
 Native collaboration, section, and master-setting access is also concrete and
 ordered:
 

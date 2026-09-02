@@ -39,6 +39,7 @@ its cost is recorded in `00-vision.md`.
 | OLE, ActiveX, and VBA executable payloads | Native Rust relationship-owned inventory, byte-exact extraction and replacement, and ownership-aware removal. Payloads remain opaque and are never executed. OLE renders from its stored preview image |
 | OpenDocument Presentation interchange | Native Rust bounded read and deterministic write for slides, ordinary rectangles and text boxes, tables, embedded images, and speaker notes. Other safe content is reported through stable diagnostics |
 | HTML slide content import | Native Rust bounded import of HTML5 documents and fragments into editable slides, explicitly positioned shapes, formatted text, tables, caller-supplied images, and links. Browser layout, scripting, fetching, and unsupported CSS remain diagnostic |
+| PDF page content import | Native Rust bounded import into either one preserved full-slide graphic per page or an editable subset of text, raster images, paths, and URI links. Unsupported operators and font substitutions remain diagnostic |
 
 ### Shapes
 

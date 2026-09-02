@@ -1068,11 +1068,13 @@ impl<'a> ResolveCtx<'a> {
             group_transform,
         } = placement;
         let transform = self.effective_xfrm(shape);
-        let Some((bounds, rotation_deg, flip_h, flip_v)) = transform_values(transform.as_ref())
+        let Some((unscaled_bounds, rotation_deg, flip_h, flip_v)) =
+            transform_values(transform.as_ref())
         else {
             return Ok(None);
         };
-        let bounds = scaled_group_bounds(bounds, group_scale);
+        let mut bounds = scaled_group_bounds(unscaled_bounds, group_scale);
+        let mut group_transform = group_transform;
         let effective = self.effective_shape_style(shape)?;
         let (fill, image_fill, fill_unsupported, fill_diagnostic) = match effective.fill.as_ref() {
             Some(Fill::Blip(fill))
@@ -1138,6 +1140,21 @@ impl<'a> ResolveCtx<'a> {
             .and_then(|effects| effects.outer_shadow.as_ref())
             .map(|shadow| self.concrete_shadow(shadow))
             .transpose()?;
+        let transparent_text_only = shape.text_body.is_some()
+            && fill.is_none()
+            && image_fill.is_none()
+            && fill_unsupported.is_none()
+            && line.is_none()
+            && shadow.is_none();
+        if transparent_text_only {
+            bounds = unscaled_bounds;
+            group_transform = Transform {
+                a: group_scale.0,
+                d: group_scale.1,
+                ..Transform::IDENTITY
+            }
+            .then(group_transform);
+        }
         let (geometry, geometry_unsupported, geometry_diagnostic) = if let Some(custom) =
             &shape.shape_properties.custom_geometry
         {
@@ -5698,6 +5715,42 @@ mod tests {
                 ..Transform::IDENTITY
             }
         );
+    }
+
+    #[test]
+    fn grouped_text_with_a_visible_stroke_keeps_path_scale_and_stroke_width_invariant() {
+        let leaf = shape_with_details(
+            None,
+            None,
+            r#"<a:xfrm><a:off x="12700" y="25400"/><a:ext cx="25400" cy="38100"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="9525"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>"#,
+            Some(r#"<a:bodyPr/><a:p><a:r><a:t>visible outline</a:t></a:r></a:p>"#),
+        );
+        let group = format!(
+            r#"<p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="127000" y="254000"/><a:ext cx="254000" cy="762000"/><a:chOff x="0" y="0"/><a:chExt cx="127000" cy="254000"/></a:xfrm></p:grpSpPr>{leaf}</p:grpSp>"#
+        );
+        let fixture = Fixture::new(&group, "", "");
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let shape = &resolved.shapes[0];
+        assert_eq!(
+            shape.bounds,
+            Rect {
+                x: 2.0,
+                y: 6.0,
+                width: 4.0,
+                height: 9.0,
+            }
+        );
+        assert_eq!(shape.line.as_ref().map(|line| line.width), Some(0.75));
+        assert_eq!(
+            shape.group_transform,
+            Transform {
+                e: 10.0,
+                f: 20.0,
+                ..Transform::IDENTITY
+            }
+        );
+        assert!(matches!(shape.content, ResolvedContent::Text(_)));
     }
 
     #[test]

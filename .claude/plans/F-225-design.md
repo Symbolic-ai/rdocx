@@ -1,6 +1,6 @@
 # F-225, PDF page content import
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S64
 **Size**: L
 **Depends on**: F-109, F-110, F-111
@@ -105,9 +105,14 @@ non-finite numbers, and every declared limit.
 
 The editable subset supports balanced graphics state, affine transforms,
 move, line, cubic curve, rectangle, close, nonzero fill and stroke, line width,
-cap, join, dash, DeviceGray and DeviceRGB solid colours, basic text state and
-show operators, JPEG and bounded 8-bit gray or RGB Flate images, and URI link
-annotations. Unsupported safe operators, colour spaces, font encodings, image
+cap, join, strictly positive dash arrays at phase zero or an exactly
+representable dash boundary, DeviceGray and DeviceRGB solid colours, basic text
+state and show operators, JPEG and bounded 8-bit gray or RGB Flate images, and
+URI link annotations. A zero member or interior phase produces one stable
+diagnostic and omits affected strokes until a valid dash state or graphics-state
+restore. A positive member that would convert to a zero DrawingML dash stop is
+handled through the same fail-closed boundary. Unsupported safe operators,
+colour spaces, font encodings, image
 forms, masks, transparency, blend modes, shadings, patterns, forms, and actions
 produce stable ordered operation-path diagnostics. Unsupported state cannot
 leak into later supported operators.
@@ -160,7 +165,7 @@ retained as a second public model.
 | integration | `both_pdf_import_modes_publish_valid_reopenable_presentations` | Both modes validate, save, reopen, and retain slide order and bounds. |
 | round-trip | `editable_pdf_text_images_paths_and_links_survive_save_and_reopen` | Text, link target and rectangle, path geometry and paint, and image bytes and dimensions remain editable and exact. |
 | differential | `pdf_page_import_matches_pinned_poppler_geometry_pixels_text_and_links` | Exact page geometry, source-render similarity, and editable text and link mappings match the pinned oracle. |
-| regression | `pdf_import_differential_rejects_geometry_text_link_and_pixel_perturbations` | A 1.01-point shift, text or link mutation, and calibrated pixel mutation fail the intended boundary. |
+| regression | `pdf_import_differential_rejects_geometry_text_link_and_pixel_perturbations` | An unchanged source passes, while a 1.01-point shift, one-pixel imported geometry shift at 150 DPI, text or link mutation, and calibrated pixel mutation fail the final predicate. |
 
 The **test gate** is the backlog's differential gate: pinned PDF pages preserve
 page geometry and match the source render, while the editable subset retains
@@ -169,10 +174,13 @@ text and link mappings.
 The oracle is Poppler 26.01.0. The gate verifies `pdfinfo` and `pdftoppm`
 identity, builds the PDF and embedded image and font input in source, and
 rasterizes at 150 DPI. Effective dimensions must match exactly. Preserved mode
-and the normalized supported editable projection must reach luminance SSIM of
-at least 0.995. Editable text and URI link target and rectangle are exact. A
-1.01-point and calibrated pixel sensitivity check proves the threshold detects
-the intended regressions. No binary fixture is added.
+and the normalized supported editable projection must reach raw full-image
+luminance SSIM of at least 0.995. Pixel-aligned representative geometry
+includes a 38.4-point styled square so renderer-only antialiasing does not
+weaken the metric. Editable text and URI link target and rectangle are exact.
+A 1.01-point shift, one-pixel imported geometry shift, and
+calibrated pixel sensitivity check prove the final predicate detects the
+intended regressions. No binary fixture is added.
 
 ## HLD impact
 
@@ -217,16 +225,16 @@ re-recorded.
 
 ## Implementation checklist
 
-- [ ] Add the approved private module and optional no-default `lopdf` edge.
-- [ ] Add the gated native types, error, methods, and default limits.
-- [ ] Implement strict bounded page, resource, content, image, font, and annotation parsing.
-- [ ] Normalize page geometry, transforms, paths, text, images, links, and diagnostics.
-- [ ] Implement both preserved and editable transactional projections.
-- [ ] Serialize, validate, reopen, and return only the complete candidate.
-- [ ] Add unit tests in the module and public coverage to the existing `rpptx` integration binary.
-- [ ] Run the pinned Poppler differential and perturbation checks.
-- [ ] Run every routed package, WASM, dependency, deterministic-render, and full verification gate.
-- [ ] Update exactly the listed HLD files.
+- [x] Add the approved private module and optional no-default `lopdf` edge.
+- [x] Add the gated native types, error, methods, and default limits.
+- [x] Implement strict bounded page, resource, content, image, font, and annotation parsing.
+- [x] Normalize page geometry, transforms, paths, text, images, links, and diagnostics.
+- [x] Implement both preserved and editable transactional projections.
+- [x] Serialize, validate, reopen, and return only the complete candidate.
+- [x] Add unit tests in the module and public coverage to the existing `rpptx` integration binary.
+- [x] Run the pinned Poppler differential and perturbation checks.
+- [x] Run every routed package, WASM, dependency, deterministic-render, and full verification gate.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

@@ -2004,11 +2004,22 @@ SSIM boundary after save and reopen with Google Chrome 152.0.7977.65.
 
 ### F-225, PDF page content import (L)
 Import PDF pages as either preserved page graphics or a bounded editable subset
-of text, raster images, paths, and links. Font substitution and unsupported PDF
-operators remain explicit diagnostics.
+of text, raster images, nonzero paths, and URI links. Strict bounded parsing,
+CropBox and rotation normalization, equal effective page sizes, deterministic
+font resolution, and transactional save, reopen, and validation define the
+conversion boundary. Font substitution and unsupported PDF operators remain
+explicit ordered diagnostics. Editable dash arrays require strictly positive
+members and phase zero or an exactly representable dash boundary. Zero members,
+interior phases, and positive members that convert to a zero DrawingML stop
+diagnose and omit affected strokes until valid dash state or graphics-state
+restore. JavaScript, encryption, malformed graphs, and declared resource-limit
+failures are rejected.
 **Depends on**: F-109, F-110, F-111.
 **Test gate**: differential. Pinned PDF pages preserve page geometry and match
-the source render, while the editable subset retains text and link mappings.
+the source render at the declared Poppler 26.01.0, 150 DPI, exact-dimension,
+and 0.995 raw full-image luminance SSIM boundary. The editable subset retains
+text and link mappings. Geometry, one-pixel imported geometry, text, link, and
+fill mutations prove the final predicate remains sensitive.
 
 ### F-226, Notes and handout export (M)
 Render relationship-resolved speaker notes and all six audience handout grids
