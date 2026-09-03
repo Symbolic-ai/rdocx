@@ -213,7 +213,7 @@ fn a_thousand_page_document_paginates_and_renders_within_the_declared_limits() {
 }
 
 // F-X075_BENCHMARK_MANIFEST_BEGIN
-const EXPECTED_FX075_HARNESS_MANIFEST: &str = "04ef83228163b8d64cb2a963c99c2a6df0144e3a";
+const EXPECTED_FX075_HARNESS_MANIFEST: &str = "e3fcfc1ac4332c54d3a4cf52ed6243c177b6d057";
 
 fn fx075_git_output(
     workspace: &std::path::Path,
@@ -362,7 +362,7 @@ fn fx075_source_manifests(workspace: &std::path::Path) -> (String, String, Strin
 fn issue_67_page_spanning_prose_release_measurement() {
     const V0_11_1_CHECKOUT_HEAD: &str = "5a850ce9ae6c31f8365594ed2970193266f8b2a6";
     const REGRESSION_CHECKOUT_HEAD: &str = "0582da0a38886f5ceeb65ab9afcd0797f6fa14b0";
-    const CURRENT_PRODUCTION_MANIFEST: &str = "0619a65e397a427cd6338a75a86ef8f52a64ba78";
+    const CURRENT_PRODUCTION_MANIFEST: &str = "5744c802fc8096683faf175c29b9c6c359617bb1";
     const V0_11_1_PRODUCTION_MANIFEST: &str = "bd56901eb9d692e6eb5c2e6f8b33d26abe14f910";
     const REGRESSION_PRODUCTION_MANIFEST: &str = "32f3644b56f848d5d9a231c28dc6a072185e9bb0";
     const CURRENT_SURROUNDING_TEST_MANIFEST: &str = "06b08d8729dc02019f96cf9f911a1f3d5cdf3df3";
