@@ -3655,6 +3655,29 @@ times the pinned `0582da0` regression median. Each timing run first
 authenticates the complete measured crate graph and exact injected harness by
 content manifest. Reference runs also authenticate their pinned commit.
 
+### F-X076, Tag v0.12.0 (S)
+
+Publish the reviewed stable Word outcomes added after v0.11.1 as the exact
+seven-package stable family at 0.12.0. Move every stable manifest, workspace
+pin, lock record, README requirement, source assertion, CI literal, Python and
+WASM metadata carrier, workflow preflight, and release regression in lockstep.
+Keep the shared OOXML and PowerPoint family at its separately published 0.9.0
+boundary. Python, WASM, npm, and PyPI remain outside publication authority.
+
+The reviewed changelog credits Pedro Assumpcao for PRs 61 through 64 and
+`@emptinessform` for Issues 65 through 67. Each outcome landed through the
+maintained hardened equivalent. After successful publication and release-body
+verification, post one specific thank-you comment to each record. Leave every
+record's open or closed state unchanged, including open Issue 67.
+
+**Depends on**: F-X074, F-X075.
+**Test gate**: release. After one clean full verification and sprint review at
+the exact prepared SHA, `/release v0.12.0` obtains separate final approval and
+publishes exactly `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
+`rdocx-pdf`, `rdocx`, and `rdocx-cli`. Every registry entry, owner, tag target,
+release-body byte, selected-family exclusion, and all seven notification URLs
+must verify before completion.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this

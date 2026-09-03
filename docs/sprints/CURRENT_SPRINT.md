@@ -41,6 +41,7 @@ bounded performance cliff before the separately reviewed stable Word release.
 | F-225 | PDF page content import | L | done | - |
 | F-X074 | Tag rpptx-v0.9.0 | S | done | - |
 | F-X075 | Preserve restart pagination across page-spanning paragraphs | M | done | - |
+| F-X076 | Tag v0.12.0 | S | pending | - |
 
 ## Sequencing note
 
@@ -55,6 +56,8 @@ F-X075 is a late cross-cutting correction requested after Issue 67 reproduced
 an unreleased F-X073 regression. It is independent of the presentation
 implementation, but its stable release follows the reviewed
 `rpptx-v0.9.0` publication so the selected package families remain separate.
+F-X076 owns that later stable publication and its seven reviewed contribution
+notifications.
 
 ## Definition of done for this sprint
 
