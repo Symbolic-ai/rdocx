@@ -313,10 +313,9 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
 `rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15
-are prepared at 0.9.0 for the separately approved `rpptx-v0.9.0` release. The
-last published boundary remains 0.8.0 from the immutable annotated
-`rpptx-v0.8.0` tag at reviewed SHA
-`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The earlier 0.7.0, 0.6.0, 0.5.0,
+are published at 0.9.0 from immutable annotated `rpptx-v0.9.0` tag at reviewed
+SHA `45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The earlier 0.8.0, 0.7.0,
+0.6.0, 0.5.0,
 and 0.4.0 registry releases remain available, and no existing version or tag
 was moved. Manifest eligibility and allowlist membership do not authorize a
 later publication without a separately approved `/release` invocation at the
@@ -335,13 +334,13 @@ leave-open notifications are verified. After separate approval, exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
 releases remain live and unyanked. The tag is never moved or deleted, no
 v0.11.0 GitHub release exists, and no other external state changes. Current
-stable source pins the prepared shared 0.9.0 boundary without changing the
-published stable package version or granting stable publication authority.
+stable source is prepared at 0.12.0 and pins the published shared 0.9.0
+boundary without granting stable publication authority.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.11.1, nine internal
+stable regression requires prepared workspace version 0.12.0, nine internal
 pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
 set. The incubating regression requires the exact 0.9.0 versions, pins,
@@ -425,10 +424,11 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group, its two Python project
-versions, and the rdocx WASM contract literals are at 0.11.1. The exact
-seven-package stable family is published from the immutable annotated
+versions, and the rdocx WASM contract literals are prepared at 0.12.0. The last
+published exact seven-package stable family remains the immutable annotated
 `v0.11.1` tag at reviewed SHA
-`5a850ce9ae6c31f8365594ed2970193266f8b2a6`.
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6` until the separately approved
+`v0.12.0` release completes.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed against the published shared 0.7.0 API.
 The remaining five packages and GitHub release were not published at that

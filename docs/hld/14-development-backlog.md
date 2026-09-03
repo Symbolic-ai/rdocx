@@ -3604,11 +3604,12 @@ aggregate budget is rejected without changing output.
 
 ### F-X074, Tag rpptx-v0.9.0 (S)
 
-Publish the completed M21 PresentationML depth boundary as the exact
-15-package incubating family at 0.9.0. Move every selected manifest, workspace
-pin, lock record, README requirement, source assertion, CI literal, and the
-unpublished `rpptx-wasm` preparation carrier in lockstep. Stable packages,
-bindings, WASM, Python, npm, and PyPI remain outside publication authority.
+The completed M21 PresentationML depth boundary is published as the exact
+15-package incubating family at 0.9.0 from immutable annotated tag
+`rpptx-v0.9.0` at reviewed SHA
+`45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. Every registry entry reports sole
+owner `mantissaman (Atul Sharma)`, the GitHub release body is byte-identical to
+the reviewed notes, and `rpptx-wasm@0.9.0` remains absent from crates.io.
 
 The reviewed changelog covers collaboration, security, timing, media,
 SmartArt, interchange, package variants, notes and handouts, animated export,
@@ -3619,11 +3620,9 @@ family.
 
 **Depends on**: F-213, F-214, F-215, F-216, F-217, F-218, F-219, F-220,
 F-221, F-222, F-223, F-224, F-225, F-226, F-227, F-X068.
-**Test gate**: release. After one clean full verification and sprint review at
-the exact prepared SHA, `/release rpptx-v0.9.0` obtains separate final approval
-and publishes exactly the 15 incubating crates. Every registry entry, owner,
-tag target, release-body byte, stable exclusion, and absent
-`rpptx-wasm@0.9.0` must verify before completion.
+**Test gate**: release, passed. All 15 incubating registry entries, their owner,
+the annotated tag target, release-body bytes, stable exclusion, and absent
+`rpptx-wasm@0.9.0` verified after separately approved publication.
 
 ### F-X075, Preserve restart pagination across page-spanning paragraphs (M)
 

@@ -2,7 +2,80 @@
 
 ## Unreleased
 
-No changes have been recorded since the rpptx-v0.9.0 preparation.
+No changes have been recorded since the v0.12.0 preparation.
+
+## v0.12.0
+
+### Highlights
+
+The stable Word family moves to 0.12.0 with richer relationship-safe reader
+facts and bounded restart pagination for ordinary prose. Warm layouts now keep
+their complete prefix across note references and page-spanning paragraphs
+without the document-wide second pagination pass reported after v0.11.1.
+
+### Added
+
+- Expose namespace-aware hyperlink targets, external-image relationships, and
+  drawing safety facts shaped by [PR
+  61](https://github.com/tensorbee/rdocx/pull/61).
+- Expose document, table, row-grid, border, formatting, and retained-property
+  completeness facts shaped by [PR
+  62](https://github.com/tensorbee/rdocx/pull/62).
+- Expose numbering identity, level metadata, and effective paragraph and run
+  formatting shaped by [PR
+  63](https://github.com/tensorbee/rdocx/pull/63).
+- Expose bounded nested-revision projection, preserved insertion facts, and
+  ordered complex-field display segments shaped by [PR
+  64](https://github.com/tensorbee/rdocx/pull/64).
+
+### Fixed
+
+- Keep direct body paragraphs with footnote or endnote references eligible for
+  exact cache reuse while retaining note-part invalidation, addressing [Issue
+  65](https://github.com/tensorbee/rdocx/issues/65).
+- Admit ordinary multi-line prose and complete block-boundary restart records
+  under the shared aggregate cache budget, addressing [Issue
+  66](https://github.com/tensorbee/rdocx/issues/66).
+- Keep the completed recorded pagination pass when a paragraph spans a page,
+  then publish only later complete-boundary checkpoints, addressing [Issue
+  67](https://github.com/tensorbee/rdocx/issues/67).
+
+### Compatibility
+
+The exact seven-package stable crates.io family moves together from 0.11.1 to
+0.12.0. The selected set is `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
+`rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`. It depends on the
+separately published shared OOXML 0.9.0 family.
+
+Native reader additions use existing non-exhaustive or additive pre-1.0
+surfaces. Full low-level `rdocx-oxml` struct literals written against 0.11.1
+must initialize the new preservation fields or use the existing constructors
+and `Default` implementations. The cache and pagination fixes require no
+migration and leave rendered output unchanged. Python, WASM, npm, and PyPI
+publication authority is unchanged, and `rdocx-wasm@0.12.0` is not a crates.io
+package.
+
+### Contributors
+
+Thanks to `@pedroassumpcao` for the relationship-safe hyperlink and drawing
+reader design in [PR 61](https://github.com/tensorbee/rdocx/pull/61), document
+and table completeness design in [PR
+62](https://github.com/tensorbee/rdocx/pull/62), numbering and effective
+formatting design in [PR 63](https://github.com/tensorbee/rdocx/pull/63), and
+tracked insertion and field safety design in [PR
+64](https://github.com/tensorbee/rdocx/pull/64).
+
+Thanks to `@emptinessform` for the note-reference cache report in [Issue
+65](https://github.com/tensorbee/rdocx/issues/65), ordinary-prose restart report
+in [Issue 66](https://github.com/tensorbee/rdocx/issues/66), and page-spanning
+paragraph regression report in [Issue
+67](https://github.com/tensorbee/rdocx/issues/67).
+
+No named external patch landed directly. Each contribution landed through a
+reviewed hardened equivalent that retains namespace identity, raw XML,
+bounded work, exact warm and fresh equality, and compatibility contracts. The
+four pull requests and Issues 65 and 66 remain closed after their release-bound
+thank-yous. Issue 67 remains open after its release-bound thank-you.
 
 ## rpptx-v0.9.0
 

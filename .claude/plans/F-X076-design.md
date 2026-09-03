@@ -125,12 +125,12 @@ only. Any output delta blocks preparation.
 
 ## Implementation checklist
 
-- [ ] Confirm F-X074 and F-X075 are completed and the shared 0.9.0 family is published.
-- [ ] Move every stable version carrier and internal stable dependency pin to 0.12.0.
-- [ ] Update stable carrier, workflow, registry, and notification regressions.
-- [ ] Prepare reviewed stable release notes with all seven linked contributions and exact credit.
-- [ ] Update exactly the five listed HLD files.
-- [ ] Run `/verify --full`, packaging, assets, bindings, WASM, dependency, supply-chain, notes, and hash gates.
+- [x] Confirm F-X074 and F-X075 are completed and the shared 0.9.0 family is published.
+- [x] Move every stable version carrier and internal stable dependency pin to 0.12.0.
+- [x] Update stable carrier, workflow, registry, and notification regressions.
+- [x] Prepare reviewed stable release notes with all seven linked contributions and exact credit.
+- [x] Update exactly the five listed HLD files.
+- [x] Run `/verify --full`, packaging, assets, bindings, WASM, dependency, supply-chain, notes, and hash gates.
 - [ ] Stop at `/release v0.12.0` for separate final approval.
 - [ ] Verify every publication, owner, tag, body, exclusion, and notification before completion.
 
