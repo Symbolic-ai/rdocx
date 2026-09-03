@@ -41,7 +41,7 @@ bounded performance cliff before the separately reviewed stable Word release.
 | F-225 | PDF page content import | L | done | - |
 | F-X074 | Tag rpptx-v0.9.0 | S | done | - |
 | F-X075 | Preserve restart pagination across page-spanning paragraphs | M | done | - |
-| F-X076 | Tag v0.12.0 | S | in-progress | codex |
+| F-X076 | Tag v0.12.0 | S | done | - |
 
 ## Sequencing note
 
@@ -97,3 +97,6 @@ notifications.
   without weakening any existing unsafe-state exclusion.
 - The reviewed `rpptx-v0.9.0` release publishes and independently verifies the
   exact 15-package incubating family before sprint closure.
+- The reviewed `v0.12.0` release publishes and independently verifies the exact
+  seven-package stable family, retains unpublished bindings, and records all
+  seven contribution notifications without changing record state.

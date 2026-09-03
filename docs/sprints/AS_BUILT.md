@@ -11166,3 +11166,71 @@ release.
 **Notes for future sessions.** Keep release-family selection exact. Verify
 registry ownership, the dereferenced annotated tag, release-body bytes, and
 explicitly excluded binding packages before completing a release story.
+
+### F-X076, Tag v0.12.0
+
+**Sprint.** S64
+**Completed.** 2026-09-03
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The reviewed `v0.12.0` release published the exact stable
+Word family: `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
+`rdocx-pdf`, `rdocx`, and `rdocx-cli`. The annotated tag dereferences to the
+reviewed sprint SHA `19adaacfcf82e3918bba4f8c3648747f1969b746`. The GitHub
+`Publish` workflow completed successfully at
+https://github.com/tensorbee/rdocx/actions/runs/33728011369, and the release is
+available at https://github.com/tensorbee/rdocx/releases/tag/v0.12.0.
+
+**Non-obvious choices.** Publication remained limited to the seven stable
+crates at 0.12.0. Every registry entry reports owner `mantissaman (Atul
+Sharma)`. Shared OOXML and PowerPoint packages stayed at their published 0.9.0
+boundary. `rdocx-wasm@0.12.0` remained absent from crates.io, and no Python,
+npm, WASM, or PyPI package was published.
+
+**Deviations from the design plan.** None. The release used the separately
+approved exact reviewed SHA, pushed the sprint branch first, created one
+annotated tag, pushed only that tag, and retained the selected-family boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full non-fast verification and the clean sprint review passed at
+the released SHA with 49 of 49 deterministic hashes unchanged. All 22 local
+package dry-runs passed below 10 MiB. The publication workflow passed output,
+metadata, shared-family, release-note, archive, stable allowlist, and GitHub
+release gates. Independent post-publication checks downloaded all seven exact
+registry versions, verified their owner, verified the annotated tag target,
+and matched the 3,525-byte GitHub release body byte for byte to the reviewed
+changelog render. Both bodies have SHA-256
+`37e3fbc29e0d7425a4ca5559e8fd73db2fc25db31a000183343521ac83f68c07`.
+
+**Contribution inventory.** Pull requests
+https://github.com/tensorbee/rdocx/pull/61,
+https://github.com/tensorbee/rdocx/pull/62,
+https://github.com/tensorbee/rdocx/pull/63, and
+https://github.com/tensorbee/rdocx/pull/64 by authenticated
+`@pedroassumpcao` contributed reader outcomes through reviewed hardened
+equivalents. Issues https://github.com/tensorbee/rdocx/issues/65,
+https://github.com/tensorbee/rdocx/issues/66, and
+https://github.com/tensorbee/rdocx/issues/67 by authenticated
+`@emptinessform` reported cache and pagination defects fixed through reviewed
+hardened equivalents. The pull requests remain closed and unmerged. Issues 65
+and 66 remain closed, and Issue 67 remains open.
+
+**Notifications.** Release-bound thank-you comments were posted at
+https://github.com/tensorbee/rdocx/pull/61#issuecomment-5522283440,
+https://github.com/tensorbee/rdocx/pull/62#issuecomment-5522283669,
+https://github.com/tensorbee/rdocx/pull/63#issuecomment-5522283889,
+https://github.com/tensorbee/rdocx/pull/64#issuecomment-5522284147,
+https://github.com/tensorbee/rdocx/issues/65#issuecomment-5522284354,
+https://github.com/tensorbee/rdocx/issues/66#issuecomment-5522284700, and
+https://github.com/tensorbee/rdocx/issues/67#issuecomment-5522284889.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep stable publication limited to the exact
+seven-package family. Verify each downloaded registry package, owner, annotated
+tag target, release-body bytes, unpublished carrier, contribution state, and
+notification URL before completing a release story.

@@ -1,6 +1,6 @@
 # F-X076, Tag v0.12.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S64
 **Size**: S
 **Depends on**: F-X074, F-X075
@@ -131,8 +131,8 @@ only. Any output delta blocks preparation.
 - [x] Prepare reviewed stable release notes with all seven linked contributions and exact credit.
 - [x] Update exactly the five listed HLD files.
 - [x] Run `/verify --full`, packaging, assets, bindings, WASM, dependency, supply-chain, notes, and hash gates.
-- [ ] Stop at `/release v0.12.0` for separate final approval.
-- [ ] Verify every publication, owner, tag, body, exclusion, and notification before completion.
+- [x] Stop at `/release v0.12.0` for separate final approval.
+- [x] Verify every publication, owner, tag, body, exclusion, and notification before completion.
 
 ## Open questions
 
