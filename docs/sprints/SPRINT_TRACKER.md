@@ -371,6 +371,7 @@ defended.
 | F-224 | S64 | L | 4 | 1 | 2026-09-02 | Imported bounded HTML and CSS into editable slide shapes, text, tables, images, and links with pinned Chrome parity |
 | F-225 | S64 | L | 4 | 1 | 2026-09-02 | Imported PDF pages as preserved graphics or editable text, paths, images, and links with pinned Poppler parity |
 | F-X075 | S64 | M | 2 | 1 | 2026-09-02 | Preserved complete-boundary restart pagination across page-spanning prose with exact sourced reuse and authenticated performance evidence |
+| F-X074 | S64 | S | 1 | 2 | 2026-09-03 | Published and independently verified the exact 15-package rpptx 0.9.0 family with the reviewed release body and no binding publication |
 
 ## Velocity
 

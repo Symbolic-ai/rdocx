@@ -1,6 +1,6 @@
 # F-X074, Tag rpptx-v0.9.0
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S64
 **Size**: S
 **Depends on**: F-213, F-214, F-215, F-216, F-217, F-218, F-219, F-220,
@@ -124,8 +124,8 @@ only. Any output delta blocks preparation.
 - [x] Prepare reviewed M21 release notes with an empty selected-family contribution inventory.
 - [x] Update exactly the five listed HLD files.
 - [x] Run `/verify --full`, packaging, assets, bindings, WASM, dependency, supply-chain, oracle, notes, and hash gates.
-- [ ] Stop at `/release rpptx-v0.9.0` for separate final approval.
-- [ ] Verify every publication, owner, tag, body, and exclusion before completion.
+- [x] Stop at `/release rpptx-v0.9.0` for separate final approval.
+- [x] Verify every publication, owner, tag, body, and exclusion before completion.
 
 ## Open questions
 

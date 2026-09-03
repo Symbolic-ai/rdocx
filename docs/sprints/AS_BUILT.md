@@ -11110,3 +11110,59 @@ and zero nitpicks.
 boundaries. A split page is not itself unsafe, but any state absent from the
 checkpoint identity remains a reason to fall back. Performance evidence must
 authenticate measured source content rather than trusting a checkout label.
+
+### F-X074, Tag rpptx-v0.9.0
+
+**Sprint.** S64
+**Completed.** 2026-09-03
+**Size.** S, estimated 1 day, actual 2 days
+
+**What was built.** The reviewed `rpptx-v0.9.0` release published the exact
+15-package shared OOXML and PowerPoint family at 0.9.0. The annotated tag
+dereferences to reviewed sprint SHA
+`45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The GitHub `Publish` workflow
+completed successfully at
+https://github.com/tensorbee/rdocx/actions/runs/33719233249, and the release is
+available at https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.9.0.
+
+**Non-obvious choices.** Publication remained limited to `oxml-core`,
+`oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`,
+`oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Every registry entry
+reports version 0.9.0 and owner `mantissaman (Atul Sharma)`. The stable Word
+family stayed at 0.11.1, and `rpptx-wasm@0.9.0` remained absent from crates.io.
+
+**Deviations from the design plan.** None. The release used the separately
+approved exact reviewed SHA, pushed the sprint branch first, created one
+annotated tag, pushed only that tag, and retained the selected-family boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full non-fast verification and the clean sprint review passed at
+the released SHA with 49 of 49 deterministic hashes unchanged. All 22 local
+package dry-runs passed below 10 MiB. The publication workflow passed output,
+metadata, release-note, archive, selected-family, and GitHub release gates.
+Independent post-publication checks downloaded all 15 exact registry versions,
+verified their owner, verified the annotated tag target, and matched the
+3,119-byte GitHub release body byte for byte to the reviewed changelog render.
+Both bodies have SHA-256
+`31f83a5d629c1cbd837176d5993d8d98469dbd0d9fd9fac733055ae9083c4c2e`.
+
+**Contribution inventory.** The selected-family inventory is empty. Pull
+requests https://github.com/tensorbee/rdocx/pull/59 and
+https://github.com/tensorbee/rdocx/pull/60 were disposable internal CI proofs.
+Pull requests https://github.com/tensorbee/rdocx/pull/61 through
+https://github.com/tensorbee/rdocx/pull/64 and Issues
+https://github.com/tensorbee/rdocx/issues/65 through
+https://github.com/tensorbee/rdocx/issues/67 belong to the stable Word family.
+No release notification comment was required or posted for this PowerPoint
+release.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep release-family selection exact. Verify
+registry ownership, the dereferenced annotated tag, release-body bytes, and
+explicitly excluded binding packages before completing a release story.
