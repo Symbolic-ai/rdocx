@@ -41,7 +41,7 @@ bounded performance cliff before the separately reviewed stable Word release.
 | F-225 | PDF page content import | L | done | - |
 | F-X074 | Tag rpptx-v0.9.0 | S | done | - |
 | F-X075 | Preserve restart pagination across page-spanning paragraphs | M | done | - |
-| F-X076 | Tag v0.12.0 | S | pending | - |
+| F-X076 | Tag v0.12.0 | S | in-progress | codex |
 
 ## Sequencing note
 
