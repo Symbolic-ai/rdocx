@@ -1894,9 +1894,30 @@ does not add the legacy binary `.ppt` format. Executable VBA, ActiveX controls,
 and arbitrary embedded objects remain inventory and preservation surfaces.
 
 **End-of-milestone gate**: one representative modern deck round-trips its
-comments, sections, SmartArt, media, animation timeline, signatures, and package
-variant without repair. Its static frames, animated export, notes, and handouts
-match the pinned PowerPoint oracle at their declared fidelity boundaries.
+comments, sections, authentic pinned-resource SmartArt, media, animation
+timeline, signatures, and package variant without repair. Its static frames,
+animated export, notes, and handouts
+match the pinned PowerPoint 16.104 oracle at their declared fidelity boundaries.
+An embedded manifest pins the no-repair signed canonical source, its exact
+observed active file name, and its four directly bound outputs. The release
+oracle consumes only the captured bundle from a configured directory. An
+ignored macOS reference-only writer owns access to external authentic SmartArt
+resources. The portable source-built signature proof has byte-identical
+non-signature parts and relationships. One shared assertion applies the full
+package, collaboration, section, media, playback, timing, signature, slide, and
+SmartArt semantic contract to both exact source bytes and their save/reopen
+result. Authentic mode rejects unsupported SmartArt fallback. All three static
+pages and the three aligned movie samples require exact normalized token
+cardinality and order, all non-media ink within 6 pixels at 150 DPI, and at
+least 0.45 SSIM per complete ink region after masking only the page-one
+audio-poster rectangle. The third static page must prove the complete SmartArt
+graph and relationships plus visible three-node SmartArt text and ink. Notes
+and handout page sizes are recorded absolutely. Notes require exact per-page
+tokens and bounded monochrome-band cardinality. Corresponding semantic notes
+components compare by normalized size within 0.06 and ink occupancy within
+0.35. Placement is not equated across different notes masters and page sizes.
+Handout text and thumbnail geometry compare in normalized coordinates within
+0.05 of one page dimension.
 
 ### F-213, Animation and transition timing model (L)
 Typed timing nodes, sequences, parallel groups, triggers, entrance and exit
@@ -1990,20 +2011,36 @@ scope.
 their original package class with preserved executable payloads.
 
 ### F-224, HTML slide content import (L)
-Project a bounded HTML and CSS presentation subset into editable slide shapes,
-text, tables, images, and links with explicit layout and unsupported-style
-diagnostics.
+The native `rpptx` facade projects a bounded HTML5 and CSS subset into fresh,
+editable slide shapes, formatted text, tables, caller-supplied images, and
+links. Explicit absolute geometry, supported cascade semantics, stable DOM-path
+diagnostics, and closed resource limits define the conversion boundary. The
+candidate is serialized, reopened, and validated before publication. Browser
+layout, scripts, external fetching, transforms, and unsupported CSS remain out
+of scope and diagnostic.
 **Depends on**: F-110, F-112.
 **Test gate**: differential. Source-built HTML matches the browser reference at
-the declared shape, text, and pixel boundary after save and reopen.
+the declared structure, text, one-pixel geometry, and 0.95 full-image luminance
+SSIM boundary after save and reopen with Google Chrome 152.0.7977.65.
 
 ### F-225, PDF page content import (L)
 Import PDF pages as either preserved page graphics or a bounded editable subset
-of text, raster images, paths, and links. Font substitution and unsupported PDF
-operators remain explicit diagnostics.
+of text, raster images, nonzero paths, and URI links. Strict bounded parsing,
+CropBox and rotation normalization, equal effective page sizes, deterministic
+font resolution, and transactional save, reopen, and validation define the
+conversion boundary. Font substitution and unsupported PDF operators remain
+explicit ordered diagnostics. Editable dash arrays require strictly positive
+members and phase zero or an exactly representable dash boundary. Zero members,
+interior phases, and positive members that convert to a zero DrawingML stop
+diagnose and omit affected strokes until valid dash state or graphics-state
+restore. JavaScript, encryption, malformed graphs, and declared resource-limit
+failures are rejected.
 **Depends on**: F-109, F-110, F-111.
 **Test gate**: differential. Pinned PDF pages preserve page geometry and match
-the source render, while the editable subset retains text and link mappings.
+the source render at the declared Poppler 26.01.0, 150 DPI, exact-dimension,
+and 0.995 raw full-image luminance SSIM boundary. The editable subset retains
+text and link mappings. Geometry, one-pixel imported geometry, text, link, and
+fill mutations prove the final predicate remains sensitive.
 
 ### F-226, Notes and handout export (M)
 Render relationship-resolved speaker notes and all six audience handout grids
@@ -3564,6 +3601,81 @@ a heading publishes a restart candidate larger than 8 MiB when the aggregate
 remains below 64 MiB. Late edit, insert, delete, and undo layouts reuse bounded
 work and remain byte-for-byte equal to fresh layout. A candidate above the
 aggregate budget is rejected without changing output.
+
+### F-X074, Tag rpptx-v0.9.0 (S)
+
+The completed M21 PresentationML depth boundary is published as the exact
+15-package incubating family at 0.9.0 from immutable annotated tag
+`rpptx-v0.9.0` at reviewed SHA
+`45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. Every registry entry reports sole
+owner `mantissaman (Atul Sharma)`, the GitHub release body is byte-identical to
+the reviewed notes, and `rpptx-wasm@0.9.0` remains absent from crates.io.
+
+The reviewed changelog covers collaboration, security, timing, media,
+SmartArt, interchange, package variants, notes and handouts, animated export,
+and bounded HTML and PDF import. The selected-family contribution inventory is
+empty. Disposable CI proof PRs 59 and 60 have no shipped user outcome. PRs 61
+through 64 and Issues 65 through 67 remain attributed only to the stable Word
+family.
+
+**Depends on**: F-213, F-214, F-215, F-216, F-217, F-218, F-219, F-220,
+F-221, F-222, F-223, F-224, F-225, F-226, F-227, F-X068.
+**Test gate**: release, passed. All 15 incubating registry entries, their owner,
+the annotated tag target, release-body bytes, stable exclusion, and absent
+`rpptx-wasm@0.9.0` verified after separately approved publication.
+
+### F-X075, Preserve restart pagination across page-spanning paragraphs (M)
+
+Keep the recorded pagination pass when an otherwise eligible ordinary-prose
+paragraph spans a page boundary. A split continuation still creates no
+checkpoint inside the paragraph. The next checkpoint may be recorded only
+after the whole paragraph completes and the existing note, wrap, and resolved
+state is clean. Numbering, drawings, raw XML, fields, unsafe tables,
+backgrounds, multiple sections, dirty note state, and every other existing
+restart exclusion remain fail-closed.
+
+Remove the document-wide split veto that discards the completed recorded pass
+and immediately paginates the whole document again. Retain the existing exact
+context fingerprints, aggregate cache budget, checkpoint bounds, and
+transactional publication. This is the hardened fix for Issue 67 and does not
+add a mid-paragraph continuation model or a public API.
+
+**Depends on**: F-X073.
+**Test gate**: regression. A deterministic 175-paragraph source-built document
+whose four-line paragraphs span 16 pages completes one recorded pass, retains
+a restart record, and records no checkpoint inside a paragraph. Ten warm
+middle edits produce 174 paragraph-cache hits and one rebuild, paginate only a
+bounded affected page range, and equal fresh layout exactly. Late edit,
+insert, delete, undo, note-bearing split, and displayed page-number footer
+cases remain exact. Existing unsafe inputs still reject restart publication.
+An interleaved release-mode comparison for the 175 and 700 paragraph native
+and bundled-fallback paths is no worse than 1.25 times v0.11.1 and at most 0.75
+times the pinned `0582da0` regression median. Each timing run first
+authenticates the complete measured crate graph and exact injected harness by
+content manifest. Reference runs also authenticate their pinned commit.
+
+### F-X076, Tag v0.12.0 (S)
+
+Publish the reviewed stable Word outcomes added after v0.11.1 as the exact
+seven-package stable family at 0.12.0. Move every stable manifest, workspace
+pin, lock record, README requirement, source assertion, CI literal, Python and
+WASM metadata carrier, workflow preflight, and release regression in lockstep.
+Keep the shared OOXML and PowerPoint family at its separately published 0.9.0
+boundary. Python, WASM, npm, and PyPI remain outside publication authority.
+
+The reviewed changelog credits Pedro Assumpcao for PRs 61 through 64 and
+`@emptinessform` for Issues 65 through 67. Each outcome landed through the
+maintained hardened equivalent. After successful publication and release-body
+verification, post one specific thank-you comment to each record. Leave every
+record's open or closed state unchanged, including open Issue 67.
+
+**Depends on**: F-X074, F-X075.
+**Test gate**: release. After one clean full verification and sprint review at
+the exact prepared SHA, `/release v0.12.0` obtains separate final approval and
+publishes exactly `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
+`rdocx-pdf`, `rdocx`, and `rdocx-cli`. Every registry entry, owner, tag target,
+release-body byte, selected-family exclusion, and all seven notification URLs
+must verify before completion.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

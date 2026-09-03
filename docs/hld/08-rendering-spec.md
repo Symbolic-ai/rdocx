@@ -791,14 +791,18 @@ equal.
 The engine also records restart checkpoints for one safe section containing
 ordinary context-independent paragraphs, safe paragraph note references, and
 cache-safe tables. Multi-line prose, headings, `keepNext`, and `keepLines` are
-eligible when pagination reaches a complete block boundary. A checkpoint
-exists only before a complete block at an empty page boundary after the current
-and pending note queues have drained. The paginator never records one inside a
-table or a split paragraph. It records the next block, page count, and displayed
-header page number. Unchanged footnote, endnote, header, and footer stories
-participate through exact retained-context equality. A changed related story or
-body note-reference sequence uses the full paginator. Note-bearing tables,
-backgrounds, fields, drawings, multi-section content, split paragraphs, and any
+eligible when pagination reaches a complete block boundary. An otherwise safe
+paragraph may span one or more pages without invalidating the completed
+recorded pass. A checkpoint exists only before a complete block at an empty
+page boundary after the current and pending note queues have drained. A split
+continuation finishes pages without recording a checkpoint. The first later
+checkpoint is eligible only after the entire paragraph completes and the
+existing note, wrap, and resolved state is clean. The paginator never records
+one inside a table or a paragraph. It records the next block, page count, and
+displayed header page number. Unchanged footnote, endnote, header, and footer
+stories participate through exact retained-context equality. A changed related
+story or body note-reference sequence uses the full paginator. Note-bearing
+tables, backgrounds, fields, drawings, multi-section content, and any
 unrepresented state also use the full paginator. A warm edit restarts at the
 last checkpoint before its first changed block. It stops at the first safe page
 boundary inside an unchanged suffix only when the complete retained context,
@@ -951,6 +955,32 @@ existing presentation model, and exported content leaves from that model.
 LibreOffice is used only as the pinned two-direction structural and PDF record
 oracle. Existing deterministic presentation rendering and the 49-entry hash
 harness remain unchanged.
+
+HTML presentation import also adds no rendering path. Supported boxes become
+ordinary shapes, text boxes, tables, pictures, and hyperlink relationships
+before save and reopen. Explicit CSS pixels use 9,525 EMU and the imported deck
+uses a 1,280 by 720 CSS-pixel slide. Deterministic rendering therefore consumes
+the same PresentationML model as authored slides. The browser differential
+uses the bundled Carlito bytes, 96 DPI, at most one CSS pixel of geometry
+error, exact reopened structure and text facts, and a full-image luminance SSIM
+floor of 0.95.
+
+PDF presentation import also adds no rendering path. The private interpreter
+lowers supported PDF graphics state, paths, text, raster images, and links into
+`PageFrame` and `PositionedElement` values. Preserved mode rasterizes that page
+through `oxml_pdf::render_page_to_png` before normal picture insertion.
+Editable mode projects the same normalized geometry into ordinary slide
+content. The shared PDF dash state accepts strictly positive arrays whose phase
+is zero or lands on an exactly representable dash boundary. Zero members,
+interior phases, and positive members that would become zero DrawingML stops
+diagnose and omit affected strokes until a valid dash state or graphics-state
+restore. The differential oracle is Poppler 26.01.0 at 150 DPI with exact page
+dimensions and a raw full-image luminance SSIM floor of 0.995. Pixel-aligned
+representative geometry includes a 38.4-point styled square so renderer-only
+antialiasing does not weaken the metric while stroke, text, and image content
+remain painted. Deterministic embedded Carlito bytes and
+explicit geometry, image, text, link, and fill perturbation checks make that
+boundary reproducible.
 
 The additive timeline path resolves the same slide into a
 `ResolvedTimelineSlide`, which pairs each resolved shape with its stable source

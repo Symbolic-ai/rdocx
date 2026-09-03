@@ -36,10 +36,10 @@ regenerated, never hand-edited.
 | M18, Format breadth                            | 8  | 5 | 3 | 0  |
 | M19, Advanced spreadsheets                     | 21 | 0 | 0 | 21 |
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
-| M21, Presentation depth                        | 15 | 11 | 0 | 4  |
+| M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 76 | 68 | 3 | 2  |
-| **Total** | **323** | **275** | **6** | **39** |
+| X, Cross-cutting (opportunistic)            | 79 | 71 | 3 | 2  |
+| **Total** | **326** | **282** | **6** | **35** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -420,8 +420,8 @@ regenerated, never hand-edited.
 | F-221 | Presentation encryption and signatures      | S59 | M | done |
 | F-222 | ODP read and write                           | S63 | L | done |
 | F-223 | Modern presentation package variants        | S63 | M | done |
-| F-224 | HTML slide content import                    | S64 | L | pending |
-| F-225 | PDF page content import                      | S64 | L | pending |
+| F-224 | HTML slide content import                    | S64 | L | done |
+| F-225 | PDF page content import                      | S64 | L | done |
 | F-226 | Notes and handout export                     | S63 | M | done |
 | F-227 | Animated GIF and video export                | S61 | L | done |
 <!-- AUTOGEN:backlog-M21 END -->
@@ -526,4 +526,7 @@ regenerated, never hand-edited.
 | F-X071 | Integrate PRs 61 through 64                | S62 | L | done |
 | F-X072 | Keep paragraph caching across note references | S63 | M | done |
 | F-X073 | Restart ordinary-prose pagination within the aggregate cache | S63 | L | done |
+| F-X074 | Tag rpptx-v0.9.0                          | S64 | S | done |
+| F-X075 | Preserve restart pagination across page-spanning paragraphs | S64 | M | done |
+| F-X076 | Tag v0.12.0                               | S64 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

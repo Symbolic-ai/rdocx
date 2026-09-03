@@ -2,7 +2,144 @@
 
 ## Unreleased
 
-No changes have been recorded since the v0.11.1 preparation.
+No changes have been recorded since the v0.12.0 preparation.
+
+## v0.12.0
+
+### Highlights
+
+The stable Word family moves to 0.12.0 with richer relationship-safe reader
+facts and bounded restart pagination for ordinary prose. Warm layouts now keep
+their complete prefix across note references and page-spanning paragraphs
+without the document-wide second pagination pass reported after v0.11.1.
+
+### Added
+
+- Expose namespace-aware hyperlink targets, external-image relationships, and
+  drawing safety facts shaped by [PR
+  61](https://github.com/tensorbee/rdocx/pull/61).
+- Expose document, table, row-grid, border, formatting, and retained-property
+  completeness facts shaped by [PR
+  62](https://github.com/tensorbee/rdocx/pull/62).
+- Expose numbering identity, level metadata, and effective paragraph and run
+  formatting shaped by [PR
+  63](https://github.com/tensorbee/rdocx/pull/63).
+- Expose bounded nested-revision projection, preserved insertion facts, and
+  ordered complex-field display segments shaped by [PR
+  64](https://github.com/tensorbee/rdocx/pull/64).
+
+### Fixed
+
+- Keep direct body paragraphs with footnote or endnote references eligible for
+  exact cache reuse while retaining note-part invalidation, addressing [Issue
+  65](https://github.com/tensorbee/rdocx/issues/65).
+- Admit ordinary multi-line prose and complete block-boundary restart records
+  under the shared aggregate cache budget, addressing [Issue
+  66](https://github.com/tensorbee/rdocx/issues/66).
+- Keep the completed recorded pagination pass when a paragraph spans a page,
+  then publish only later complete-boundary checkpoints, addressing [Issue
+  67](https://github.com/tensorbee/rdocx/issues/67).
+
+### Compatibility
+
+The exact seven-package stable crates.io family moves together from 0.11.1 to
+0.12.0. The selected set is `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
+`rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`. It depends on the
+separately published shared OOXML 0.9.0 family.
+
+Native reader additions use existing non-exhaustive or additive pre-1.0
+surfaces. Full low-level `rdocx-oxml` struct literals written against 0.11.1
+must initialize the new preservation fields or use the existing constructors
+and `Default` implementations. The cache and pagination fixes require no
+migration and leave rendered output unchanged. Python, WASM, npm, and PyPI
+publication authority is unchanged, and `rdocx-wasm@0.12.0` is not a crates.io
+package.
+
+### Contributors
+
+Thanks to `@pedroassumpcao` for the relationship-safe hyperlink and drawing
+reader design in [PR 61](https://github.com/tensorbee/rdocx/pull/61), document
+and table completeness design in [PR
+62](https://github.com/tensorbee/rdocx/pull/62), numbering and effective
+formatting design in [PR 63](https://github.com/tensorbee/rdocx/pull/63), and
+tracked insertion and field safety design in [PR
+64](https://github.com/tensorbee/rdocx/pull/64).
+
+Thanks to `@emptinessform` for the note-reference cache report in [Issue
+65](https://github.com/tensorbee/rdocx/issues/65), ordinary-prose restart report
+in [Issue 66](https://github.com/tensorbee/rdocx/issues/66), and page-spanning
+paragraph regression report in [Issue
+67](https://github.com/tensorbee/rdocx/issues/67).
+
+No named external patch landed directly. Each contribution landed through a
+reviewed hardened equivalent that retains namespace identity, raw XML,
+bounded work, exact warm and fresh equality, and compatibility contracts. The
+four pull requests and Issues 65 and 66 remain closed after their release-bound
+thank-yous. Issue 67 remains open after its release-bound thank-you.
+
+## rpptx-v0.9.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family completes the M21 presentation-depth
+boundary at 0.9.0. Native Rust callers can inspect and edit modern
+collaboration, timing, media, SmartArt, embedded-content, security, and package
+variant state. They can also exchange presentations through bounded ODP, HTML,
+and PDF workflows and export deterministic animations, notes, and handouts.
+
+### Added
+
+- Read and author modern comments, threaded replies, sections, slide numbers,
+  dates, footers, and notes-master and handout-master settings.
+- Inspect, create, and invalidate presentation signatures, and read or write
+  password-protected packages through explicit optional security features.
+- Model animation timing, transitions, morph metadata, audio and video,
+  posters, playback settings, and deterministic timeline state.
+- Export animated GIF or Motion JPEG AVI output with bounded frame rate,
+  dimensions, duration, and media fallback policy.
+- Inspect and edit the supported SmartArt data and layout subset, retain
+  unsupported diagram content, and render six pinned layout families.
+- Inventory, extract, replace, and remove relationship-owned OLE, ActiveX, and
+  VBA payloads without executing them.
+- Read and write the declared ODP subset, preserve PPTX, PPTM, POTX, POTM,
+  PPSX, and PPSM package identity, and export deterministic notes pages and all
+  six handout grids.
+- Import a bounded HTML5 and CSS subset as editable slide content with pinned
+  Chrome structure and render comparisons.
+- Import PDF pages as preserved graphics or as the declared editable text,
+  image, path, and URI-link subset with strict resource limits and pinned
+  Poppler render comparisons.
+
+### Fixed
+
+- Preserve relationship ownership, raw unsupported XML, executable payloads,
+  package signatures, and source package class across the new mutation and
+  conversion paths.
+- Keep unsupported HTML, PDF, SmartArt, media, animation, and interchange
+  content explicit through stable diagnostics or retained opaque content
+  instead of silently approximating it.
+- Keep ordinary static rendering and the 49-entry deterministic output harness
+  unchanged while adding the new presentation-depth paths.
+
+### Compatibility
+
+The exact 15-package shared OOXML and PowerPoint crates.io family moves
+together from 0.8.0 to 0.9.0. The selected set is `oxml-core`, `oxml-opc`,
+`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`,
+`oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
+`rpptx-render`, `rpptx`, and `rpptx-cli`.
+
+The native Rust facade and model additions are additive pre-1.0 APIs. Existing
+callers need no migration unless they opt into the new methods. HTML import
+uses the existing default-template boundary and PDF import uses the existing
+render boundary. The stable Word family remains at 0.11.1. Python, WASM, npm,
+and PyPI publication authority is unchanged, and `rpptx-wasm@0.9.0` is not a
+crates.io package.
+
+### Contributors
+
+Atul Sharma maintained the release. No external issue or pull request belongs
+to the selected PowerPoint family for this release.
 
 ## v0.11.1
 

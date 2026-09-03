@@ -46,6 +46,20 @@ attributes, archive and output limits, deterministic bytes, exact manifest
 ownership, diagnostic exhaustion, and atomic failure publication. Existing
 presentation hashes must remain 49 of 49 unchanged.
 
+The presentation HTML differential builds one HTML document, image, and font
+reference in source and sends that same input to Google Chrome 152.0.7977.65
+and the native importer. Chrome runs headless at 1,280 by 720 with an isolated
+profile and host resolution disabled. After save and reopen, the gate compares
+shape kind and order, exact text and link relationships, selected run
+formatting, geometry within one CSS pixel, and deterministic 96 DPI output at
+a full-image luminance SSIM floor of 0.95. A paired regression passes real PNGs
+through the same SSIM helper and proves structural, text, two-pixel geometry,
+and calibrated pixel mutations fail the shared acceptance predicate. Focused
+tests cover every importer limit, CSS cascade and EMU conversion, stable lossy
+diagnostics, editable shape, table, image, and link projection, schema order,
+and byte-identical default template parts. The 49-entry hash harness remains
+unchanged.
+
 Regression tests are named as sentences describing the failure they prevent, so
 a reintroduction is obvious from the test name alone rather than from a diff.
 The existing file is the model: `zero_column_tables_do_not_panic`,
@@ -288,6 +302,24 @@ gate serializes and reopens the generated DOCX before comparing its public
 structure. No binary fixture or sample is added, so all 49 hash entries remain
 unchanged.
 
+The PDF import regression gate builds PDF objects, content streams, embedded
+Carlito bytes, paths, text, and URI annotations in source. Unit coverage locks
+strict parsing, page and object bounds, aggregate decompression, operation,
+pixel, shape, and diagnostic limits, CropBox and rotation normalization, exact
+12,700 EMU point conversion, comment-safe content decoding, explicit font
+substitution, ordered unsupported-operator diagnostics, strictly positive dash
+arrays at representable boundaries, zero-member and interior-phase isolation,
+positive stops that convert to zero, and valid sibling recovery. Both modes
+save, reopen, and validate in the existing `rpptx` integration binary. The ignored
+differential pins Poppler 26.01.0 at 150 DPI, exact dimensions, exact editable
+text and link facts, and a raw full-image luminance SSIM floor of 0.995.
+Pixel-aligned representative geometry includes a 38.4-point styled square so
+renderer-only antialiasing does not weaken the acceptance metric. An unchanged
+source passes, while a 1.01-point geometry change, one-pixel imported geometry
+shift at 150 DPI, and calibrated
+pixel, text, and link mutations fail the same final predicate. No binary
+fixture or hash baseline is added.
+
 The EPUB regression gate builds the complete publication in source. It checks
 the stored first `mimetype` entry, fixed timestamps and metadata, byte-identical
 repeated output, front matter, outline-root spine splitting, nested navigation,
@@ -529,12 +561,32 @@ headers, and page-number footers keep bounded restart work through both the
 engine and bundled-fallback facade. They also prove endnotes append once,
 changed related stories and note-reference sequences invalidate reuse, and a
 footnote continuation cannot publish a dirty checkpoint. Multi-section
-content, note-bearing tables, split paragraphs, floating drawings, backgrounds,
-and mismatched boundary state must use the full paginator. Ordinary multi-line
-prose, headings, `keepNext`, and `keepLines` must publish complete-boundary
-restart records. A 700-paragraph source-built case requires late edit, insert,
-delete, and undo results to equal fresh deterministic layout while recomputing
-only a bounded page region.
+content, note-bearing tables, floating drawings, backgrounds, and mismatched
+boundary state must use the full paginator. Ordinary multi-line prose,
+headings, `keepNext`, and `keepLines` must publish complete-boundary restart
+records. A deterministic Issue 67 fixture requires 175 naturally wrapped
+four-line paragraphs to span 16 pages, keep the completed recorded pass, and
+publish no checkpoint on a page ending inside a paragraph. Ten middle edits
+must each produce 174 paragraph-cache hits and one build, recompute at most two
+pages, and equal every field of a fresh deterministic result, including
+metadata, logical structure, and the result-local Word source map. Late edit,
+insert, delete, undo, note-bearing split, and displayed PAGE footer cases
+remain exact. A 700-paragraph source-built case requires late edit, insert,
+delete, and undo
+results to equal fresh deterministic layout while recomputing only a bounded
+page region.
+
+The Issue 67 release-performance rider is an ignored timing-only regression.
+It runs identical 175-paragraph and 700-paragraph sources through the reusable
+native and deterministic bundled-fallback paths in four alternating rounds.
+Before timing, each run authenticates a deterministic manifest of every
+tracked crate and workspace-manifest byte, the surrounding regression source,
+and the exact benchmark harness. Reference runs also require the pinned commit
+identity. The current manifest is content-bound instead of parent-SHA-bound,
+so committing or integrating the reviewed bytes does not invalidate it.
+The median of each build's per-edit medians must be no worse than 1.25 times
+the immutable v0.11.1 release and at most 0.75 times pinned commit `0582da0`.
+Wall-clock thresholds do not run in the normal unit-test pass.
 
 The incremental-layout scale gate builds 1,000 one-page paragraphs through the
 public deterministic bundled-fallback facade, edits paragraph 500, and compares
@@ -829,6 +881,79 @@ Eight gates run against it:
    unmatched rejection. The geometry unit gate covers exact targets, clipping,
    five rules, and rejection of a 1.01-point displacement. The 49-entry render
    hash manifest remains unchanged.
+
+The portable M21 core test source-builds one macro-enabled signed deck that
+combines modern comments, sections, the self-contained minimal SmartArt
+preservation fixture, exact embedded audio and poster bytes, a typed fade
+timeline, three notes pages, and a three-up handout. Save and reopen preserve
+those semantic surfaces and real source mutations change the static, animated,
+notes, and handout outputs. This portable test classifies the minimal SmartArt
+render as an unsupported fallback and does not claim authentic SmartArt raster
+fidelity. A separate ignored macOS reference-only writer reads SHA-256-pinned
+authentic layout, quick-style, and colour resources and emits corrected signed
+and signature-free sources for manual oracle capture. The mandatory ignored
+release oracle does not read those installed resources. It reads the captured
+signed source and four outputs from one configured oracle directory. Its
+embedded manifest records PowerPoint 16.104 build 16.104.25121423 and
+AppleScript build 1214, `signed=true`, exact source and output SHA-256 values,
+and `open_no_repair=true` for an observation whose active name was exactly
+`m21-corrected-signed.pptm` and whose hash was the canonical signed source hash.
+The signed macro-enabled source
+with SHA-256 `74fe838af835fbf9852d232d1eb39683bfbb1381b86095073e9e96974b50aac9`
+is canonical. Every Rust semantic and output check starts from its bytes. The
+shared semantic assertion repeats after save and reopen. It pins slide IDs and
+order, notes ownership, comment author and reply cardinality, section identity
+and slide membership, WAV and poster bytes and content types, playback
+settings, typed fade target and duration, complete signature coverage, and the
+exact SmartArt relationship IDs, data topology and text, layout identity, and
+style and colour identities. Authentic mode also rejects any unsupported
+SmartArt fallback. The
+portable source-built signature-free package
+differs only by the empty signature origin, the XML signature, their owning
+relationship, the package origin relationship, and their two content-type
+overrides. Every other package part and relationship is byte-identical,
+including presentation, media, theme, SmartArt, timing, notes, handout, macro,
+and render relationships. The directly bound signed outputs have SHA-256
+values `aebe97df20d029a611afa935fad0e96653e0b515396ce7ec1f5e2c665d92f8de`
+for the three-page static PDF,
+`4643c6cb25222b343067364a8983673c79962e32378809206b7f9e6f5306e5e9`
+for the movie,
+`d940316865a28e626c2cc7756d9bef4f132c516d03cba63387e1f6f0ca0dba2a`
+for the three-page A4 portrait notes PDF, and
+`77345fd00914bb2b233bf548530bd2f6de05c25b53a08cd7392bf38be696d05f`
+for the one-page A4 portrait handout PDF. The movie is sampled at 0, 297,
+and 594 of 600 ticks. The
+static visual gate compares all three pages and masks only the declared
+audio-poster rectangle on page one. Each page has exact normalized token
+cardinality and order, full-page ink geometry within 6 pixels at 150 DPI, and
+at least 0.45 SSIM in each union ink region. Page three must retain the complete
+SmartArt graph, relationships, three-node text, and visible ink. The movie
+manifest records the exact visible token vector and ink-band count observed at
+each of its three samples. The movie gate compares that observation with the
+actual Rust frame text and applies the same page-one visual boundaries.
+The low regional SSIM floor accounts only for deterministic Carlito versus
+PowerPoint font rasterization and is paired with exact text and geometry gates.
+Real shifted-raster geometry, source text, extra-token, duplicate-token,
+reordered-token, token-containing, and solid-raster mutations fail their
+applicable predicates across the three static pages, animated output, notes,
+and handout output. Notes require three Rust pages and three A4 portrait
+PowerPoint pages with exact per-page token vectors and exact bounded
+monochrome-band cardinality. The semantic note component on each side compares
+by normalized width and height within 0.06 of one page dimension and by
+monochrome ink occupancy within 0.35. Absolute component placement is not
+equated because the two notes masters and page sizes differ. Extending or
+solid-filling the semantic component on either side fails the combined notes
+predicate. All three handout thumbnail bounds compare in normalized page
+coordinates within 0.05 of one page dimension. Geometry mutations beyond that
+boundary fail.
+
+The earlier minimal SmartArt source remains a local regression for an explicit
+unsupported fallback. An independent ignored classification requires only its
+one recorded static PDF to prove that PowerPoint 16.104 renders a blank third
+page where Rust renders `Unsupported SmartArt`. Neither result is
+representative acceptance evidence. The corrected captured-source oracle and
+the native SmartArt render differential below supply the visible-render
+evidence for authentic SmartArt resources.
 
 The native SmartArt render differential uses six one-slide source decks built
 from exact SHA-256-pinned PowerPoint 16.104 layout, quick-style, and colour
@@ -1390,25 +1515,25 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.11.1 carrier regression pins all eleven inherited version
+The stable 0.12.0 carrier regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
-are 0.8.0 while `rpptx-wasm` remains ineligible for publication.
+are 0.9.0 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.8.0. It separately proves the stable
-workspace remains at its published 0.11.1 boundary and `rpptx-wasm` remains
+15-package publication preflight at 0.9.0. It separately proves the stable
+workspace remains at its prepared 0.12.0 boundary and `rpptx-wasm` remains
 ineligible for publication.
-The stable shared-family gate packages and verifies `rdocx-layout@0.11.1`, requires its
-normalized archive dependency on `oxml-layout@0.8.0` to contain no local path,
-and compiles the packaged crate against the exact shared registry version
-without an `oxml-layout` patch.
+The current stable shared-family gate packages and verifies
+`rdocx-layout@0.12.0`, requires its normalized archive dependency on
+`oxml-layout@0.9.0` to contain no local path, and compiles the packaged crate
+against the exact shared registry version without an `oxml-layout` patch.
 That registry consumer is excluded from the incubating tag preflight because
-0.8.0 does not exist before its own publication. The stable tag preflight runs
-it with explicit published-shared authority, and the F-X068 post-publication
-gate runs it independently before stable recovery starts.
+0.9.0 does not exist before its own publication. The stable tag preflight runs
+it only with explicit published-shared authority. The earlier F-X068
+post-publication proof against 0.8.0 remains immutable release evidence.
 A separate recovery gate constructs an isolated registry consumer of exact
 `rdocx-layout@0.10.1` and inspects its unpatched normal dependency tree. It
 requires registry `oxml-layout@0.6.0` and rejects 0.7.0, so the immutable
@@ -1436,6 +1561,16 @@ reviewed SHA `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`, stable-family exclusion
 byte-identical GitHub release notes, the published stable shared-family graph,
 and the absence of `rpptx-wasm@0.8.0` from crates.io. Its selected contribution
 inventory is empty, so it requires no external notification.
+The 0.9.0 release gate verified all 15 incubating registry entries under sole
+owner `mantissaman (Atul Sharma)`, immutable annotated tag `rpptx-v0.9.0` at
+reviewed SHA `45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`, byte-identical GitHub
+release notes, selected-family exclusion, and absent `rpptx-wasm@0.9.0`. Its
+selected-family inventory is empty, so it requires no notification.
+The stable 0.12.0 preparation gate pins the exact seven-package family, the
+published shared 0.9.0 dependency boundary, all binding exclusions, and the
+seven-record PR 61 through 64 and Issue 65 through 67 contribution inventory.
+It requires full verification and clean review at one SHA before a separate
+release approval.
 The failed stable 0.11.0 release gate is not a passing family gate. Its
 annotated tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full

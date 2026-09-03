@@ -10959,3 +10959,278 @@ and zero nitpicks.
 facade-owned package assembly stage. Do not resolve notes-slide media in the
 notes-master relationship scope, and do not replace vector thumbnails with a
 raster intermediate.
+
+### F-224, HTML slide content import
+
+**Sprint.** S64
+**Completed.** 2026-09-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native presentation facade now imports bounded HTML5
+and CSS into a fresh presentation. Top-level slide sections or one document
+body project explicit absolute geometry into editable shapes, formatted text,
+tables, caller-supplied images, and slide-owned links. Stable ordered
+diagnostics retain safe unsupported content, and the candidate validates,
+saves, and reopens before publication.
+
+**Non-obvious choices.** The private importer follows the existing
+`default-template` boundary and keeps `scraper` as an optional direct `rpptx`
+dependency. Images resolve only from the caller-provided resource slice, with
+no network or filesystem fetch. Aggregate selector work has its own bound.
+Unsupported empty semantic elements remain diagnostic, and diagnostics are
+published in document order across collection phases.
+
+**Deviations from the design plan.** None. The completed plan includes the
+review-driven selector-work bound, empty semantic-element handling, and
+cross-phase diagnostic ordering.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The ten source-built unit, regression, integration, round-trip, and
+differential tests cover exact CSS geometry, the bounded cascade, every
+declared resource limit, unsupported-content diagnostics, document-order
+diagnostics, editable content after reopen, opaque XML and schema order, and
+geometry, text, and pixel sensitivity. The gate
+`source_built_html_matches_pinned_chrome_after_save_and_reopen` passed against
+Google Chrome 152.0.7977.65 at 0.984628993 full-image luminance SSIM. Full
+non-fast verification and all routed riders passed. Microscope pass 4 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep browser semantics limited to the declared
+absolute-position and CSS subset. New layout behavior needs an explicit
+contract, a hard work bound, and a pinned differential. Keep image resolution
+caller-owned and publication transactional.
+
+### F-225, PDF page content import
+
+**Sprint.** S64
+**Completed.** 2026-09-02
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native presentation facade now imports bounded PDF
+pages in preserved and editable modes. Preserved mode emits one deterministic
+full-slide PNG per page. Editable mode projects supported text, paths, raster
+images, and URI links into ordinary slide content. Strict parsing, stable
+diagnostics, checked geometry, and candidate save and reopen keep publication
+transactional.
+
+**Non-obvious choices.** The private importer follows the existing `render`
+boundary and uses no-default `lopdf` only for PDF syntax and object decoding.
+Both modes share one normalized layout path. Resource traversal is iterative,
+cycle checked, depth bounded, and charged through one cached reference
+resolver. Unsupported state is isolated until reset. Active content and
+malformed URI actions fail closed. Dash phases are accepted only at zero or an
+exact representable boundary.
+
+**Deviations from the design plan.** None. The completed plan records the exact
+dash boundary, affine behavior, resource accounting, active-content policy, and
+strict URI decoding established during review.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/06-presentationml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Source-built unit and regression coverage proves exact point-to-EMU
+geometry, affine text and image placement, dash isolation, font decoding and
+widths, image typing, iterative resource traversal, shared reference-work
+accounting, strict page and annotation graphs, active-content rejection,
+fallible URI decoding, every declared limit, diagnostics, and transactional
+publication. Both modes and editable content pass save and reopen coverage.
+The gate
+`pdf_page_import_matches_pinned_poppler_geometry_pixels_text_and_links` passed
+against Poppler 26.01.0 at raw full-image luminance SSIM 0.999557935 for
+preserved mode and 0.998561398 for editable mode. Its geometry, text, link, and
+pixel perturbation regression also passed. Full canonical non-fast
+verification, all routed riders, and all 22 package dry-runs passed. Microscope
+pass 11 reported zero defects, zero smells, and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep PDF engines out of the production graph.
+Charge every XObject member and every previously unseen indirect-reference hop
+against the shared work budget. Preserve the common normalized layout path
+between modes, and add editable operators only with explicit fail-closed state
+semantics and differential evidence.
+
+### F-X075, Preserve restart pagination across page-spanning paragraphs
+
+**Sprint.** S64
+**Completed.** 2026-09-02
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The Word layout engine now keeps the completed recorded
+pagination pass when otherwise safe ordinary prose spans page boundaries. A
+split continuation still emits no checkpoint. Restart state is published only
+at later complete block boundaries after note, wrap, and resolved state is
+clean. The obsolete document-wide split veto and its private flag were
+removed.
+
+**Non-obvious choices.** The existing source-safety predicates, exact retained
+context, aggregate cache budget, checkpoint limit, field substitution rules,
+and transactional publication remain authoritative. The performance harness
+authenticates each historical HEAD and hashes the complete measured production
+source plus the exact injected harness. It rejects production, harness,
+same-line suffix, duplicate-pin, and untracked-source mutations before timing.
+
+**Deviations from the design plan.** None. Review expanded the planned exact
+result proof to cover metadata, logical structure, and result-local provenance,
+and strengthened the planned pinned performance evidence with source-content
+authentication.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The deterministic Issue 67 fixture contains 175 four-line
+paragraphs across exactly 16 pages. Ten sourced middle edits retain 174
+paragraph-cache hits, rebuild one paragraph, paginate at most two pages, and
+match a fresh result across pages, fonts, diagnostics, outlines, metadata,
+structure, and provenance. Late edit, insert, delete, undo, note-bearing split,
+displayed page-number footer, unsafe-state, aggregate-bound, and 1,000-page
+gates remain green. The authenticated 48-run release comparison measured
+current-to-v0.11.1 ratios from 0.341 to 0.389 and
+current-to-`0582da0` ratios from 0.175 to 0.203 across the 175 and 700 paragraph
+native and bundled-fallback paths. Full integrated non-fast verification and
+all routed riders passed. Microscope pass 4 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep restart checkpoints at complete block
+boundaries. A split page is not itself unsafe, but any state absent from the
+checkpoint identity remains a reason to fall back. Performance evidence must
+authenticate measured source content rather than trusting a checkout label.
+
+### F-X074, Tag rpptx-v0.9.0
+
+**Sprint.** S64
+**Completed.** 2026-09-03
+**Size.** S, estimated 1 day, actual 2 days
+
+**What was built.** The reviewed `rpptx-v0.9.0` release published the exact
+15-package shared OOXML and PowerPoint family at 0.9.0. The annotated tag
+dereferences to reviewed sprint SHA
+`45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The GitHub `Publish` workflow
+completed successfully at
+https://github.com/tensorbee/rdocx/actions/runs/33719233249, and the release is
+available at https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.9.0.
+
+**Non-obvious choices.** Publication remained limited to `oxml-core`,
+`oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`,
+`oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`,
+`rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. Every registry entry
+reports version 0.9.0 and owner `mantissaman (Atul Sharma)`. The stable Word
+family stayed at 0.11.1, and `rpptx-wasm@0.9.0` remained absent from crates.io.
+
+**Deviations from the design plan.** None. The release used the separately
+approved exact reviewed SHA, pushed the sprint branch first, created one
+annotated tag, pushed only that tag, and retained the selected-family boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full non-fast verification and the clean sprint review passed at
+the released SHA with 49 of 49 deterministic hashes unchanged. All 22 local
+package dry-runs passed below 10 MiB. The publication workflow passed output,
+metadata, release-note, archive, selected-family, and GitHub release gates.
+Independent post-publication checks downloaded all 15 exact registry versions,
+verified their owner, verified the annotated tag target, and matched the
+3,119-byte GitHub release body byte for byte to the reviewed changelog render.
+Both bodies have SHA-256
+`31f83a5d629c1cbd837176d5993d8d98469dbd0d9fd9fac733055ae9083c4c2e`.
+
+**Contribution inventory.** The selected-family inventory is empty. Pull
+requests https://github.com/tensorbee/rdocx/pull/59 and
+https://github.com/tensorbee/rdocx/pull/60 were disposable internal CI proofs.
+Pull requests https://github.com/tensorbee/rdocx/pull/61 through
+https://github.com/tensorbee/rdocx/pull/64 and Issues
+https://github.com/tensorbee/rdocx/issues/65 through
+https://github.com/tensorbee/rdocx/issues/67 belong to the stable Word family.
+No release notification comment was required or posted for this PowerPoint
+release.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep release-family selection exact. Verify
+registry ownership, the dereferenced annotated tag, release-body bytes, and
+explicitly excluded binding packages before completing a release story.
+
+### F-X076, Tag v0.12.0
+
+**Sprint.** S64
+**Completed.** 2026-09-03
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The reviewed `v0.12.0` release published the exact stable
+Word family: `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
+`rdocx-pdf`, `rdocx`, and `rdocx-cli`. The annotated tag dereferences to the
+reviewed sprint SHA `19adaacfcf82e3918bba4f8c3648747f1969b746`. The GitHub
+`Publish` workflow completed successfully at
+https://github.com/tensorbee/rdocx/actions/runs/33728011369, and the release is
+available at https://github.com/tensorbee/rdocx/releases/tag/v0.12.0.
+
+**Non-obvious choices.** Publication remained limited to the seven stable
+crates at 0.12.0. Every registry entry reports owner `mantissaman (Atul
+Sharma)`. Shared OOXML and PowerPoint packages stayed at their published 0.9.0
+boundary. `rdocx-wasm@0.12.0` remained absent from crates.io, and no Python,
+npm, WASM, or PyPI package was published.
+
+**Deviations from the design plan.** None. The release used the separately
+approved exact reviewed SHA, pushed the sprint branch first, created one
+annotated tag, pushed only that tag, and retained the selected-family boundary.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full non-fast verification and the clean sprint review passed at
+the released SHA with 49 of 49 deterministic hashes unchanged. All 22 local
+package dry-runs passed below 10 MiB. The publication workflow passed output,
+metadata, shared-family, release-note, archive, stable allowlist, and GitHub
+release gates. Independent post-publication checks downloaded all seven exact
+registry versions, verified their owner, verified the annotated tag target,
+and matched the 3,525-byte GitHub release body byte for byte to the reviewed
+changelog render. Both bodies have SHA-256
+`37e3fbc29e0d7425a4ca5559e8fd73db2fc25db31a000183343521ac83f68c07`.
+
+**Contribution inventory.** Pull requests
+https://github.com/tensorbee/rdocx/pull/61,
+https://github.com/tensorbee/rdocx/pull/62,
+https://github.com/tensorbee/rdocx/pull/63, and
+https://github.com/tensorbee/rdocx/pull/64 by authenticated
+`@pedroassumpcao` contributed reader outcomes through reviewed hardened
+equivalents. Issues https://github.com/tensorbee/rdocx/issues/65,
+https://github.com/tensorbee/rdocx/issues/66, and
+https://github.com/tensorbee/rdocx/issues/67 by authenticated
+`@emptinessform` reported cache and pagination defects fixed through reviewed
+hardened equivalents. The pull requests remain closed and unmerged. Issues 65
+and 66 remain closed, and Issue 67 remains open.
+
+**Notifications.** Release-bound thank-you comments were posted at
+https://github.com/tensorbee/rdocx/pull/61#issuecomment-5522283440,
+https://github.com/tensorbee/rdocx/pull/62#issuecomment-5522283669,
+https://github.com/tensorbee/rdocx/pull/63#issuecomment-5522283889,
+https://github.com/tensorbee/rdocx/pull/64#issuecomment-5522284147,
+https://github.com/tensorbee/rdocx/issues/65#issuecomment-5522284354,
+https://github.com/tensorbee/rdocx/issues/66#issuecomment-5522284700, and
+https://github.com/tensorbee/rdocx/issues/67#issuecomment-5522284889.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep stable publication limited to the exact
+seven-package family. Verify each downloaded registry package, owner, annotated
+tag target, release-body bytes, unpublished carrier, contribution state, and
+notification URL before completing a release story.

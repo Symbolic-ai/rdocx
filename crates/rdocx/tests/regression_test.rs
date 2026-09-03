@@ -212,6 +212,278 @@ fn a_thousand_page_document_paginates_and_renders_within_the_declared_limits() {
     );
 }
 
+// F-X075_BENCHMARK_MANIFEST_BEGIN
+const EXPECTED_FX075_HARNESS_MANIFEST: &str = "e3fcfc1ac4332c54d3a4cf52ed6243c177b6d057";
+
+fn fx075_git_output(
+    workspace: &std::path::Path,
+    arguments: &[&str],
+    stdin: Option<&[u8]>,
+) -> Vec<u8> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut command = std::process::Command::new("git");
+    command
+        .args(arguments)
+        .current_dir(workspace)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if stdin.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    let mut child = command
+        .spawn()
+        .expect("git must inspect the measured source");
+    if let Some(stdin) = stdin {
+        child
+            .stdin
+            .take()
+            .expect("piped git stdin")
+            .write_all(stdin)
+            .expect("source manifest reaches git");
+    }
+    let output = child
+        .wait_with_output()
+        .expect("git must finish inspecting the measured source");
+    assert!(
+        output.status.success(),
+        "git source inspection failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+fn fx075_git_hash(workspace: &std::path::Path, bytes: &[u8]) -> String {
+    let output = fx075_git_output(workspace, &["hash-object", "--stdin"], Some(bytes));
+    String::from_utf8(output)
+        .expect("git object identity is UTF-8")
+        .trim()
+        .to_owned()
+}
+
+fn fx075_source_manifests(workspace: &std::path::Path) -> (String, String, String) {
+    const BENCHMARK_PATH: &str = "crates/rdocx/tests/regression_test.rs";
+    const BEGIN: &str = "// F-X075_BENCHMARK_MANIFEST_BEGIN";
+    const END: &str = "// F-X075_BENCHMARK_MANIFEST_END";
+
+    let untracked = fx075_git_output(
+        workspace,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "Cargo.toml",
+            "Cargo.lock",
+            "crates",
+        ],
+        None,
+    );
+    assert!(
+        untracked.is_empty(),
+        "measured crate graph contains untracked source: {}",
+        String::from_utf8_lossy(&untracked)
+    );
+
+    let tracked = fx075_git_output(
+        workspace,
+        &["ls-files", "-z", "--", "Cargo.toml", "Cargo.lock", "crates"],
+        None,
+    );
+    let mut paths = tracked
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8(path.to_vec()).expect("tracked path is UTF-8"))
+        .filter(|path| path != BENCHMARK_PATH)
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    let path_input = format!("{}\n", paths.join("\n"));
+    let object_ids = fx075_git_output(
+        workspace,
+        &["hash-object", "--stdin-paths"],
+        Some(path_input.as_bytes()),
+    );
+    let object_ids = String::from_utf8(object_ids).expect("source identities are UTF-8");
+    let object_ids = object_ids.lines().collect::<Vec<_>>();
+    assert_eq!(object_ids.len(), paths.len());
+    let production_manifest = paths
+        .iter()
+        .zip(object_ids)
+        .map(|(path, object_id)| format!("{object_id} {path}\n"))
+        .collect::<String>();
+
+    let benchmark_source = std::fs::read_to_string(workspace.join(BENCHMARK_PATH))
+        .expect("benchmark source must be readable");
+    let begin = benchmark_source
+        .find(BEGIN)
+        .expect("benchmark manifest begin marker");
+    let end = benchmark_source
+        .rfind(END)
+        .expect("benchmark manifest end marker")
+        + END.len();
+    let surrounding = format!(
+        "{}<F-X075 benchmark harness>\n{}",
+        &benchmark_source[..begin],
+        &benchmark_source[end..]
+    );
+    let mut harness = benchmark_source[begin..end].to_owned();
+    let self_pin_prefix = ["const EXPECTED_FX075_", "HARNESS_MANIFEST: &str = "].concat();
+    let candidates = harness.match_indices(&self_pin_prefix).collect::<Vec<_>>();
+    assert_eq!(
+        candidates.len(),
+        1,
+        "benchmark harness must contain exactly one self-pin declaration"
+    );
+    let literal_start = candidates[0].0 + self_pin_prefix.len();
+    let expected_literal = format!("\"{EXPECTED_FX075_HARNESS_MANIFEST}\"");
+    let literal_end = literal_start + expected_literal.len();
+    assert_eq!(
+        harness.get(literal_start..literal_end),
+        Some(expected_literal.as_str()),
+        "benchmark self-pin must contain its exact expected literal"
+    );
+    assert_eq!(
+        harness.as_bytes().get(literal_end),
+        Some(&b';'),
+        "benchmark self-pin must use the exact declaration shape"
+    );
+    harness.replace_range(literal_start..literal_end, "\"<self>\"");
+
+    (
+        fx075_git_hash(workspace, production_manifest.as_bytes()),
+        fx075_git_hash(workspace, surrounding.as_bytes()),
+        fx075_git_hash(workspace, harness.as_bytes()),
+    )
+}
+
+#[test]
+#[ignore = "F-X075 interleaved release-mode performance evidence"]
+fn issue_67_page_spanning_prose_release_measurement() {
+    const V0_11_1_CHECKOUT_HEAD: &str = "5a850ce9ae6c31f8365594ed2970193266f8b2a6";
+    const REGRESSION_CHECKOUT_HEAD: &str = "0582da0a38886f5ceeb65ab9afcd0797f6fa14b0";
+    const CURRENT_PRODUCTION_MANIFEST: &str = "5744c802fc8096683faf175c29b9c6c359617bb1";
+    const V0_11_1_PRODUCTION_MANIFEST: &str = "bd56901eb9d692e6eb5c2e6f8b33d26abe14f910";
+    const REGRESSION_PRODUCTION_MANIFEST: &str = "32f3644b56f848d5d9a231c28dc6a072185e9bb0";
+    const CURRENT_SURROUNDING_TEST_MANIFEST: &str = "06b08d8729dc02019f96cf9f911a1f3d5cdf3df3";
+    const V0_11_1_SURROUNDING_TEST_MANIFEST: &str = "c72fe72a92befb7d4a79573835c53fd83fe5201c";
+    const REGRESSION_SURROUNDING_TEST_MANIFEST: &str = "06b08d8729dc02019f96cf9f911a1f3d5cdf3df3";
+
+    let checkout = std::env::var("RDOCX_FX075_CHECKOUT")
+        .expect("RDOCX_FX075_CHECKOUT must identify current, v0.11.1, or 0582da0");
+    let (expected_head, expected_production, expected_surrounding) = match checkout.as_str() {
+        "current" => (
+            None,
+            CURRENT_PRODUCTION_MANIFEST,
+            CURRENT_SURROUNDING_TEST_MANIFEST,
+        ),
+        "v0.11.1" => (
+            Some(V0_11_1_CHECKOUT_HEAD),
+            V0_11_1_PRODUCTION_MANIFEST,
+            V0_11_1_SURROUNDING_TEST_MANIFEST,
+        ),
+        "0582da0" => (
+            Some(REGRESSION_CHECKOUT_HEAD),
+            REGRESSION_PRODUCTION_MANIFEST,
+            REGRESSION_SURROUNDING_TEST_MANIFEST,
+        ),
+        _ => panic!("unsupported F-X075 checkout identity {checkout:?}"),
+    };
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let actual_head = fx075_git_output(
+        &workspace,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        None,
+    );
+    let actual_head = String::from_utf8(actual_head).expect("checkout identity is UTF-8");
+    let actual_head = actual_head.trim();
+    if let Some(expected_head) = expected_head {
+        assert_eq!(
+            actual_head, expected_head,
+            "F-X075 {checkout} measurement must use its pinned reference commit"
+        );
+    }
+    let (production_manifest, surrounding_manifest, harness_manifest) =
+        fx075_source_manifests(&workspace);
+    eprintln!(
+        "F-X075 source identity: checkout={checkout}, head={actual_head}, production_manifest={production_manifest}, surrounding_test_manifest={surrounding_manifest}, harness_manifest={harness_manifest}"
+    );
+    assert_eq!(
+        production_manifest, expected_production,
+        "F-X075 {checkout} production source differs from the reviewed manifest"
+    );
+    assert_eq!(
+        surrounding_manifest, expected_surrounding,
+        "F-X075 {checkout} non-harness test source differs from the reviewed manifest"
+    );
+    assert_eq!(
+        harness_manifest, EXPECTED_FX075_HARNESS_MANIFEST,
+        "F-X075 benchmark harness differs from the reviewed injection"
+    );
+
+    let paragraph_count = std::env::var("RDOCX_FX075_PARAGRAPHS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(175);
+    let mode = std::env::var("RDOCX_FX075_MODE").unwrap_or_else(|_| "native".to_owned());
+    assert!(matches!(paragraph_count, 175 | 700));
+    assert!(matches!(mode.as_str(), "native" | "bundled-fallback"));
+
+    let paragraph_text = |index: usize, suffix: &str| {
+        format!(
+            "Paragraph {index}: the quick brown fox jumps over the lazy dog, pack my box \
+             with five dozen liquor jugs, and a mixed sentence that keeps going. \
+             Sphinx of black quartz, judge my vow across line breaks and pages. \
+             Waltz, bad nymph, for quick jigs vex. Glib jocks quiz nymph to vex dwarf. \
+             Bright vixens jump, dozy fowl quack.{suffix}"
+        )
+    };
+    let mut document = Document::new();
+    for index in 0..paragraph_count {
+        document.add_paragraph(&paragraph_text(index, ""));
+    }
+    let layout = |document: &Document| match mode.as_str() {
+        "native" => document.layout().map(|result| result.layout.pages.len()),
+        "bundled-fallback" => document
+            .layout_with_fonts_aliases_and_bundled_fallback(&[], &[])
+            .map(|result| result.layout.pages.len()),
+        _ => unreachable!("mode validated above"),
+    };
+    let pages = layout(&document).expect("prime deterministic Issue 67 layout");
+    if paragraph_count == 175 {
+        assert_eq!(pages, 16);
+    }
+
+    let edit_index = paragraph_count / 2;
+    let mut samples = Vec::with_capacity(10);
+    for revision in 1..=10 {
+        document
+            .paragraph_mut(edit_index)
+            .expect("middle paragraph")
+            .run_mut(0)
+            .expect("middle paragraph text run")
+            .set_text(&paragraph_text(edit_index, &"x".repeat(revision)));
+        let started = Instant::now();
+        assert_eq!(
+            layout(&document).expect("warm deterministic Issue 67 layout"),
+            pages
+        );
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    let median = samples[samples.len() / 2];
+    let milliseconds = samples
+        .iter()
+        .map(|sample| format!("{:.3}", sample.as_secs_f64() * 1_000.0))
+        .collect::<Vec<_>>();
+    eprintln!(
+        "F-X075 release measurement: checkout={checkout}, head={actual_head}, paragraphs={paragraph_count}, mode={mode}, pages={pages}, median_ms={:.3}, sorted_ms=[{}]",
+        median.as_secs_f64() * 1_000.0,
+        milliseconds.join(", ")
+    );
+}
+// F-X075_BENCHMARK_MANIFEST_END
+
 #[test]
 fn editing_one_paragraph_of_a_thousand_page_document_rebuilds_at_most_two_pages() {
     fn thousand_page_document() -> Document {

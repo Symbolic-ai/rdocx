@@ -153,6 +153,17 @@ an explicit ignored acceptance gate that runs with an isolated user profile.
 Publish dry runs and the 10 MiB archive ceiling cover the additive native API
 and private converter module.
 
+Presentation HTML import adds no production executable. The private `rpptx`
+module reuses workspace `scraper` 0.27 behind `default-template`. Google Chrome
+152.0.7977.65 is an ignored differential oracle only. The native archive,
+WASM, rustdoc, dependency policy, and 10 MiB package ceiling remain gates.
+
+PDF presentation import adds no production executable. The private `rpptx`
+module uses `lopdf` 0.44.0 with default features disabled behind the existing
+`render` feature. Poppler 26.01.0 is an ignored differential oracle only. The
+native archive, both WASM graphs, rustdoc, dependency policy, patched publish
+dry run, and 10 MiB package ceiling remain gates.
+
 Modern presentation package classes add no dependency, feature, module, or
 asset. The additive pre-1.0 `rpptx` enum and methods plus the new `oxml-opc`
 content-type constants require rustdoc, README inventory, patched publish
@@ -173,8 +184,8 @@ dry-run, archive-size, and release review before publication.
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
 | `rpptx-render` | `system-fonts` | on | Preserves host discovery for normal presentation rendering |
 | `rpptx` | `system-fonts` | on | Preserves native presentation font resolution |
-| `rpptx` | `default-template` | on | The bundled `default.pptx` |
-| `rpptx` | `render` | on | Pulls in `rpptx-render` and `oxml-pdf` |
+| `rpptx` | `default-template` | on | The bundled `default.pptx` and private bounded HTML importer |
+| `rpptx` | `render` | on | Pulls in `rpptx-render`, `oxml-pdf`, and the private bounded PDF importer |
 | `rpptx-wasm` | `render` | off | Adds `toPdf` through the deterministic facade renderer |
 | `rdocx-py`, `rpptx-py` | `extension-module` | off | Must stay off for `cargo test` |
 
@@ -302,14 +313,14 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
 `rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15
-are published at 0.8.0 from the immutable annotated `rpptx-v0.8.0` tag at
-reviewed SHA `7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The earlier 0.7.0, 0.6.0,
-0.5.0, and 0.4.0
-registry releases remain available, and no existing version or tag was moved. Manifest
-eligibility and allowlist membership do not authorize a later publication
-without a separately approved `/release` invocation at the exact reviewed
-SHA. The unpublished `rpptx-wasm` preparation member is also at 0.8.0 but has
-no crates.io publication path.
+are published at 0.9.0 from immutable annotated `rpptx-v0.9.0` tag at reviewed
+SHA `45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The earlier 0.8.0, 0.7.0,
+0.6.0, 0.5.0,
+and 0.4.0 registry releases remain available, and no existing version or tag
+was moved. Manifest eligibility and allowlist membership do not authorize a
+later publication without a separately approved `/release` invocation at the
+exact reviewed SHA. The unpublished `rpptx-wasm` preparation member is also at
+0.9.0 but has no crates.io publication path.
 
 The complete stable 0.11.1 family is published against the shared 0.8.0 family
 from the immutable annotated `v0.11.1` tag at reviewed SHA
@@ -322,15 +333,17 @@ and posted no contribution notifications. All seven 0.11.1 packages and six
 leave-open notifications are verified. After separate approval, exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
 releases remain live and unyanked. The tag is never moved or deleted, no
-v0.11.0 GitHub release exists, and no other external state changes.
+v0.11.0 GitHub release exists, and no other external state changes. Current
+stable source is prepared at 0.12.0 and pins the published shared 0.9.0
+boundary without granting stable publication authority.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.11.1, nine internal
+stable regression requires prepared workspace version 0.12.0, nine internal
 pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.8.0 versions, pins,
+set. The incubating regression requires the exact 0.9.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -411,10 +424,11 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group, its two Python project
-versions, and the rdocx WASM contract literals are at 0.11.1. The exact
-seven-package stable family is published from the immutable annotated
+versions, and the rdocx WASM contract literals are prepared at 0.12.0. The last
+published exact seven-package stable family remains the immutable annotated
 `v0.11.1` tag at reviewed SHA
-`5a850ce9ae6c31f8365594ed2970193266f8b2a6`.
+`5a850ce9ae6c31f8365594ed2970193266f8b2a6` until the separately approved
+`v0.12.0` release completes.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed against the published shared 0.7.0 API.
 The remaining five packages and GitHub release were not published at that
@@ -426,7 +440,7 @@ Earlier immutable
 registry releases remain available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.8.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+0.9.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 preparation group contains unpublished `rpptx-wasm`, while the crates.io
 allowlist remains exactly 15 packages. The last published complete family is
 the immutable `rpptx-v0.8.0` release at reviewed SHA
@@ -759,13 +773,20 @@ an `rdocx` development dependency for the 150 dpi SSIM oracle only. It receives
 explicit layout fonts, never system fonts, and does not enter the runtime graph
 or generated `rdocx` archive.
 
-`scraper` 0.27 has one direct named consumer, the private inbound HTML importer
-inside `rdocx`. Default features are disabled and only `errors` is enabled so
-HTML5 parser repair diagnostics remain available without an unrelated feature
-surface. No `oxml-*`, `rdocx-html`, Presentation, Python, WASM, or CLI crate
-declares the dependency directly. The complete facade graph passes Rust 1.93,
-both wasm32 checks, the workspace dependency policy, and the `rdocx` package
-dry run. The packaged archive remains below the 10 MiB ceiling.
+`scraper` 0.27 has two direct named consumers, the private inbound HTML
+importers inside `rdocx` and `rpptx`. The `rdocx` edge disables default
+features and enables `errors`. The optional `rpptx` edge is activated only by
+`default-template`. HTML5 parser repair diagnostics remain available without a
+new public feature. No `oxml-*`, `rdocx-html`, Python, WASM, or CLI crate
+declares the dependency directly. Both facade graphs pass Rust 1.93, the wasm32
+checks, dependency policy, patched package dry runs, and the 10 MiB archive
+ceiling.
+
+`lopdf` 0.44.0 has one direct named consumer, the private inbound PDF importer
+inside `rpptx`. The optional edge disables default features and is activated
+only by `render`. It owns strict bounded PDF object, page, resource, stream,
+font-encoding, image, annotation, and content decoding. It does not render and
+does not enter an `oxml-*`, Python, WASM, or CLI crate directly.
 
 The existing workspace `zip` 8.1 dependency has direct named consumers in the
 private ODT reader and writer inside `rdocx`. It retains the workspace's

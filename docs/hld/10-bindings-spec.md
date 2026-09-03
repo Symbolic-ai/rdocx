@@ -282,6 +282,22 @@ Native Rust callers can import and export OpenDocument Presentation through
 serialize fully before atomic replacement. This is an additive pre-1.0 native
 surface. Python, WASM, and CLI bindings gain no ODP entry point.
 
+Native Rust callers can import HTML5 documents and fragments as presentations
+through `Presentation::from_html` and `Presentation::open_html`. The additive
+pre-1.0 surface exposes concrete `HtmlReadResult`, `HtmlDiagnostic`, and
+`HtmlImageResource` values plus `Error::Html`. Conversion returns a fresh
+editable presentation only after save, reopen, and validation. Python, WASM,
+and CLI surfaces gain no presentation HTML entry point and retain their
+existing methods and errors.
+
+Native Rust callers can import PDF pages through
+`Presentation::from_pdf_bytes`, `from_pdf_bytes_with_limits`, and `open_pdf`.
+The additive pre-1.0 surface exposes concrete `PdfImportMode`,
+`PdfImportLimits`, `PdfImportDiagnostic`, and `PdfImportResult` values plus
+`Error::PdfImport`. Conversion returns a fresh presentation only after save,
+reopen, and validation. Python, WASM, and CLI surfaces gain no PDF import entry
+point and retain their existing methods and errors.
+
 Native Rust callers can export EPUB 3 through `Document::to_epub_bytes` and
 `Document::save_epub`. The byte API returns `EpubWriteResult`, which carries
 the bounded deterministic publication and ordered location-aware
@@ -1016,19 +1032,20 @@ honest. Do not auto-generate them from PyO3.
 crates are `publish = false`, because a cdylib has no business on crates.io.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint workspace family is published at 0.8.0 from the immutable annotated
-`rpptx-v0.8.0` tag at reviewed SHA
-`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`. The stable workspace is published
-at 0.11.1 from the immutable annotated `v0.11.1` tag at reviewed SHA
-`5a850ce9ae6c31f8365594ed2970193266f8b2a6` and pins shared dependencies to
-0.8.0. The immutable v0.11.0 attempt at
+PowerPoint workspace family is published at 0.9.0 from immutable annotated tag
+`rpptx-v0.9.0` at reviewed SHA
+`45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The stable workspace is prepared
+at 0.12.0 and pins shared dependencies to the published 0.9.0 boundary. Its
+last published family remains 0.11.1 from immutable annotated `v0.11.1` tag at
+reviewed SHA `5a850ce9ae6c31f8365594ed2970193266f8b2a6`, whose archives retain their
+0.8.0 requirements. The immutable v0.11.0 attempt at
 reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published only
 `rdocx-opc` and `rdocx-oxml`. It created no GitHub release and posted no
 contribution notifications. The complete seven-package recovery is published
 at 0.11.1, and all six reviewed leave-open notifications are posted. Both
-Python project versions and `rdocx-wasm` track the stable workspace version, but
+Python project versions and `rdocx-wasm` track stable workspace version 0.12.0, but
 every binding and WASM crate remains unpublished on crates.io. The incubating
-group places the unpublished `rpptx-wasm` crate at 0.8.0. Neither Rust release
+group places the unpublished `rpptx-wasm` crate at 0.9.0. Neither Rust release
 gives binding, WASM, npm, or Python package publication authority. Every later
 release still requires its selected-family gate and a separate final approval
 at the reviewed SHA. Complete coherent stable releases remain live and

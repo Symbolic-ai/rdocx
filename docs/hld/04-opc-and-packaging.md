@@ -447,6 +447,19 @@ extension and content type are registered with the package. Each source slide
 creates or reuses its own internal image relationship to that shared part, with
 a relative target resolved from the slide part name.
 
+The presentation HTML importer accepts image bytes only through
+`HtmlImageResource`. The HTML source string is an exact lookup key. Missing
+resources are diagnosed, duplicate keys and aggregate byte overflow fail
+closed, and no URL or filesystem path from markup is fetched. Successful
+images enter the normal presentation media insertion path with caller-supplied
+filenames and explicit CSS geometry.
+
+The PDF importer routes decoded JPEG and PNG image content through the same
+package-wide presentation media store. JPEG bytes with `DCTDecode` are retained
+directly. Bounded 8-bit `DeviceGray` and `DeviceRGB` image streams become PNG.
+Each imported slide owns its image and external URI relationships, while equal
+image bytes still deduplicate package-wide.
+
 Slide removal considers only `/ppt/media/` targets reached from the removed
 slide and its removed notes relationship scopes. A candidate part is deleted
 only when no remaining internal package relationship reaches it. Pre-existing
@@ -483,6 +496,18 @@ automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that
 resolve to no part, and orphan media. `rpptx` adds its own presentation-specific
 checks, listed in `06-presentationml-model.md`.
+
+Presentation HTML conversion publishes only a serialized, reopened, validated
+candidate. Projection failure returns `Error::Html` or an existing package
+error before any partial presentation escapes. Default master, layout, and
+theme parts remain byte-identical while new slide children follow the existing
+fixed-prefix PresentationML serializers and shape-tree sequence.
+
+PDF conversion has the same publication boundary. It builds a fresh candidate,
+adds every source page in order, serializes, reopens, validates, and only then
+returns `PdfImportResult`. Mixed effective page sizes, malformed graphs, active
+JavaScript, and any declared resource-limit failure return `Error::PdfImport`
+before a partial presentation can escape.
 
 Executable presentation payloads are selected only through normalized internal
 relationships with the exact expected type. OLE, control, ActiveX binary, VBA
