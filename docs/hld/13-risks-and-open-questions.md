@@ -136,6 +136,47 @@ PresentationML is enormous and there is no natural stopping point.
 not model it.** Stated as a rule in `06-presentationml-model.md` and enforced in
 review.
 
+### R11, modern DOCX completeness becomes unbounded
+
+WordprocessingML, DrawingML, package extensions, and producer-specific
+compatibility markup do not provide a natural meaning of feature complete.
+Without a closed capability vocabulary, an audit can continually discover new
+work and a public facade can appear complete while omitting one half of a
+cross-part invariant such as style-linked numbering.
+
+*Mitigation*: F-240 owns a property-level capability matrix and classifies each
+row as complete, partial, preserve-only, unsupported, or a permanent non-goal.
+Every incomplete in-scope row names one story. M23 closes the five-document
+from-scratch gate. M24 closes the declared modern DOCX authoring matrix. The
+audit is explicitly allowed to update the provisional sprint plan rather than
+hiding newly discovered gaps behind raw XML.
+
+### R12, private client documents escape into repository history
+
+The five M23 reference documents are customer data. A useful differential gate
+needs their exact parts and renders, but committing a document, derived page,
+text extract, filename, or identifying manifest would create an irreversible
+confidentiality failure.
+
+*Mitigation*: the corpus stays in a configured ignored private directory.
+Tracked tests contain only synthetic fixtures and non-identifying capability
+assertions. Local required-corpus mode records hashes and evidence outside the
+repository, scans staged and tracked paths for forbidden artifacts, and fails
+closed when the configured private corpus is incomplete. Public CI proves the
+same API boundary through synthetic documents.
+
+### R13, a public facade writes only half of an OOXML invariant
+
+Several Word features span parts or stories. Numbering linked to a paragraph
+style, fields linked to bookmarks, drawings linked to media, and section
+headers linked through relationships can all produce a valid ZIP that behaves
+incorrectly in Word when only one side is written.
+
+*Mitigation*: M23 and M24 stories own complete operations rather than exposing
+uncoordinated XML fragments as the normal path. Conformance tests inspect every
+owned part, reopen through `Document`, compare fresh layout, and require
+authored public-API content to report no unexplained unmodeled properties.
+
 ## Assumptions that would invalidate the plan if wrong
 
 - **That a slide is a page.** The entire rendering reuse argument rests on it.

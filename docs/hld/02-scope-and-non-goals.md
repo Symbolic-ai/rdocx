@@ -143,7 +143,7 @@ will render legibly but not faithfully, and will say so.
 v1 shipped. This section records what changed after it, and it is the only place
 a v1 non-goal may be superseded. A non-goal not named here still stands.
 
-The shape of the roadmap is in `14-development-backlog.md`, M14 through M22. The
+The shape of the roadmap is in `14-development-backlog.md`, M14 through M24. The
 principle behind it: v1 proved the model and the renderer can live in one
 codebase, which is the thing no other library in Python or Rust has. Everything
 after v1 leans on that rather than away from it.
@@ -167,6 +167,23 @@ equation subset as Presentation MathML or LaTeX. Lossy format and OfficeMath
 properties remain visible through ordered diagnostics. Python, WASM, CLI,
 legacy equation formats, and a second conversion model remain outside this
 surface.
+
+M23 makes from-scratch business-document generation a tested native Rust
+surface. Its completion gate starts from `Document::new()`, uses only public
+`rdocx` APIs, and reproduces the required structure and rendering of five
+private reference documents without a base template or raw XML injection. The
+private corpus is evidence, not distributable product data. F-240 may reshape
+the provisional story plan when its property-level audit finds an uncovered
+gap.
+
+M24 extends that result to a complete modern DOCX authoring matrix. It covers
+modeled paragraph, run, table, section, story, field, numbering, form,
+collaboration, drawing, package-extension, accessibility, conformance,
+determinism, resource-limit, and binding surfaces. Complete means that every
+in-scope modeled capability is publicly authorable or is explicitly classified
+as preservation-only or a permanent non-goal. It does not promise execution of
+VBA, ActiveX, embedded applications, proprietary cloud services, or unknown
+future producer extensions.
 
 Bounded MHTML import and export is part of the post-v1 native Word interchange
 surface. It carries the supported document structure, contained PNG and JPEG
@@ -231,7 +248,7 @@ pixel, and byte caps fail closed, and no system codec or subprocess is used.
 
 `oxml-sml` remains chart-workbook support rather than a spreadsheet library.
 M19 may supersede that position only if F-184 finds a material gap still exists
-in the Rust ecosystem at S70. A basic reader, writer, or formula evaluator is
+in the Rust ecosystem at S81. A basic reader, writer, or formula evaluator is
 not enough. The required gap is one loss-aware lifecycle covering advanced
 editing, calculation, local pivot refresh, selected Power Query execution,
 Office Scripts-compatible automation, and rendering. If a credible maintained
@@ -239,9 +256,10 @@ crate provides that boundary by then, M19 is archived rather than implemented.
 
 ### Still non-goals, and still permanent
 
-- **Not a PowerPoint clone, and not a Word clone.** The renderer targets
-  business documents. Decks and documents that lean on 3-D, heavy effects or
-  WordArt render legibly and say so.
+- **Not a PowerPoint clone, and not a Word rendering clone.** The renderers
+  target business documents. M24 completes the declared modern DOCX authoring
+  matrix, but documents that lean on unsupported 3-D, heavy effects, or
+  proprietary WordArt rendering remain diagnostic rather than falsely exact.
 - **Drop-in `python-docx` and `python-pptx` compatibility is not promised.**
   Unchanged and for the unchanged reason: their real surface is inseparable from
   lxml.

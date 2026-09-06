@@ -78,6 +78,15 @@ A single release in which:
   indistinguishable at a glance from PowerPoint's own export.
 - Both ship as Rust crates, CLIs, WASM modules and Python wheels.
 
+The post-v1 roadmap now adds two Word authoring boundaries before the
+conditional spreadsheet programme. M23 proves that five representative
+business documents can be generated from `Document::new()` through public
+`rdocx` APIs alone. M24 closes the audited modern DOCX authoring matrix across
+stories, fields, forms, collaboration, drawings, package extensions,
+accessibility, conformance, determinism, and bindings. Complete authoring does
+not mean executing proprietary payloads or reproducing every Word rendering
+effect.
+
 ## What this costs
 
 Charts mean ChartML plus a minimal SpreadsheetML writer, because every chart
@@ -96,3 +105,9 @@ genuinely useful.
 
 This is recorded here so the trade is made deliberately rather than discovered
 in month nine.
+
+The active post-v1 delivery record is larger than this historical v1 estimate.
+M23 adds 24 stories and roughly 112 developer-days. M24 adds 47 stories and
+roughly 219 developer-days. They occupy S70 through S80, before conditional
+spreadsheet work begins at S81. F-240 is an audit gate, so these later story
+boundaries and estimates are provisional until its evidence is integrated.

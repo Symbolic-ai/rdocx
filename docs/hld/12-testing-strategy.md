@@ -1296,6 +1296,53 @@ destination only after its digest matches. `--check` verifies the complete
 directory without changing it. The primary workspace-test and MSRV jobs fetch
 both pinned corpora before running Cargo tests.
 
+## The private from-scratch DOCX conformance corpus
+
+M23 uses five client reference documents that are never committed, published,
+or fetched by repository automation. They live in a configured ignored private
+directory outside the tracked corpus tree. The repository must not contain the
+documents, their rendered pages, extracted text, identifying filenames,
+customer metadata, or a manifest that would disclose their provenance.
+
+F-240 inventories each private document locally at package-part, relationship,
+section, story, paragraph, run, table, numbering, field, drawing, and layout
+levels. Its capability matrix stores only non-identifying classifications in
+tracked documentation. Exact hashes, filenames, XML extracts, and differential
+artifacts remain beside the private corpus. A staged-path and tracked-path scan
+fails when a private artifact is about to enter repository history.
+
+The M23 conformance harness has two modes:
+
+1. Public CI source-builds synthetic fixtures that exercise every declared M23
+   capability. Construction must begin with `Document::new()` and use public
+   `rdocx` APIs only. A base package, raw XML injection, private OXML facade, or
+   prebuilt document fails the gate.
+2. Local required-corpus mode builds the five target documents through their
+   Rust generators and compares them with the configured private references.
+   Missing input, unexpected input count, a digest change, or missing evidence
+   fails closed. This mode never prints document text or embeds source XML in a
+   tracked report.
+
+The local comparison first normalizes ZIP metadata that is not document state,
+then checks content types, relationships, part inventory, schema child order,
+modeled properties, and required compatibility branches. It renders both sides
+with deterministic bundled fonts at the pinned resolution and records page
+count, dimensions, and image similarity outside the repository. Feature-level
+tests remain authoritative when byte identity is not a valid expectation.
+
+F-263 closes M23 only when all five generators pass local required-corpus mode,
+the synthetic public suite passes in CI, opening and saving requires no repair,
+and every unexplained structural or visual delta has an owning story. F-240 can
+revise the provisional M23 and M24 sprint plan if the audit discovers a missing
+public authoring capability.
+
+M24 extends the synthetic conformance matrix to all declared modern DOCX
+authoring rows. Each row proves public construction, save and reopen equality,
+part ownership, binding parity where exposed, deterministic allocation, and
+honest losslessness diagnostics. Preservation-only and permanent non-goal rows
+use explicit diagnostic tests rather than an authoring test that silently
+falls back to XML.
+
 ## The Word render fidelity gate
 
 The five-document Word corpus is rendered at 150 dpi through the production

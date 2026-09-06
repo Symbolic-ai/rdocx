@@ -30,30 +30,32 @@ came in far under their estimates whenever a story arrived with its cause
 already written up by the sprint that filed it, and the escalation record
 carries the variance for each.
 
-### Post-v1, M14 through M22
+### Post-v1, M14 through M24
 
-**93 stories, roughly 336 developer-days**, or about 67 weeks solo. By
-milestone, in days: M14 28, M15 12, M16 31, M17 23, M18 26, M19 85, M20 27,
-M21 60, M22 44.
+M14 through M22 delivered 72 non-spreadsheet stories. M23 and M24 add 71 Word
+stories, roughly 331 developer-days, before the conditional 21-story M19
+spreadsheet programme. Four S70 cross-cutting stories add roughly 12 days for
+the confirmed Issue 67 closure and the three independently measured Issue 69
+performance corrections.
 
-M19 is 85 of those 336 and may supersede a recorded permanent non-goal, so it
-is the one milestone that remains a business decision rather than a scheduling
-one. M20, M21, and M22 run before M19. Stopping after M22 leaves every planned
-Word and PowerPoint capability complete. The spreadsheet programme starts last
-and proceeds only if F-184 confirms a material gap in the Rust ecosystem.
+M23 closes the five-document from-scratch business-document boundary. M24 then
+classifies and closes the broader modern DOCX authoring surface before M19 may
+begin. The spreadsheet programme remains a business decision and proceeds only
+if F-184 confirms a material gap in the Rust ecosystem at S81.
 
-Three stopping and compression choices remain without reworking completed
-milestones:
+The stopping and compression choices are:
 
-- **Stop after M22.** S69 completes every planned non-spreadsheet capability.
-  M19 can wait without carrying any Word or PowerPoint work.
-- **Stop M19 after S64.** That boundary leaves a loss-aware xlsx reader,
-  writer, calculation engine, charts, worksheet features, and locally
-  refreshable pivots. Power Query and Office Scripts remain preserved but not
-  executed until the later sprints land.
-- **Parallelise after the core model.** Rendering and distribution can proceed
-  separately from the Power Query and automation runtimes once their shared
-  workbook, calculation, chart, and pivot contracts are reviewed.
+- **Stop after M23.** S73 can generate the five private reference documents
+  from `Document::new()` through public modeled APIs, with no base template,
+  raw OOXML, or LibreOffice field-update pass.
+- **Stop after M24.** S80 provides the complete modern DOCX authoring boundary.
+  Every in-scope feature is authorable, readable, mutable, round-trip safe,
+  rendered where applicable, and classified across the public bindings.
+- **Archive M19 at its decision gate.** F-184 may still find that the advanced
+  spreadsheet lifecycle no longer represents a material ecosystem gap.
+- **Parallelise dependency-independent stories.** Each larger sprint contains
+  explicit waves. The sprint boundary remains one integrated verification and
+  review result.
 
 ---
 
@@ -1593,7 +1595,7 @@ decision lands.
 OPC, DrawingML, the chart engine, the layout engine and the PDF backend all
 exist and are format-neutral, which lowers the cost of a third family. That is
 not sufficient reason to build one. F-184 must reassess the Rust ecosystem when
-S70 begins. M19 proceeds only if no credible maintained crate provides the
+S81 begins. M19 proceeds only if no credible maintained crate provides the
 combined lifecycle required here: open an existing advanced workbook, preserve
 what is not executed, edit typed features, recalculate formulas and local
 pivots, refresh a declared Power Query subset, automate it through an Office
@@ -1615,7 +1617,7 @@ render to PDF.
 
 ### F-184, Advanced spreadsheet go or no-go (S)
 The go or no-go decision record. Reassess the maintained Rust spreadsheet
-ecosystem at S70, state whether the combined lifecycle gap still exists, and
+ecosystem at S81, state whether the combined lifecycle gap still exists, and
 archive M19 if it does not. If it does, amend `02-scope-and-non-goals.md`, define
 the boundary between `oxml-sml` as chart support and `rxlsx` as a library, and
 publish the preserve, model, and execute classification for every advanced
@@ -2193,6 +2195,630 @@ reports stable loss diagnostics.
 **Test gate**: differential. Source-built MHTML and DOCX conversions preserve
 body order, formatting, tables, lists, images, links, and declared loss records
 against Microsoft Word 16.104 build 16.104.25121423.
+
+---
+
+## Milestone 23, From-scratch business documents (about 22 weeks)
+
+**Goal**: generate the five private proposal and order-form references from
+`Document::new()` through the public `rdocx` facade. The generation path uses no
+base DOCX, caller-supplied raw XML, direct `rdocx-oxml` mutation, or LibreOffice
+field-update pass.
+
+The first sprint is an evidence-gathering and planning boundary. Its audit owns
+the final capability matrix, story reshaping, HLD scope, sprint plan, backlog,
+and current-sprint update for the remaining M23 and M24 work. Client documents,
+extracted parts, and rendered pages stay in a private ignored directory. Only
+sanitized source-built fixtures and non-identifying requirements may be tracked.
+
+**End-of-milestone gate**: all five private references are generated from a
+blank public facade, reopen without repair, match the required package
+semantics, and meet the reviewed deterministic visual thresholds. Repeated
+generation produces identical DOCX bytes, and no generated document reports an
+unexplained preservation-only fallback.
+
+### F-240, Modern DOCX completeness audit and private corpus matrix (L)
+Audit every modern DOCX capability across create, read, mutate, remove,
+save-reopen, story placement, layout, rendering, determinism, bindings, and
+diagnostics. Map the five private documents without committing their content,
+remove overlap with completed M1 through M22 work, and update the HLD, sprint
+plan, backlog, current sprint, release boundaries, and renumbered M19 schedule.
+The audit may split, merge, resize, or archive the provisional F-243 through
+F-310 stories while preserving the two milestone outcomes.
+**Test gate**: regression. Every in-scope matrix row has evidence, an owner
+story, an explicit preservation boundary, or a permanent non-goal, and every
+roadmap duplicate or dangling dependency is rejected.
+
+### F-241, Public authoring conformance harness (L)
+Build the reusable source-built and private-corpus harness for public-facade
+generation, package comparison, save-reopen checks, deterministic rendering,
+and unsupported-content diagnostics. Private client inputs and outputs remain
+ignored, and tracked fixtures contain no identifying text, media, or extracted
+package bytes.
+**Depends on**: F-240.
+**Test gate**: differential. A sanitized representative fixture proves every
+gate locally, while missing private inputs report a clear skip rather than
+weakening required private-corpus mode.
+
+### F-242, Root README product and capability overview (M)
+Simplify the root README into a current product entry point with major feature
+categories, an evidence-based comparison with common alternatives, the
+authoring and preservation distinction, and a concise roadmap. Detailed status
+continues to live in the canonical backlog and sprint plan, and every public
+feature story updates the summary when its classification changes.
+**Depends on**: F-240.
+**Test gate**: regression. README examples compile, links resolve, version
+requirements match manifests, and every capability claim maps to the approved
+matrix.
+
+### F-243, Word-compatible fresh package profiles (L)
+Extend `Document::new()` with deterministic DOCX, DOCM, DOTX, and DOTM creation
+profiles that own all required parts, content types, relationships, and package
+metadata without copying a template. Minimal output remains available as an
+explicit profile.
+**Depends on**: F-240.
+**Test gate**: round-trip. Each profile saves, reopens with the same identity,
+and passes strict package validation and the pinned no-repair check.
+
+### F-244, Corpus settings and document properties (L)
+Author the settings, core properties, application properties, custom
+properties, document variables, compatibility facts, and defaults required by
+the private corpus. Values are typed, deterministic, and removable through the
+public facade.
+**Depends on**: F-243.
+**Test gate**: round-trip. Every authored value survives save and reopen, and
+removal deletes only its owned package content.
+
+### F-245, Corpus themes, font tables, and embedded fonts (L)
+Create and select the theme, font table, language defaults, font relationships,
+and licensed embedded-font parts required by the private documents. Font
+embedding remains caller-authorized and preserves exact licensing metadata.
+**Depends on**: F-243.
+**Test gate**: differential. Public-authored theme and font resolution matches
+the pinned Word references in deterministic layout without system-font input.
+
+### F-246, Corpus style authoring (L)
+Create, update, remove, and resolve the paragraph, character, and table styles
+used by the private corpus, including defaults, inheritance, linked and next
+styles, and conditional table regions. Style references are validated before a
+transaction publishes.
+**Depends on**: F-243, F-245.
+**Test gate**: differential. The source-built style graph resolves to the same
+effective formatting and visible output as the sanitized Word oracle.
+
+### F-247, Complete numbering level and instance model (L)
+Model and author full numbering levels and instances, including level text,
+paragraph-style links, suffix, alignment, indentation, marker properties,
+legal numbering, restart controls, level overrides, and start overrides. The
+public format type accepts the complete standard set, including `none`, without
+requiring raw XML.
+**Depends on**: F-243.
+**Test gate**: round-trip. Every typed level and override survives save and
+reopen with schema-correct order and reports no unmodeled properties when
+created solely through the public API.
+
+### F-248, Style-linked numbering, counters, TOC, and REF (L)
+Provide one transactional operation that writes both the numbering-level style
+link and the style's numbering properties. Counter behavior covers independent
+instances, continuation, restarts, table cells, sections, suppression through
+`numId` zero, numbered TOC entries, and numbering-aware REF switches.
+**Depends on**: F-246, F-247.
+**Test gate**: differential. Three-level numbered headings inside and outside
+tables match Word in body text, TOC entries, cross-references, and restart
+behavior.
+
+### F-249, Deterministic package identifier allocation (M)
+Centralize deterministic allocation for relationships, bookmarks, comments,
+drawings, numbering definitions, numbering instances, parts, and content types.
+Allocation follows document order and detects imported or preserved collisions
+before mutation.
+**Depends on**: F-243.
+**Test gate**: regression. Equivalent construction orders produce the declared
+stable identifiers and repeated saves are byte-identical.
+
+### F-250, Ordered mutable section facade (L)
+Expose every section in document order with stable lookup, insertion, removal,
+and mutation across paragraph-level and final section properties. Section
+operations preserve body order and cannot orphan related stories.
+**Depends on**: F-249.
+**Test gate**: round-trip. A portrait, landscape, portrait document retains all
+three ordered sections and their independent references after every mutation.
+
+### F-251, Complete section and page geometry (L)
+Author the M23 section properties for size, orientation, margins, gutter,
+columns, page numbering, header and footer distance, title page, and break type.
+Unsupported section children remain visible until M24 completes them.
+**Depends on**: F-250.
+**Test gate**: differential. Mixed-orientation source-built sections match the
+pinned Word page geometry and page-number sequence.
+
+### F-252, Rich per-section headers and footers (L)
+Create, link, unlink, inherit, replace, and remove default, first, and even
+header and footer stories per section. Each story accepts paragraphs, tables,
+fields, links, images, drawings, and nested supported content through the same
+public container operations.
+**Depends on**: F-250, F-253.
+**Test gate**: differential. Every section variant renders at the correct width
+and survives save, reopen, replacement, and inheritance changes.
+
+### F-253, Container-neutral story editing (L)
+Define one public content-location and mutation model for the body, table cells,
+headers, footers, notes, comments, and text boxes. The model supports ordered
+paragraph, table, control, field, drawing, and preserved-node traversal without
+introducing a second document tree.
+**Depends on**: F-240.
+**Test gate**: integration. One generic mutation visits and edits the same
+supported content shape in every story with identical error behavior.
+
+### F-254, Generic insert, move, clone, and remove operations (L)
+Add transactional arbitrary-position insertion, movement, cloning, and removal
+for supported content through the container-neutral model. Invalid ranges,
+cross-owner moves, and stale locations fail without partial mutation.
+**Depends on**: F-253, F-249.
+**Test gate**: regression. Interleaved operations across body and cell content
+preserve exact order, references, and untouched raw XML.
+
+### F-255, Part-scoped assets, links, and relationships (M)
+Make images, hyperlinks, charts, and other related content allocate against the
+owning OPC part rather than assuming the main document. Public APIs resolve and
+validate relationship scope for every supported story.
+**Depends on**: F-253, F-249.
+**Test gate**: round-trip. Equal content in body, header, footer, note, and text
+box stories resolves only through its correct owner relationships.
+
+### F-256, Transactional cross-document fragment import (L)
+Import a selected subtree while remapping styles, numbering, bookmarks,
+comments, media, drawings, charts, embedded parts, fields, and relationships.
+Caller-selected conflict policies are deterministic, and any unsupported
+dependency aborts without changing the destination.
+**Depends on**: F-246 through F-255.
+**Test gate**: regression. A dependency-rich fragment imports twice without
+collisions and reopens with every reference resolved.
+
+### F-257, Complete M23 table authoring (L)
+Author table width modes, alignment, indentation, layout, shading, borders,
+cell margins, grid, style look, and the layout-table behavior used by the
+private corpus. Invisible borders remain explicit modeled values rather than
+absence inferred by convention.
+**Depends on**: F-253.
+**Test gate**: differential. Sanitized layout and data tables match Word in XML
+semantics, column geometry, pagination, and deterministic rendering.
+
+### F-258, Complete M23 row and cell authoring (L)
+Author exact and minimum row heights, repeating headers, split policy, row
+alignment, grid omissions, merges, per-cell borders and margins, width,
+shading, vertical alignment, text direction, conditional formatting, and
+wrapping.
+**Depends on**: F-257.
+**Test gate**: differential. The corpus-required nested tables reproduce every
+reviewed row and cell property without unmodeled fallback.
+
+### F-259, Container measurement and equal-height layout (M)
+Measure supported paragraphs and tables at a caller-supplied width using the
+same deterministic fonts and layout rules as whole-document pagination. The
+result reports height and diagnostics without mutating the document.
+**Depends on**: F-257, F-258.
+**Test gate**: regression. Two independently measured nested tables align to
+the same final row height and match whole-document layout.
+
+### F-260, Ordered run content authoring (L)
+Author tabs, line, page, and column breaks, drawings, fields, symbols, and text
+inside one run while preserving mixed-content order. Existing formatting
+setters operate on the run without replacing non-text children.
+**Depends on**: F-253.
+**Test gate**: round-trip. A run containing every supported child reopens in
+the same order and renders each break and tab at the expected position.
+
+### F-261, Rich HTML fragments in arbitrary containers (L)
+Insert HTML fragments at any supported content location with bounded inline
+and embedded CSS, nested lists, tables, data-URI images, links, and explicit
+resource resolution. Every dropped construct produces an ordered diagnostic.
+**Depends on**: F-253 through F-260.
+**Test gate**: differential. The supported fragment subset produces equivalent
+Word content and rendering in body, cell, header, and footer containers.
+
+### F-262, Corpus drawings, text boxes, and watermarks (L)
+Author inline and floating images, crop and size, anchors, wrapping, rotated
+text boxes, text direction, section-aware watermarks, and the required modeled
+AlternateContent and VML fallback. Raw header XML is not used by the generator.
+**Depends on**: F-252, F-255, F-260.
+**Test gate**: differential. Every private-corpus drawing and watermark matches
+the reviewed Word geometry and compatibility structure.
+
+### F-263, Layout-backed fields and M23 corpus gate (L)
+Materialize PAGE, NUMPAGES, PAGEREF, and supported TOC caches from deterministic
+layout, including numbered headings inside table cells. Build all five private
+documents through public `Document::new()` programs and enforce package,
+semantic, visual, deterministic, and no-fallback acceptance.
+**Depends on**: F-241 through F-262.
+**Test gate**: differential. Required private-corpus mode passes all five
+references without LibreOffice post-processing, raw XML, or source-template
+access at generation time.
+
+---
+
+## Milestone 24, Modern DOCX authoring completeness (about 44 weeks)
+
+**Goal**: close the modern, non-executable DOCX authoring surface after the
+private corpus proves the architecture. Every in-scope capability is created,
+read, mutated, removed, saved and reopened through public APIs, placed in every
+valid story, rendered where the product claims rendering, and classified across
+native, Python, WASM, and CLI surfaces.
+
+Binary `.doc`, Word 2003 XML, VBA execution, ActiveX execution, OLE application
+execution, hosted add-in execution, Microsoft cloud services, and undocumented
+Word layout parity remain permanent non-goals. Their modern-package payloads
+may be preserved, inventoried, attached, extracted, replaced, removed, and
+diagnosed without execution.
+
+**End-of-milestone gate**: the approved capability matrix has no unexplained
+partial row. A broad source-built document and the pinned Word corpus pass
+strict and transitional validation, public authoring, mutation, save-reopen,
+deterministic layout and rendering, accessibility, package preservation, and
+binding-parity checks without Word repair.
+
+### F-264, Complete paragraph property authoring (L)
+Expose the full supported paragraph-property model through public setters and
+readers, including logical indentation, automatic spacing, borders, shading,
+tabs, pagination, frames, outline, direction, and paragraph-mark properties.
+**Depends on**: F-253.
+**Test gate**: round-trip. Every public-authored paragraph property reopens as
+modeled content and preserves unrelated producer XML.
+
+### F-265, Complete run property and inline authoring (L)
+Expose full run fonts, theme references, colors, complex-script formatting,
+shading, effects, language, symbols, special characters, and ordered inline
+content. Explicit-font replacement has a documented theme-clearing policy.
+**Depends on**: F-260.
+**Test gate**: differential. Effective run formatting and inline ordering match
+the pinned Word reference across save, reopen, and render.
+
+### F-266, International and vertical typography (L)
+Author and render bidirectional, East Asian, complex-script, vertical, ruby,
+phonetic, emphasis-mark, character-grid, and locale-sensitive text behavior.
+**Depends on**: F-264, F-265.
+**Test gate**: golden. Mixed Arabic, Hebrew, Korean, Japanese, and Latin pages
+match the pinned deterministic geometry and reading order.
+
+### F-267, Complete table style and conditional formatting authoring (L)
+Create and mutate table styles, conditional regions, band sizes, table look,
+row and cell conditional selectors, and their paragraph, run, table, and cell
+property layers.
+**Depends on**: F-246, F-257, F-258.
+**Test gate**: differential. Every conditional region resolves and renders like
+the pinned Word-authored table.
+
+### F-268, Floating and advanced table layout (L)
+Author floating table positioning, overlap, bidirectional visual order, complete
+width modes, autofit, captions, descriptions, and advanced row-grid behavior.
+**Depends on**: F-257 through F-259.
+**Test gate**: golden. Fixed, autofit, nested, and floating tables match the
+reviewed Word page geometry and pagination.
+
+### F-269, Complete section page semantics (L)
+Add page borders, line numbering, variable-width columns, separators, vertical
+page alignment, mirrored margins, book-fold settings, paper source, and section
+footnote and endnote configuration.
+**Depends on**: F-250, F-251.
+**Test gate**: differential. Every supported section property survives
+round-trip and changes only its declared layout behavior.
+
+### F-270, Complete settings and web settings authoring (L)
+Model and author the remaining modern document settings, compatibility options,
+proof state, update policy, default tabs, theme language, mail-merge settings,
+and web settings with typed removal and diagnostics.
+**Depends on**: F-244.
+**Test gate**: round-trip. A public-authored settings package reports no
+unmodeled supported children and preserves unknown extensions byte for byte.
+
+### F-271, Uniform rich header and footer editing (L)
+Complete all valid header and footer content, fields, controls, annotations,
+drawings, tables, links, and inherited variant operations through the common
+story API.
+**Depends on**: F-252 through F-255.
+**Test gate**: integration. The same rich subtree can be authored in every
+header and footer variant and reopens with correct part-scoped relationships.
+
+### F-272, Rich footnote authoring (L)
+Create, edit, reorder, and remove footnotes containing rich paragraphs, tables,
+fields, links, drawings, comments, and content controls.
+**Depends on**: F-253 through F-255.
+**Test gate**: differential. Rich notes and their references match Word in
+numbering, page placement, continuation, and round-trip structure.
+
+### F-273, Rich endnote authoring (L)
+Create, edit, reorder, and remove endnotes with the same content and relationship
+surface as footnotes while retaining an independent identifier namespace.
+**Depends on**: F-272.
+**Test gate**: differential. Mixed footnotes and endnotes remain independent and
+match Word at section and document-end placement boundaries.
+
+### F-274, Note separators, markers, and restart policy (L)
+Author separator and continuation stories, custom reference marks, number
+formats, start values, placement, and section restart behavior for both note
+families.
+**Depends on**: F-269, F-272, F-273.
+**Test gate**: differential. Every note policy produces the pinned marker and
+page placement without disturbing unrelated section numbering.
+
+### F-275, Cross-story bookmarks, ranges, and annotations (L)
+Create and mutate bookmarks, comment ranges, permission ranges, proofing ranges,
+and other supported paired markers in every valid story and nested container.
+**Depends on**: F-253, F-254.
+**Test gate**: round-trip. Nested and crossing-invalid ranges are respectively
+preserved or rejected atomically, and valid ranges retain exact endpoints.
+
+### F-276, Complete fragment conflict and dependency policy (L)
+Complete cross-document fragment import for style aliases, numbering overrides,
+custom XML bindings, notes, comments, revisions, charts, diagrams, embeddings,
+and package extensions.
+**Depends on**: F-256, F-270 through F-275.
+**Test gate**: regression. Importing a full-story fragment into a conflicting
+destination remaps every dependency deterministically and leaves no dangling ID.
+
+### F-277, Glossary and building-block creation (L)
+Create, classify, update, insert, and remove glossary documents, AutoText,
+building blocks, placeholders, and their related content through public APIs.
+**Depends on**: F-237, F-253, F-276.
+**Test gate**: round-trip. Public-created entries retain category, behavior,
+content, relationships, and unsupported siblings after insertion and reopen.
+
+### F-278, General simple and complex field builder (L)
+Provide typed and raw-instruction-safe builders for simple and complex fields,
+nested instructions, ordered begin-separate-end runs, locks, dirty state,
+format switches, and cached display content.
+**Depends on**: F-260.
+**Test gate**: round-trip. Every supported field shape reopens with identical
+instruction semantics and ordered cached content.
+
+### F-279, Pagination field materialization across stories (L)
+Materialize PAGE, NUMPAGES, SECTION, SECTIONPAGES, PAGEREF, and related layout
+fields in every supported story using one deterministic layout snapshot.
+**Depends on**: F-263, F-271 through F-274, F-278.
+**Test gate**: differential. Body, header, footer, note, and text-box field caches
+match the pinned Word page and section values.
+
+### F-280, Captions, sequences, and complete cross-references (M)
+Author captions and labels, sequence fields, bookmark targets, and complete REF
+number, position, hyperlink, and context switches.
+**Depends on**: F-248, F-275, F-278.
+**Test gate**: differential. Figure, table, equation, and numbered-heading
+references match Word before and after insertion and renumbering.
+
+### F-281, Indexes and tables of figures and authorities (L)
+Author source markers and rebuild INDEX, TOF, and TOA result structures with
+cached entries, page ranges, leaders, links, and preserved formatting.
+**Depends on**: F-278 through F-280.
+**Test gate**: differential. Mutating sources produces the same ordered entries
+and page targets as the pinned Word update.
+
+### F-282, Citations and bibliography authoring (L)
+Create bibliography sources, citation fields, source styles, and bibliography
+results while preserving unsupported producer metadata and locale data.
+**Depends on**: F-278.
+**Test gate**: differential. A source-built citation set and bibliography match
+the pinned Word identifiers, ordering, display text, and round-trip package.
+
+### F-283, Complete numbering-aware navigation fields (L)
+Close all numbering interactions across TOC, STYLEREF, REF, PAGEREF, captions,
+and document outline results, including table-cell headings and suppressed
+paragraphs.
+**Depends on**: F-248, F-279 through F-282.
+**Test gate**: regression. One multilevel numbered document stays consistent
+across visible markers, navigation structures, references, and saved caches.
+
+### F-284, Stable container-wide template grammar (L)
+Define the public template grammar, formatting hooks, filters, nested paths,
+whitespace behavior, errors, and structural expansion across every supported
+story and container.
+**Depends on**: F-253, F-261, F-276.
+**Test gate**: regression. The versioned grammar renders the same payload across
+body, table, header, footer, note, and text-box locations without run-split loss.
+
+### F-285, Content control creation and lifecycle (L)
+Create, inspect, edit, move, clone, and remove block, row, cell, paragraph, and
+inline content controls with typed identity, alias, tag, lock, appearance, and
+placeholder behavior.
+**Depends on**: F-253, F-254.
+**Test gate**: round-trip. Each control location and property survives public
+creation and mutation with no raw-XML fallback.
+
+### F-286, Rich, repeating, and typed content controls (L)
+Author rich text, plain text, date, checkbox, picture, combo, drop-down, group,
+repeating-section, and repeating-item controls with type-specific validation.
+**Depends on**: F-285.
+**Test gate**: differential. Every supported control matches the pinned Word
+structure and behavior under replacement and repetition.
+
+### F-287, Custom XML stores and data binding authoring (L)
+Create custom XML data stores, item properties, schema references, namespace
+mappings, XPath bindings, and two-way controlled updates without exposing raw
+package surgery.
+**Depends on**: F-285.
+**Test gate**: round-trip. Bound controls resolve, update, and reopen against the
+correct store while unknown store content remains byte-identical.
+
+### F-288, Legacy form field creation (M)
+Create text, checkbox, and drop-down legacy fields with complete supported help,
+status, default, formatting, size, list, and calculation properties.
+**Depends on**: F-237, F-278.
+**Test gate**: differential. Public-created legacy fields match Word and retain
+their typed values through update and reopen.
+
+### F-289, Modern Word form authoring (L)
+Compose content controls, protection, editable ranges, validation, placeholders,
+and repeating data into a high-level modern form surface without creating a
+second document model.
+**Depends on**: F-275, F-285 through F-288.
+**Test gate**: differential. A dense source-built form behaves and renders like
+the pinned Word form across fill, reset, protect, and reopen operations.
+
+### F-290, Mail-merge package and data-source authoring (M)
+Author mail-merge settings, field mappings, recipients, connection metadata,
+and safe embedded data while external retrieval remains policy-controlled and
+offline by default.
+**Depends on**: F-233, F-270, F-278.
+**Test gate**: round-trip. A public-created merge package retains its declared
+source and mappings, and unavailable external data returns diagnostics.
+
+### F-291, Tracked insertion and deletion authoring (L)
+Create tracked text, paragraph, table, row, cell, and nested-story insertions
+and deletions with deterministic revision IDs, authors, dates, and accepted and
+original views.
+**Depends on**: F-253, F-254.
+**Test gate**: differential. Authored revisions match Word structure and both
+views across save, reopen, accept, and reject.
+
+### F-292, Property revisions and move ranges (L)
+Author paragraph, run, table, row, cell, numbering, and section property changes
+plus paired move-from and move-to ranges in every valid story.
+**Depends on**: F-275, F-291.
+**Test gate**: differential. Property and move revisions match the pinned Word
+result and resolve atomically in both directions.
+
+### F-293, Complete comments and modern comment metadata (L)
+Create comments, replies, people identities, resolved state, anchors, and modern
+comment extension metadata across body, tables, notes, headers, footers, and
+text boxes.
+**Depends on**: F-275, F-291.
+**Test gate**: round-trip. Every comment thread retains its range, identity,
+reply graph, and resolved state after unrelated story edits.
+
+### F-294, Permission ranges and protection integration (M)
+Author editable ranges for users and groups, validate paired markers, and
+compose them with document protection and supported form-filling policies.
+**Depends on**: F-275, F-289.
+**Test gate**: differential. Protected documents expose only the declared
+editable ranges and reopen without repair.
+
+### F-295, Comparison output as complete revisions (L)
+Make comparison emit the complete tracked-revision surface, including property
+changes, moves, tables, controls, fields, notes, drawings, and related stories.
+**Depends on**: F-234, F-235, F-291 through F-293.
+**Test gate**: differential. Pinned document pairs produce the same revision
+semantics and accepted and original views as Word.
+
+### F-296, Collaboration identity and deterministic time policy (M)
+Provide one caller-controlled identity and clock policy for comments, revisions,
+properties, signatures, fields, and generated package metadata. Deterministic
+mode never reads ambient user or wall-clock state.
+**Depends on**: F-244, F-249, F-291, F-293.
+**Test gate**: regression. Identical explicit identity and time input produces
+byte-identical collaboration packages across repeated runs.
+
+### F-297, Complete Word drawing anchor and effect authoring (L)
+Author inline and anchored pictures with page, margin, column, paragraph, and
+character-relative positioning, wrap modes, distances, overlap, crop, rotation,
+transform, fill, line, and supported effects.
+**Depends on**: F-255, F-262.
+**Test gate**: golden. A source-built drawing matrix matches the pinned Word
+geometry and deterministic raster output.
+
+### F-298, Shapes, text boxes, groups, and connectors in Word (L)
+Expose shared DrawingML shapes, connectors, groups, and rich text boxes through
+WordprocessingDrawing without requiring PresentationML or raw XML APIs.
+**Depends on**: F-253, F-297.
+**Test gate**: differential. Public-created Word shapes reopen with the same
+geometry, text story, relationships, and rendering as the pinned reference.
+
+### F-299, AlternateContent, VML, and SVG compatibility authoring (L)
+Generate modeled modern choices and bounded transitional fallbacks for shapes,
+text boxes, watermarks, SVG images, and legacy consumers. Callers select a
+compatibility policy rather than supplying raw wrappers.
+**Depends on**: F-298.
+**Test gate**: round-trip. Each choice and fallback pair is schema ordered,
+relationship complete, and accepted by the pinned modern and compatibility
+oracles.
+
+### F-300, Charts at arbitrary Word insertion points (M)
+Insert and edit charts in body, cells, headers, footers, notes, and text boxes
+where WordprocessingML permits them, with part-scoped embedded workbooks and
+deterministic relationships.
+**Depends on**: F-158, F-255, F-253.
+**Test gate**: differential. Equivalent charts at every valid insertion point
+match Word package ownership and rendering.
+
+### F-301, SmartArt and diagram authoring in Word (L)
+Create and edit Word SmartArt and diagram parts through the shared typed model,
+including data, layout, colors, styles, relationships, and deterministic
+fallback rendering.
+**Depends on**: F-219, F-220, F-255.
+**Test gate**: differential. A source-built Word diagram reopens, renders, and
+retains unsupported extension data like the pinned Word reference.
+
+### F-302, Embedded objects, icons, and alternative-format parts (M)
+Attach, replace, extract, and remove embedded packages, object icons, linked
+objects, and bounded alternative-format import parts without executing their
+payloads.
+**Depends on**: F-236, F-255.
+**Test gate**: round-trip. Each safe object retains exact bytes and ownership,
+and removal leaves no orphan relationship or content-type override.
+
+### F-303, Drawing and embedded-content layout completion (L)
+Lay out and render the supported drawings, text boxes, charts, diagrams, object
+icons, and compatibility choices in every valid Word story with source
+provenance and accessibility metadata.
+**Depends on**: F-297 through F-302.
+**Test gate**: golden. The combined drawing page matches the pinned Word oracle
+at the declared geometry and SSIM thresholds.
+
+### F-304, Typed package extensibility facade (L)
+Create, inspect, replace, and remove arbitrary safe custom parts through typed
+content types, owner-scoped relationships, explicit external-target policy, and
+validated package publication.
+**Depends on**: F-243, F-249, F-255.
+**Test gate**: round-trip. A source-built extension graph remains reachable,
+deterministic, and lossless while unsafe paths and relationship cycles fail.
+
+### F-305, Attached templates, web extensions, and task panes (L)
+Author and inspect attached-template relationships, web settings, web-extension
+stores, task panes, content-add-in declarations, permissions, and external
+resource locations without executing web content.
+**Depends on**: F-270, F-304.
+**Test gate**: round-trip. Every public-created declaration reopens with exact
+ownership and reports unavailable execution explicitly.
+
+### F-306, Executable compatibility attachment and signature rules (M)
+Attach and remove caller-supplied VBA, ActiveX, OLE, and custom UI payloads as
+opaque bytes, and define package and VBA signature retention, invalidation, and
+re-signing requirements for every mutation.
+**Depends on**: F-172, F-236, F-238, F-304.
+**Test gate**: regression. Mutation policy never presents an invalid signature
+as valid, never executes a payload, and preserves unrelated bytes exactly.
+
+### F-307, Complete accessibility authoring and audit (L)
+Author alternative text, decorative flags, table headers and scopes, reading
+order, languages, accessible links, equations, controls, drawings, and document
+metadata, then align DOCX audit results with tagged PDF semantics.
+**Depends on**: F-266 through F-303.
+**Test gate**: differential. A source-built accessible document passes the
+declared Word and tagged-PDF structural checks with no false clean result.
+
+### F-308, Fully modeled and losslessness diagnostics (L)
+Report every modeled, preservation-only, unsupported, unsafe, orphaned, or
+lossy feature by stable document and package path. A public-authored document
+can assert that it contains no unexplained raw XML or unsupported semantics.
+**Depends on**: F-264 through F-307.
+**Test gate**: regression. Deliberate unsupported content produces one stable
+diagnostic, while the complete source-built document reports fully modeled.
+
+### F-309, Strict, transitional, and repair-free conformance (L)
+Validate package relationships, content types, expanded names, schema child
+order, required attributes, Strict and Transitional vocabulary, and supported
+markup compatibility before publication.
+**Depends on**: F-X077, F-308.
+**Test gate**: differential. The complete generated corpus passes the strict
+validator and pinned Word no-repair check, and one mutation per rule fails.
+
+### F-310, Determinism, resource limits, bindings, and stability gate (L)
+Close M24 with byte determinism, explicit memory and time bounds, cancellation,
+complex-document performance budgets, native, Python, WASM, and CLI capability
+classification, stable template grammar, final README refresh, and a separate
+1.0 readiness decision.
+**Depends on**: F-264 through F-309.
+**Test gate**: regression. The complete milestone matrix has no unexplained
+partial row, all required public surfaces pass their gates, and repeated output
+is byte-identical under the declared deterministic inputs.
 
 ---
 
@@ -3838,6 +4464,61 @@ the reviewed SHA, the GitHub release body is byte-identical to reviewed notes,
 selected-family exclusions hold, and every applicable contribution
 notification verifies. The contribution inventory is empty, so no notification
 was required.
+
+### F-X083, Close confirmed Issue 67 and intake Issue 69 (S)
+
+Record `@emptinessform`'s v0.12.0 confirmation that F-X075 fixed Issue 67,
+close that issue without reopening completed implementation, and preserve the
+three independent Issue 69 mechanisms, measurements, proposed commits, and
+authorship as inputs to F-X084 through F-X086. The intake compares each offered
+fork commit with current main rather than treating external code as trusted.
+
+**Depends on**: F-X075, F-X076.
+**Test gate**: regression. The existing page-spanning restart regression passes,
+the Issue 67 closure cites the reporter's confirmation, and each live Issue 69
+mechanism maps to exactly one pending story with authenticated credit.
+
+### F-X084, Narrow note-part paragraph cache invalidation (M)
+
+Changing a footnote or endnote part must keep paragraph-cache reads enabled for
+ordinary body paragraphs and conservatively rebuild only entries whose
+paragraph carries a note reference. Restart, header, footer, and note-page
+caches keep their full-context safety gates. Review the independently offered
+`@emptinessform` commit `4777a741` against current main and retain contributor
+credit for any adopted implementation.
+
+**Depends on**: F-X072, F-X083.
+**Test gate**: regression. Warm and fresh layout stay element-for-element equal
+after note text, insertion, and deletion changes, at least 698 of 700 unaffected
+paragraphs hit the cache, and deterministic output hashes remain unchanged.
+
+### F-X085, Memoize restart body identities once per layout (M)
+
+Share one lazy candidate-identity memo across unchanged-body, first-change, and
+common-suffix scans so each body block serializes its exact identity at most
+once per layout. Exact identity bytes remain authoritative after the existing
+fingerprint prefilter, and the bounded transient memory cost is measured.
+Review `@emptinessform` commit `eff0ea0c` independently and retain contributor
+credit for any adopted implementation.
+
+**Depends on**: F-X075, F-X083.
+**Test gate**: regression. A 715-block edit computes at most 715 candidate
+identities, warm and fresh layouts remain equal, the cache stays bounded, and
+the deterministic corpus hashes do not move.
+
+### F-X086, Provenance-safe restart after body-length changes (L)
+
+Allow sourced insert, delete, Enter, merge, and selection-delete edits to reuse
+the unchanged prefix restart checkpoint even when body block count changes.
+Tail reuse remains disabled when shifted source indices would make retained
+`SourceSpan` paths stale. Review `@emptinessform` commit `c8315b92`
+independently and preserve authenticated credit for any adopted implementation.
+
+**Depends on**: F-X075, F-X083.
+**Test gate**: regression. A sourced insert and delete near block 640 of 700
+recomputes at most three pages, matches a fresh layout element for element with
+equal source paths, and fails if the full-pagination veto is restored or stale
+tail provenance is reused.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
