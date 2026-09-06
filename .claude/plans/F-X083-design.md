@@ -1,6 +1,6 @@
 # F-X083, Close confirmed Issue 67 and intake Issue 69
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S70
 **Size**: S
 **Depends on**: F-X075, F-X076
@@ -111,17 +111,17 @@ completion.
 
 ## Implementation checklist
 
-- [ ] Reconfirm F-X075 and F-X076 are done.
-- [ ] Run the deterministic Issue 67 page-spanning regressions.
-- [ ] Re-read live Issues 67 and 69 immediately before mutation.
-- [ ] Authenticate the reporter-owned offer comments and exact fork metadata.
-- [ ] Amend F-X086 to name both `9e48bc86` and `c8315b92`.
-- [ ] Record the exact F-X084 through F-X086 mechanism mapping.
-- [ ] Close Issue 67 as completed with one evidence-linked comment.
-- [ ] Verify Issue 67 is closed and Issue 69 remains open and unmodified.
-- [ ] Preserve contributor credit without importing co-author trailers.
-- [ ] Run focused regression, prose, full verification, and hash checks.
-- [ ] Update exactly the listed HLD file.
+- [x] Reconfirm F-X075 and F-X076 are done.
+- [x] Run the deterministic Issue 67 page-spanning regressions.
+- [x] Re-read live Issues 67 and 69 immediately before mutation.
+- [x] Authenticate the reporter-owned offer comments and exact fork metadata.
+- [x] Amend F-X086 to name both `9e48bc86` and `c8315b92`.
+- [x] Record the exact F-X084 through F-X086 mechanism mapping.
+- [x] Close Issue 67 as completed with one evidence-linked comment.
+- [x] Verify Issue 67 is closed and Issue 69 remains open and unmodified.
+- [x] Preserve contributor credit without importing co-author trailers.
+- [x] Run focused regression, prose, full verification, and hash checks.
+- [x] Update exactly the listed HLD file.
 
 ## Open questions
 

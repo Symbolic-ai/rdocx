@@ -4511,8 +4511,10 @@ the deterministic corpus hashes do not move.
 Allow sourced insert, delete, Enter, merge, and selection-delete edits to reuse
 the unchanged prefix restart checkpoint even when body block count changes.
 Tail reuse remains disabled when shifted source indices would make retained
-`SourceSpan` paths stale. Review `@emptinessform` commit `c8315b92`
-independently and preserve authenticated credit for any adopted implementation.
+`SourceSpan` paths stale. Review the independently offered `@emptinessform`
+commits `9e48bc86` and `c8315b92` against current main as the enabling and
+provenance-safety patches respectively, and preserve authenticated credit for
+any adopted implementation.
 
 **Depends on**: F-X075, F-X083.
 **Test gate**: regression. A sourced insert and delete near block 640 of 700
