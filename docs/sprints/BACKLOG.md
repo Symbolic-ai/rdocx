@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 2 | 1 | 21 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 89 | 83 | 0 | 2  |
-| **Total** | **407** | **311** | **1** | **91** |
+| X, Cross-cutting (opportunistic)            | 89 | 83 | 1 | 1  |
+| **Total** | **407** | **311** | **2** | **90** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -624,6 +624,6 @@ regenerated, never hand-edited.
 | F-X082 | Tag v0.13.1                               | S69 | S | done |
 | F-X083 | Close confirmed Issue 67 and intake Issue 69 | S70 | S | done |
 | F-X084 | Narrow note-part paragraph cache invalidation | S70 | M | done |
-| F-X085 | Memoize restart body identities once per layout | S70 | M | pending |
+| F-X085 | Memoize restart body identities once per layout | S70 | M | in-progress |
 | F-X086 | Provenance-safe restart after body-length changes | S70 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->
