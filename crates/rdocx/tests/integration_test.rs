@@ -27,6 +27,63 @@ struct MhtmlOracleRecord {
     diagnostics: Vec<MhtmlDiagnostic>,
 }
 
+mod public_authoring_conformance_harness {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    fn repository_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("rdocx crate must live under the workspace crates directory")
+            .to_path_buf()
+    }
+
+    #[test]
+    fn sanitized_public_authoring_fixture_passes_every_conformance_stage() {
+        let root = repository_root();
+        let script = root.join("scripts/docx_authoring_conformance.py");
+        assert!(
+            script.is_file(),
+            "missing public authoring conformance harness"
+        );
+
+        let output = Command::new("python3")
+            .arg(&script)
+            .arg("--public")
+            .current_dir(&root)
+            .output()
+            .expect("public authoring conformance harness must start");
+        assert!(
+            output.status.success(),
+            "public authoring conformance failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn public_fixture_rejects_base_package_raw_xml_or_private_oxml_dependency() {
+        let root = repository_root();
+        let script = root.join("scripts/docx_authoring_conformance.py");
+        assert!(
+            script.is_file(),
+            "missing public authoring conformance harness"
+        );
+
+        let output = Command::new("python3")
+            .arg(&script)
+            .arg("--self-test")
+            .current_dir(&root)
+            .output()
+            .expect("authoring conformance self-test must start");
+        assert!(
+            output.status.success(),
+            "authoring conformance self-test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 mod flat_opc_package_class_tests {
     use super::*;
     use base64::Engine;

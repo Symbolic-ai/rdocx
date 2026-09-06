@@ -190,6 +190,8 @@ jobs:
           --test regression_test
           a_thousand_page_document_paginates_and_renders_within_the_declared_limits
           -- --ignored --exact --test-threads=1 --nocapture
+      - name: Run public DOCX authoring conformance
+        run: python3 scripts/docx_authoring_conformance.py --public
       - name: Run full workspace suite
         env:
           UV_CACHE_DIR: "${{ runner.temp }}/uv-cache"

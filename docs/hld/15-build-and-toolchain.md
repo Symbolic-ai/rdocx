@@ -66,6 +66,15 @@ The Word SSIM harness reaches that deterministic path through the production
 trees exist. It cannot alter layout, pagination, font selection, or renderer
 dimensions.
 
+The M23 authoring gate is owned by
+`scripts/docx_authoring_conformance.py`. CI invokes its public mode before the
+workspace test suite. That mode builds an offline temporary consumer with only
+the public `rdocx` dependency and uses the same deterministic 150 DPI render
+path twice. Its local private mode uses exact LibreOffice 26.2.5.2 build
+`cd7284b4cbbfeb507e630c1aac019f4157393acb` and pdftoppm 26.01.0 identities.
+Private source packages, digests, thresholds, and rendered evidence remain in
+the ignored local corpus directory and are never fetched by CI.
+
 The pinned Writer process receives one oracle-only static Thin instance for
 the Noto Sans SC fixture. `hb-subset (HarfBuzz) 13.2.1` instantiates it at
 `wght=100` from the exact checked-in product font with source SHA-256

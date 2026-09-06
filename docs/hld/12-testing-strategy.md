@@ -1332,24 +1332,34 @@ These are requirements for the source-built conformance documents, not
 fingerprints. The matrix maps them to F-243 through F-310 without recording the
 combination of package counts or property values from any source.
 
-The M23 conformance harness has two modes:
+`scripts/docx_authoring_conformance.py` is the single owner of the M23
+conformance gate. It provides self-test, public-only, optional-private, and
+required-private entry modes. The two evidence paths are:
 
-1. Public CI source-builds synthetic fixtures that exercise every declared M23
-   capability. Construction must begin with `Document::new()` and use public
-   `rdocx` APIs only. A base package, raw XML injection, private OXML facade, or
-   prebuilt document fails the gate.
+1. Public CI source-builds a synthetic fixture through a temporary consumer
+   whose sole dependency is `rdocx`. Construction begins exactly once with
+   `Document::new()` and uses public `rdocx` APIs only. The harness validates
+   package inventory, content types, relationships, schema child order,
+   modeled reopen state, unsupported-content diagnostics, unmodeled-part
+   preservation, and repeated deterministic 150 DPI output. A base package,
+   raw XML injection, private OXML facade, or prebuilt document fails the gate.
 2. Local required-corpus mode builds the five target documents through their
    Rust generators and compares them with the configured private references.
    Missing input, unexpected input count, a digest change, or missing evidence
-   fails closed. This mode never prints document text or embeds source XML in a
-   tracked report.
+   fails closed. An optional-private invocation reports a skip when the ignored
+   directory is absent, while required-private mode rejects that absence. This
+   mode never prints document text or embeds source XML in a tracked report.
 
 The local comparison first normalizes ZIP metadata that is not document state,
 then checks content types, relationships, part inventory, schema child order,
 modeled properties, and required compatibility branches. It renders both sides
 with deterministic bundled fonts at the pinned resolution and records page
-count, dimensions, and image similarity outside the repository. Feature-level
-tests remain authoritative when byte identity is not a valid expectation.
+count, exact dimensions, and image similarity against a reviewed per-case
+threshold outside the repository. The ignored manifest binds the anonymous
+P1 through P5 aliases to exact local digests, page expectations, and tool
+identities. Tracked-path and staged-path scans reject private document formats
+without echoing a path or digest. Feature-level tests remain authoritative when
+byte identity is not a valid expectation.
 
 F-263 closes M23 only when all five generators pass local required-corpus mode,
 the synthetic public suite passes in CI, opening and saving requires no repair,
@@ -1977,7 +1987,7 @@ parallel, or failure-swallowing invocation.
 | Job | Command |
 |---|---|
 | changes | On pushes and pull requests, classify changed paths for the nine filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
-| test | Install exact uv 0.10.2, Poppler 26.01.0, LibreOffice 26.2.5.2, and Pandoc 3.10, fetch both pinned corpora, run the pinned Pandoc texmath differential and exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, run the exact locked deterministic animation golden, then run `python3 scripts/golden_png_harness.py --check` |
+| test | Install exact uv 0.10.2, Poppler 26.01.0, LibreOffice 26.2.5.2, and Pandoc 3.10, fetch both pinned corpora, run the pinned Pandoc texmath differential and exact locked release-mode 1,000-page performance regression with one test thread, run `python3 scripts/docx_authoring_conformance.py --public`, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, run the exact locked deterministic animation golden, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |

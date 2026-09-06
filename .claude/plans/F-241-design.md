@@ -1,6 +1,6 @@
 # F-241, Public authoring conformance harness
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S70
 **Size**: L
 **Depends on**: F-240
@@ -114,15 +114,15 @@ source-built fixtures and does not alter shipped rendering behavior.
 
 ## Implementation checklist
 
-- [ ] Add failing public-boundary, package, reopen, privacy, and mode tests.
-- [ ] Create the one focused conformance script after explicit approval.
-- [ ] Build the public fixture through a temporary `rdocx`-only consumer.
-- [ ] Add structural, deterministic, diagnostic, and privacy gate stages.
-- [ ] Add optional and required ignored-corpus modes for anonymous P1 through P5.
-- [ ] Pin external tools and record private per-case thresholds outside git.
-- [ ] Add public mode to CI and preserve private mode as local required evidence.
-- [ ] Run focused tests, full verification, hash checks, and routed riders.
-- [ ] Update exactly the listed HLD files.
+- [x] Add failing public-boundary, package, reopen, privacy, and mode tests.
+- [x] Create the one focused conformance script after explicit approval.
+- [x] Build the public fixture through a temporary `rdocx`-only consumer.
+- [x] Add structural, deterministic, diagnostic, and privacy gate stages.
+- [x] Add optional and required ignored-corpus modes for anonymous P1 through P5.
+- [x] Pin external tools and record private per-case thresholds outside git.
+- [x] Add public mode to CI and preserve private mode as local required evidence.
+- [x] Run focused tests, full verification, hash checks, and routed riders.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

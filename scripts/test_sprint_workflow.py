@@ -8374,5 +8374,44 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assertTrue((workflow.REPO / binding).is_file(), binding)
 
 
+class DocxAuthoringConformanceTests(unittest.TestCase):
+    def test_public_harness_is_wired_to_ci_and_private_artifacts_stay_ignored(
+        self,
+    ) -> None:
+        script = workflow.REPO / "scripts/docx_authoring_conformance.py"
+        self.assertTrue(script.is_file(), "missing DOCX authoring conformance harness")
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertEqual(
+            ci.count("python3 scripts/docx_authoring_conformance.py --public"),
+            1,
+        )
+
+        tracked = subprocess.run(
+            (
+                "git",
+                "ls-files",
+                "--",
+                "corpus/private-docx",
+                "*.docx",
+                "*.DOCX",
+            ),
+            cwd=workflow.REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(tracked, "")
+
+    def test_authoring_harness_self_tests_privacy_and_mode_failures(self) -> None:
+        completed = subprocess.run(
+            ("python3", "scripts/docx_authoring_conformance.py", "--self-test"),
+            cwd=workflow.REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
