@@ -741,10 +741,15 @@ collision still requires exact typed paragraph equality. Focused cases prove
 that an early direct footnote or endnote reference still permits 699 hits and
 one rebuild, while fields, numbering, drawings, and raw-child prefixes disable
 later reads. Changing the reference ID misses its paragraph key, changing a
-note part invalidates the exact retained context, note-bearing table and header
-or footer content remains conservative, a late failure publishes nothing, hits
-preserve insertion order, and FIFO eviction holds at the independently pinned
-4,096-entry and 50 MiB paragraph limits. Cacheable
+footnote or endnote part retains at least 698 of 700 ordinary hits and rebuilds
+at most two paragraphs across text, insertion, and deletion changes. Warm and
+fresh deterministic layouts and source paths remain exact. A third transaction
+after the note edit and one ordinary paragraph edit still records 699 hits and
+one build, proving unaffected entries survived publication. Note-bearing table
+and header or footer content remains conservative, full restart reuse stays
+disabled after a note change, a late failure publishes nothing, hits preserve
+insertion order, and FIFO eviction holds at the independently pinned 4,096-entry
+and 50 MiB paragraph limits. Cacheable
 active paragraph and table blocks share immutable cache payloads through a
 private representation. Warm and fresh results must retain exact pages,
 structure, provenance, and nested table paths while public block APIs remain

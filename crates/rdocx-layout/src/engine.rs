@@ -849,6 +849,8 @@ pub struct Engine {
     #[cfg(test)]
     pending_paragraph_cache_peak_bytes: usize,
     paragraph_cache_reads_enabled: bool,
+    paragraph_cache_notes_match: bool,
+    retained_context_matches_full: bool,
     table_cache: VecDeque<TableCacheEntry>,
     table_cache_bytes: usize,
     table_cache_hits: usize,
@@ -1010,6 +1012,23 @@ impl ReusableEngineContext {
         caller_font_aliases: &[(String, String)],
         has_wrapping_drawing: bool,
     ) -> bool {
+        self.matches_input_after_unchanged_fonts_ignoring_notes(
+            input,
+            caller_font_aliases,
+            has_wrapping_drawing,
+        ) && self.notes_match(input)
+    }
+
+    fn notes_match(&self, input: &LayoutInput) -> bool {
+        self.footnotes == input.footnotes && self.endnotes == input.endnotes
+    }
+
+    fn matches_input_after_unchanged_fonts_ignoring_notes(
+        &self,
+        input: &LayoutInput,
+        caller_font_aliases: &[(String, String)],
+        has_wrapping_drawing: bool,
+    ) -> bool {
         let sections_match = self.sections.iter().eq(input
             .document
             .body
@@ -1040,8 +1059,6 @@ impl ReusableEngineContext {
             && self.chart_color_map == input.chart_color_map
             && self.core_properties == input.core_properties
             && self.hyperlink_urls == input.hyperlink_urls
-            && self.footnotes == input.footnotes
-            && self.endnotes == input.endnotes
             && self.theme == input.theme
             && self.caller_font_aliases == caller_font_aliases
             && self.background_xml == input.document.background_xml
@@ -1359,6 +1376,8 @@ impl Engine {
             #[cfg(test)]
             pending_paragraph_cache_peak_bytes: 0,
             paragraph_cache_reads_enabled: false,
+            paragraph_cache_notes_match: false,
+            retained_context_matches_full: false,
             table_cache: VecDeque::new(),
             table_cache_bytes: 0,
             table_cache_hits: 0,
@@ -1489,18 +1508,25 @@ impl Engine {
             self.header_footer_cache.clear();
             self.header_footer_cache_bytes = 0;
         }
-        let context_matches = !font_context_changed
+        let base_context_matches = !font_context_changed
             && self
                 .paragraph_cache_context
                 .as_ref()
                 .is_some_and(|context| {
-                    context.matches_input_after_unchanged_fonts(
+                    context.matches_input_after_unchanged_fonts_ignoring_notes(
                         input,
                         &self.caller_font_aliases,
                         has_wrapping_drawing,
                     )
                 });
-        self.paragraph_cache_reads_enabled = context_matches;
+        let notes_match = self
+            .paragraph_cache_context
+            .as_ref()
+            .is_some_and(|context| context.notes_match(input));
+        let context_matches = base_context_matches && notes_match;
+        self.paragraph_cache_reads_enabled = base_context_matches;
+        self.paragraph_cache_notes_match = notes_match;
+        self.retained_context_matches_full = context_matches;
         self.header_footer_cache_reads_enabled = context_matches;
         self.pending_paragraph_cache = Some(VecDeque::new());
         self.pending_paragraph_cache_bytes = 0;
@@ -1527,11 +1553,22 @@ impl Engine {
         self.pending_table_cache_bytes = 0;
         self.pending_header_footer_cache_bytes = 0;
         self.paragraph_cache_reads_enabled = false;
+        self.paragraph_cache_notes_match = false;
+        self.retained_context_matches_full = false;
         self.header_footer_cache_reads_enabled = false;
         if result.is_ok() {
-            if !context_matches {
+            if !base_context_matches {
                 self.paragraph_cache.clear();
                 self.paragraph_cache_bytes = 0;
+            } else if !notes_match {
+                self.paragraph_cache.retain(|entry| {
+                    paragraph_note_references(&entry.key.paragraph, entry.key.revision_view)
+                        .is_empty()
+                });
+                self.paragraph_cache_bytes =
+                    self.paragraph_cache.iter().map(|entry| entry.bytes).sum();
+            }
+            if !context_matches {
                 self.table_cache.clear();
                 self.table_cache_bytes = 0;
                 self.header_footer_cache.clear();
@@ -1597,7 +1634,7 @@ impl Engine {
         sources: Option<&SourceRegistry>,
         document_wraps: bool,
     ) -> Result<LayoutResult> {
-        let retained_context_matches = self.paragraph_cache_reads_enabled;
+        let retained_context_matches = self.retained_context_matches_full;
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
         let media = MediaRegistry::new(&input.images);
@@ -2348,7 +2385,10 @@ impl Engine {
         }
 
         let fingerprint = paragraph_fingerprint(paragraph);
+        let notes_allow_reuse = self.paragraph_cache_notes_match
+            || paragraph_note_references(paragraph, input.revision_view).is_empty();
         if self.paragraph_cache_reads_enabled
+            && notes_allow_reuse
             && let Some(entry) = self.paragraph_cache.iter().find(|entry| {
                 entry.fingerprint == fingerprint
                     && entry.key.paragraph == *paragraph
@@ -2463,6 +2503,7 @@ impl Engine {
 
         let fingerprint = table_fingerprint(table);
         if self.paragraph_cache_reads_enabled
+            && self.retained_context_matches_full
             && let Some(entry) = self.table_cache.iter().find(|entry| {
                 entry.fingerprint == fingerprint
                     && entry.key.table == *table
@@ -10341,7 +10382,95 @@ mod tests {
             .layout(&input)
             .expect("fresh changed note layout succeeds");
         assert_layout_results_equal(&warm_note, &fresh_note);
-        assert_eq!(engine.paragraph_cache_counts(), (699, 1_401));
+        assert_eq!(engine.paragraph_cache_counts(), (1_398, 702));
+    }
+
+    #[test]
+    fn note_part_changes_invalidate_only_referencing_paragraphs() {
+        use rdocx_oxml::footnotes::{CT_Footnote, NoteType};
+
+        for stream in [NoteStream::Footnote, NoteStream::Endnote] {
+            for operation in ["text", "insertion", "deletion"] {
+                let mut input = note_reference_cache_input(stream, operation == "deletion");
+                let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+                engine
+                    .layout_with_provenance(&input)
+                    .expect("cold note layout succeeds");
+                let before = engine.paragraph_cache_counts();
+
+                let notes = match stream {
+                    NoteStream::Footnote => input.footnotes.as_mut().expect("footnotes exist"),
+                    NoteStream::Endnote => input.endnotes.as_mut().expect("endnotes exist"),
+                };
+                match operation {
+                    "text" => {
+                        notes.footnotes[0].paragraphs[0].runs[0].content = vec![RunContent::Text(
+                            rdocx_oxml::text::CT_Text::new("changed note text"),
+                        )];
+                    }
+                    "insertion" => {
+                        let mut paragraph = CT_P::new();
+                        paragraph.add_run("inserted note text");
+                        notes.footnotes.push(CT_Footnote {
+                            id: 2,
+                            note_type: NoteType::Normal,
+                            paragraphs: vec![paragraph],
+                        });
+                    }
+                    "deletion" => {
+                        notes.footnotes.pop().expect("second note exists");
+                    }
+                    _ => unreachable!(),
+                }
+
+                let warm = engine
+                    .layout_with_provenance(&input)
+                    .expect("warm changed-note layout succeeds");
+                let fresh = Engine::new_deterministic()
+                    .expect("bundled fonts load")
+                    .layout_with_provenance(&input)
+                    .expect("fresh changed-note layout succeeds");
+                assert_layout_results_equal(&warm.0, &fresh.0);
+                assert_eq!(warm.1, fresh.1);
+
+                let after = engine.paragraph_cache_counts();
+                assert!(
+                    after.0.saturating_sub(before.0) >= 698,
+                    "{stream:?} {operation} retained too few ordinary hits: {before:?} -> {after:?}"
+                );
+                assert!(
+                    after.1.saturating_sub(before.1) <= 2,
+                    "{stream:?} {operation} rebuilt too many paragraphs: {before:?} -> {after:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn note_only_invalidation_preserves_unreferenced_entries_for_next_layout() {
+        let mut input = note_reference_cache_input(NoteStream::Footnote, false);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("cold note layout succeeds");
+
+        input.footnotes.as_mut().expect("footnotes exist").footnotes[0].paragraphs[0].runs[0]
+            .content = vec![RunContent::Text(rdocx_oxml::text::CT_Text::new(
+            "changed note text",
+        ))];
+        engine.layout(&input).expect("changed-note layout succeeds");
+
+        set_body_paragraph_text(&mut input, 350, "ordinary paragraph changed next");
+        let before = engine.paragraph_cache_counts();
+        let warm = engine
+            .layout(&input)
+            .expect("third warm layout succeeds after note edit");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("third fresh layout succeeds after note edit");
+        assert_layout_results_equal(&warm, &fresh);
+        let after = engine.paragraph_cache_counts();
+        assert_eq!(after.0.saturating_sub(before.0), 699);
+        assert_eq!(after.1.saturating_sub(before.1), 1);
     }
 
     #[test]

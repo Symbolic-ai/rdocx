@@ -1,6 +1,6 @@
 # F-X084, Narrow note-part paragraph cache invalidation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S70
 **Size**: M
 **Depends on**: F-X072, F-X083
@@ -92,14 +92,14 @@ selection without changing cold output.
 
 ## Implementation checklist
 
-- [ ] Add failing note text, insertion, deletion, and third-layout regressions.
-- [ ] Split base, note, and full retained-context predicates.
-- [ ] Gate each paragraph hit on its own note-reference state.
-- [ ] Preserve and evict cache entries transactionally after note-only changes.
-- [ ] Keep restart and every related-story cache on exact full context.
-- [ ] Run `cargo check -p rdocx-layout --all-targets` and the crate tests.
-- [ ] Run full verification, deterministic hash checks, and routed riders.
-- [ ] Update exactly the listed HLD files.
+- [x] Add failing note text, insertion, deletion, and third-layout regressions.
+- [x] Split base, note, and full retained-context predicates.
+- [x] Gate each paragraph hit on its own note-reference state.
+- [x] Preserve and evict cache entries transactionally after note-only changes.
+- [x] Keep restart and every related-story cache on exact full context.
+- [x] Run `cargo check -p rdocx-layout --all-targets` and the crate tests.
+- [x] Run full verification, deterministic hash checks, and routed riders.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

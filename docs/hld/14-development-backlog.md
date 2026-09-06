@@ -4221,11 +4221,12 @@ complete Word suites pass, and all 49 output hashes remain unchanged.
 
 Keep paragraph-cache reads available after an otherwise safe paragraph that
 contains a footnote or endnote reference. The cache key continues to include
-the complete typed paragraph and revision view, while cache-context reuse
-continues to compare the exact footnote and endnote parts. A changed reference
-ID or changed note part therefore invalidates the affected reuse boundary
-without poisoning later safe paragraphs. Fields, numbering, drawings, raw
-children, and other unsupported paragraph-cache content remain conservative.
+the complete typed paragraph and revision view. Base cache-context reuse is
+separate from exact footnote and endnote equality, so a changed reference ID or
+note part invalidates each affected paragraph entry without poisoning later
+safe paragraphs. Full restart and related-story caches still require exact note
+parts. Fields, numbering, drawings, raw children, and other unsupported
+paragraph-cache content remain conservative.
 
 **Depends on**: F-X062.
 **Test gate**: regression. A 700-paragraph document with one early footnote or

@@ -746,11 +746,15 @@ bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting earlier numbering input
 cannot leave a later generated marker stale. A direct footnote or endnote
 reference in an otherwise safe body paragraph remains cacheable. Its explicit
-note ID is part of the complete typed paragraph key, and the exact footnote and
-endnote parts remain part of the retained-work context. Changing the reference
-misses that paragraph. Changing either note part disables retained reads for
-the transaction. Note references inside tables, headers, or footers remain
-uncacheable because those retained payloads do not own body note placement.
+note ID is part of the complete typed paragraph key. Retained paragraph reads
+compare the base context separately from the exact footnote and endnote parts.
+Changing the reference misses that paragraph. Changing either note part keeps
+ordinary paragraph reads enabled but rejects and then evicts retained entries
+whose projected paragraph carries a note reference. Unaffected entries survive
+successful publication into later transactions. Restart, table, header,
+footer, and note-page reuse keep the exact full-context gate. Note references
+inside tables, headers, or footers remain uncacheable because those retained
+payloads do not own body note placement.
 Cacheable paragraph and table entries share one immutable `Arc` block with the
 active layout transaction. A private concrete side overlay holds result-local
 provenance and the paragraph structure ids consumed by paginator emission. Public
