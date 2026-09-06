@@ -109,5 +109,8 @@ in month nine.
 The active post-v1 delivery record is larger than this historical v1 estimate.
 M23 adds 24 stories and roughly 112 developer-days. M24 adds 47 stories and
 roughly 219 developer-days. They occupy S70 through S80, before conditional
-spreadsheet work begins at S81. F-240 is an audit gate, so these later story
-boundaries and estimates are provisional until its evidence is integrated.
+spreadsheet work begins at S81. The F-240 audit closed 85 stable capability
+rows against the public facade, modeled Word properties, bindings, package
+ownership, and five anonymous private references. Its evidence confirmed the
+F-243 through F-310 story boundaries, sizes, dependencies, and S71 through S80
+placement without adding another backlog or document model.

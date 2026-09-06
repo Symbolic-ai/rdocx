@@ -185,6 +185,119 @@ as preservation-only or a permanent non-goal. It does not promise execution of
 VBA, ActiveX, embedded applications, proprietary cloud services, or unknown
 future producer extensions.
 
+## Modern DOCX capability matrix
+
+This is the closed authoring contract for M23 and M24. Each row is one public
+capability or property family. `Y` means the operation is complete today. `P`
+means only part of the family is modeled or public. `PV` means input is retained
+without a modeled authoring surface. `N` means unsupported, `NA` means the
+operation does not apply, and `B` means the binding deliberately exposes only a
+narrower boundary. Determinism is `NA` for encrypted bytes because fresh
+cryptographic randomness is required. Story placement uses `body`, `related`,
+`all`, `package`, or `NA`. Layout and render use `Y`, `P`, `N`, or `NA` with the
+same meanings.
+
+An owner is required for every `partial` or `unsupported` row. A
+`preserve-only` or `permanent-non-goal` row is closed by its evidence instead.
+Public OXML types do not count as facade authoring. Save and reopen means that
+modeled state returns through the public `Document` surface, not merely that raw
+bytes remain in the ZIP package.
+
+| Capability ID | Family | Capability or property | Create | Read | Mutate | Remove | Save-reopen | Story | Layout | Render | Determinism | Native | Python | WASM | CLI | Classification | Evidence | Owner |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| DOCX-001 | package | DOCX open, save, and byte serialization | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | Y | Y | Y | complete | implementation:`crates/rdocx/src/document.rs:1955` | - |
+| DOCX-002 | package | bounded and encrypted package input and output | Y | Y | Y | NA | Y | package | Y | Y | NA | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:1962` | - |
+| DOCX-003 | package | blank Word-compatible package profiles | P | Y | P | NA | P | package | P | P | P | P | B | B | B | partial | boundary:F-243 | F-243 |
+| DOCX-004 | package | DOCM, DOTX, and DOTM identity and output selection | N | Y | P | NA | Y | package | Y | Y | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:1999` | F-243 |
+| DOCX-005 | properties | core document properties | P | Y | P | P | Y | package | NA | NA | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4355` | F-244 |
+| DOCX-006 | properties | application and custom properties | N | Y | N | N | PV | package | NA | NA | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |
+| DOCX-007 | properties | document variables, compatibility facts, and defaults | N | P | N | N | PV | package | P | P | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |
+| DOCX-008 | conformance | public and private authoring conformance gate | N | NA | NA | NA | NA | all | N | N | N | N | N | N | N | unsupported | boundary:F-241 | F-241 |
+| DOCX-009 | theme-font | themes and theme selection | N | Y | N | N | PV | package | Y | Y | P | P | B | B | B | partial | boundary:F-245 | F-245 |
+| DOCX-010 | theme-font | font table and licensed embedded fonts | N | P | N | N | PV | package | P | P | N | P | B | B | B | partial | boundary:F-245 | F-245 |
+| DOCX-011 | styles | paragraph, character, and table style graphs | P | Y | P | N | Y | package | Y | Y | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4082` | F-246 |
+| DOCX-012 | numbering | complete numbering levels and instances | P | P | P | N | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3945` | F-247 |
+| DOCX-013 | numbering | style-linked counters, restarts, TOC, and REF | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-248 | F-248 |
+| DOCX-014 | package | deterministic identifiers across owned parts | P | Y | P | NA | P | package | NA | NA | P | P | B | B | B | partial | boundary:F-249 | F-249 |
+| DOCX-015 | sections | ordered section lookup, insertion, mutation, and removal | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4233` | F-250 |
+| DOCX-016 | sections | page geometry and ordinary section properties | P | Y | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4247` | F-251 |
+| DOCX-017 | stories | per-section default, first, and even headers and footers | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3369` | F-252 |
+| DOCX-018 | stories | common content location and traversal | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-253 | F-253 |
+| DOCX-019 | stories | arbitrary insert, move, clone, and remove | P | Y | P | P | P | body | P | P | P | P | B | B | P | partial | implementation:`crates/rdocx/src/document.rs:2940` | F-254 |
+| DOCX-020 | package | part-scoped images, links, and relationships | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3019` | F-255 |
+| DOCX-021 | stories | transactional cross-document fragment import | P | Y | P | NA | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4409` | F-256 |
+| DOCX-022 | tables | table properties, grids, widths, borders, and layout mode | P | Y | P | P | P | body | P | P | P | P | P | B | B | partial | implementation:`crates/rdocx/src/table.rs:46` | F-257 |
+| DOCX-023 | tables | row and cell height, merge, margins, borders, and flow | P | Y | P | P | P | body | P | P | P | P | P | B | B | partial | implementation:`crates/rdocx/src/table.rs:266` | F-258 |
+| DOCX-024 | tables | container measurement and equal-height layout | N | NA | NA | NA | NA | all | N | N | N | N | N | N | N | unsupported | boundary:F-259 | F-259 |
+| DOCX-025 | run | ordered text, tabs, breaks, fields, and drawings | P | Y | P | P | P | body | P | P | P | P | P | B | B | partial | implementation:`crates/rdocx/src/run.rs:272` | F-260 |
+| DOCX-026 | stories | rich HTML fragments in arbitrary containers | P | NA | NA | NA | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/html.rs:34` | F-261 |
+| DOCX-027 | drawing | M23 pictures, text boxes, and watermarks | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3436` | F-262 |
+| DOCX-028 | fields | M23 pagination fields and private corpus gate | N | P | N | N | PV | all | N | N | N | P | B | B | B | unsupported | boundary:F-263 | F-263 |
+| DOCX-029 | paragraph | ordinary text, alignment, spacing, indentation, and pagination | Y | Y | Y | Y | Y | body | Y | Y | Y | Y | Y | B | B | complete | implementation:`crates/rdocx/src/paragraph.rs:279` | - |
+| DOCX-030 | paragraph | borders, shading, tabs, frames, direction, and mark properties | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | boundary:F-264 | F-264 |
+| DOCX-031 | run | fonts, emphasis, color, language, and ordinary inline content | Y | Y | Y | Y | Y | body | Y | Y | Y | Y | Y | B | B | complete | implementation:`crates/rdocx/src/run.rs:367` | - |
+| DOCX-032 | run | theme fonts, complex script, effects, symbols, and special content | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | boundary:F-265 | F-265 |
+| DOCX-033 | paragraph | bidirectional, East Asian, vertical, ruby, and phonetic text | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-266 | F-266 |
+| DOCX-034 | tables | table styles and conditional formatting | P | P | P | N | P | all | P | P | P | P | B | B | B | partial | boundary:F-267 | F-267 |
+| DOCX-035 | tables | floating, bidirectional, autofit, and advanced table layout | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-268 | F-268 |
+| DOCX-036 | sections | borders, columns, line numbers, book fold, and note policy | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | boundary:F-269 | F-269 |
+| DOCX-037 | properties | complete settings and web settings authoring | P | P | P | P | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4318` | F-270 |
+| DOCX-038 | stories | uniform rich header and footer editing | P | P | P | P | P | related | P | P | P | P | B | B | B | partial | boundary:F-271 | F-271 |
+| DOCX-039 | stories | rich footnotes | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:2738` | F-272 |
+| DOCX-040 | stories | rich endnotes | N | P | N | N | PV | related | P | P | N | P | B | B | B | unsupported | boundary:F-273 | F-273 |
+| DOCX-041 | stories | note separators, markers, numbering, and restart policy | N | P | N | N | PV | related | P | P | N | P | B | B | B | unsupported | boundary:F-274 | F-274 |
+| DOCX-042 | stories | bookmarks, paired ranges, and annotations | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/comments.rs:44` | F-275 |
+| DOCX-043 | stories | complete fragment dependency and conflict policy | P | P | P | NA | P | all | P | P | P | P | B | B | B | partial | boundary:F-276 | F-276 |
+| DOCX-044 | stories | glossary and building-block creation and insertion | N | Y | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/building_block.rs:14` | F-277 |
+| DOCX-045 | fields | simple and complex field builder | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/run.rs:187` | F-278 |
+| DOCX-046 | fields | page and section field materialization across stories | N | P | N | N | PV | all | N | N | N | P | B | B | B | unsupported | boundary:F-279 | F-279 |
+| DOCX-047 | fields | captions, sequences, and complete cross-references | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-280 | F-280 |
+| DOCX-048 | fields | indexes, tables of figures, and authorities | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-281 | F-281 |
+| DOCX-049 | fields | citations and bibliography | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-282 | F-282 |
+| DOCX-050 | fields | numbering-aware navigation fields | P | P | P | P | P | all | P | P | P | P | B | B | B | partial | boundary:F-283 | F-283 |
+| DOCX-051 | stories | stable container-wide template grammar | P | NA | P | NA | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4837` | F-284 |
+| DOCX-052 | forms | content control creation and lifecycle | N | Y | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/content_control.rs:27` | F-285 |
+| DOCX-053 | forms | rich, repeating, and typed content controls | N | P | P | N | P | body | P | P | P | P | B | B | B | partial | boundary:F-286 | F-286 |
+| DOCX-054 | forms | custom XML stores and two-way data binding | N | P | N | N | PV | package | P | P | N | P | B | B | B | unsupported | boundary:F-287 | F-287 |
+| DOCX-055 | forms | legacy text, checkbox, and drop-down field creation | N | Y | P | N | P | all | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/field.rs:30` | F-288 |
+| DOCX-056 | forms | high-level modern form composition | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-289 | F-289 |
+| DOCX-057 | forms | mail-merge package and data-source authoring | P | Y | P | P | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/field.rs:617` | F-290 |
+| DOCX-058 | collaboration | tracked insertion and deletion | N | Y | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/revision.rs:19` | F-291 |
+| DOCX-059 | collaboration | property revisions and move ranges | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-292 | F-292 |
+| DOCX-060 | collaboration | comments, replies, people, and modern metadata | P | Y | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/comments.rs:77` | F-293 |
+| DOCX-061 | collaboration | permission ranges and protection composition | N | P | P | P | P | all | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:2812` | F-294 |
+| DOCX-062 | collaboration | comparison as complete tracked revisions | P | Y | P | NA | P | all | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/comparison.rs:70` | F-295 |
+| DOCX-063 | collaboration | deterministic identity and time policy | N | NA | N | NA | N | package | NA | NA | N | N | N | N | N | unsupported | boundary:F-296 | F-296 |
+| DOCX-064 | drawing | picture anchors, wrapping, crop, transforms, and effects | P | P | P | P | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3146` | F-297 |
+| DOCX-065 | drawing | shapes, text boxes, groups, and connectors | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-298 | F-298 |
+| DOCX-066 | drawing | AlternateContent, VML, and SVG compatibility writing | P | P | P | N | P | all | P | P | P | P | B | B | B | partial | boundary:F-299 | F-299 |
+| DOCX-067 | drawing | charts at every valid Word insertion point | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3053` | F-300 |
+| DOCX-068 | drawing | SmartArt and diagram authoring | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-301 | F-301 |
+| DOCX-069 | drawing | embedded objects, icons, and alternative-format parts | N | Y | P | P | Y | all | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/embedded.rs:67` | F-302 |
+| DOCX-070 | drawing | complete drawing and embedded-content layout | N | P | N | NA | NA | all | P | P | N | P | B | B | B | unsupported | boundary:F-303 | F-303 |
+| DOCX-071 | extensions | typed safe custom-part and relationship facade | N | P | N | N | PV | package | NA | NA | N | P | B | B | B | unsupported | boundary:F-304 | F-304 |
+| DOCX-072 | extensions | templates, web extensions, task panes, and web settings | N | P | N | N | PV | package | NA | NA | N | P | B | B | B | unsupported | boundary:F-305 | F-305 |
+| DOCX-073 | extensions | attach opaque VBA, ActiveX, OLE, and custom UI payloads | N | Y | P | Y | Y | package | NA | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/embedded.rs:44` | F-306 |
+| DOCX-074 | accessibility | complete authoring and structural audit | P | P | P | P | P | all | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:6895` | F-307 |
+| DOCX-075 | conformance | stable modeled, preserved, unsupported, and lossy diagnostics | P | P | NA | NA | NA | all | P | P | P | P | B | B | P | partial | implementation:`crates/rdocx/src/document.rs:112` | F-308 |
+| DOCX-076 | conformance | Strict and Transitional validation and repair-free output | P | P | NA | NA | P | package | P | P | P | P | B | B | P | partial | boundary:F-309 | F-309 |
+| DOCX-077 | operations | byte determinism, resource limits, cancellation, and stability | P | P | P | P | P | all | Y | Y | P | P | P | P | P | partial | boundary:F-310 | F-310 |
+| DOCX-078 | operations | native, Python, WASM, and CLI capability classification | P | Y | NA | NA | NA | all | NA | NA | P | P | P | P | P | partial | boundary:F-310 | F-310 |
+| DOCX-079 | run | Transitional OfficeMath authoring and conversion | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/math.rs:39` | - |
+| DOCX-080 | package | unknown unmodeled safe producer XML | N | PV | N | N | PV | all | P | P | Y | PV | B | B | B | preserve-only | boundary:`docs/hld/03-architecture.md` preservation contract | - |
+| DOCX-081 | extensions | unknown future producer extensions | N | PV | N | N | PV | package | NA | NA | Y | PV | B | B | B | preserve-only | boundary:`docs/hld/04-opc-and-packaging.md` loss-free retention | - |
+| DOCX-082 | package | binary DOC, Word 2003 XML, and pre-OOXML payloads | N | N | N | N | N | NA | N | N | NA | N | N | N | N | permanent-non-goal | non-goal:legacy format engine | - |
+| DOCX-083 | extensions | VBA, ActiveX, OLE, add-in, and embedded application execution | N | N | N | N | N | NA | N | N | NA | N | N | N | N | permanent-non-goal | non-goal:executable payload execution | - |
+| DOCX-084 | operations | proprietary cloud services and hosted collaboration | N | N | N | N | N | NA | N | N | NA | N | N | N | N | permanent-non-goal | non-goal:hosted service execution | - |
+| DOCX-085 | drawing | exact 3-D, heavy effects, and proprietary WordArt rendering | N | PV | N | N | PV | all | P | N | Y | PV | B | B | B | permanent-non-goal | non-goal:Word rendering clone | - |
+
+The public facade and modeled-property audit covers the `rdocx` exports, the
+WordprocessingML paragraph, run, table, section, settings, styles, numbering,
+fields, comments, revisions, content-control, drawing, and OfficeMath models,
+the package relationship owners, layout and render entry points, and the native,
+Python, WASM, and CLI surfaces. The audit found no capability that requires a
+second document model or an additional story beyond F-243 through F-310.
+
 Bounded MHTML import and export is part of the post-v1 native Word interchange
 surface. It carries the supported document structure, contained PNG and JPEG
 resources, safe links, and ordered loss diagnostics through the existing Word

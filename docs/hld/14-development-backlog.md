@@ -2206,10 +2206,10 @@ base DOCX, caller-supplied raw XML, direct `rdocx-oxml` mutation, or LibreOffice
 field-update pass.
 
 The first sprint is an evidence-gathering and planning boundary. Its audit owns
-the final capability matrix, story reshaping, HLD scope, sprint plan, backlog,
-and current-sprint update for the remaining M23 and M24 work. Client documents,
-extracted parts, and rendered pages stay in a private ignored directory. Only
-sanitized source-built fixtures and non-identifying requirements may be tracked.
+the final capability matrix and the remaining M23 and M24 work. Client
+documents, extracted parts, and rendered pages stay in a private ignored
+directory. Only sanitized source-built fixtures and non-identifying requirements
+may be tracked.
 
 **End-of-milestone gate**: all five private references are generated from a
 blank public facade, reopen without repair, match the required package
@@ -2220,11 +2220,13 @@ unexplained preservation-only fallback.
 ### F-240, Modern DOCX completeness audit and private corpus matrix (L)
 Audit every modern DOCX capability across create, read, mutate, remove,
 save-reopen, story placement, layout, rendering, determinism, bindings, and
-diagnostics. Map the five private documents without committing their content,
-remove overlap with completed M1 through M22 work, and update the HLD, sprint
-plan, backlog, current sprint, release boundaries, and renumbered M19 schedule.
-The audit may split, merge, resize, or archive the provisional F-243 through
-F-310 stories while preserving the two milestone outcomes.
+diagnostics. The closed matrix contains 85 stable rows and maps the five private
+documents only as anonymous, non-identifying capability families. The audit
+found no duplicate scope, missing owner, dangling dependency, dependency cycle,
+or scheduling conflict in F-243 through F-310, so their boundaries, sizes,
+dependencies, and S71 through S80 placement remain authoritative.
+**Capability matrix owner**: `docs/hld/02-scope-and-non-goals.md`, "Modern DOCX
+capability matrix".
 **Test gate**: regression. Every in-scope matrix row has evidence, an owner
 story, an explicit preservation boundary, or a permanent non-goal, and every
 roadmap duplicate or dangling dependency is rejected.

@@ -1311,6 +1311,22 @@ tracked documentation. Exact hashes, filenames, XML extracts, and differential
 artifacts remain beside the private corpus. A staged-path and tracked-path scan
 fails when a private artifact is about to enter repository history.
 
+The anonymous audit records only the capability families needed by each local
+reference. Counts, values, source names, text, relationship targets, media,
+rendered pages, and extracted markup are not part of this summary.
+
+| Anonymous reference | Non-identifying required families |
+|---|---|
+| P1 | Section-scoped header and footer variants, fields, drawings, text boxes, content controls, custom data bindings, custom properties, and web add-in declarations |
+| P2 | Section-scoped stories, dense tables, fields, drawings, text boxes, links, custom data bindings, custom properties, and web add-in declarations |
+| P3 | Numbering, tables, section-scoped stories, drawings, text boxes, theme, font table, settings, and web settings |
+| P4 | Multiple sections, tables, drawings, links, theme, font table, settings, and web settings |
+| P5 | Modern comment metadata, numbering, tables, section-scoped stories, drawings, text boxes, theme, font table, settings, and web settings |
+
+These are requirements for the source-built conformance documents, not
+fingerprints. The matrix maps them to F-243 through F-310 without recording the
+combination of package counts or property values from any source.
+
 The M23 conformance harness has two modes:
 
 1. Public CI source-builds synthetic fixtures that exercise every declared M23
@@ -1333,8 +1349,9 @@ tests remain authoritative when byte identity is not a valid expectation.
 F-263 closes M23 only when all five generators pass local required-corpus mode,
 the synthetic public suite passes in CI, opening and saving requires no repair,
 and every unexplained structural or visual delta has an owning story. F-240 can
-revise the provisional M23 and M24 sprint plan if the audit discovers a missing
-public authoring capability.
+revise the M23 and M24 sprint plan if a later approved audit discovers a missing
+public authoring capability. The completed initial audit found the existing
+F-243 through F-310 boundaries sufficient for the anonymous requirements.
 
 M24 extends the synthetic conformance matrix to all declared modern DOCX
 authoring rows. Each row proves public construction, save and reopen equality,

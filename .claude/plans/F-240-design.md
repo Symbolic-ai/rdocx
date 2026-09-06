@@ -1,6 +1,6 @@
 # F-240, Modern DOCX completeness audit and private corpus matrix
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S70
 **Size**: L
 **Depends on**: none
@@ -123,17 +123,18 @@ contract without changing document generation or rendering.
 
 ## Implementation checklist
 
-- [ ] Inventory the five private references under anonymous local identities.
-- [ ] Enumerate modeled properties, public authoring, package ownership, layout,
+- [x] Inventory the five private references under anonymous local identities.
+- [x] Enumerate modeled properties, public authoring, package ownership, layout,
   rendering, determinism, diagnostics, and binding coverage.
-- [ ] Write the closed capability matrix in the existing scope HLD.
-- [ ] Map every incomplete in-scope row to exactly one live story.
-- [ ] Reconcile F-243 through F-310 and all S71 through S80 dependencies.
-- [ ] Add duplicate, dependency, classification, evidence, and privacy tests.
-- [ ] Correct the nonexistent current-sprint spec reference.
-- [ ] Run prose, sync-status, focused regressions, full verification, and hash
+- [x] Write the closed capability matrix in the existing scope HLD.
+- [x] Map every incomplete in-scope row to exactly one live story.
+- [x] Reconcile F-243 through F-310 and all S71 through S80 dependencies.
+- [x] Add duplicate, dependency, classification, evidence, and privacy tests.
+- [x] Correct the nonexistent current-sprint spec reference.
+- [x] Run prose, sync-status, focused regressions, full verification, and hash
   checks.
-- [ ] Update exactly the listed HLD files and shared sprint records.
+- [x] Update exactly the listed HLD files and leave shared sprint records to the
+  integrator.
 
 ## Open questions
 
