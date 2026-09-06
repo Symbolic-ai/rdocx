@@ -12037,3 +12037,89 @@ is not part of this release.
 **Notes for future sessions.** Treat v0.13.1 as the current complete stable
 registry boundary. Preserve the immutable partial v0.13.0 attempt and do not
 move or republish either release tag.
+
+### F-240, Modern DOCX completeness audit and private corpus matrix
+
+**Sprint.** S70
+**Completed.** 2026-09-06
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The scope HLD now owns a closed 85-row modern DOCX
+capability matrix covering public creation, reading, mutation, removal,
+save-reopen behavior, story placement, layout, rendering, determinism, and the
+native, Python, WASM, and CLI surfaces. Every partial or unsupported row names
+one live owner from F-241 or F-243 through F-310. The five private documents
+remain ignored and appear in tracked prose only as anonymous P1 through P5
+requirement summaries.
+
+**Non-obvious choices.** Public OXML types do not count as public facade
+authoring, and raw XML preservation does not count as modeled mutation. The
+matrix treats preservation-only and permanent non-goals as closed evidence
+boundaries without implementation owners. Repository regressions enforce
+classifications, owner and evidence agreement, complete roadmap placement and
+dependencies, status alignment, capability-family coverage, and the absence of
+tracked DOCX files or private identity details.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 expanded
+the planned regressions to enforce complete and inverse row consistency,
+boundary-owner agreement, whole-plan duplicate placement, BACKLOG status
+alignment, and repository-wide DOCX privacy. Pass 3 reported zero defects,
+zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/00-vision.md`,
+`docs/hld/02-scope-and-non-goals.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The five gates are
+`test_modern_docx_capability_matrix_has_closed_classifications_and_evidence`,
+`test_every_incomplete_modern_docx_row_has_one_live_owner`,
+`test_m23_m24_roadmap_has_no_duplicate_or_dangling_story`,
+`test_private_corpus_summary_contains_no_private_identity`, and
+`test_modern_docx_matrix_covers_public_facade_and_modeled_property_families`.
+The integrated `/verify --full` gate passed at
+`b93560f12ffc76e917bf391d600dabf697466917`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep private filenames, hashes, text, XML,
+media, renders, and detailed differentials in the ignored corpus area. Update
+the existing matrix and canonical backlog when later authoring stories change a
+classification.
+
+### F-X083, Close confirmed Issue 67 and intake Issue 69
+
+**Sprint.** S70
+**Completed.** 2026-09-06
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** GitHub Issue 67 is closed as completed after the reporter
+confirmed that the F-X075 fix shipped in v0.12.0. The sole new maintainer
+comment links the confirmation, implementation, release, and the separate
+Issue 69 follow-up. Issue 69 remains open and unmodified. Its three independent
+mechanisms map to F-X084 through F-X086 with authenticated credit to
+`@emptinessform`.
+
+**Non-obvious choices.** F-X086 records both `9e48bc86`, which enables safe
+prefix restart after a body-length change, and `c8315b92`, which prevents stale
+sourced tail reuse. Neither external patch was adopted by this record-only
+story, and no external co-author trailer was copied into repository commits.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, the F-X086
+intake contract.
+
+**Tests.** `page_spanning_prose_publishes_complete_boundary_restart_records`
+and `page_spanning_prose_restarts_warm_edits_exactly` passed. Live GitHub state
+confirmed Issue 67 closed with exactly one new evidence comment at
+https://github.com/tensorbee/rdocx/issues/67#issuecomment-5562442667 and Issue
+69 still open without another comment. The integrated `/verify --full` gate
+passed at `b93560f12ffc76e917bf391d600dabf697466917`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat the two F-X086 commits as complementary
+inputs and review them against current main rather than merging the offered
+branch. Preserve reporter credit on any adopted implementation.

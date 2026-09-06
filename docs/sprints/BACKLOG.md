@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 0 | 1 | 23 |
+| M23, From-scratch business documents           | 24 | 1 | 0 | 23 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 89 | 81 | 1 | 3  |
-| **Total** | **407** | **307** | **2** | **94** |
+| X, Cross-cutting (opportunistic)            | 89 | 82 | 0 | 3  |
+| **Total** | **407** | **309** | **0** | **94** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -452,7 +452,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M23 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-240 | Modern DOCX completeness audit and private corpus matrix | S70 | L | in-progress |
+| F-240 | Modern DOCX completeness audit and private corpus matrix | S70 | L | done |
 | F-241 | Public authoring conformance harness | S70 | L | pending |
 | F-242 | Root README product and capability overview | S70 | M | pending |
 | F-243 | Word-compatible fresh package profiles | S71 | L | pending |
@@ -622,7 +622,7 @@ regenerated, never hand-edited.
 | F-X080 | Restore CI release readiness              | S69 | S | done |
 | F-X081 | Tag rpptx-v0.11.0                         | S69 | S | done |
 | F-X082 | Tag v0.13.1                               | S69 | S | done |
-| F-X083 | Close confirmed Issue 67 and intake Issue 69 | S70 | S | in-progress |
+| F-X083 | Close confirmed Issue 67 and intake Issue 69 | S70 | S | done |
 | F-X084 | Narrow note-part paragraph cache invalidation | S70 | M | pending |
 | F-X085 | Memoize restart body identities once per layout | S70 | M | pending |
 | F-X086 | Provenance-safe restart after body-length changes | S70 | L | pending |
