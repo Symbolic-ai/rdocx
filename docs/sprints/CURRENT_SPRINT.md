@@ -30,7 +30,7 @@ three independent incremental-layout gaps reported in Issue 69.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-240 | Modern DOCX completeness audit and private corpus matrix | L | pending | - |
+| F-240 | Modern DOCX completeness audit and private corpus matrix | L | in-progress | codex |
 | F-241 | Public authoring conformance harness | L | pending | - |
 | F-242 | Root README product and capability overview | M | pending | - |
 | F-X083 | Close confirmed Issue 67 and intake Issue 69 | S | pending | - |

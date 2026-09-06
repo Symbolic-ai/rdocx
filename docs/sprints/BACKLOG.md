@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 0 | 0 | 24 |
+| M23, From-scratch business documents           | 24 | 0 | 1 | 23 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
 | X, Cross-cutting (opportunistic)            | 89 | 81 | 0 | 4  |
-| **Total** | **407** | **307** | **0** | **96** |
+| **Total** | **407** | **307** | **1** | **95** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -452,7 +452,7 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M23 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-240 | Modern DOCX completeness audit and private corpus matrix | S70 | L | pending |
+| F-240 | Modern DOCX completeness audit and private corpus matrix | S70 | L | in-progress |
 | F-241 | Public authoring conformance harness | S70 | L | pending |
 | F-242 | Root README product and capability overview | S70 | M | pending |
 | F-243 | Word-compatible fresh package profiles | S71 | L | pending |
