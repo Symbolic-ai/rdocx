@@ -362,7 +362,10 @@ leave-open notifications are verified. After separate approval, exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
 releases remain live and unyanked. The tag is never moved or deleted, no
 v0.11.0 GitHub release exists, and no other external state changes. Current
-stable source is prepared at 0.13.1 pending its separately approved release.
+stable source is published as the exact seven-package 0.13.1 family from
+immutable annotated `v0.13.1` tag at reviewed SHA
+`c391d12422c288be5db314bad8338dd08bb47d9a`. All seven registry entries and
+their sole owner are verified, and the release depends on shared 0.11.0.
 The immutable v0.13.0 tag at reviewed SHA
 `05332b17f481741e7d5ab4e39699c6d1536475af` published five stable packages,
 then stopped before `rdocx`, `rdocx-cli`, and the GitHub release because
@@ -455,21 +458,20 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group, its two Python project
-versions, and the rdocx WASM contract literals are prepared at 0.13.1. The latest
-published exact seven-package stable family is the immutable annotated
-`v0.12.0` tag at reviewed SHA
-`19adaacfcf82e3918bba4f8c3648747f1969b746`. Its published archives retain
-their shared 0.9.0 requirements, while current source prepares shared
-dependencies at 0.11.0.
+versions, and the rdocx WASM contract literals are at 0.13.1. The exact
+seven-package stable family is published from immutable annotated `v0.13.1`
+tag at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Its published
+archives require shared 0.11.0. The Python, binding, and WASM carriers remain
+unpublished.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed against the published shared 0.7.0 API.
 The remaining five packages and GitHub release were not published at that
 version. Shared 0.8.0 and stable 0.11.1 form the published recovery sequence.
 After separate immediate approval, the post-recovery cleanup yanked exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Complete coherent stable releases
-remain live and unyanked. The last published complete stable family remains
-0.12.0 until the separately approved 0.13.1 recovery. Earlier immutable
-registry releases remain available. No binding, WASM, Python, npm, or
+remain live and unyanked. The current complete stable family is 0.13.1. Earlier
+immutable registry releases, including the complete 0.12.0 family, remain
+available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
 0.11.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The

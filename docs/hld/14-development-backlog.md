@@ -3817,10 +3817,12 @@ eligible to start.
 
 ### F-X082, Tag v0.13.1 (S)
 
-The 0.13.1 preparation moves every stable version carrier, internal pin, lock
-record, README requirement, source assertion, CI literal, Python and WASM
-metadata carrier, workflow preflight, and release regression in lockstep after
-F-X081 verified shared 0.11.0. Every shared dependency is pinned to 0.11.0.
+The exact seven-package stable family is published at 0.13.1 from immutable
+annotated tag `v0.13.1` at reviewed SHA
+`c391d12422c288be5db314bad8338dd08bb47d9a`. Every stable version carrier,
+internal pin, lock record, README requirement, source assertion, CI literal,
+Python and WASM metadata carrier, workflow preflight, and release regression
+moved in lockstep. Every shared dependency is pinned to published 0.11.0.
 
 The release notes describe the complete M22 outcome and the immutable partial
 v0.13.0 attempt accurately. The registry-only proof packages normalized local
@@ -3830,11 +3832,12 @@ workspace graph cannot mask this dependency boundary again. Python, WASM, npm,
 and PyPI remain outside publication authority.
 
 **Depends on**: F-238, F-239, F-X077, F-X081.
-**Test gate**: release. All seven stable registry entries resolve at 0.13.1
+**Test gate**: release, passed. All seven stable registry entries resolve at 0.13.1
 against shared 0.11.0 under the authenticated owner. The annotated tag targets
 the reviewed SHA, the GitHub release body is byte-identical to reviewed notes,
 selected-family exclusions hold, and every applicable contribution
-notification verifies.
+notification verifies. The contribution inventory is empty, so no notification
+was required.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

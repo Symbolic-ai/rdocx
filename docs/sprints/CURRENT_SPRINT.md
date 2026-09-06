@@ -39,7 +39,7 @@ shared 0.11.0 family and the exact stable Rust family at v0.13.1.
 | F-238 | Flat OPC and modern Word package variants | M | done | - |
 | F-X078 | Tag v0.13.0 | S | archived | - |
 | F-X081 | Tag rpptx-v0.11.0 | S | done | - |
-| F-X082 | Tag v0.13.1 | S | in-progress | codex |
+| F-X082 | Tag v0.13.1 | S | done | - |
 
 ## Sequencing note
 
@@ -55,9 +55,9 @@ F-X078 ran after the representative M22 end gate passed. Its immutable
 v0.13.0 tag published five low-level stable crates, then registry verification
 proved that F-238's new `oxml-opc` constants were newer than the published
 shared 0.10.0 archive. F-X081 published and independently verified the complete
-shared and PowerPoint family at 0.11.0. F-X082 may now publish the complete
-stable family at 0.13.1 against that registry boundary after its own clean gate
-and separate final approval at the exact reviewed SHA.
+shared and PowerPoint family at 0.11.0. F-X082 then published and independently
+verified the complete stable family at 0.13.1 against that registry boundary
+after its own clean gate and separate final approval at the reviewed SHA.
 
 ## Definition of done for this sprint
 

@@ -11987,3 +11987,53 @@ paragraph-cache performance follow-up and is not part of this release.
 **Notes for future sessions.** Stable v0.13.1 may now package against the
 published shared 0.11.0 boundary. Its registry-only facade proof, full gate,
 clean review, and separate release approval remain mandatory.
+
+### F-X082, Tag v0.13.1
+
+**Sprint.** S69
+**Completed.** 2026-09-06
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact seven-package stable Word family is published at
+0.13.1 against shared 0.11.0. The immutable annotated `v0.13.1` tag
+dereferences to reviewed SHA
+`c391d12422c288be5db314bad8338dd08bb47d9a`. The successful publication
+workflow is https://github.com/tensorbee/rdocx/actions/runs/34052518724 and the
+release is https://github.com/tensorbee/rdocx/releases/tag/v0.13.1.
+
+**Non-obvious choices.** The complete stable family was republished at the new
+patch version because the immutable v0.13.0 attempt stopped after five
+low-level packages. Publication followed the exact dependency order for
+`rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`,
+and `rdocx-cli`. Shared 0.11.0 supplied the required Word package-class
+constants. Bindings, WASM, Python, npm, PyPI, and the incubating family remained
+outside publication authority.
+
+**Deviations from the design plan.** None. The separate release approval was
+given at the exact reviewed SHA after sprint review pass 22 and repeated full
+verification were clean.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `/verify --full` passed at the exact reviewed SHA with all 49 hash
+entries unchanged. The hosted workflow published all seven selected packages
+and created the GitHub release. Every package downloaded independently at
+0.13.1 and reported sole owner `mantissaman (Atul Sharma)`. The remote
+annotated tag dereferences to the reviewed SHA. The GitHub release body is
+byte-identical to the reviewed render with SHA-256
+`d7451f6351767a5a6f9518e7cacc083209c33ca4d5ff264a2f75651d5197c8f1`.
+
+**Contribution inventory.** Empty. No GitHub issue or pull request implements
+the selected stable-family changes, there are no authenticated external
+contributors to notify, and no notification comment was required or posted.
+Issue 69 remains open as a separate paragraph-cache performance follow-up and
+is not part of this release.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat v0.13.1 as the current complete stable
+registry boundary. Preserve the immutable partial v0.13.0 attempt and do not
+move or republish either release tag.

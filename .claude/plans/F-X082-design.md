@@ -1,6 +1,6 @@
 # F-X082, Tag v0.13.1
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S69
 **Size**: S
 **Depends on**: F-238, F-239, F-X077, F-X081
@@ -87,9 +87,9 @@ Expected unchanged across all 49 entries. Any delta blocks preparation.
 - [x] Add the registry-only `rdocx` package verification gate.
 - [x] Prepare exact recovery notes and contribution inventory.
 - [x] Run `/verify --full` and every routed release check.
-- [ ] Reach a clean microscope and sprint review at the exact prepared SHA.
-- [ ] Stop at `/release v0.13.1` for separate final approval.
-- [ ] Verify all seven registry entries and release evidence before completion.
+- [x] Reach a clean microscope and sprint review at the exact prepared SHA.
+- [x] Stop at `/release v0.13.1` for separate final approval.
+- [x] Verify all seven registry entries and release evidence before completion.
 
 ## Open questions
 
