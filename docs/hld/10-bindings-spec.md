@@ -227,6 +227,16 @@ mutation for a larger value. `Document::set_list_level` can redefine an
 existing level without rebuilding the document. A rejected redefinition is
 side-effect free.
 
+Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
+`Document::package_class` reads the exact main-part override.
+`to_bytes_as` and `save_as_package_class` select an output class on a staged
+copy without removing executable or opaque parts. `from_flat_opc_bytes`, its
+limits overload, `open_flat_opc`, `to_flat_opc_bytes`, and `save_flat_opc`
+provide bounded strict Flat OPC interchange through the same `Document` and
+`OpcPackage` owners. These are additive pre-1.0 native APIs. Python, WASM, and
+CLI bindings preserve opened class identity through their existing saves but
+gain no selector or Flat OPC entry point.
+
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
 bundled-font page targets and returns `TocRebuildReport` with entry, newly
@@ -298,6 +308,16 @@ read. The importer supports source-ordered paragraphs, runs, nested lists, and
 spanned tables plus the bounded inline and embedded CSS subset. It does not
 fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
 entry point and retain their existing methods and error contracts.
+
+Native Rust callers can import and export bounded MHTML through
+`Document::from_mhtml_bytes`, `Document::open_mhtml`,
+`Document::to_mhtml_bytes`, and `Document::save_mhtml`. Concrete
+`MhtmlReadResult`, `MhtmlWriteResult`, and `MhtmlDiagnostic` values expose the
+converted document or bytes and stable path-aware loss records. Malformed,
+ambiguous, unsafe, or over-limit MIME returns contextual `Error::Mhtml` without
+publishing a partial result. Export is deterministic and a path save is atomic.
+These are additive native pre-1.0 APIs. Python, WASM, and CLI surfaces gain no
+MHTML entry point and retain their existing method and error contracts.
 
 Native Rust callers can import OpenDocument Text through
 `Document::from_odt_bytes`, `Document::from_odt_bytes_with_limits`, and
@@ -1134,20 +1154,25 @@ honest. Do not auto-generate them from PyO3.
 crates are `publish = false`, because a cdylib has no business on crates.io.
 
 The Rust package trains remain separate. The exact 15-package shared OOXML and
-PowerPoint workspace family is published at 0.9.0 from immutable annotated tag
-`rpptx-v0.9.0` at reviewed SHA
-`45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The stable workspace is prepared
-at 0.12.0 and pins shared dependencies to the published 0.9.0 boundary. Its
-last published family remains 0.11.1 from immutable annotated `v0.11.1` tag at
-reviewed SHA `5a850ce9ae6c31f8365594ed2970193266f8b2a6`, whose archives retain their
-0.8.0 requirements. The immutable v0.11.0 attempt at
+PowerPoint workspace family is published at 0.11.0 from immutable annotated tag
+`rpptx-v0.11.0` at reviewed SHA
+`0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. Every registry entry and its sole
+owner are verified. The stable workspace is published as the exact
+seven-package 0.13.1 family from immutable annotated tag `v0.13.1` at reviewed
+SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Every stable registry entry and
+its sole owner are verified, and the published archives require shared 0.11.0.
+The immutable v0.13.0 tag at
+reviewed SHA `05332b17f481741e7d5ab4e39699c6d1536475af` published five
+low-level stable packages, then stopped because packaged `rdocx` required the
+newer `oxml-opc` Word main content-type constants. `rdocx`, `rdocx-cli`, and
+the GitHub release remain absent. The immutable v0.11.0 attempt at
 reviewed SHA `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published only
 `rdocx-opc` and `rdocx-oxml`. It created no GitHub release and posted no
 contribution notifications. The complete seven-package recovery is published
 at 0.11.1, and all six reviewed leave-open notifications are posted. Both
-Python project versions and `rdocx-wasm` track stable workspace version 0.12.0, but
-every binding and WASM crate remains unpublished on crates.io. The incubating
-group places the unpublished `rpptx-wasm` crate at 0.9.0. Neither Rust release
+Python project versions and `rdocx-wasm` track stable workspace version 0.13.1,
+but every binding and WASM crate remains unpublished on crates.io. The incubating
+group places the unpublished `rpptx-wasm` crate at 0.11.0. Neither Rust release
 gives binding, WASM, npm, or Python package publication authority. Every later
 release still requires its selected-family gate and a separate final approval
 at the reviewed SHA. Complete coherent stable releases remain live and

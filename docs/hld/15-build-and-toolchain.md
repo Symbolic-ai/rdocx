@@ -152,8 +152,11 @@ The Linux x86-64 release archive is pinned to SHA-256
 `e0f8af62d0f267d22baa5bcefe6d5dda3a097ccc60de794b759fe03159923244`.
 The bounded installer rejects an unexpected platform, archive layout, member,
 size, digest, or executable identity, then exposes the verified binary only to
-CI. Pandoc and texmath are absent from every published crate and production
-dependency graph.
+CI. Its 160 MiB extracted-size ceiling admits the authenticated 162,406,703-byte
+payload. The installer skips without materializing only the archive's exact
+`pandoc-lua -> pandoc` and `pandoc-server -> pandoc` symlinks and rejects every
+other unsupported member type. Pandoc and texmath are absent from every
+published crate and production dependency graph.
 
 ODP conversion adds no external production tool and reuses the workspace
 `zip`, `quick-xml`, and `oxml-media` dependencies. LibreOffice 26.2.5.2 remains
@@ -166,6 +169,13 @@ module reuses workspace `scraper` 0.27 behind `default-template`. Google Chrome
 152.0.7977.65 is an ignored differential oracle only. The native archive,
 WASM, rustdoc, dependency policy, and 10 MiB package ceiling remain gates.
 
+Word MHTML conversion adds no dependency, module, feature, executable, or
+asset. It reuses the private `rdocx` HTML owner, existing `scraper` and `base64`
+dependencies, and the shared atomic path writer. Microsoft Word 16.104 build
+16.104.25121423 is an ignored differential oracle only. The exact native
+oracle, both WASM checks, rustdoc, the patched workspace publish dry run, the
+10 MiB archive ceiling, and the unchanged 49-entry hash harness are gates.
+
 PDF presentation import adds no production executable. The private `rpptx`
 module uses `lopdf` 0.44.0 with default features disabled behind the existing
 `render` feature. Poppler 26.01.0 is an ignored differential oracle only. The
@@ -176,6 +186,14 @@ Modern presentation package classes add no dependency, feature, module, or
 asset. The additive pre-1.0 `rpptx` enum and methods plus the new `oxml-opc`
 content-type constants require rustdoc, README inventory, patched publish
 dry-run, archive-size, and release review before publication.
+
+Modern Word package classes add one approved private `rdocx` module and four
+`oxml-opc` content-type constants, with no dependency, feature, executable, or
+asset. The additive pre-1.0 native enum and methods require both WASM target
+checks, rustdoc with warnings denied, dependency policy, patched workspace
+publish dry runs, the 10 MiB archive ceiling, and the unchanged 49-entry hash
+harness. Microsoft Word 16.104 build 16.104.25121423 is an ignored no-repair
+oracle only.
 
 ## Feature flags
 
@@ -235,10 +253,11 @@ include = [
 
 The dedicated package CI job compares `cargo package -p oxml-layout --list`
 against all 24 TTFs, the four family licence files, the Caladea and Noto
-notices, and the Simplified Chinese subset record. It then runs verified
-packaging without `--no-verify` and rejects a missing archive or one larger
-than the crates.io 10 MiB limit. `oxml-layout` is a published 0.1.2 package,
-while the release workflow remains the authority for every later publication.
+notices. The manifest also includes the Simplified Chinese subset record. The
+job then runs verified packaging without `--no-verify` and rejects a missing
+archive or one larger than the crates.io 10 MiB limit. `oxml-layout` is a
+published 0.1.2 package, while the release workflow remains the authority for
+every later publication.
 
 The external PowerPoint and Word corpora remain outside every published crate
 under the ignored `corpus/` directory. Their tracked manifests pin immutable
@@ -321,14 +340,15 @@ and PowerPoint packages. They are
 `oxml-core`, `oxml-opc`, `oxml-media`, `oxml-layout`, `oxml-drawing`,
 `oxml-pdf`, `oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`,
 `rpptx-chart`, `rpptx-layout`, `rpptx-render`, `rpptx`, and `rpptx-cli`. All 15
-are published at 0.9.0 from immutable annotated `rpptx-v0.9.0` tag at reviewed
-SHA `45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The earlier 0.8.0, 0.7.0,
-0.6.0, 0.5.0,
+are published at 0.11.0 from immutable annotated `rpptx-v0.11.0` tag at
+reviewed SHA `0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. The earlier 0.10.0,
+0.9.0, 0.8.0, 0.7.0, 0.6.0, 0.5.0,
 and 0.4.0 registry releases remain available, and no existing version or tag
 was moved. Manifest eligibility and allowlist membership do not authorize a
 later publication without a separately approved `/release` invocation at the
-exact reviewed SHA. The unpublished `rpptx-wasm` preparation member is also at
-0.9.0 but has no crates.io publication path.
+exact reviewed SHA. The unpublished `rpptx-wasm` preparation member and all
+incubating source carriers are prepared at 0.11.0 without gaining another
+publication path.
 
 The complete stable 0.11.1 family is published against the shared 0.8.0 family
 from the immutable annotated `v0.11.1` tag at reviewed SHA
@@ -342,16 +362,22 @@ leave-open notifications are verified. After separate approval, exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` are yanked. Complete coherent stable
 releases remain live and unyanked. The tag is never moved or deleted, no
 v0.11.0 GitHub release exists, and no other external state changes. Current
-stable source is prepared at 0.12.0 and pins the published shared 0.9.0
-boundary without granting stable publication authority.
+stable source is published as the exact seven-package 0.13.1 family from
+immutable annotated `v0.13.1` tag at reviewed SHA
+`c391d12422c288be5db314bad8338dd08bb47d9a`. All seven registry entries and
+their sole owner are verified, and the release depends on shared 0.11.0.
+The immutable v0.13.0 tag at reviewed SHA
+`05332b17f481741e7d5ab4e39699c6d1536475af` published five stable packages,
+then stopped before `rdocx`, `rdocx-cli`, and the GitHub release because
+registry `oxml-opc@0.10.0` lacks the F-238 Word main content-type constants.
 
 `publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
 real allowlist it reproduces the hash harness and runs self-contained stable
 and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.12.0, nine internal
+stable regression requires prepared workspace version 0.13.1, nine internal
 pins, eleven inherited lockfile packages, two Python project versions, unpublished
 `rdocx-wasm`, stable README requirements, and the exact seven-package crates.io
-set. The incubating regression requires the exact 0.9.0 versions, pins,
+set. The incubating regression requires the exact 0.11.0 versions, pins,
 lockfile entries, publication flags, and non-empty package descriptions.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
@@ -432,30 +458,31 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, `rpptx-py`, and `oxml-py-support` packages, use
 cargo-release's effective `workspace` shared-version group and the
 `v{{version}}` tag template. That shared-version group, its two Python project
-versions, and the rdocx WASM contract literals are prepared at 0.12.0. The last
-published exact seven-package stable family remains the immutable annotated
-`v0.11.1` tag at reviewed SHA
-`5a850ce9ae6c31f8365594ed2970193266f8b2a6` until the separately approved
-`v0.12.0` release completes.
+versions, and the rdocx WASM contract literals are at 0.13.1. The exact
+seven-package stable family is published from immutable annotated `v0.13.1`
+tag at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`. Its published
+archives require shared 0.11.0. The Python, binding, and WASM carriers remain
+unpublished.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
 before package verification failed against the published shared 0.7.0 API.
 The remaining five packages and GitHub release were not published at that
 version. Shared 0.8.0 and stable 0.11.1 form the published recovery sequence.
 After separate immediate approval, the post-recovery cleanup yanked exactly
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0`. Complete coherent stable releases
-remain live and unyanked. The last published complete stable family is 0.11.1.
-Earlier immutable
-registry releases remain available. No binding, WASM, Python, npm, or
+remain live and unyanked. The current complete stable family is 0.13.1. Earlier
+immutable registry releases, including the complete 0.12.0 family, remain
+available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 16 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.9.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
+0.11.0, the named `incubating` group, and the `rpptx-v{{version}}` template. The
 preparation group contains unpublished `rpptx-wasm`, while the crates.io
-allowlist remains exactly 15 packages. The last published complete family is
-the immutable `rpptx-v0.8.0` release at reviewed SHA
-`7f4414b0aeef1ec2cbae75fcb5aa96ab6dee6d70`, and earlier registry releases
+allowlist remains exactly 15 packages. The latest published complete family is
+the immutable `rpptx-v0.11.0` release at reviewed SHA
+`0b6bd622f8a14189d7d1281d011f81319ef8ad2a`, and earlier registry releases
 remain available. The stable 0.10.1 registry consumer proof remains pinned to
 the immutable `oxml-layout@0.6.0` dependency rather than the current workspace
-family.
+family. Shared 0.11.0 contains the additive `oxml-opc` constants required by
+the stable recovery.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
 creation, and pushing are disabled, and no README replacement is configured.
@@ -566,9 +593,9 @@ disposable pull requests are closed and unmerged. Their verified remote head
 refs were deleted and are absent. Their disposable worktrees and local branches
 were removed cleanly.
 
-**A dedicated `oxml-layout` package job.** It checks the exact bundled font and
-legal-file inventory, builds and verifies the generated archive, and enforces
-the crates.io 10 MiB limit.
+**A dedicated `oxml-layout` package job.** It checks the exact 24-font and six
+licence-and-notice-file inventory, builds and verifies the generated archive,
+and enforces the crates.io 10 MiB limit.
 
 **`--exclude rdocx-py --exclude rpptx-py` on every `--all-features` job.**
 `pyo3/extension-module` tells the linker the Python symbols come from the host
@@ -586,8 +613,10 @@ and propagates a decoded-pixel mismatch as a CI failure.
 **The Pandoc texmath gate in the test job.** The Ubuntu 24.04 runner installs
 the exact SHA-256-pinned Pandoc 3.10 archive, verifies the executable identity,
 and runs the ignored `rdocx` structural differential by its exact unit-test
-path before the workspace suite. The installer and gate have mutation coverage
-in the release-regression suite.
+path before the workspace suite. The installer caps extraction at 160 MiB and
+skips only the exact unneeded `pandoc-lua` and `pandoc-server` aliases to the
+verified `pandoc` executable. The installer and gate have mutation coverage in
+the release-regression suite.
 
 **The large-document gate in the test job.** The Ubuntu 24.04 runner executes
 the exact locked `rdocx` regression binary in release mode, selects only the

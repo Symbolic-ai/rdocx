@@ -524,6 +524,11 @@ class SprintWorkflowTests(unittest.TestCase):
             'PANDOC_SHA256 = "e0f8af62d0f267d22baa5bcefe6d5dda3a097ccc60de794b759fe03159923244"',
             "MAX_DOWNLOAD_BYTES = 40 * 1024 * 1024",
             "MAX_ARCHIVE_MEMBERS = 256",
+            "MAX_EXTRACTED_BYTES = 160 * MEBIBYTE",
+            'f"{ARCHIVE_ROOT}/bin/pandoc-lua": "pandoc"',
+            'f"{ARCHIVE_ROOT}/bin/pandoc-server": "pandoc"',
+            "member.issym()",
+            "AUTHENTICATED_SKIPPED_SYMLINKS.get(member.name) == member.linkname",
             "if extracted_bytes > MAX_EXTRACTED_BYTES:",
             "if not member_path.parts or member_path.parts[0] != ARCHIVE_ROOT:",
             "if not member.isfile():",
@@ -535,6 +540,38 @@ class SprintWorkflowTests(unittest.TestCase):
             'os.environ.get("GITHUB_ENV")',
         ):
             self.assertIn(required, installer)
+
+    def assert_ci_oxml_layout_package_inventory(self, ci: str) -> None:
+        job = self.yaml_block(ci, "  package-oxml-layout:")
+        inventory = self.yaml_step(job, "Check package inventory")
+        script = self.yaml_run_script(inventory)
+        listed_fonts = tuple(
+            re.findall(
+                r"^\s+(fonts/[^\s]+\.ttf)(?:\s*\\|\)\")$",
+                script,
+                re.MULTILINE,
+            )
+        )
+        listed_legal = tuple(
+            re.findall(
+                r"^\s+(fonts/(?:LICENSE|NOTICE)-[^\s\\\)]+)(?:\s*\\|\)\")$",
+                script,
+                re.MULTILINE,
+            )
+        )
+        fonts = workflow.REPO / "crates/oxml-layout/fonts"
+        expected_fonts = tuple(
+            f"fonts/{path.name}" for path in sorted(fonts.glob("*.ttf"))
+        )
+        expected_legal = tuple(
+            f"fonts/{path.name}"
+            for path in sorted((*fonts.glob("LICENSE-*"), *fonts.glob("NOTICE-*")))
+        )
+        self.assertEqual(len(expected_fonts), 24)
+        self.assertEqual(len(expected_legal), 6)
+        self.assertEqual(listed_fonts, expected_fonts)
+        self.assertEqual(listed_legal, expected_legal)
+        self.assertIn("diff -u", script)
 
     def assert_pinned_libreoffice_installer_contract(self, installer: str) -> None:
         self.assertIn('LIBREOFFICE_VERSION = "26.2.5.2"', installer)
@@ -1069,6 +1106,116 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_pinned_pandoc_ci_gate(ci)
+
+    def test_ci_oxml_layout_package_inventory_matches_bundled_assets(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assert_ci_oxml_layout_package_inventory(ci)
+
+        noto_entries = (
+            "fonts/NotoSansArabic.ttf",
+            "fonts/NotoSansDevanagari.ttf",
+            "fonts/NotoSansSC-FX058-subset.ttf",
+            "fonts/NotoSansThai.ttf",
+            "fonts/LICENSE-Noto",
+            "fonts/NOTICE-Noto",
+        )
+        for entry in noto_entries:
+            mutated = ci.replace(entry, "", 1)
+            self.assertNotEqual(mutated, ci, entry)
+            with self.subTest(missing=entry), self.assertRaises(AssertionError):
+                self.assert_ci_oxml_layout_package_inventory(mutated)
+
+    def test_pinned_pandoc_installer_accepts_authenticated_archive_with_bounded_headroom(
+        self,
+    ) -> None:
+        installer = (
+            workflow.REPO / "scripts/install_pinned_pandoc.py"
+        ).read_text(encoding="utf-8")
+        self.assert_pinned_pandoc_installer_contract(installer)
+
+        authenticated_payload_bytes = 162_406_703
+        ceiling = install_pinned_pandoc.MAX_EXTRACTED_BYTES
+        self.assertEqual(ceiling, 160 * install_pinned_pandoc.MEBIBYTE)
+        self.assertGreater(ceiling, authenticated_payload_bytes)
+        self.assertLess(ceiling - authenticated_payload_bytes, ceiling // 25)
+
+        for replacement in ("154 * MEBIBYTE", "256 * MEBIBYTE"):
+            mutated = installer.replace("160 * MEBIBYTE", replacement, 1)
+            self.assertNotEqual(mutated, installer, replacement)
+            with self.subTest(bound=replacement), self.assertRaises(AssertionError):
+                self.assert_pinned_pandoc_installer_contract(mutated)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def write_archive(
+                path: Path,
+                members: tuple[tuple[str, bytes, str], ...],
+            ) -> None:
+                with tarfile.open(path, mode="w:gz") as archive:
+                    executable = tarfile.TarInfo("pandoc-3.10/bin/pandoc")
+                    executable.mode = 0o755
+                    executable.size = len(b"reviewed pandoc")
+                    archive.addfile(executable, io.BytesIO(b"reviewed pandoc"))
+                    for name, member_type, linkname in members:
+                        member = tarfile.TarInfo(name)
+                        member.type = member_type
+                        member.linkname = linkname
+                        archive.addfile(member)
+
+            exact_aliases = (
+                ("pandoc-3.10/bin/pandoc-server", tarfile.SYMTYPE, "pandoc"),
+                ("pandoc-3.10/bin/pandoc-lua", tarfile.SYMTYPE, "pandoc"),
+            )
+            accepted_archive = root / "accepted.tar.gz"
+            write_archive(accepted_archive, exact_aliases)
+            accepted_root = root / "accepted"
+            executable = install_pinned_pandoc.safe_extract(
+                accepted_archive,
+                accepted_root,
+            )
+            self.assertEqual(executable.read_bytes(), b"reviewed pandoc")
+            for name, _, _ in exact_aliases:
+                alias = accepted_root / name
+                self.assertFalse(alias.exists(), name)
+                self.assertFalse(alias.is_symlink(), name)
+
+            rejected_members = (
+                (
+                    "wrong-name",
+                    "pandoc-3.10/bin/pandoc-other",
+                    tarfile.SYMTYPE,
+                    "pandoc",
+                ),
+                (
+                    "wrong-target",
+                    "pandoc-3.10/bin/pandoc-server",
+                    tarfile.SYMTYPE,
+                    "other",
+                ),
+                (
+                    "hardlink",
+                    "pandoc-3.10/bin/pandoc-server",
+                    tarfile.LNKTYPE,
+                    "pandoc",
+                ),
+                ("character-device", "pandoc-3.10/dev", tarfile.CHRTYPE, ""),
+                ("block-device", "pandoc-3.10/block", tarfile.BLKTYPE, ""),
+                ("fifo", "pandoc-3.10/fifo", tarfile.FIFOTYPE, ""),
+            )
+            for label, name, member_type, linkname in rejected_members:
+                archive = root / f"{label}.tar.gz"
+                write_archive(archive, ((name, member_type, linkname),))
+                with self.subTest(member=label), self.assertRaisesRegex(
+                    RuntimeError,
+                    "non-file entry",
+                ):
+                    install_pinned_pandoc.safe_extract(
+                        archive,
+                        root / f"extract-{label}",
+                    )
 
     def test_pinned_pandoc_ci_gate_rejects_disabled_or_noop_steps(self) -> None:
         ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
@@ -2166,9 +2313,9 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.12.0" "rdocx_wasm"',
+            '"0.13.1" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
-            '"0.9.0" "rpptx_wasm"',
+            '"0.11.0" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
             "--ignore-scripts --no-audit --no-fund --package-lock=false "
             '"$tarball_root/$tarball"',
@@ -4777,8 +4924,72 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertNotIn("rpptx-v0.9.0", notes)
         return notes
 
-    def test_stable_release_family_is_prepared_at_0_12_0(self) -> None:
-        expected_version = "0.12.0"
+    def assert_v0_13_0_release_notes_truth_contract(self, changelog: str) -> str:
+        notes = workflow.render_release_notes(changelog, "v0.13.0")
+        normalized_notes = " ".join(notes.split())
+        for claim in (
+            "M22 Word-depth boundary",
+            "OfficeMath",
+            "MathML and LaTeX",
+            "dynamic table-of-contents rebuilding",
+            "sectioned mail merge",
+            "VBA, OLE, and ActiveX",
+            "DOCX, DOCM, DOTX, and DOTM",
+            "Flat OPC",
+            "MHTML",
+            "shared `oxml-core` validator",
+            "separately published shared OOXML 0.10.0 family",
+            "additive pre-1.0 surfaces",
+            "does not remove macros",
+            "No external issue or pull request belongs to the selected stable-family",
+        ):
+            self.assertIn(claim, normalized_notes, claim)
+        for package in (
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+        ):
+            self.assertIn(f"`{package}`", notes, package)
+        self.assertIn("`rdocx-wasm@0.13.0` is not a crates.io package", normalized_notes)
+        self.assertIn("Atul Sharma maintained the release", normalized_notes)
+        self.assertNotIn("github.com/tensorbee/rdocx/issues/", notes)
+        self.assertNotIn("github.com/tensorbee/rdocx/pull/", notes)
+        self.assertNotIn("rpptx-v0.10.0", notes)
+        return notes
+
+    def assert_v0_13_1_release_notes_truth_contract(self, changelog: str) -> str:
+        notes = workflow.render_release_notes(changelog, "v0.13.1")
+        normalized_notes = " ".join(notes.split())
+        for claim in (
+            "M22 Word-depth boundary",
+            "immutable v0.13.0 attempt",
+            "shared OOXML 0.11.0 family",
+            "No external issue or pull request belongs to the selected stable-family",
+        ):
+            self.assertIn(claim, normalized_notes, claim)
+        for package in (
+            "rdocx-opc",
+            "rdocx-oxml",
+            "rdocx-layout",
+            "rdocx-html",
+            "rdocx-pdf",
+            "rdocx",
+            "rdocx-cli",
+        ):
+            self.assertIn(f"`{package}`", notes, package)
+        self.assertIn("`rdocx-wasm@0.13.1` is not a crates.io package", normalized_notes)
+        self.assertIn("Atul Sharma maintained the release", normalized_notes)
+        self.assertNotIn("github.com/tensorbee/rdocx/issues/", notes)
+        self.assertNotIn("github.com/tensorbee/rdocx/pull/", notes)
+        self.assertNotIn("rpptx-v0.11.0", notes)
+        return notes
+
+    def test_stable_release_family_is_prepared_at_0_13_1(self) -> None:
+        expected_version = "0.13.1"
         stable_members = (
             "oxml-py-support",
             "rpptx-py",
@@ -4902,13 +5113,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.12.0"', 'version = "0.12.0"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.12.0'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.12.0"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.12.0"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.12.0"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.12.0"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.12.0"',),
+            "README.md": ('rdocx = "0.13.1"', 'version = "0.13.1"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.13.1'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.13.1"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.13.1"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.13.1"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.13.1"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.13.1"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -4928,7 +5139,7 @@ class SprintWorkflowTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(manifest["package"]["version"], "0.9.0", name)
+            self.assertEqual(manifest["package"]["version"], "0.11.0", name)
             self.assertIs(
                 manifest["package"].get("publish", True),
                 name != "rpptx-wasm",
@@ -4942,24 +5153,174 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(
             publish.count(
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_12_0"
+                "test_stable_release_family_is_prepared_at_0_13_1"
             ),
             1,
         )
 
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        notes = self.assert_v0_12_0_release_notes_truth_contract(changelog)
-        self.assertIn("shared OOXML 0.9.0 family", " ".join(notes.split()))
+        notes = self.assert_v0_13_1_release_notes_truth_contract(changelog)
+        self.assertIn("shared OOXML 0.11.0 family", " ".join(notes.split()))
 
-    def test_release_notes_v0_12_0_cover_reviewed_word_outcomes(self) -> None:
+    def test_release_notes_v0_13_1_cover_recovery_and_word_outcomes(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-        self.assert_v0_12_0_release_notes_truth_contract(changelog)
+        self.assert_v0_13_1_release_notes_truth_contract(changelog)
+
+    def test_immutable_release_notes_v0_13_0_remain_recorded(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assert_v0_13_0_release_notes_truth_contract(changelog)
 
     @unittest.skipUnless(
         os.environ.get("RDOCX_VERIFY_PUBLISHED_SHARED") == "1",
-        "requires the separately published shared 0.9.0 family",
+        "requires the separately published shared 0.11.0 family",
     )
-    def test_prepared_rdocx_layout_0_12_0_requires_published_oxml_layout_0_9_0(
+    def test_prepared_rdocx_0_13_1_requires_published_shared_0_11_0(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="rdocx-registry-proof-") as temp:
+            root = Path(temp)
+            target = root / "package-target"
+
+            def package_source(name: str, patches: dict[str, Path]) -> Path:
+                command = [
+                    "cargo",
+                    "package",
+                    "--locked",
+                    "--allow-dirty",
+                    "--no-verify",
+                    "--package",
+                    name,
+                    "--target-dir",
+                    str(target),
+                ]
+                for dependency, path in patches.items():
+                    command.extend(
+                        (
+                            "--config",
+                            f'patch.crates-io.{dependency}.path="{path}"',
+                        )
+                    )
+                packaged = subprocess.run(
+                    command,
+                    cwd=workflow.REPO,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    packaged.returncode,
+                    0,
+                    packaged.stdout + packaged.stderr,
+                )
+                archive = target / "package" / f"{name}-0.13.1.crate"
+                self.assertTrue(archive.is_file(), archive)
+                with tarfile.open(archive, mode="r:gz") as package:
+                    package.extractall(target / "package", filter="data")
+                source = target / "package" / f"{name}-0.13.1"
+                self.assertTrue(source.is_dir(), source)
+                return source
+
+            rdocx_oxml = package_source("rdocx-oxml", {})
+            source_patches = {"rdocx-oxml": workflow.REPO / "crates/rdocx-oxml"}
+            rdocx_html = package_source("rdocx-html", source_patches)
+            rdocx_layout = package_source("rdocx-layout", source_patches)
+            rdocx_source = package_source(
+                "rdocx",
+                {
+                    "rdocx-oxml": workflow.REPO / "crates/rdocx-oxml",
+                    "rdocx-html": workflow.REPO / "crates/rdocx-html",
+                    "rdocx-layout": workflow.REPO / "crates/rdocx-layout",
+                },
+            )
+
+            normalized = tomllib.loads(
+                (rdocx_source / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            shared = (
+                "oxml-chart",
+                "oxml-core",
+                "oxml-drawing",
+                "oxml-layout",
+                "oxml-media",
+                "oxml-opc",
+                "oxml-pdf",
+                "oxml-sml",
+            )
+            for dependency in shared:
+                requirement = normalized["dependencies"][dependency]
+                self.assertEqual(requirement["version"], "0.11.0", dependency)
+                self.assertNotIn("path", requirement, dependency)
+
+            consumer = root / "consumer"
+            (consumer / "src").mkdir(parents=True)
+            (consumer / "Cargo.toml").write_text(
+                "\n".join(
+                    (
+                        "[package]",
+                        'name = "rdocx-registry-proof"',
+                        'version = "0.0.0"',
+                        'edition = "2024"',
+                        "",
+                        "[dependencies]",
+                        f'rdocx = {{ path = "{rdocx_source}", default-features = false }}',
+                        "",
+                        "[patch.crates-io]",
+                        f'rdocx-oxml = {{ path = "{rdocx_oxml}" }}',
+                        f'rdocx-html = {{ path = "{rdocx_html}" }}',
+                        f'rdocx-layout = {{ path = "{rdocx_layout}" }}',
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            (consumer / "src/lib.rs").write_text(
+                "pub fn package_class() -> rdocx::WordPackageClass {\n"
+                "    rdocx::Document::new().package_class().unwrap()\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["CARGO_HOME"] = str(root / "cargo-home")
+            env["CARGO_TARGET_DIR"] = str(root / "consumer-target")
+            checked = subprocess.run(
+                ("cargo", "check", "--manifest-path", str(consumer / "Cargo.toml")),
+                cwd=consumer,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            metadata = subprocess.run(
+                (
+                    "cargo",
+                    "metadata",
+                    "--format-version",
+                    "1",
+                    "--manifest-path",
+                    str(consumer / "Cargo.toml"),
+                ),
+                cwd=consumer,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(metadata.returncode, 0, metadata.stdout + metadata.stderr)
+            packages = json.loads(metadata.stdout)["packages"]
+            for dependency in shared:
+                matches = [package for package in packages if package["name"] == dependency]
+                self.assertTrue(matches, dependency)
+                for package in matches:
+                    self.assertEqual(package["version"], "0.11.0", dependency)
+                    self.assertTrue(
+                        package["source"].startswith("registry+"),
+                        (dependency, package["source"]),
+                    )
+
+    @unittest.skipUnless(
+        os.environ.get("RDOCX_VERIFY_PUBLISHED_SHARED") == "1",
+        "requires the separately published shared 0.10.0 family",
+    )
+    def test_prepared_rdocx_layout_0_13_0_requires_published_oxml_layout_0_10_0(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="rdocx-layout-package-") as temp:
@@ -4987,19 +5348,19 @@ class SprintWorkflowTests(unittest.TestCase):
                 0,
                 packaged.stdout + packaged.stderr,
             )
-            archive = target / "package" / "rdocx-layout-0.12.0.crate"
+            archive = target / "package" / "rdocx-layout-0.13.0.crate"
             self.assertTrue(archive.is_file(), archive)
             with tarfile.open(archive, mode="r:gz") as package:
                 normalized = package.extractfile(
-                    "rdocx-layout-0.12.0/Cargo.toml"
+                    "rdocx-layout-0.13.0/Cargo.toml"
                 )
                 self.assertIsNotNone(normalized)
                 manifest = tomllib.loads(normalized.read().decode("utf-8"))
             dependency = manifest["dependencies"]["oxml-layout"]
-            self.assertEqual(dependency["version"], "0.9.0")
+            self.assertEqual(dependency["version"], "0.10.0")
             self.assertNotIn("path", dependency)
 
-            verified_manifest = target / "package" / "rdocx-layout-0.12.0" / "Cargo.toml"
+            verified_manifest = target / "package" / "rdocx-layout-0.13.0" / "Cargo.toml"
             self.assertTrue(verified_manifest.is_file(), verified_manifest)
             resolved = subprocess.run(
                 (
@@ -5020,8 +5381,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 text=True,
             )
         self.assertEqual(resolved.returncode, 0, resolved.stdout + resolved.stderr)
-        self.assertIn("rdocx-layout v0.12.0", resolved.stdout + resolved.stderr)
-        self.assertIn("oxml-layout v0.9.0", resolved.stdout + resolved.stderr)
+        self.assertIn("rdocx-layout v0.13.0", resolved.stdout + resolved.stderr)
+        self.assertIn("oxml-layout v0.10.0", resolved.stdout + resolved.stderr)
 
     def test_immutable_rdocx_layout_0_10_1_registry_graph_remains_at_oxml_layout_0_6_0(
         self,
@@ -5283,7 +5644,7 @@ rdocx-layout = "=0.10.1"
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_9_0(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_11_0(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -5302,9 +5663,9 @@ rdocx-layout = "=0.10.1"
             "rpptx-cli",
         )
         preparation_packages = (*incubating_packages, "rpptx-wasm")
-        expected_version = "0.9.0"
+        expected_version = "0.11.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.12.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.13.1")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -5337,21 +5698,21 @@ rdocx-layout = "=0.10.1"
         self.assertEqual(lock_versions["rpptx-wasm"], expected_version)
 
         readme_requirements = {
-            "crates/oxml-core/README.md": ('oxml-core = "0.9.0"',),
-            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.9.0"',),
-            "crates/oxml-layout/README.md": ('version = "0.9.0"',),
-            "crates/oxml-media/README.md": ('oxml-media = "0.9.0"',),
-            "crates/oxml-opc/README.md": ('oxml-opc = "0.9.0"',),
+            "crates/oxml-core/README.md": ('oxml-core = "0.11.0"',),
+            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.11.0"',),
+            "crates/oxml-layout/README.md": ('version = "0.11.0"',),
+            "crates/oxml-media/README.md": ('oxml-media = "0.11.0"',),
+            "crates/oxml-opc/README.md": ('oxml-opc = "0.11.0"',),
             "crates/oxml-pdf/README.md": (
-                'oxml-pdf = "0.9.0"',
-                'oxml-layout = "0.9.0"',
+                'oxml-pdf = "0.11.0"',
+                'oxml-layout = "0.11.0"',
             ),
-            "crates/oxml-chart/README.md": ('oxml-chart = "0.9.0"',),
-            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.9.0"',),
-            "crates/rpptx-cli/README.md": ("--version '^0.9.0'",),
-            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.9.0"',),
-            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.9.0"',),
-            "crates/rpptx-render/README.md": ('rpptx-render = "0.9.0"',),
+            "crates/oxml-chart/README.md": ('oxml-chart = "0.11.0"',),
+            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.11.0"',),
+            "crates/rpptx-cli/README.md": ("--version '^0.11.0'",),
+            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.11.0"',),
+            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.11.0"',),
+            "crates/rpptx-render/README.md": ('rpptx-render = "0.11.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -5360,29 +5721,29 @@ rdocx-layout = "=0.10.1"
 
         source_requirements = {
             "crates/oxml-chart/src/lib.rs": (
-                'manifest.contains("version = \\"0.9.0\\"")',
+                'manifest.contains("version = \\"0.11.0\\"")',
             ),
             "crates/oxml-drawing/src/lib.rs": (
-                'manifest.contains("version = \\"0.9.0\\"")',
+                'manifest.contains("version = \\"0.11.0\\"")',
             ),
             "crates/rdocx-wasm/src/lib.rs": (
                 'oxml-layout = { path = \\"crates/oxml-layout\\", '
-                'version = \\"0.9.0\\", default-features = false }',
+                'version = \\"0.11.0\\", default-features = false }',
             ),
             "crates/rpptx-oxml/tests/integration.rs": (
-                'manifest.contains("version = \\"0.9.0\\"")',
+                'manifest.contains("version = \\"0.11.0\\"")',
             ),
             "crates/rpptx-render/src/lib.rs": (
-                'manifest.contains("version = \\"0.9.0\\"")',
+                'manifest.contains("version = \\"0.11.0\\"")',
             ),
             "crates/rpptx-wasm/src/lib.rs": (
-                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.9.0\\", '
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.11.0\\", '
                 'default-features = false }',
             ),
             "crates/rpptx/tests/integration.rs": (
-                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.9.0\\", '
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.11.0\\", '
                 'default-features = false }',
-                'manifest.contains("version = \\"0.9.0\\"")',
+                'manifest.contains("version = \\"0.11.0\\"")',
             ),
         }
         for path, requirements in source_requirements.items():
@@ -5396,7 +5757,7 @@ rdocx-layout = "=0.10.1"
         self.assertEqual(
             ci.count(
                 'verify_package "$package_root/rpptx-wasm" '
-                '"@tensorbee/rpptx-wasm" "0.9.0" "rpptx_wasm"'
+                '"@tensorbee/rpptx-wasm" "0.11.0" "rpptx_wasm"'
             ),
             1,
         )
@@ -5408,7 +5769,7 @@ rdocx-layout = "=0.10.1"
         self.assertEqual(
             publish.count(
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_incubating_release_family_is_prepared_at_0_9_0"
+                "test_incubating_release_family_is_prepared_at_0_11_0"
             ),
             1,
         )
@@ -5432,6 +5793,39 @@ rdocx-layout = "=0.10.1"
             self.assertIn(claim, normalized, claim)
         self.assertIn("stable Word family remains at 0.11.1", normalized)
         self.assertNotIn("stable Word family moves", normalized)
+        self.assertNotIn("github.com/tensorbee/rdocx/issues/", notes)
+        self.assertNotIn("github.com/tensorbee/rdocx/pull/", notes)
+
+    def test_release_notes_rpptx_v0_10_0_cover_selected_shared_changes(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = workflow.render_release_notes(changelog, "rpptx-v0.10.0")
+        normalized = " ".join(notes.split())
+        for claim in (
+            "strict XML 1.0 lexical validator",
+            "baseline-aware inline groups",
+            "Word glossary",
+            "0.10.0",
+            "stable Word family remains at 0.12.0",
+            "No external issue or pull request belongs to the selected family",
+        ):
+            self.assertIn(claim, normalized, claim)
+        self.assertIn("Atul Sharma maintained the release", normalized)
+        self.assertNotIn("github.com/tensorbee/rdocx/issues/", notes)
+        self.assertNotIn("github.com/tensorbee/rdocx/pull/", notes)
+
+    def test_release_notes_rpptx_v0_11_0_cover_word_package_constants(self) -> None:
+        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = workflow.render_release_notes(changelog, "rpptx-v0.11.0")
+        normalized = " ".join(notes.split())
+        for claim in (
+            "Word main content-type constants",
+            "DOCX, DOCM, DOTX, and DOTM",
+            "0.11.0",
+            "stable Word family remains at 0.13.0",
+            "No external issue or pull request belongs to the selected family",
+        ):
+            self.assertIn(claim, normalized, claim)
+        self.assertIn("Atul Sharma maintained the release", normalized)
         self.assertNotIn("github.com/tensorbee/rdocx/issues/", notes)
         self.assertNotIn("github.com/tensorbee/rdocx/pull/", notes)
 
@@ -5508,7 +5902,7 @@ rdocx-layout = "=0.10.1"
 
         wasm_package = manifests["crates/rpptx-wasm"]["package"]
         self.assertEqual(wasm_package["name"], "rpptx-wasm")
-        self.assertEqual(wasm_package["version"], "0.9.0")
+        self.assertEqual(wasm_package["version"], "0.11.0")
         self.assertTrue(wasm_package.get("description", "").strip())
         self.assertFalse(wasm_package["publish"])
         self.assertEqual(
@@ -5527,7 +5921,7 @@ rdocx-layout = "=0.10.1"
             for package in lock["package"]
             if package["name"] == "rpptx-wasm"
         )
-        self.assertEqual(wasm_lock_versions, ("0.9.0",))
+        self.assertEqual(wasm_lock_versions, ("0.11.0",))
 
     def test_release_preparation_metadata_cannot_mutate_external_state(self) -> None:
         self.assert_release_preparation_metadata_contract()
@@ -5562,7 +5956,7 @@ rdocx-layout = "=0.10.1"
                 1,
             ),
             "workspace-version": manifest.replace(
-                'version = "0.9.0"',
+                'version = "0.11.0"',
                 "version.workspace = true",
                 1,
             ),
@@ -6719,7 +7113,7 @@ Pedro Assumpcao and the rdocx maintainers.
                 "python3 -m unittest scripts.test_sprint_workflow",
                 "python3 -m unittest "
                 "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_12_0",
+                "test_stable_release_family_is_prepared_at_0_13_1",
                 1,
             ),
             "job-condition": ci.replace(
@@ -6848,7 +7242,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertIn("crates/oxml-chart", root["members"])
         self.assertEqual(
             root["dependencies"]["oxml-chart"],
-            {"path": "crates/oxml-chart", "version": "0.9.0"},
+            {"path": "crates/oxml-chart", "version": "0.11.0"},
         )
 
         shim = tomllib.loads(
@@ -6955,15 +7349,15 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         stable_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_12_0"
+            "test_stable_release_family_is_prepared_at_0_13_1"
         )
         incubating_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_9_0"
+            "test_incubating_release_family_is_prepared_at_0_11_0"
         )
         packaged_registry_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_prepared_rdocx_layout_0_12_0_requires_published_oxml_layout_0_9_0"
+            "test_prepared_rdocx_0_13_1_requires_published_shared_0_11_0"
         )
         historical_registry_check = (
             "scripts.test_sprint_workflow.SprintWorkflowTests."
@@ -7523,7 +7917,7 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace(
-                    "prepared at\n  0.12.0",
+                    "prepared at\n  0.13.1",
                     "prepared at\n  0.2.0",
                     1,
                 ),

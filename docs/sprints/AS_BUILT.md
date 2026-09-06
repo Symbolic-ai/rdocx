@@ -11698,3 +11698,342 @@ including all parser, serializer, package, facade, LibreOffice, canonical
 identity boundary. Keep binary `.doc`, field execution, and implicit reusable
 content expansion out of scope, and retain raw unsupported properties, bodies,
 and sibling entries byte-for-byte through unrelated edits.
+
+### F-X077, Share strict XML lexical validation
+
+**Sprint.** S69
+**Completed.** 2026-09-05
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** `oxml-core` now owns one strict XML 1.0 lexical validator
+for declaration grammar, characters, names, namespace bindings, duplicate
+expanded attributes, references, comments, and processing-instruction targets.
+Glossary, embedded-content, and package-story scanners all call that shared
+entry point while retaining their existing format-specific validation passes.
+
+**Non-obvious choices.** The validator lives in the existing `xml.rs` owner and
+returns a concrete shared error. Each consumer maps that error back to its
+established variant and message, so the refactor does not change public failure
+surfaces. Root, schema-position, doctype, declaration-placement, and semantic
+whitespace rules remain local to their owning scanners.
+
+**Deviations from the design plan.** None. Microscope pass 1 found declaration
+entity normalization that would have accepted an invalid pseudo-attribute.
+The correction retained raw declaration values until shared validation, and
+pass 3 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/03-architecture.md` and
+`docs/hld/12-testing-strategy.md`.
+
+**Tests.** The gate
+`strict_xml_1_0_validator_rejects_every_shared_lexical_class` covers every
+shared branch. The glossary, package-story, and embedded malformed matrices
+also prove exact local error mapping, source preservation, and byte-identical
+mutation rollback. Integrated `/verify --full` passed at
+`7462b363e96df64adc8fea68aebd2778a9e130d8`, including the dependency-direction,
+rustdoc, packaging, archive-size, and supply-chain riders.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep format-neutral lexical policy in
+`oxml-core`. New consumers should adapt shared errors locally and must not move
+owner-specific document structure or mutation policy into the shared helper.
+
+### F-239, MHTML import and export
+
+**Sprint.** S69
+**Completed.** 2026-09-05
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now imports bounded
+`multipart/related` MHTML into the existing document model and exports
+deterministic MHTML with diagnostic-bearing byte and path APIs. Supported body
+structure, formatting, lists, tables, contained images, and links survive
+conversion, save, and reopen.
+
+**Non-obvious choices.** MIME parsing and HTML projection remain in the
+existing HTML owner. Imports pre-index and validate the complete contained
+resource graph before publication, never fetch external resources, and accept
+safe external anchors only as navigation. Export uses stable CRLF MIME,
+content-derived boundaries, referenced resources, bounded base64, atomic path
+writes, and an immediate reparse and DOCX reopen check.
+
+**Deviations from the design plan.** None. Microscope pass 1 strengthened CSS
+and `srcset` resource preflight, MIME and whitespace validation, closing-boundary
+handling, export loss diagnostics, and mutation-sensitive image and diagnostic
+coverage. Pass 2 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The differential gate
+`mhtml_conversions_match_the_pinned_word_structure` and integration gate
+`mhtml_import_and_export_preserve_supported_word_structure` cover normalized
+body order, formatting, lists, tables, images, links, and diagnostics. Focused
+parser, transfer, resource, limit, deterministic-writer, and loss tests cover
+failure atomicity and mutation sensitivity. Microsoft Word 16.104 build
+16.104.25121423 passed the exact integrated oracle at
+`7fde4033b7cdf17f7c6e309dfccf7d1b9a6b1d44`, and `/verify --full` passed at the
+same SHA. The remediated oracle sends one source-built input through rdocx and
+Word, then compares every shared structural field with one acceptance predicate.
+It pins the intentional image difference: Word drops the contained PNG while
+rdocx retains it under the supported MHTML image contract.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep MHTML resource resolution contained and
+fail closed before document publication. Ordinary HTML behavior and output are
+separate compatibility surfaces and must remain unchanged.
+
+### F-X080, Restore CI release readiness
+
+**Sprint.** S69
+**Completed.** 2026-09-05
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Hosted CI now checks the complete explicit 24-font and
+six-file legal inventory for `oxml-layout`. The pinned Pandoc 3.10 installer
+admits its authenticated 162,406,703-byte payload under a 160 MiB ceiling and
+skips only its two reviewed in-root executable aliases. The Python adapter also
+maps every current native import error to its established generic exception.
+
+**Non-obvious choices.** The package inventory remains explicit so unexpected
+assets still fail review. Pandoc extraction retains its digest, download,
+member-count, path, layout, and executable checks. It does not materialize the
+two aliases and continues to reject every other symlink, hardlink, device,
+FIFO, and unsupported member type.
+
+**Deviations from the design plan.** Live reconstruction showed that the
+authenticated archive contains two symlink aliases. The plan was amended before
+completion to admit and skip only those exact name and target pairs. Microscope
+pass 2 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The regression gates
+`test_ci_oxml_layout_package_inventory_matches_bundled_assets` and
+`test_pinned_pandoc_installer_accepts_authenticated_archive_with_bounded_headroom`
+are mutation-sensitive for every repaired hosted contract. The integrated
+package reconstruction produced the exact 24 fonts and six legal files in a
+4,603,463-byte archive. The authenticated Pandoc archive reconstructed at
+162,406,703 bytes with exactly the two approved aliases skipped, and the exact
+Pandoc 3.10 texmath oracle passed. `rdocx-py` check, tests, and Clippy passed.
+Integrated `/verify --full` passed at
+`8e0abcc5035a0819199795559ad4c5f553b1c4ec`, including Microsoft Word 16.104,
+all 50 pinned presentation decks, LibreOffice, WASM, rustdoc, packaging,
+archive-size, and supply-chain riders.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep hosted package inventories explicit and
+calibrate extraction bounds only against digest-authenticated payloads. A new
+Pandoc archive shape requires a new reviewed policy rather than a general
+symlink allowance.
+
+### F-X079, Tag rpptx-v0.10.0
+
+**Sprint.** S69
+**Completed.** 2026-09-05
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact 15-package shared OOXML and PowerPoint family is
+published at 0.10.0. The immutable annotated `rpptx-v0.10.0` tag dereferences
+to reviewed SHA `1e409c553b950eb8029e3e78e39ff775f18ba3ab`. The successful
+publication workflow is
+https://github.com/tensorbee/rdocx/actions/runs/33984024736 and the release is
+https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.10.0.
+
+**Non-obvious choices.** Publication followed the exact 15-package dependency
+order and waited for every registry entry before continuing. Stable Word,
+bindings, WASM, Python, npm, and PyPI remained outside publication authority.
+Current stable source now resolves the separately published shared 0.10.0
+boundary without changing the stable workspace version.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the exact reviewed SHA. The GitHub
+workflow published all 15 selected crates and created the release. Every
+registry package downloaded at 0.10.0 and reported sole owner `mantissaman
+(Atul Sharma)`. The remote annotated tag dereferences to the reviewed SHA. The
+GitHub release body matches the reviewed render with SHA-256
+`af97bb5020b8cdaa5f7982bea55e471f89483e6fc3fe692929bb29a55199c43f`.
+`rpptx-wasm@0.10.0` and `rdocx@0.13.0` remain absent from crates.io.
+
+**Contribution inventory.** Empty. Every selected-family commit is authored
+by Atul Sharma, no linked external issue or pull request implements the
+selected changes, and no release notification is required.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat the published 0.10.0 shared family as the
+registry boundary for stable 0.13.0. Do not extend this release's authority to
+the unpublished WASM member or either binding family.
+
+### F-238, Flat OPC and modern Word package variants
+
+**Sprint.** S69
+**Completed.** 2026-09-05
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The native Word facade now reads and writes bounded Flat
+OPC packages and exposes exact DOCX, DOCM, DOTX, and DOTM package identity.
+Ordinary saves preserve the opened class, while staged output-only conversion
+changes only the authoritative main-part content type and retains executable
+payloads, relationships, unrelated content types, and unsupported XML.
+
+**Non-obvious choices.** Flat OPC is converted directly into the existing OPC
+package rather than retained as a second model. The parser accepts namespace
+aliases but validates expanded names, routes relationship parts to their
+owners, applies package limits before publication, and fails closed on unsafe
+targets, ambiguous main parts, malformed data forms, and unknown package
+classes. Deterministic output uses fixed `pkg:` markup, XML data for XML parts,
+base64 binary data for opaque parts, atomic path replacement, and a reopen gate.
+
+**Deviations from the design plan.** None. Microscope review strengthened
+relationship target-mode handling, relationship-owner validation, local
+namespace declaration handling, allocation bounds, MIME classification, empty
+binary representation, and signature invalidation evidence. Pass 5 reported
+zero defects, zero smells, and zero nitpicks. Integrated sprint review pass 14
+then added relationship-aware alternative-format classification, materialized
+used inherited payload namespaces, and established the composed M22 gate. Pass
+15 made the composed gate mutation-sensitive for TOC cache updates, sectioned
+merge structure, and body comparisons, and extended namespace materialization
+to markup-compatibility QName-valued attributes.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The gate
+`flat_opc_and_modern_word_package_classes_reopen_without_repair_and_preserve_payloads`
+covers all four package classes through ZIP, Flat OPC, document, and ZIP
+conversion. Focused malformed-package, namespace, relationship, limit,
+conversion-isolation, signature-invalidation, path-save, XML, and binary tests
+cover the strict boundary. The source-built
+`representative_m22_document_composes_the_complete_milestone_gate` test authors
+and renders OfficeMath, rebuilds fields and a table of contents, performs
+sectioned mail merge and comparison, inventories VBA, and preserves DOTM
+identity, unsupported XML, and executable bytes through Flat OPC. Microsoft
+Word 16.104 build 16.104.25121423 opened the generated DOCX, DOCM, DOTX, DOTM,
+and Flat OPC outputs without repair.
+Integrated `/verify --full` passed at
+`754c117af6cf8d1cb26e87023c1da9a78e018651`, including all tests, WASM,
+rustdoc, dependency direction, packaging, archive-size, and supply-chain
+riders.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat the main-part override as the sole package
+class authority. Keep class conversion staged and preservation-first, and do
+not infer identity from filenames or remove executable content when selecting
+an ordinary document or template class.
+
+### F-X081, Tag rpptx-v0.11.0
+
+**Sprint.** S69
+**Completed.** 2026-09-06
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact 15-package shared OOXML and PowerPoint family is
+published at 0.11.0. The immutable annotated `rpptx-v0.11.0` tag dereferences
+to reviewed SHA `0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. The successful
+publication workflow is
+https://github.com/tensorbee/rdocx/actions/runs/34033742964 and the release is
+https://github.com/tensorbee/rdocx/releases/tag/rpptx-v0.11.0.
+
+**Non-obvious choices.** The complete lockstep family was required because the
+additive pre-1.0 `oxml-opc` API crossed a minor version boundary. Stable Word,
+bindings, WASM, Python, npm, and PyPI remained outside publication authority.
+The immutable partial v0.13.0 tag and its five registry packages were not
+moved, deleted, republished, or treated as a complete stable family.
+
+**Deviations from the design plan.** None. Microscope pass 1 and integrated
+sprint review pass 19 reported zero findings.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Full verification passed at the exact reviewed SHA with all 49 hash
+entries unchanged. The hosted workflow published all 15 packages and created
+the GitHub release. Every package downloaded independently at 0.11.0 and
+reported sole owner `mantissaman (Atul Sharma)`. The remote annotated tag
+dereferences to the reviewed SHA. The GitHub release body matches the reviewed
+render with SHA-256
+`e4556abf8b218b2cfcf64bc92b0661dc87260a8f130916f2f0a6dc60cf8ff837`.
+`rpptx-wasm@0.11.0`, `rdocx@0.13.0`, and `rdocx-cli@0.13.0` remain absent from
+crates.io.
+
+**Contribution inventory.** Empty. The selected source delta contains the four
+additive Word main content-type constants and their shared vocabulary
+regression. No external issue or pull request implements those selected
+changes, so no release notification was required. Issue 69 remains a separate
+paragraph-cache performance follow-up and is not part of this release.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Stable v0.13.1 may now package against the
+published shared 0.11.0 boundary. Its registry-only facade proof, full gate,
+clean review, and separate release approval remain mandatory.
+
+### F-X082, Tag v0.13.1
+
+**Sprint.** S69
+**Completed.** 2026-09-06
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The exact seven-package stable Word family is published at
+0.13.1 against shared 0.11.0. The immutable annotated `v0.13.1` tag
+dereferences to reviewed SHA
+`c391d12422c288be5db314bad8338dd08bb47d9a`. The successful publication
+workflow is https://github.com/tensorbee/rdocx/actions/runs/34052518724 and the
+release is https://github.com/tensorbee/rdocx/releases/tag/v0.13.1.
+
+**Non-obvious choices.** The complete stable family was republished at the new
+patch version because the immutable v0.13.0 attempt stopped after five
+low-level packages. Publication followed the exact dependency order for
+`rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`,
+and `rdocx-cli`. Shared 0.11.0 supplied the required Word package-class
+constants. Bindings, WASM, Python, npm, PyPI, and the incubating family remained
+outside publication authority.
+
+**Deviations from the design plan.** None. The separate release approval was
+given at the exact reviewed SHA after sprint review pass 22 and repeated full
+verification were clean.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `/verify --full` passed at the exact reviewed SHA with all 49 hash
+entries unchanged. The hosted workflow published all seven selected packages
+and created the GitHub release. Every package downloaded independently at
+0.13.1 and reported sole owner `mantissaman (Atul Sharma)`. The remote
+annotated tag dereferences to the reviewed SHA. The GitHub release body is
+byte-identical to the reviewed render with SHA-256
+`d7451f6351767a5a6f9518e7cacc083209c33ca4d5ff264a2f75651d5197c8f1`.
+
+**Contribution inventory.** Empty. No GitHub issue or pull request implements
+the selected stable-family changes, there are no authenticated external
+contributors to notify, and no notification comment was required or posted.
+Issue 69 remains open as a separate paragraph-cache performance follow-up and
+is not part of this release.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat v0.13.1 as the current complete stable
+registry boundary. Preserve the immutable partial v0.13.0 attempt and do not
+move or republish either release tag.

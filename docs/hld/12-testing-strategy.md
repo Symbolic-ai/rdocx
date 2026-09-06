@@ -74,6 +74,14 @@ byte-exact unsupported subtree retention, unsafe relationship graphs, stale
 identities, wrong value kinds, bounds, and atomic failure are focused checks.
 The Python, WASM, and CLI surfaces and the 49-entry hash set remain unchanged.
 
+The glossary, embedded-content, and package-story malformed XML matrices run
+through the single strict XML 1.0 lexical validator in `oxml-core`. A shared
+unit matrix covers declarations, literal characters, names, namespaces,
+duplicate expanded attributes, references, comments, and processing
+instructions. Consumer regressions pin `OxmlError::InvalidValue`,
+`Error::InvalidEmbeddedMutation`, and `Error::Other` mapping, while the
+embedded cases also require byte-identical rollback after rejected mutation.
+
 The Presentation collaboration round-trip gate is
 `modern_comments_replies_sections_and_handout_settings_survive_ordered_mutation_save_and_reopen`.
 It builds a noncanonical package in the existing `rpptx` integration binary,
@@ -436,6 +444,27 @@ blocks, all Word runs, rows, columns, cells, and diagnostics. The integration
 gate serializes and reopens the generated DOCX before comparing its public
 structure. No binary fixture or sample is added, so all 49 hash entries remain
 unchanged.
+
+The MHTML gate stays in the existing `rdocx` HTML unit tests and Word
+integration binary. Source-built MIME cases cover folded headers, root
+selection, Content-ID and Content-Location resolution, every supported transfer
+encoding, unsafe or unresolved resources, image MIME sniffing, 96 DPI sizing,
+all parser and writer ceilings, deterministic CRLF output, source order,
+deduplication, boundary collision avoidance, 76-column base64, and atomic path
+saves. The integration record compares body order, formatting, tables, lists,
+images, links, and ordered loss diagnostics after MHTML reparse and DOCX reopen.
+Default HTML bytes and all 49 hash entries remain unchanged.
+
+The ignored MHTML differential authenticates Microsoft Word 16.104 build
+16.104.25121423 before opening one source-built MHTML document and saving DOCX.
+It compares normalized public structure rather than package bytes. Independent
+mutations to body text, formatting, table content, list identity, hyperlink,
+image, and diagnostic records each fail the same acceptance predicate. Word's
+`Strong` run style is accepted as the normalized representation of source
+`strong` markup. Word drops the source-built contained PNG while rdocx retains
+it under the declared MHTML image contract. The shared predicate compares all
+other normalized fields and pins both sides of that intentional image
+difference, so removing the rdocx image still fails acceptance.
 
 The PDF import regression gate builds PDF objects, content streams, embedded
 Carlito bytes, paths, text, and URI annotations in source. Unit coverage locks
@@ -1223,6 +1252,29 @@ sample identity, dimensions, normalization provenance, or case coverage.
 
 ## The Word corpus
 
+The modern Word package-class gate source-builds DOCX, DOCM, DOTX, and DOTM
+from one valid WordprocessingML graph. ZIP, `Document`, Flat OPC, and converted
+ZIP round trips must retain the exact class, VBA bytes, relationship scopes,
+and unrelated XML payloads. A four-way conversion comparison proves the main
+override is the only package difference and that the live document is
+unchanged. Malformed expanded names, duplicate parts, unsafe paths, wrong data
+kinds, invalid base64, malformed relationship owners, permissive-parser
+lookalikes, and each resource limit fail before publication. Microsoft Word
+16.104 build 16.104.25121423 supplies only the ignored no-repair acceptance
+fact. Source-built assertions remain the structural authority.
+
+The M22 completion gate composes its feature families in one source-built
+macro-enabled template. It authors and deterministically renders OfficeMath,
+rebuilds a dynamic table of contents and field caches, performs sectioned mail
+merge and full document comparison, inventories the retained VBA project, and
+round-trips through Flat OPC. The final package must retain its DOTM identity,
+exact executable bytes, equations, and unsupported XML. Separate focused tests
+cover inherited Flat OPC payload namespaces in qualified names and
+markup-compatibility values, plus the required binary treatment of Transitional
+and Strict alternative-format import targets. The composed predicate inspects
+the rebuilt TOC cache, section boundary, and body and header comparison output
+so each milestone operation is mutation-sensitive.
+
 Five real `.docx` files are stored outside the published crates and fetched by
 `scripts/fetch_docx_corpus.py` into the ignored `corpus/docx` directory. The
 tracked manifest pins one document for each of `business-letter`, `report`,
@@ -1636,6 +1688,13 @@ required, and no binary fixture enters the repository.
 
 ## Binding tests
 
+MHTML remains native Rust only. The existing Python, WASM, and CLI surface
+inventories therefore assert no new method, error, dependency, or feature. The
+exhaustive Python error adapter maps native MHTML and invalid embedded-mutation
+failures to the established generic `RdocxError` class. The
+published-crate riders compile both WASM graphs, deny rustdoc warnings, verify
+the patched workspace package graph, and enforce the 10 MiB archive ceiling.
+
 The parity suites are worth more than any number of Rust-side assertions,
 because the whole value proposition is compatibility:
 
@@ -1735,25 +1794,25 @@ creation uses the same exact 22-package local source patch set as the release
 dry run, so a reviewed version can be checked before its internal dependencies
 exist on crates.io. The patches never enter an archive and upload nothing. The
 docs job and canonical non-fast verification call this same runner.
-The stable 0.12.0 carrier regression pins all eleven inherited version
+The stable 0.13.1 carrier regression pins all eleven inherited version
 carriers, both Python project versions, both rdocx WASM dependency assertions,
 the stable CI package literal, the seven publishable crates, and every stable
 README requirement. It also proves the current incubating workspace carriers
-are 0.9.0 while `rpptx-wasm` remains ineligible for publication.
+are 0.11.0 while `rpptx-wasm` remains ineligible for publication.
 The paired incubating regression pins all sixteen explicit manifests, fifteen
 workspace dependency requirements, sixteen lockfile entries, publication
 flags, README examples, Rust assertions, the CI WASM literal, and the exact
-15-package publication preflight at 0.9.0. It separately proves the stable
-workspace remains at its prepared 0.12.0 boundary and `rpptx-wasm` remains
+15-package publication preflight at 0.11.0. It separately proves the stable
+workspace remains at its prepared 0.13.1 boundary and `rpptx-wasm` remains
 ineligible for publication.
-The current stable shared-family gate packages and verifies
-`rdocx-layout@0.12.0`, requires its normalized archive dependency on
-`oxml-layout@0.9.0` to contain no local path, and compiles the packaged crate
-against the exact shared registry version without an `oxml-layout` patch.
-That registry consumer is excluded from the incubating tag preflight because
-0.9.0 does not exist before its own publication. The stable tag preflight runs
-it only with explicit published-shared authority. The earlier F-X068
-post-publication proof against 0.8.0 remains immutable release evidence.
+The immutable v0.13.0 shared-family gate packages and verifies
+`rdocx-layout@0.13.0`, requires its normalized archive dependency on
+`oxml-layout@0.10.0` to contain no local path, and compiles the packaged crate
+against the exact shared registry version without an `oxml-layout` patch. That
+narrow proof did not cover the facade's newer `oxml-opc` API. Stable 0.13.1
+therefore replaces it with a package-level `rdocx` proof against registry-only
+shared 0.11.0. The earlier F-X068 post-publication proof against 0.8.0 remains
+immutable release evidence.
 A separate recovery gate constructs an isolated registry consumer of exact
 `rdocx-layout@0.10.1` and inspects its unpatched normal dependency tree. It
 requires registry `oxml-layout@0.6.0` and rejects 0.7.0, so the immutable
@@ -1786,11 +1845,33 @@ owner `mantissaman (Atul Sharma)`, immutable annotated tag `rpptx-v0.9.0` at
 reviewed SHA `45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`, byte-identical GitHub
 release notes, selected-family exclusion, and absent `rpptx-wasm@0.9.0`. Its
 selected-family inventory is empty, so it requires no notification.
-The stable 0.12.0 preparation gate pins the exact seven-package family, the
-published shared 0.9.0 dependency boundary, all binding exclusions, and the
-seven-record PR 61 through 64 and Issue 65 through 67 contribution inventory.
-It requires full verification and clean review at one SHA before a separate
-release approval.
+The 0.10.0 release gate verified all 15 incubating registry entries under sole
+owner `mantissaman (Atul Sharma)`, immutable annotated tag
+`rpptx-v0.10.0` at reviewed SHA
+`1e409c553b950eb8029e3e78e39ff775f18ba3ab`, byte-identical GitHub release
+notes, stable-family exclusion, and absent `rpptx-wasm@0.10.0`. Its selected
+diff contains no external issue or pull request, so its reviewed contribution
+inventory is empty and no notification is required.
+The shared 0.11.0 release gate verified all 15 registry entries under sole owner
+`mantissaman (Atul Sharma)`, immutable annotated tag `rpptx-v0.11.0` at reviewed
+SHA `0b6bd622f8a14189d7d1281d011f81319ef8ad2a`, byte-identical GitHub release
+notes, stable-family exclusion, and absent `rpptx-wasm@0.11.0`. Its preparation
+gate pins all 16 incubating carriers, the exact publication set, source and CI
+literals, and the selected notes. Its selected diff contains only the additive
+`oxml-opc` Word main content-type constants required by F-238. The contribution
+inventory is empty, so no notification was required.
+The immutable stable 0.13.0 attempt passed its preparation gate, full
+verification, and clean review at SHA
+`05332b17f481741e7d5ab4e39699c6d1536475af`. Publication then stopped after
+five packages because packaged `rdocx` could not find those constants in
+registry `oxml-opc@0.10.0`. The stable 0.13.1 recovery gate packages and
+compiles `rdocx` against registry-only shared 0.11.0 before publication.
+The completed stable 0.13.1 release gate verified all seven registry entries
+under sole owner `mantissaman (Atul Sharma)`, immutable annotated tag `v0.13.1`
+at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`, byte-identical
+GitHub release notes, incubating-family exclusion, and unpublished binding and
+WASM carriers. Its selected contribution inventory is empty, so no external
+notification was required. Issue 69 remains a separate performance follow-up.
 The failed stable 0.11.0 release gate is not a passing family gate. Its
 annotated tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full
@@ -1838,12 +1919,22 @@ parallel, or failure-swallowing invocation.
 | clippy | `cargo clippy --workspace --all-targets --all-features --exclude rdocx-py --exclude rpptx-py -- -D warnings` |
 | fmt | `cargo fmt --all -- --check` |
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
-| package-oxml-layout | Verify the exact font and legal-file inventory, then build and size-check the verified archive |
+| package-oxml-layout | Verify the exact 24-font and six licence-and-notice-file inventory, then build and size-check the verified archive |
 | msrv | Install exact uv 0.10.2, fetch both pinned corpora, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 with an isolated uv cache and 8 MiB Rust test-thread stack |
 | python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
 | supply-chain | `cargo-deny check` |
 | ci-gate | Always validate that every selected filtered job succeeded and every unselected filtered job was skipped |
 | python-wheels | On manual dispatch or a `py-v*` tag, build six cp39-abi3 wheels for each Python package and one source distribution per package, then install and test every compatible artifact in a fresh environment |
+
+MHTML uses the existing test, clippy, fmt, doc, wasm, hash-harness, and package
+routes. Its Microsoft Word differential remains an explicit ignored local
+oracle because that exact Word build is not available on the Ubuntu CI runners.
+
+The checksum-pinned Pandoc 3.10 installer admits the authenticated
+162,406,703-byte archive under an exact 160 MiB extracted-size ceiling. It skips
+without materializing only the archive's two exact in-root executable aliases,
+`pandoc-lua -> pandoc` and `pandoc-server -> pandoc`, while every other
+symlink, hardlink, device, FIFO, and unsupported member type remains rejected.
 
 The `changes` job routes `test`, `msrv`, `wasm`, `python-bindings`,
 `presentation-fidelity`, `word-fidelity`, `hash-harness`, `supply-chain`, and

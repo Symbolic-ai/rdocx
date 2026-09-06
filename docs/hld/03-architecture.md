@@ -5,8 +5,8 @@
 ```
 crates/
   # format-neutral infrastructure
-  oxml-core          units, xml helpers, entity decoding, raw-XML capture,
-                     core / app / custom properties
+  oxml-core          units, XML helpers and strict lexical validation, entity
+                     decoding, raw-XML capture, core / app / custom properties
   oxml-opc           ZIP and OPC package, relationships, content types
   oxml-media         image and media sniffing, dimensions and DPI, MIME, naming
   oxml-drawing       DrawingML: colour, transforms, geometry, fills, lines,
@@ -97,6 +97,13 @@ not claim a codec decoder.
 content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
+
+Bounded MHTML import and export use that same seam. The private MIME reader and
+writer live in the existing `rdocx` HTML owner, project through the existing
+HTML import path, and use `rdocx-html` only through its existing outbound
+facade. MIME resource indexing, transfer decoding, content-derived boundaries,
+and loss diagnostics add no crate, dependency edge, feature flag, or second
+document model.
 
 **ODT conversion belongs to the `rdocx` facade.** The private importer validates
 the complete bounded ZIP index, parses ODF XML by expanded namespace, and
@@ -378,6 +385,15 @@ properties are namespace aware, while retained XML remains the serialization
 source for every unsupported attribute and subtree. The `rdocx` facade owns
 relationship resolution, story-part identity, staged validation, and package
 commit for form-value and existing building-block replacement.
+
+Strict XML 1.0 lexical policy is shared by these glossary and facade scanners
+through `oxml_core::xml::validate_strict_xml_1_0`. The shared pass owns UTF-8,
+declaration grammar, literal characters, names, namespace bindings, expanded
+attribute uniqueness, references, comments, and processing instruction
+targets. Each format owner keeps its document roots, schema positions,
+declaration placement, doctype policy, semantic whitespace, diagnostic labels,
+and public error variants.
+The validator and its concrete error enum are additive pre-1.0 Rust APIs.
 
 The same grammar crate owns Transitional OfficeMath. One concrete recursive
 tree covers inline and display equations, math runs, fractions, scripts,
@@ -823,33 +839,37 @@ an endnote sharing a number.
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
-incubating version in their manifests and workspace pins. All 15 candidates
-are published coherently at 0.9.0 from immutable annotated tag
-`rpptx-v0.9.0` at reviewed SHA
-`45b4f277ff5fd6d1b032e929c5dcee7fb9d2c550`. The unpublished `rpptx-wasm`
-preparation member is also at 0.9.0 without gaining a crates.io publication
-path. The family includes `oxml-chart` as the format-neutral owner while
+incubating version 0.11.0 in their manifests and workspace pins. The latest
+published coherent family is 0.11.0 from immutable annotated tag
+`rpptx-v0.11.0` at reviewed SHA
+`0b6bd622f8a14189d7d1281d011f81319ef8ad2a`. All 15 registry entries and their
+sole owner are verified, while the `rpptx-wasm` preparation member remains
+unpublished at 0.11.0. The earlier 0.10.0 family remains available. The family
+includes `oxml-chart` as the format-neutral owner while
 retaining `rpptx-chart` as a source-compatible deprecated shim. The released
-`rdocx-*` crates use the separate workspace version. The stable workspace is
-prepared at 0.12.0 across nine internal pins, eleven inherited lockfile
-packages, two Python project versions, and the unpublished `rdocx-wasm`
-package. Its last published exact seven-package crates.io family remains
-0.11.1 from immutable annotated `v0.11.1` tag at reviewed SHA
-`5a850ce9ae6c31f8365594ed2970193266f8b2a6`. The immutable
-v0.11.0 attempt at reviewed SHA
+`rdocx-*` crates use the separate workspace version. The stable workspace, its
+nine internal pins, eleven inherited lockfile packages, two Python project
+versions, and unpublished `rdocx-wasm` package are at 0.13.1. The exact
+seven-package stable crates.io family is published from immutable annotated
+`v0.13.1` tag at reviewed SHA
+`c391d12422c288be5db314bad8338dd08bb47d9a`. Every registry entry and its sole
+owner are verified. The published family depends on shared 0.11.0, while the
+binding and WASM carriers remain unpublished. The immutable v0.13.0 tag at reviewed SHA
+`05332b17f481741e7d5ab4e39699c6d1536475af` published five low-level stable
+packages, then stopped because packaged `rdocx` required the four Word main
+content-type constants added after shared 0.10.0. `rdocx`, `rdocx-cli`, and the
+GitHub release are absent. The immutable v0.11.0 attempt at reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4` published `rdocx-opc` and
 `rdocx-oxml`, then stopped before the other five packages and GitHub release
 when `rdocx-layout` proved it needed `TextSegment.direction` from a newer
-shared registry family. Stable source pins the published shared 0.9.0 boundary,
-while the published stable 0.11.1 archives retain their shared 0.8.0 registry
-requirements. The complete 0.11.1 recovery is published and verified. The
-separately approved cleanup yanked exactly the incomplete
+shared registry family. The complete 0.11.1 recovery is published and verified.
+The separately approved cleanup yanked exactly the incomplete
 `rdocx-opc@0.11.0` and `rdocx-oxml@0.11.0` entries. Complete coherent stable
 releases remain live and unyanked. The v0.11.0 tag remains immutable, and no
-v0.11.0 GitHub release exists. The last published complete stable family is
-0.11.1 until the separately approved `v0.12.0` release completes.
-Earlier immutable registry releases remain available. Version preparation and manifest
-eligibility do not authorize any later publication. `oxml-cli-support` is the
+v0.11.0 GitHub release exists. Earlier immutable registry releases, including
+the complete 0.12.0 family, remain available. Version
+preparation and manifest eligibility do not authorize any later publication.
+`oxml-cli-support` is the
 format-neutral owner of range parsing,
 JSON envelope, and output-path contracts. It has no dependency on either
 document family, while CLI binaries depend inward on it.
@@ -872,6 +892,13 @@ serialization preserves that source class. An explicit output conversion
 changes only a staged content-type override, retains opaque executable parts
 and relationships, and invalidates retained package signature evidence when
 the signed table changes. Binary `.ppt` never enters this OPC path.
+
+The `rdocx` facade owns the corresponding Word package identity and its private
+Flat OPC boundary. `oxml-opc` supplies the four exact Word main content types
+and the existing in-memory package. The facade validates DOCX, DOCM, DOTX, or
+DOTM before building a `Document`, while `flat_opc.rs` projects XML package
+parts directly into that same package owner. No second public package model or
+format dependency edge is introduced.
 
 `rpptx-*` crates carry their own `keywords` and `categories`, because the
 workspace values say `["docx", "word"]` which would be wrong on a presentation
@@ -956,6 +983,13 @@ skipped visible constructs. Input, DOM, projection, text, table, and diagnostic
 limits fail closed before a partial document is published. The importer saves
 and reopens its candidate through the typed Word package model before returning
 it.
+
+`Document::from_mhtml_bytes`, `Document::open_mhtml`,
+`Document::to_mhtml_bytes`, and `Document::save_mhtml` are additive native
+facade methods. Concrete read and write results carry the converted document or
+bytes plus stable diagnostics. Read and write failures use one contextual
+`Error::Mhtml` variant. The paths publish only after bounded conversion,
+MHTML reparse, and DOCX save and reopen checks succeed.
 
 `Document::from_odt_bytes`, `Document::from_odt_bytes_with_limits`, and
 `Document::open_odt` are additive native facade constructors. They return a

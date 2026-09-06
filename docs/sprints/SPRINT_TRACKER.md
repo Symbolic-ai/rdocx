@@ -83,6 +83,7 @@ defended.
 | S66 | M22 | 2 | 2 | 0 | 8 | 2 | Added structured extended field evaluation and deterministic dynamic table of contents rebuilding with pinned Word parity, final page targets, atomic failure, and source-preserving ownership. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and final sprint review pass 3 clean. M22 continues in S67 with advanced automation and comparison |
 | S67 | M22 | 3 | 3 | 0 | 10 | 1 | Added advanced rich mail merge, full-story document comparison, and deterministic character, word, and ignore policies. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, prompt-free Word 16.104 parity, and global sprint review pass 2 clean. M22 continues in S68 with embedded content, forms, and building blocks |
 | S68 | M22, X | 2 | 2 | 0 | 8 | 1 | Added relationship-owned embedded-content and macro inventory, typed legacy forms, and glossary and building-block editing with atomic source preservation. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 2 clean after normalized Pack URI handling was corrected and shared XML validation was filed as F-X077. M22 continues in S69 with modern package and web variants |
+| S69 | M22, X | 8 | 7 | 1 | 11 | 2 | Completed M22 with shared strict XML validation, Flat OPC and modern Word package variants, bounded MHTML interchange, and restored hosted CI release readiness. Published and verified the shared 0.10.0 and 0.11.0 families and the stable 0.13.1 recovery. F-X078 records the immutable partial v0.13.0 attempt. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 23 clean |
 
 ## Completed features
 
@@ -388,6 +389,13 @@ defended.
 | F-235 | S67 | M | 2 | 1 | 2026-09-04 | Added deterministic Word and Character comparison plus left-biased formatting, whitespace, field, comment, and story ignore policies |
 | F-236 | S68 | L | 4 | 1 | 2026-09-05 | Added relationship-owned OLE, ActiveX, and VBA inventory with exact hashes, byte-preserving mutation, and explicit signature policy |
 | F-237 | S68 | L | 4 | 1 | 2026-09-05 | Added typed legacy form editing and relationship-owned glossary, AutoText, and building-block inventory and replacement |
+| F-X077 | S69 | M | 2 | 1 | 2026-09-05 | Consolidated strict XML 1.0 lexical validation in oxml-core while preserving glossary, embedded, and package-story error and rollback contracts |
+| F-239 | S69 | M | 2 | 1 | 2026-09-05 | Added bounded MHTML import and deterministic export with contained resources, stable diagnostics, and pinned Word parity |
+| F-X080 | S69 | S | 1 | 1 | 2026-09-05 | Restored release-ready CI package inventory, bounded authenticated Pandoc extraction, and exhaustive Python error mapping |
+| F-X079 | S69 | S | 1 | 1 | 2026-09-05 | Published and independently verified the exact 15-package rpptx 0.10.0 family with no external contribution notifications |
+| F-238 | S69 | M | 2 | 1 | 2026-09-05 | Added strict Flat OPC import and export plus source-preserving DOCX, DOCM, DOTX, and DOTM package identity and conversion |
+| F-X081 | S69 | S | 1 | 1 | 2026-09-06 | Published and independently verified the exact 15-package rpptx 0.11.0 recovery family required by stable package-class handling |
+| F-X082 | S69 | S | 1 | 1 | 2026-09-06 | Published and independently verified the exact seven-package rdocx 0.13.1 stable recovery family against shared 0.11.0 |
 
 ## Velocity
 
@@ -471,6 +479,7 @@ five working days.
 | S66 | 2 | 2 | 5.00 |
 | S67 | 3 | 1 | 15.00 |
 | S68 | 2 | 1 | 10.00 |
+| S69 | 7 | 2 | 17.50 |
 
 ## Escalation record
 
@@ -542,3 +551,4 @@ was done about it. Empty is the expected state.
 | 2026-09-04 | Sprint estimate variance exceeded 30 percent | S66 | Record 2 actual days against 8 estimated. The strict dependency let F-232 reuse F-231's completed recursive field grammar, while the established Word differential and deterministic layout boundaries concentrated preservation and pagination corrections in one reviewed path. The resulting 5.00 stories per week matches the long-run delivery velocity, so retain the dependency-defined S67 boundary |
 | 2026-09-04 | Sprint estimate variance exceeded 30 percent | S67 | Record 1 actual day against 10 estimated. Isolated workers, the completed field and comparison foundations, and the established Word oracle concentrated review and verification across one integrated automation boundary. The resulting 15.00 stories per week is not a sustainable forecast, so retain the dependency-defined S68 boundary |
 | 2026-09-05 | Sprint estimate variance exceeded 30 percent | S68 | Record 1 actual day against 8 estimated. Two isolated workers reused the completed package-signature, field, and preservation foundations, while exhaustive feature reviews and the integrated sprint review concentrated fail-closed corrections in the owned Word package paths. The resulting 10.00 stories per week is not a sustainable forecast, so retain the dependency-defined S69 boundary |
+| 2026-09-06 | Sprint estimate variance exceeded 30 percent | S69 | Record 2 actual days against 11 estimated. Isolated workers, established package and release workflows, and two recovery releases allowed implementation, review, and publication work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S70 decision boundary |

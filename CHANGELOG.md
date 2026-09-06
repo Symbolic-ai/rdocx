@@ -2,7 +2,194 @@
 
 ## Unreleased
 
-No changes have been recorded since the v0.12.0 preparation.
+No changes have been recorded since the v0.13.1 preparation.
+
+## v0.13.1
+
+### Highlights
+
+The complete stable Word family publishes the M22 Word-depth boundary at
+0.13.1. This patch release recovers from the immutable v0.13.0 attempt, which
+published only five low-level stable packages before registry verification
+stopped the workflow.
+
+### Added
+
+- Publish the complete DOCX, DOCM, DOTX, and DOTM package identity and bounded
+  Flat OPC interchange surface.
+- Publish bounded MHTML import and export with contained image and link
+  resolution, deterministic output, and stable loss diagnostics.
+- Publish the M22 OfficeMath, field, table-of-contents, merge, comparison,
+  executable-content, glossary, and package-story outcomes in one coherent
+  stable family.
+
+### Fixed
+
+- Pin the stable family to the separately published shared OOXML 0.11.0 family,
+  which contains the Word main content-type constants required by `rdocx`.
+- Replace the incomplete v0.13.0 publication boundary with a new coherent patch
+  family without moving its tag or altering its five immutable registry entries.
+
+### Compatibility
+
+The exact seven-package stable crates.io family moves together from the last
+complete 0.12.0 release to 0.13.1. The selected set is `rdocx-opc`,
+`rdocx-oxml`, `rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and
+`rdocx-cli`. It depends on the separately published shared OOXML 0.11.0 family.
+
+The native Rust APIs remain additive pre-1.0 surfaces. The immutable v0.13.0
+attempt and its five published packages remain available as historical release
+evidence. Python, WASM, npm, and PyPI publication authority is unchanged, and
+`rdocx-wasm@0.13.1` is not a crates.io package.
+
+### Contributors
+
+Atul Sharma maintained the release. No external issue or pull request belongs
+to the selected stable-family changes since `v0.12.0`, so this release has no
+external contribution notification.
+
+## rpptx-v0.11.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family moves to 0.11.0 with the Word main
+content-type constants required by modern stable package-class handling.
+`oxml-opc` now names DOCX, DOCM, DOTX, and DOTM main parts through one shared
+vocabulary.
+
+### Added
+
+- Add `WORD_DOCUMENT`, `WORD_DOCUMENT_MACRO_ENABLED`, `WORD_TEMPLATE`, and
+  `WORD_TEMPLATE_MACRO_ENABLED` to `oxml-opc`.
+- Cover the four Word main content-type constants in the shared relationship
+  vocabulary regression.
+
+### Fixed
+
+- Publish the shared contract required by packaged stable `rdocx`, which the
+  immutable shared 0.10.0 archive does not contain.
+
+### Compatibility
+
+The exact 15-package shared OOXML and PowerPoint crates.io family moves
+together from 0.10.0 to 0.11.0. The constants are additive pre-1.0 Rust API.
+The stable Word family remains at 0.13.0 during this selected-family release.
+Its immutable v0.13.0 attempt published five low-level packages before
+registry verification exposed the missing shared constants.
+
+Stable Word, Python, WASM, npm, and PyPI packages are outside this release's
+publication authority. `rpptx-wasm@0.11.0` is not a crates.io package.
+
+### Contributors
+
+Atul Sharma maintained the release. No external issue or pull request belongs
+to the selected family changes since `rpptx-v0.10.0`, so this release has no
+external contribution notification.
+
+## v0.13.0
+
+### Highlights
+
+The stable Word family completes the M22 Word-depth boundary at 0.13.0.
+Documents can author and render OfficeMath, rebuild fields and tables of
+contents, perform advanced mail merge and comparison, inspect executable and
+building-block content, preserve modern package identity, and exchange bounded
+Flat OPC and MHTML through the native Rust facade.
+
+### Added
+
+- Add OfficeMath modeling, authoring, deterministic rendering, and MathML and
+  LaTeX conversion for the supported equation subset.
+- Add field evaluation and updates, dynamic table-of-contents rebuilding,
+  sectioned mail merge, and body, header, footer, footnote, and endnote
+  comparison with explicit revision policy.
+- Add exact VBA, OLE, and ActiveX inventory and mutation, plus glossary,
+  building-block, and package-story access without executing embedded content.
+- Add DOCX, DOCM, DOTX, and DOTM package identity, output-only class
+  conversion, and bounded Flat OPC import and export with payload retention.
+- Add bounded MHTML import and export with contained image and link resolution,
+  deterministic MIME output, and location-aware loss diagnostics.
+
+### Fixed
+
+- Reject malformed XML lexical forms through the shared `oxml-core` validator
+  while preserving each Word owner's established error and rollback surface.
+- Preserve unsupported XML, namespace bindings, relationship ownership,
+  executable bytes, template semantics, and package-signature invalidation
+  evidence through the new editing and interchange paths.
+- Keep unsafe, external, ambiguous, malformed, or over-limit MHTML and Flat OPC
+  resources from publishing a partial document.
+
+### Compatibility
+
+The exact seven-package stable crates.io family moves together from 0.12.0 to
+0.13.0. The selected set is `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`,
+`rdocx-html`, `rdocx-pdf`, `rdocx`, and `rdocx-cli`. It depends on the
+separately published shared OOXML 0.10.0 family.
+
+The native Rust APIs are additive pre-1.0 surfaces. Package-class conversion
+changes only output identity and does not remove macros. Flat OPC output uses a
+deterministic container representation while preserving unsupported inner XML
+and binary payload bytes. MHTML supports the documented contained PNG and JPEG
+resource subset and never fetches external content. Python, WASM, npm, and PyPI
+publication authority is unchanged, and `rdocx-wasm@0.13.0` is not a crates.io
+package.
+
+### Contributors
+
+Atul Sharma maintained the release. No external issue or pull request belongs
+to the selected stable-family changes since `v0.12.0`, so this release has no
+external contribution notification.
+
+## rpptx-v0.10.0
+
+### Highlights
+
+The shared OOXML and PowerPoint family moves to 0.10.0 with one strict XML
+1.0 lexical validator owned by `oxml-core`. Format-specific readers can share
+declaration, character, name, namespace, reference, comment, and processing
+instruction checks while keeping their schema rules and public errors local.
+
+### Added
+
+- Add `XmlLexicalError` and `validate_strict_xml_1_0` to `oxml-core` for
+  bounded format-neutral lexical validation.
+- Add baseline-aware inline groups to `oxml-layout`, allowing shared layout
+  consumers to carry exact ascent and descent without teaching a backend
+  document grammar.
+- Add the Word glossary content type and relationship constants to `oxml-opc`
+  so package owners can resolve glossary parts through shared vocabulary.
+
+### Fixed
+
+- Reject malformed declarations, forbidden XML 1.0 characters, invalid names
+  and namespace bindings, duplicate expanded attributes, invalid references,
+  malformed comments, and reserved processing instruction targets through one
+  reviewed policy.
+
+### Compatibility
+
+The exact 15-package shared OOXML and PowerPoint crates.io family moves
+together from 0.9.0 to 0.10.0. The selected set is `oxml-core`, `oxml-opc`,
+`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`,
+`oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`,
+`rpptx-render`, `rpptx`, and `rpptx-cli`.
+
+The lexical validator and glossary constants are additive pre-1.0 APIs.
+Callers constructing `InlineItem::Group` or `LineItem::Group` literals must
+initialize the new `baseline` field. `None` preserves the established
+top-aligned group behavior.
+
+The stable Word family remains at 0.12.0 and current source now pins shared
+dependencies to 0.10.0. It is outside this release's publication authority.
+Python, WASM, npm, and PyPI publication authority is unchanged, and
+`rpptx-wasm@0.10.0` is not a crates.io package.
+
+### Contributors
+
+Atul Sharma maintained the release. No external issue or pull request belongs
+to the selected family changes since `rpptx-v0.9.0`, so this release has no
+external contribution notification.
 
 ## v0.12.0
 
