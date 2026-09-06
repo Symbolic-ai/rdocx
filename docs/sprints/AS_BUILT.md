@@ -12123,3 +12123,82 @@ passed at `b93560f12ffc76e917bf391d600dabf697466917`.
 **Notes for future sessions.** Treat the two F-X086 commits as complementary
 inputs and review them against current main rather than merging the offered
 branch. Preserve reporter credit on any adopted implementation.
+
+### F-241, Public authoring conformance harness
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `scripts/docx_authoring_conformance.py` now owns one public
+from-scratch DOCX conformance gate and one ignored private-corpus gate. Public
+CI builds an offline temporary consumer whose sole dependency is the public
+`rdocx` facade, then proves package structure, modeled reopen state,
+unsupported diagnostics, opaque-part preservation, and repeated deterministic
+150 DPI rendering. Optional and required private modes validate anonymous P1
+through P5 identities, package graphs, production CLI projections, page
+geometry, and per-case SSIM thresholds without committing customer artifacts.
+
+**Non-obvious choices.** Relationship IDs remain part of the normalized
+package graph, and the temporary Cargo manifest is parsed to reject aliases to
+private packages. Private failures use sanitized aliases only. Source files,
+digests, thresholds, rendered evidence, and identifying content remain in the
+ignored corpus directory.
+
+**Deviations from the design plan.** None. Microscope pass 1 found three
+harness defects involving malformed manifest roots, relationship ID omission,
+and private-package aliases. Mutation tests cover all three remediations, and
+pass 2 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `sanitized_public_authoring_fixture_passes_every_conformance_stage`
+and
+`public_fixture_rejects_base_package_raw_xml_or_private_oxml_dependency`
+passed. The integrated required-private gate passed P1 through P5 after all 44
+reference pages were visually inspected. The integrated `/verify --full` gate
+passed at `dae856078f69792beb0920f3f795b21994bbb16e`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep anonymous private manifests and evidence
+ignored. Later M23 authoring stories should extend the existing single harness
+and public consumer instead of creating parallel conformance owners.
+
+### F-X084, Narrow note-part paragraph cache invalidation
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Retained paragraph reuse now compares base context and note
+parts separately. A footnote-only or endnote-only change keeps ordinary body
+paragraph reads enabled, rejects note-bearing entries, and evicts those entries
+after successful publication. Unaffected entries survive into the next
+transaction, while restart, table, header, footer, and note-page caches retain
+the exact full-context gate.
+
+**Non-obvious choices.** Paragraph note references are checked against the
+active revision view at both read and post-publication retention boundaries.
+The change does not weaken caches whose payloads depend on exact note state,
+and failed layouts still publish no retained state.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `note_part_changes_invalidate_only_referencing_paragraphs` and
+`note_only_invalidation_preserves_unreferenced_entries_for_next_layout` passed.
+The first gate was observed failing against the unmodified implementation with
+zero retained hits and 700 builds. The integrated `/verify --full` gate passed
+at `dae856078f69792beb0920f3f795b21994bbb16e`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep paragraph-only note invalidation separate
+from F-X085 body-identity memoization and F-X086 restart provenance. Those
+stories retain their own performance and correctness gates.

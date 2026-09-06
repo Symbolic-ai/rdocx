@@ -398,6 +398,8 @@ defended.
 | F-X082 | S69 | S | 1 | 1 | 2026-09-06 | Published and independently verified the exact seven-package rdocx 0.13.1 stable recovery family against shared 0.11.0 |
 | F-240 | S70 | L | 4 | 1 | 2026-09-06 | Closed the 85-row modern DOCX capability matrix, anonymous private-corpus requirements, and M23 and M24 roadmap ownership |
 | F-X083 | S70 | S | 1 | 1 | 2026-09-06 | Closed confirmed Issue 67 with release evidence and mapped the three Issue 69 mechanisms to independent credited stories |
+| F-241 | S70 | L | 4 | 1 | 2026-09-07 | Added public-only from-scratch DOCX conformance and ignored required-private package, modeled, privacy, and visual evidence |
+| F-X084 | S70 | M | 2 | 1 | 2026-09-07 | Preserved ordinary paragraph cache reuse across note-only changes while retaining exact gates for note-bearing and related caches |
 
 ## Velocity
 
