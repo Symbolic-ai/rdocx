@@ -92,6 +92,7 @@ than weakening required private-corpus mode.
 
 ## HLD impact
 
+- `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/12-testing-strategy.md`
 - `docs/hld/15-build-and-toolchain.md`
 

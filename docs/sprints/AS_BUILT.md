@@ -12145,13 +12145,17 @@ private packages. Private failures use sanitized aliases only. Source files,
 digests, thresholds, rendered evidence, and identifying content remain in the
 ignored corpus directory.
 
-**Deviations from the design plan.** None. Microscope pass 1 found three
-harness defects involving malformed manifest roots, relationship ID omission,
-and private-package aliases. Mutation tests cover all three remediations, and
-pass 2 reported zero defects, zero smells, and zero nitpicks.
+**Deviations from the design plan.** Post-review verification exposed that the
+completed conformance owner still appeared as an incomplete matrix row. The
+plan's HLD impact list was corrected to include the scope HLD, DOCX-008 now
+records the completed gate, and the owner-integrity regression enforces the
+remaining live owners. Microscope pass 1 found three harness defects involving
+malformed manifest roots, relationship ID omission, and private-package
+aliases. Mutation tests cover all three remediations, and pass 2 reported zero
+defects, zero smells, and zero nitpicks.
 
-**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
-`docs/hld/15-build-and-toolchain.md`.
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/15-build-and-toolchain.md`.
 
 **Tests.** `sanitized_public_authoring_fixture_passes_every_conformance_stage`
 and

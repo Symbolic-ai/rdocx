@@ -212,7 +212,7 @@ bytes remain in the ZIP package.
 | DOCX-005 | properties | core document properties | P | Y | P | P | Y | package | NA | NA | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4355` | F-244 |
 | DOCX-006 | properties | application and custom properties | N | Y | N | N | PV | package | NA | NA | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |
 | DOCX-007 | properties | document variables, compatibility facts, and defaults | N | P | N | N | PV | package | P | P | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |
-| DOCX-008 | conformance | public and private authoring conformance gate | N | NA | NA | NA | NA | all | N | N | N | N | N | N | N | unsupported | boundary:F-241 | F-241 |
+| DOCX-008 | conformance | public and private authoring conformance gate | Y | Y | NA | NA | Y | all | Y | Y | Y | Y | B | B | Y | complete | implementation:`scripts/docx_authoring_conformance.py:388` | - |
 | DOCX-009 | theme-font | themes and theme selection | N | Y | N | N | PV | package | Y | Y | P | P | B | B | B | partial | boundary:F-245 | F-245 |
 | DOCX-010 | theme-font | font table and licensed embedded fonts | N | P | N | N | PV | package | P | P | N | P | B | B | B | partial | boundary:F-245 | F-245 |
 | DOCX-011 | styles | paragraph, character, and table style graphs | P | Y | P | N | Y | package | Y | Y | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4082` | F-246 |
