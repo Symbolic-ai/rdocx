@@ -5582,6 +5582,91 @@ rdocx-layout = "=0.10.1"
             self.assertFalse(readme_doctests.validate_inventory())
         self.assertIn("('oxml-core', 'crates/oxml-core')", errors.getvalue())
 
+    def test_root_readme_capability_claims_match_the_approved_matrix(self) -> None:
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        matrix = (
+            workflow.REPO / "docs/hld/02-scope-and-non-goals.md"
+        ).read_text(encoding="utf-8")
+        self.assertTrue(
+            readme_doctests.validate_root_capability_claims(readme, matrix)
+        )
+        mutations = (
+            readme.replace(
+                "| DOCX package I/O | Open, save, and byte serialization | complete |",
+                "| DOCX package I/O | Open, save, and byte serialization | partial |",
+                1,
+            ),
+            readme.replace("DOCX-001", "DOCX-999", 1),
+            readme.replace("DOCX-001", "DOCX-011", 1),
+            readme.replace(
+                "Open, save, and byte serialization",
+                "Execute every embedded application",
+                1,
+            ),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[:80]):
+                self.assertFalse(
+                    readme_doctests.validate_root_capability_claims(mutation, matrix)
+                )
+
+    def test_root_readme_versions_match_workspace_manifests(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme_doctests.validate_root_versions(readme, metadata))
+        for requirement in (
+            'rdocx = "0.13.1"',
+            'rdocx = { version = "0.13.1", default-features = false }',
+            "cargo install rdocx-cli --version '^0.13.1'",
+        ):
+            with self.subTest(requirement=requirement):
+                mutation = readme.replace(
+                    requirement, requirement.replace("0.13.1", "9.9.9")
+                )
+                self.assertFalse(
+                    readme_doctests.validate_root_versions(mutation, metadata)
+                )
+
+    def test_root_readme_local_link_and_anchor_mutation_matrix(self) -> None:
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme_doctests.validate_local_links(readme))
+        missing_path = readme.replace(
+            "[LICENSE](LICENSE)", "[LICENSE](missing-license)", 1
+        )
+        missing_anchor = readme.replace(
+            "CHANGELOG.md#unreleased", "CHANGELOG.md#missing-anchor", 1
+        )
+        missing_badge_target = readme.replace(
+            "](LICENSE)", "](missing-badge-target)", 1
+        )
+        self.assertFalse(readme_doctests.validate_local_links(missing_path))
+        self.assertFalse(readme_doctests.validate_local_links(missing_anchor))
+        self.assertFalse(readme_doctests.validate_local_links(missing_badge_target))
+
+    def test_root_readme_approved_comparison_evidence_matrix(self) -> None:
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme_doctests.validate_comparison_evidence(readme))
+        unapproved = readme.replace(
+            "https://github.com/bokuweb/docx-rs",
+            "https://example.com/docx-rs",
+            1,
+        )
+        volatile = readme.replace(
+            "Generate and parse DOCX",
+            "Most popular tool to generate and parse DOCX",
+            1,
+        )
+        unsupported = readme.replace(
+            "| python-docx | Create, read, and update DOCX with paragraphs, "
+            "tables, and inline pictures | MIT |",
+            "| python-docx | Execute macros | Proprietary |",
+            1,
+        )
+        self.assertFalse(readme_doctests.validate_comparison_evidence(unapproved))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(volatile))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(unsupported))
+
     def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
         stable_packages = (
             "rdocx-opc",

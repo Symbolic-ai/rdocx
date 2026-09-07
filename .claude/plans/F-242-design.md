@@ -1,6 +1,6 @@
 # F-242, Root README product and capability overview
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S70
 **Size**: M
 **Depends on**: F-240
@@ -51,6 +51,11 @@ assert README classifications against the F-240 matrix. Add mutation-sensitive
 coverage to `scripts/test_sprint_workflow.py`. Keep live external URL checks as
 a focused implementation and review command, not a flaky default CI gate.
 
+The completion review found that the cross-cutting F-X002 entry still described
+the previous six-example gate. The approved contract correction adds the
+backlog HLD to the impact list so that entry states the same three-example gate
+as this plan.
+
 ## Rejected alternatives
 
 - Preserve the current large comparison tables and update their numbers. They
@@ -80,6 +85,7 @@ approved matrix.
 ## HLD impact
 
 - `docs/hld/12-testing-strategy.md`
+- `docs/hld/14-development-backlog.md`
 - `docs/hld/15-build-and-toolchain.md`
 
 ## Risk routing
@@ -95,15 +101,16 @@ not alter generated documents.
 
 ## Implementation checklist
 
-- [ ] Map root product claims to approved F-240 capability ids.
-- [ ] Replace volatile comparison claims with official functional evidence.
-- [ ] Rewrite installation, capability legend, examples, surfaces, and roadmap.
-- [ ] Reduce root Rust examples to three concise compiling cases.
-- [ ] Derive versions and validate local links and anchors in the README gate.
-- [ ] Add matrix alignment and approved-evidence mutation tests.
-- [ ] Run focused official URL checks, doctests, prose, full verification, and
+- [x] Map root product claims to approved F-240 capability ids.
+- [x] Replace volatile comparison claims with official functional evidence.
+- [x] Rewrite installation, capability legend, examples, surfaces, and roadmap.
+- [x] Reduce root Rust examples to three concise compiling cases.
+- [x] Derive versions and validate local links and anchors in the README gate.
+- [x] Add matrix alignment and approved-evidence mutation tests.
+- [x] Run focused official URL checks, doctests, prose, full verification, and
   the unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Update exactly the listed HLD files and leave shared sprint records to the
+  integrator.
 
 ## Open questions
 

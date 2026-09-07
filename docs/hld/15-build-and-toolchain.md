@@ -637,7 +637,11 @@ failures.
 
 **Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
-high-level `rdocx` guide. The other 26 packages use focused crate-local files.
+high-level `rdocx` guide. It has exactly three compiling Rust examples and a
+major-category summary whose stable capability IDs and classifications match
+the modern DOCX matrix. Its alternatives table is bounded to reviewed official
+functional, licence, runtime, and host-dependency evidence. The other 26
+packages use focused crate-local files.
 The documents describe purpose, direct use, neighbouring package boundaries,
 publication status, and an example suited to the actual consumer surface. The
 three deprecated shims direct new consumers to `oxml-opc`, `oxml-pdf`, and
@@ -645,8 +649,12 @@ three deprecated shims direct new consumers to `oxml-opc`, `oxml-pdf`, and
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
 the exact 27-package inventory, validates Rust, shell, Python, and JavaScript
-snippets, and compiles 27 Rust examples across the 21 Rust-library READMEs. It
-discovers each primary and companion rlib from one Cargo build graph and passes
+snippets, derives root stable-family versions from Cargo metadata, checks local
+paths and anchors, and rejects matrix or comparison-evidence drift. Its focused
+network mode resolves the approved official comparison sources during review,
+not in default CI. It compiles 23 Rust examples across the 21 Rust-library
+READMEs. It discovers each primary and companion rlib from one Cargo build
+graph and passes
 them to rustdoc with the repository edition, dependency search path, matching
 external crate bindings, and warnings denied.
 The same runner is part of canonical non-fast verification. It creates each of

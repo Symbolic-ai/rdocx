@@ -1864,19 +1864,30 @@ extensions, invalid range rejection and no partial output. Process ID and an
 atomic counter isolate temporary workspaces across concurrent runs.
 
 All 27 workspace packages explicitly declare one distinct README. The root
-README is the high-level `rdocx` guide. Each crate-local document states the
-package purpose, direct-use guidance, adjacent package relationship,
+README is the high-level `rdocx` guide. Its three Rust examples cover blank
+authoring, read and mutation, and render and export. Its major-category claims
+carry stable IDs and classifications from the 85-row modern DOCX capability
+matrix. The comparison table accepts only the reviewed official evidence for
+python-docx, docx-rs, docx4j, and Aspose.Words, and makes no volatile
+performance, popularity, price, or footprint claims. Each crate-local document
+states the package purpose, direct-use guidance, adjacent package relationship,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
-The compatibility shims direct users to their shared replacements.
-Internal binding and WASM crates state that they are not crates.io packages.
+The compatibility shims direct users to their shared replacements. Internal
+binding and WASM crates state that they are not crates.io packages.
 
 `scripts/readme_doctests.py` validates the exact package-to-README inventory,
 the documented CLI argument names, Python and JavaScript surface names,
 deterministic feature guidance, and matching dependency and import names. It
-builds the applicable libraries with locked dependencies and Cargo JSON
+derives the root dependency and CLI requirements from Cargo metadata, checks
+every root local path and Markdown anchor, and rejects a capability ID or
+classification that differs from the canonical matrix. Comparison evidence is
+an exact official-URL allowlist. Its focused `--check-official-links` mode
+resolves those sources during implementation review, while default CI remains
+network-independent. It builds the applicable libraries with locked
+dependencies and Cargo JSON
 messages, locates each emitted rlib from one package build graph, and invokes
 rustdoc with the 2024 edition, warnings denied, the dependency search path, and
-every matching `--extern` binding. It compiles 27 Rust examples across the 21
+every matching `--extern` binding. It compiles 23 Rust examples across the 21
 Rust-library READMEs. It also creates all 22 publishable archives and
 byte-compares their single packaged README with the declared source. Archive
 creation uses the same exact 22-package local source patch set as the release
