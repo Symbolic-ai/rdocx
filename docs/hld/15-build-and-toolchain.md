@@ -66,6 +66,15 @@ The Word SSIM harness reaches that deterministic path through the production
 trees exist. It cannot alter layout, pagination, font selection, or renderer
 dimensions.
 
+The M23 authoring gate is owned by
+`scripts/docx_authoring_conformance.py`. CI invokes its public mode before the
+workspace test suite. That mode builds an offline temporary consumer with only
+the public `rdocx` dependency and uses the same deterministic 150 DPI render
+path twice. Its local private mode uses exact LibreOffice 26.2.5.2 build
+`cd7284b4cbbfeb507e630c1aac019f4157393acb` and pdftoppm 26.01.0 identities.
+Private source packages, digests, thresholds, and rendered evidence remain in
+the ignored local corpus directory and are never fetched by CI.
+
 The pinned Writer process receives one oracle-only static Thin instance for
 the Noto Sans SC fixture. `hb-subset (HarfBuzz) 13.2.1` instantiates it at
 `wght=100` from the exact checked-in product font with source SHA-256
@@ -628,7 +637,11 @@ failures.
 
 **Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
-high-level `rdocx` guide. The other 26 packages use focused crate-local files.
+high-level `rdocx` guide. It has exactly three compiling Rust examples and a
+major-category summary whose stable capability IDs and classifications match
+the modern DOCX matrix. Its alternatives table is bounded to reviewed official
+functional, licence, runtime, and host-dependency evidence. The other 26
+packages use focused crate-local files.
 The documents describe purpose, direct use, neighbouring package boundaries,
 publication status, and an example suited to the actual consumer surface. The
 three deprecated shims direct new consumers to `oxml-opc`, `oxml-pdf`, and
@@ -636,8 +649,12 @@ three deprecated shims direct new consumers to `oxml-opc`, `oxml-pdf`, and
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
 the exact 27-package inventory, validates Rust, shell, Python, and JavaScript
-snippets, and compiles 27 Rust examples across the 21 Rust-library READMEs. It
-discovers each primary and companion rlib from one Cargo build graph and passes
+snippets, derives root stable-family versions from Cargo metadata, checks local
+paths and anchors, and rejects matrix or comparison-evidence drift. Its focused
+network mode resolves the approved official comparison sources during review,
+not in default CI. It compiles 23 Rust examples across the 21 Rust-library
+READMEs. It discovers each primary and companion rlib from one Cargo build
+graph and passes
 them to rustdoc with the repository edition, dependency search path, matching
 external crate bindings, and warnings denied.
 The same runner is part of canonical non-fast verification. It creates each of

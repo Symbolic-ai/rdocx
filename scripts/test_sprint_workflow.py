@@ -5582,6 +5582,91 @@ rdocx-layout = "=0.10.1"
             self.assertFalse(readme_doctests.validate_inventory())
         self.assertIn("('oxml-core', 'crates/oxml-core')", errors.getvalue())
 
+    def test_root_readme_capability_claims_match_the_approved_matrix(self) -> None:
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        matrix = (
+            workflow.REPO / "docs/hld/02-scope-and-non-goals.md"
+        ).read_text(encoding="utf-8")
+        self.assertTrue(
+            readme_doctests.validate_root_capability_claims(readme, matrix)
+        )
+        mutations = (
+            readme.replace(
+                "| DOCX package I/O | Open, save, and byte serialization | complete |",
+                "| DOCX package I/O | Open, save, and byte serialization | partial |",
+                1,
+            ),
+            readme.replace("DOCX-001", "DOCX-999", 1),
+            readme.replace("DOCX-001", "DOCX-011", 1),
+            readme.replace(
+                "Open, save, and byte serialization",
+                "Execute every embedded application",
+                1,
+            ),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[:80]):
+                self.assertFalse(
+                    readme_doctests.validate_root_capability_claims(mutation, matrix)
+                )
+
+    def test_root_readme_versions_match_workspace_manifests(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme_doctests.validate_root_versions(readme, metadata))
+        for requirement in (
+            'rdocx = "0.13.1"',
+            'rdocx = { version = "0.13.1", default-features = false }',
+            "cargo install rdocx-cli --version '^0.13.1'",
+        ):
+            with self.subTest(requirement=requirement):
+                mutation = readme.replace(
+                    requirement, requirement.replace("0.13.1", "9.9.9")
+                )
+                self.assertFalse(
+                    readme_doctests.validate_root_versions(mutation, metadata)
+                )
+
+    def test_root_readme_local_link_and_anchor_mutation_matrix(self) -> None:
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme_doctests.validate_local_links(readme))
+        missing_path = readme.replace(
+            "[LICENSE](LICENSE)", "[LICENSE](missing-license)", 1
+        )
+        missing_anchor = readme.replace(
+            "CHANGELOG.md#unreleased", "CHANGELOG.md#missing-anchor", 1
+        )
+        missing_badge_target = readme.replace(
+            "](LICENSE)", "](missing-badge-target)", 1
+        )
+        self.assertFalse(readme_doctests.validate_local_links(missing_path))
+        self.assertFalse(readme_doctests.validate_local_links(missing_anchor))
+        self.assertFalse(readme_doctests.validate_local_links(missing_badge_target))
+
+    def test_root_readme_approved_comparison_evidence_matrix(self) -> None:
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme_doctests.validate_comparison_evidence(readme))
+        unapproved = readme.replace(
+            "https://github.com/bokuweb/docx-rs",
+            "https://example.com/docx-rs",
+            1,
+        )
+        volatile = readme.replace(
+            "Generate and parse DOCX",
+            "Most popular tool to generate and parse DOCX",
+            1,
+        )
+        unsupported = readme.replace(
+            "| python-docx | Create, read, and update DOCX with paragraphs, "
+            "tables, and inline pictures | MIT |",
+            "| python-docx | Execute macros | Proprietary |",
+            1,
+        )
+        self.assertFalse(readme_doctests.validate_comparison_evidence(unapproved))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(volatile))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(unsupported))
+
     def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
         stable_packages = (
             "rdocx-opc",
@@ -7951,6 +8036,464 @@ Pedro Assumpcao and the rdocx maintainers.
                     claude=mutated_claude,
                     verify=mutated_verify,
                 )
+
+    def modern_docx_matrix_rows(self, scope: str | None = None) -> list[dict[str, str]]:
+        if scope is None:
+            scope = (
+                workflow.REPO / "docs/hld/02-scope-and-non-goals.md"
+            ).read_text(encoding="utf-8")
+        heading = "## Modern DOCX capability matrix"
+        self.assertEqual(scope.count(heading), 1)
+        section = scope.split(heading, 1)[1].split("\n## ", 1)[0]
+        section_lines = section.splitlines()
+        table_start = next(
+            index
+            for index, line in enumerate(section_lines)
+            if line.startswith("| Capability ID |")
+        )
+        lines = []
+        for line in section_lines[table_start:]:
+            if not line.startswith("|"):
+                break
+            lines.append(line)
+        self.assertGreaterEqual(len(lines), 3)
+        header = tuple(cell.strip() for cell in lines[0].strip("|").split("|"))
+        self.assertEqual(
+            header,
+            (
+                "Capability ID",
+                "Family",
+                "Capability or property",
+                "Create",
+                "Read",
+                "Mutate",
+                "Remove",
+                "Save-reopen",
+                "Story",
+                "Layout",
+                "Render",
+                "Determinism",
+                "Native",
+                "Python",
+                "WASM",
+                "CLI",
+                "Classification",
+                "Evidence",
+                "Owner",
+            ),
+        )
+        rows = []
+        for line in lines[2:]:
+            cells = tuple(cell.strip() for cell in line.strip("|").split("|"))
+            self.assertEqual(len(cells), len(header), line)
+            rows.append(dict(zip(header, cells)))
+        return rows
+
+    def test_modern_docx_capability_matrix_has_closed_classifications_and_evidence(
+        self,
+    ) -> None:
+        rows = self.modern_docx_matrix_rows()
+        self.assertEqual(len(rows), 85)
+        self.assertEqual(
+            [row["Capability ID"] for row in rows],
+            [f"DOCX-{number:03d}" for number in range(1, 86)],
+        )
+        self.assertEqual(
+            len({(row["Family"], row["Capability or property"]) for row in rows}),
+            len(rows),
+        )
+        allowed_classifications = {
+            "complete",
+            "partial",
+            "preserve-only",
+            "unsupported",
+            "permanent-non-goal",
+        }
+        operation_values = {"Y", "P", "PV", "N", "NA"}
+        placement_values = {"body", "related", "all", "package", "NA"}
+        fidelity_values = {"Y", "P", "N", "NA"}
+        binding_values = {"Y", "P", "PV", "B", "N"}
+        evidence_prefixes = ("implementation:", "test:", "boundary:", "non-goal:")
+        for row in rows:
+            capability_id = row["Capability ID"]
+            with self.subTest(capability=capability_id):
+                self.assertIn(row["Classification"], allowed_classifications)
+                for column in ("Create", "Read", "Mutate", "Remove", "Save-reopen"):
+                    self.assertIn(row[column], operation_values, column)
+                self.assertIn(row["Story"], placement_values)
+                for column in ("Layout", "Render", "Determinism"):
+                    self.assertIn(row[column], fidelity_values, column)
+                for column in ("Native", "Python", "WASM", "CLI"):
+                    self.assertIn(row[column], binding_values, column)
+                self.assertTrue(row["Family"])
+                self.assertTrue(row["Capability or property"])
+                self.assertTrue(row["Evidence"].startswith(evidence_prefixes))
+                if row["Classification"] == "preserve-only":
+                    self.assertEqual(row["Create"], "N")
+                    self.assertEqual(row["Read"], "PV")
+                    self.assertEqual(row["Owner"], "-")
+                    self.assertTrue(row["Evidence"].startswith("boundary:"))
+                if row["Classification"] == "permanent-non-goal":
+                    self.assertEqual(row["Owner"], "-")
+                    self.assertTrue(row["Evidence"].startswith("non-goal:"))
+                if row["Classification"] == "complete":
+                    for column in (
+                        "Create",
+                        "Read",
+                        "Mutate",
+                        "Remove",
+                        "Save-reopen",
+                        "Layout",
+                        "Render",
+                        "Determinism",
+                    ):
+                        self.assertIn(row[column], {"Y", "NA"}, column)
+                    for column in ("Native", "Python", "WASM", "CLI"):
+                        self.assertIn(row[column], {"Y", "B"}, column)
+                if row["Classification"] == "partial":
+                    applicable = (
+                        row[column]
+                        for column in (
+                            "Create",
+                            "Read",
+                            "Mutate",
+                            "Remove",
+                            "Save-reopen",
+                            "Layout",
+                            "Render",
+                            "Determinism",
+                            "Native",
+                            "Python",
+                            "WASM",
+                            "CLI",
+                        )
+                    )
+                    self.assertTrue(any(value in {"P", "PV", "N"} for value in applicable))
+                if row["Classification"] == "unsupported":
+                    self.assertEqual(row["Create"], "N")
+
+    def test_every_incomplete_modern_docx_row_has_one_live_owner(self) -> None:
+        rows = self.modern_docx_matrix_rows()
+        backlog = (workflow.REPO / "docs/sprints/BACKLOG.md").read_text(
+            encoding="utf-8"
+        )
+        status_rows = {
+            match.group("fid"): match.group("status")
+            for match in re.finditer(
+                r"^\| (?P<fid>F-(?:X\d+|\d+)) \|[^\n]*\| "
+                r"(?P<status>pending|in-progress|reviewed|done|archived) \|$",
+                backlog,
+                re.MULTILINE,
+            )
+        }
+        incomplete = {"partial", "unsupported"}
+        expected_owners = {f"F-{number:03d}" for number in range(243, 311)}
+        self.assertEqual(
+            {row["Owner"] for row in rows if row["Owner"] != "-"},
+            expected_owners,
+        )
+        for row in rows:
+            capability_id = row["Capability ID"]
+            owner = row["Owner"]
+            with self.subTest(capability=capability_id):
+                if row["Classification"] in incomplete:
+                    self.assertRegex(owner, r"^F-\d{3}$")
+                    self.assertIn(owner, status_rows)
+                    self.assertIn(status_rows[owner], {"pending", "in-progress"})
+                    if row["Evidence"].startswith("boundary:F-"):
+                        self.assertEqual(row["Evidence"], f"boundary:{owner}")
+                else:
+                    self.assertEqual(owner, "-")
+
+    def test_m23_m24_roadmap_has_no_duplicate_or_dangling_story(self) -> None:
+        backlog = (
+            workflow.REPO / "docs/hld/14-development-backlog.md"
+        ).read_text(encoding="utf-8")
+        sprint_plan = (workflow.REPO / "docs/sprints/SPRINT_PLAN.md").read_text(
+            encoding="utf-8"
+        )
+        headings = re.findall(
+            r"^### (F-(?:X\d+|\d{3}[a-z]?)),", backlog, re.MULTILINE
+        )
+        self.assertEqual(len(headings), len(set(headings)))
+        all_stories = set(headings)
+        audited = {f"F-{number:03d}" for number in range(240, 311)}
+        self.assertLessEqual(audited, all_stories)
+
+        placements: dict[str, list[tuple[int, str, str]]] = {
+            fid: [] for fid in audited
+        }
+        sprint_markers = list(
+            re.finditer(r"^#### Sprint S(\d+(?:\.\d+)?),", sprint_plan, re.MULTILINE)
+        )
+        self.assertTrue(sprint_markers)
+        for index, marker in enumerate(sprint_markers):
+            end = (
+                sprint_markers[index + 1].start()
+                if index + 1 < len(sprint_markers)
+                else len(sprint_plan)
+            )
+            section = sprint_plan[marker.start() : end]
+            for fid, title, size in re.findall(
+                r"^\| (F-\d{3}) \| ([^|]+?) \| ([SML]) \|$",
+                section,
+                re.MULTILINE,
+            ):
+                if fid in placements:
+                    placements[fid].append((int(marker.group(1)), title.strip(), size))
+        self.assertTrue(all(value for value in placements.values()))
+        self.assertTrue(all(len(value) == 1 for value in placements.values()))
+        self.assertEqual(
+            {sprint for value in placements.values() for sprint, _, _ in value},
+            set(range(70, 81)),
+        )
+
+        backlog_rows: dict[str, list[tuple[int, str, str, str]]] = {
+            fid: [] for fid in audited
+        }
+        sprint_backlog = (workflow.REPO / "docs/sprints/BACKLOG.md").read_text(
+            encoding="utf-8"
+        )
+        for fid, title, sprint, size, status in re.findall(
+            r"^\| (F-\d{3}) \| ([^|]+?) \| S(\d+) \| ([SML]) \| "
+            r"(pending|in-progress|reviewed|done|archived) \|$",
+            sprint_backlog,
+            re.MULTILINE,
+        ):
+            if fid in backlog_rows:
+                backlog_rows[fid].append((int(sprint), title.strip(), size, status))
+        self.assertTrue(all(len(value) == 1 for value in backlog_rows.values()))
+        hld_rows = {
+            fid: (title.strip(), size)
+            for fid, title, size in re.findall(
+                r"^### (F-\d{3}), (.+?) \(([SML])\)$", backlog, re.MULTILINE
+            )
+            if fid in audited
+        }
+        self.assertEqual(set(hld_rows), audited)
+        for fid in audited:
+            sprint, title, size = placements[fid][0]
+            backlog_sprint, backlog_title, backlog_size, status = backlog_rows[fid][0]
+            self.assertEqual((backlog_sprint, backlog_title, backlog_size), (sprint, title, size))
+            self.assertEqual(hld_rows[fid], (title, size))
+            self.assertNotEqual(status, "archived")
+
+        dependencies: dict[str, set[str]] = {}
+        for fid in audited:
+            start = backlog.index(f"### {fid},")
+            next_heading = backlog.find("\n### F-", start + 1)
+            block = backlog[start : next_heading if next_heading != -1 else len(backlog)]
+            match = re.search(r"\*\*Depends on\*\*: (.+?)\.\n", block, re.DOTALL)
+            dependency_text = match.group(1) if match else ""
+            expanded: set[str] = set()
+            for first, last in re.findall(
+                r"F-(\d{3}) through F-(\d{3})", dependency_text
+            ):
+                self.assertLessEqual(first, last)
+                expanded.update(
+                    f"F-{number:03d}" for number in range(int(first), int(last) + 1)
+                )
+            without_ranges = re.sub(
+                r"F-\d{3} through F-\d{3}", "", dependency_text
+            )
+            expanded.update(re.findall(r"F-(?:X\d+|\d{3})", without_ranges))
+            self.assertLessEqual(expanded, all_stories, fid)
+            dependencies[fid] = expanded
+            sprint = placements[fid][0][0]
+            for dependency in expanded & audited:
+                self.assertLessEqual(
+                    placements[dependency][0][0], sprint, (fid, dependency)
+                )
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(fid: str) -> None:
+            self.assertNotIn(fid, visiting, f"dependency cycle at {fid}")
+            if fid in visited:
+                return
+            visiting.add(fid)
+            for dependency in dependencies[fid] & audited:
+                visit(dependency)
+            visiting.remove(fid)
+            visited.add(fid)
+
+        for fid in sorted(audited):
+            visit(fid)
+        self.assertEqual(visited, audited)
+
+    def test_private_corpus_summary_contains_no_private_identity(self) -> None:
+        testing = (
+            workflow.REPO / "docs/hld/12-testing-strategy.md"
+        ).read_text(encoding="utf-8")
+        heading = "## The private from-scratch DOCX conformance corpus"
+        section = testing.split(heading, 1)[1].split("\n## ", 1)[0]
+        aliases = re.findall(r"^\| (P[1-5]) \| (.+) \|$", section, re.MULTILINE)
+        self.assertEqual([alias for alias, _ in aliases], ["P1", "P2", "P3", "P4", "P5"])
+        summary = "\n".join(value for _, value in aliases)
+        forbidden = (
+            r"[A-Fa-f0-9]{32,}",
+            r"https?://",
+            r"[\w.+-]+@[\w.-]+",
+            r"<\/?[A-Za-z][^>]*>",
+            r"(?i)\.docx\b|reference[-_ ]?0?[1-5]\b|sha-?256|digest",
+        )
+        for pattern in forbidden:
+            self.assertIsNone(re.search(pattern, summary), pattern)
+        tracked_private = subprocess.run(
+            ("git", "ls-files", "--", "corpus/private-docx"),
+            cwd=workflow.REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(tracked_private, "")
+        tracked_docx = subprocess.run(
+            ("git", "ls-files", "--", "*.docx", "*.DOCX"),
+            cwd=workflow.REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(tracked_docx, "")
+
+    def test_modern_docx_matrix_covers_public_facade_and_modeled_property_families(
+        self,
+    ) -> None:
+        rows = self.modern_docx_matrix_rows()
+        matrix_families = {row["Family"] for row in rows}
+        expected_families = {
+            "package",
+            "properties",
+            "theme-font",
+            "styles",
+            "numbering",
+            "sections",
+            "stories",
+            "tables",
+            "paragraph",
+            "run",
+            "fields",
+            "forms",
+            "collaboration",
+            "drawing",
+            "extensions",
+            "accessibility",
+            "conformance",
+            "operations",
+        }
+        self.assertEqual(matrix_families, expected_families)
+
+        oxml_family = {
+            "borders": "paragraph",
+            "comments": "collaboration",
+            "comments_extended": "collaboration",
+            "content_control": "forms",
+            "document": "sections",
+            "drawing": "drawing",
+            "footnotes": "stories",
+            "glossary": "stories",
+            "header_footer": "stories",
+            "math": "run",
+            "numbering": "numbering",
+            "placeholder": "fields",
+            "properties": "properties",
+            "revision": "collaboration",
+            "settings": "properties",
+            "styles": "styles",
+            "table": "tables",
+            "text": "run",
+            "theme": "theme-font",
+        }
+        oxml_dir = workflow.REPO / "crates/rdocx-oxml/src"
+        modeled_modules = {
+            path.stem
+            for path in oxml_dir.glob("*.rs")
+            if path.stem not in {"lib", "namespace", "shared"}
+        }
+        self.assertEqual(modeled_modules, set(oxml_family))
+        self.assertLessEqual(set(oxml_family.values()), matrix_families)
+
+        facade_family = {
+            "building_block": "stories",
+            "comments": "collaboration",
+            "comparison": "collaboration",
+            "content_control": "forms",
+            "document": "package",
+            "embedded": "extensions",
+            "epub": "operations",
+            "error": "operations",
+            "field": "fields",
+            "html": "operations",
+            "math": "run",
+            "odt": "operations",
+            "oxml_chart": "drawing",
+            "oxml_core": "operations",
+            "oxml_opc": "package",
+            "oxml_pdf": "operations",
+            "paragraph": "paragraph",
+            "rdocx_layout": "operations",
+            "rdocx_oxml": "run",
+            "redaction": "operations",
+            "revision": "collaboration",
+            "rtf": "operations",
+            "run": "run",
+            "style": "styles",
+            "svg": "drawing",
+            "table": "tables",
+        }
+        facade = (workflow.REPO / "crates/rdocx/src/lib.rs").read_text(
+            encoding="utf-8"
+        )
+        exported_modules = set(re.findall(r"^pub use ([a-z0-9_]+)::", facade, re.MULTILINE))
+        exported_modules.update(re.findall(r"^pub mod ([a-z0-9_]+);", facade, re.MULTILINE))
+        self.assertEqual(exported_modules, set(facade_family))
+        self.assertLessEqual(set(facade_family.values()), matrix_families)
+        for binding in (
+            "crates/rdocx-py/src/document.rs",
+            "crates/rdocx-wasm/src/lib.rs",
+            "crates/rdocx-cli/src/main.rs",
+        ):
+            self.assertTrue((workflow.REPO / binding).is_file(), binding)
+
+
+class DocxAuthoringConformanceTests(unittest.TestCase):
+    def test_public_harness_is_wired_to_ci_and_private_artifacts_stay_ignored(
+        self,
+    ) -> None:
+        script = workflow.REPO / "scripts/docx_authoring_conformance.py"
+        self.assertTrue(script.is_file(), "missing DOCX authoring conformance harness")
+
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertEqual(
+            ci.count("python3 scripts/docx_authoring_conformance.py --public"),
+            1,
+        )
+
+        tracked = subprocess.run(
+            (
+                "git",
+                "ls-files",
+                "--",
+                "corpus/private-docx",
+                "*.docx",
+                "*.DOCX",
+            ),
+            cwd=workflow.REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(tracked, "")
+
+    def test_authoring_harness_self_tests_privacy_and_mode_failures(self) -> None:
+        completed = subprocess.run(
+            ("python3", "scripts/docx_authoring_conformance.py", "--self-test"),
+            cwd=workflow.REPO,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":

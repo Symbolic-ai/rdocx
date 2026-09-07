@@ -849,6 +849,8 @@ pub struct Engine {
     #[cfg(test)]
     pending_paragraph_cache_peak_bytes: usize,
     paragraph_cache_reads_enabled: bool,
+    paragraph_cache_notes_match: bool,
+    retained_context_matches_full: bool,
     table_cache: VecDeque<TableCacheEntry>,
     table_cache_bytes: usize,
     table_cache_hits: usize,
@@ -885,6 +887,12 @@ pub struct Engine {
     last_shared_block_counts: (usize, usize),
     #[cfg(test)]
     page_layout_invocations: usize,
+    #[cfg(test)]
+    last_restart_identity_computations: usize,
+    #[cfg(test)]
+    last_restart_identity_memo_peak_slots: usize,
+    #[cfg(test)]
+    last_restart_identity_memo_peak_bytes: usize,
 }
 
 #[derive(Clone, PartialEq)]
@@ -915,6 +923,7 @@ struct ReusableEngineContext {
 #[cfg(test)]
 thread_local! {
     static RETAINED_CONTEXT_FONT_BYTES_COMPARED: Cell<usize> = const { Cell::new(0) };
+    static RESTART_BODY_IDENTITY_COMPUTATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn retained_context_fonts_match(
@@ -938,6 +947,16 @@ fn reset_retained_context_font_bytes_compared() {
 #[cfg(test)]
 fn retained_context_font_bytes_compared() -> usize {
     RETAINED_CONTEXT_FONT_BYTES_COMPARED.get()
+}
+
+#[cfg(test)]
+fn reset_restart_body_identity_computations() {
+    RESTART_BODY_IDENTITY_COMPUTATIONS.set(0);
+}
+
+#[cfg(test)]
+fn restart_body_identity_computations() -> usize {
+    RESTART_BODY_IDENTITY_COMPUTATIONS.get()
 }
 
 impl ReusableEngineContext {
@@ -1010,6 +1029,23 @@ impl ReusableEngineContext {
         caller_font_aliases: &[(String, String)],
         has_wrapping_drawing: bool,
     ) -> bool {
+        self.matches_input_after_unchanged_fonts_ignoring_notes(
+            input,
+            caller_font_aliases,
+            has_wrapping_drawing,
+        ) && self.notes_match(input)
+    }
+
+    fn notes_match(&self, input: &LayoutInput) -> bool {
+        self.footnotes == input.footnotes && self.endnotes == input.endnotes
+    }
+
+    fn matches_input_after_unchanged_fonts_ignoring_notes(
+        &self,
+        input: &LayoutInput,
+        caller_font_aliases: &[(String, String)],
+        has_wrapping_drawing: bool,
+    ) -> bool {
         let sections_match = self.sections.iter().eq(input
             .document
             .body
@@ -1040,8 +1076,6 @@ impl ReusableEngineContext {
             && self.chart_color_map == input.chart_color_map
             && self.core_properties == input.core_properties
             && self.hyperlink_urls == input.hyperlink_urls
-            && self.footnotes == input.footnotes
-            && self.endnotes == input.endnotes
             && self.theme == input.theme
             && self.caller_font_aliases == caller_font_aliases
             && self.background_xml == input.document.background_xml
@@ -1143,36 +1177,74 @@ enum RestartBodyEntry {
 }
 
 impl RestartBodyEntry {
+    #[cfg(test)]
     fn matches(&self, content: &BodyContent) -> bool {
+        if !self.fingerprint_matches(content) {
+            return false;
+        }
+        self.identity_matches(restart_body_identity(content).as_deref())
+    }
+
+    fn matches_memoized(
+        &self,
+        content: &BodyContent,
+        index: usize,
+        memo: &mut RestartBodyIdentityMemo,
+    ) -> bool {
+        if !self.fingerprint_matches(content) {
+            return false;
+        }
+        self.identity_matches(memo.identity(index, content))
+    }
+
+    #[cfg(test)]
+    fn fingerprint(&self) -> u64 {
+        match self {
+            Self::Paragraph { fingerprint, .. } | Self::Table { fingerprint, .. } => *fingerprint,
+        }
+    }
+
+    fn fingerprint_matches(&self, content: &BodyContent) -> bool {
         match (self, content) {
-            (
-                Self::Paragraph {
-                    fingerprint,
-                    identity,
-                    ..
-                },
-                BodyContent::Paragraph(paragraph),
-            ) => {
+            (Self::Paragraph { fingerprint, .. }, BodyContent::Paragraph(paragraph)) => {
                 *fingerprint == paragraph_fingerprint(paragraph)
-                    && restart_body_identity(content).as_ref() == Some(identity)
             }
-            (
-                Self::Table {
-                    fingerprint,
-                    identity,
-                    ..
-                },
-                BodyContent::Table(table),
-            ) => {
+            (Self::Table { fingerprint, .. }, BodyContent::Table(table)) => {
                 *fingerprint == table_fingerprint(table)
-                    && restart_body_identity(content).as_ref() == Some(identity)
             }
             _ => false,
         }
     }
 
+    fn identity_matches(&self, candidate: Option<&[u8]>) -> bool {
+        match self {
+            Self::Paragraph { identity, .. } | Self::Table { identity, .. } => {
+                candidate == Some(identity.as_slice())
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn for_content(content: &BodyContent, view: RevisionView) -> Option<Self> {
         let identity = restart_body_identity(content)?;
+        Self::for_content_with_identity(content, view, identity)
+    }
+
+    fn for_content_memoized(
+        content: &BodyContent,
+        view: RevisionView,
+        index: usize,
+        memo: &mut RestartBodyIdentityMemo,
+    ) -> Option<Self> {
+        let identity = memo.take_identity(index, content)?;
+        Self::for_content_with_identity(content, view, identity)
+    }
+
+    fn for_content_with_identity(
+        content: &BodyContent,
+        view: RevisionView,
+        identity: Vec<u8>,
+    ) -> Option<Self> {
         match content {
             BodyContent::Paragraph(paragraph) => {
                 let mut note_references = paragraph_note_references(paragraph, view);
@@ -1214,7 +1286,100 @@ impl RestartBodyEntry {
     }
 }
 
+enum RestartBodyIdentitySlot {
+    NotComputed,
+    Unserializable,
+    Computed(Vec<u8>),
+}
+
+struct RestartBodyIdentityMemo {
+    slots: Vec<RestartBodyIdentitySlot>,
+    #[cfg(test)]
+    computations: usize,
+    #[cfg(test)]
+    populated_slots: usize,
+    #[cfg(test)]
+    retained_bytes: usize,
+    #[cfg(test)]
+    peak_retained_bytes: usize,
+}
+
+impl RestartBodyIdentityMemo {
+    fn new(len: usize) -> Self {
+        Self {
+            slots: std::iter::repeat_with(|| RestartBodyIdentitySlot::NotComputed)
+                .take(len)
+                .collect(),
+            #[cfg(test)]
+            computations: 0,
+            #[cfg(test)]
+            populated_slots: 0,
+            #[cfg(test)]
+            retained_bytes: 0,
+            #[cfg(test)]
+            peak_retained_bytes: 0,
+        }
+    }
+
+    fn compute(&mut self, index: usize, content: &BodyContent) {
+        let Some(slot) = self.slots.get(index) else {
+            return;
+        };
+        if !matches!(slot, RestartBodyIdentitySlot::NotComputed) {
+            return;
+        }
+        let identity = restart_body_identity(content);
+        #[cfg(test)]
+        {
+            self.computations = self.computations.saturating_add(1);
+            self.populated_slots = self.populated_slots.saturating_add(1);
+        }
+        let replacement = match identity {
+            Some(identity) => {
+                #[cfg(test)]
+                {
+                    self.retained_bytes = self.retained_bytes.saturating_add(identity.capacity());
+                    self.peak_retained_bytes = self.peak_retained_bytes.max(self.retained_bytes);
+                }
+                RestartBodyIdentitySlot::Computed(identity)
+            }
+            None => RestartBodyIdentitySlot::Unserializable,
+        };
+        if let Some(slot) = self.slots.get_mut(index) {
+            *slot = replacement;
+        }
+    }
+
+    fn identity(&mut self, index: usize, content: &BodyContent) -> Option<&[u8]> {
+        self.compute(index, content);
+        match self.slots.get(index)? {
+            RestartBodyIdentitySlot::Computed(identity) => Some(identity),
+            RestartBodyIdentitySlot::NotComputed | RestartBodyIdentitySlot::Unserializable => None,
+        }
+    }
+
+    fn take_identity(&mut self, index: usize, content: &BodyContent) -> Option<Vec<u8>> {
+        self.compute(index, content);
+        let RestartBodyIdentitySlot::Computed(identity) = self.slots.get_mut(index)? else {
+            return None;
+        };
+        #[cfg(test)]
+        {
+            self.retained_bytes = self.retained_bytes.saturating_sub(identity.capacity());
+        }
+        Some(std::mem::take(identity))
+    }
+
+    #[cfg(test)]
+    fn computations(&self) -> usize {
+        self.computations
+    }
+}
+
 fn restart_body_identity(content: &BodyContent) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    RESTART_BODY_IDENTITY_COMPUTATIONS
+        .set(RESTART_BODY_IDENTITY_COMPUTATIONS.get().saturating_add(1));
     if !matches!(content, BodyContent::Paragraph(_) | BodyContent::Table(_)) {
         return None;
     }
@@ -1359,6 +1524,8 @@ impl Engine {
             #[cfg(test)]
             pending_paragraph_cache_peak_bytes: 0,
             paragraph_cache_reads_enabled: false,
+            paragraph_cache_notes_match: false,
+            retained_context_matches_full: false,
             table_cache: VecDeque::new(),
             table_cache_bytes: 0,
             table_cache_hits: 0,
@@ -1395,6 +1562,12 @@ impl Engine {
             last_shared_block_counts: (0, 0),
             #[cfg(test)]
             page_layout_invocations: 0,
+            #[cfg(test)]
+            last_restart_identity_computations: 0,
+            #[cfg(test)]
+            last_restart_identity_memo_peak_slots: 0,
+            #[cfg(test)]
+            last_restart_identity_memo_peak_bytes: 0,
         }
     }
 
@@ -1489,18 +1662,25 @@ impl Engine {
             self.header_footer_cache.clear();
             self.header_footer_cache_bytes = 0;
         }
-        let context_matches = !font_context_changed
+        let base_context_matches = !font_context_changed
             && self
                 .paragraph_cache_context
                 .as_ref()
                 .is_some_and(|context| {
-                    context.matches_input_after_unchanged_fonts(
+                    context.matches_input_after_unchanged_fonts_ignoring_notes(
                         input,
                         &self.caller_font_aliases,
                         has_wrapping_drawing,
                     )
                 });
-        self.paragraph_cache_reads_enabled = context_matches;
+        let notes_match = self
+            .paragraph_cache_context
+            .as_ref()
+            .is_some_and(|context| context.notes_match(input));
+        let context_matches = base_context_matches && notes_match;
+        self.paragraph_cache_reads_enabled = base_context_matches;
+        self.paragraph_cache_notes_match = notes_match;
+        self.retained_context_matches_full = context_matches;
         self.header_footer_cache_reads_enabled = context_matches;
         self.pending_paragraph_cache = Some(VecDeque::new());
         self.pending_paragraph_cache_bytes = 0;
@@ -1517,9 +1697,17 @@ impl Engine {
             self.pending_header_footer_cache_peak_entries = 0;
             self.pending_header_footer_cache_peak_bytes = 0;
             self.page_layout_invocations = 0;
+            self.last_restart_identity_computations = 0;
+            self.last_restart_identity_memo_peak_slots = 0;
+            self.last_restart_identity_memo_peak_bytes = 0;
+            reset_restart_body_identity_computations();
         }
 
         let result = self.layout_transaction(input, sources, has_wrapping_drawing);
+        #[cfg(test)]
+        {
+            self.last_restart_identity_computations = restart_body_identity_computations();
+        }
         let pending = self.pending_paragraph_cache.take().unwrap_or_default();
         let pending_tables = self.pending_table_cache.take().unwrap_or_default();
         let pending_header_footers = self.pending_header_footer_cache.take().unwrap_or_default();
@@ -1527,11 +1715,22 @@ impl Engine {
         self.pending_table_cache_bytes = 0;
         self.pending_header_footer_cache_bytes = 0;
         self.paragraph_cache_reads_enabled = false;
+        self.paragraph_cache_notes_match = false;
+        self.retained_context_matches_full = false;
         self.header_footer_cache_reads_enabled = false;
         if result.is_ok() {
-            if !context_matches {
+            if !base_context_matches {
                 self.paragraph_cache.clear();
                 self.paragraph_cache_bytes = 0;
+            } else if !notes_match {
+                self.paragraph_cache.retain(|entry| {
+                    paragraph_note_references(&entry.key.paragraph, entry.key.revision_view)
+                        .is_empty()
+                });
+                self.paragraph_cache_bytes =
+                    self.paragraph_cache.iter().map(|entry| entry.bytes).sum();
+            }
+            if !context_matches {
                 self.table_cache.clear();
                 self.table_cache_bytes = 0;
                 self.header_footer_cache.clear();
@@ -1597,7 +1796,7 @@ impl Engine {
         sources: Option<&SourceRegistry>,
         document_wraps: bool,
     ) -> Result<LayoutResult> {
-        let retained_context_matches = self.paragraph_cache_reads_enabled;
+        let retained_context_matches = self.retained_context_matches_full;
         let styles = &input.styles;
         let mut num_state = NumberingState::new();
         let media = MediaRegistry::new(&input.images);
@@ -1841,9 +2040,10 @@ impl Engine {
                         .iter()
                         .flat_map(|entry| entry.note_references().iter().copied())
                         .eq(body_note_references(input))
-                    && (sources.is_none() || cache.body.len() == input.document.body.content.len())
             });
         let reusable_restart = restart_eligible && reusable_restart_record;
+        let mut restart_identity_memo =
+            RestartBodyIdentityMemo::new(input.document.body.content.len());
         let body_unchanged = reusable_restart_record
             && self.restart_cache.as_ref().is_some_and(|cache| {
                 cache.body.len() == input.document.body.content.len()
@@ -1853,7 +2053,10 @@ impl Engine {
                         .content
                         .iter()
                         .zip(&cache.body)
-                        .all(|(content, retained)| retained.matches(content))
+                        .enumerate()
+                        .all(|(index, (content, retained))| {
+                            retained.matches_memoized(content, index, &mut restart_identity_memo)
+                        })
             });
         let first_changed = reusable_restart.then(|| {
             let cache = self.restart_cache.as_ref().expect("restart cache exists");
@@ -1863,7 +2066,10 @@ impl Engine {
                 .content
                 .iter()
                 .zip(&cache.body)
-                .position(|(current, previous)| !previous.matches(current))
+                .enumerate()
+                .position(|(index, (current, previous))| {
+                    !previous.matches_memoized(current, index, &mut restart_identity_memo)
+                })
                 .unwrap_or_else(|| input.document.body.content.len().min(cache.body.len()))
         });
         let common_suffix = reusable_restart.then(|| {
@@ -1873,9 +2079,12 @@ impl Engine {
                 .body
                 .content
                 .iter()
+                .enumerate()
                 .rev()
                 .zip(cache.body.iter().rev())
-                .take_while(|(current, previous)| previous.matches(current))
+                .take_while(|((index, current), previous)| {
+                    previous.matches_memoized(current, *index, &mut restart_identity_memo)
+                })
                 .count()
         });
         let restart_checkpoint = first_changed.and_then(|first_changed| {
@@ -1888,37 +2097,44 @@ impl Engine {
                 .find(|checkpoint| checkpoint.next_block_index <= first_changed)
                 .copied()
         });
-        let tail_source = restart_checkpoint.and_then(|restart| {
-            let cache = self.restart_cache.as_ref().expect("restart cache exists");
-            let common_suffix = common_suffix.expect("reusable restart has an exact suffix");
-            let new_tail = input.document.body.content.len() - common_suffix;
-            let old_tail = cache.body.len() - common_suffix;
-            let block_delta = new_tail as isize - old_tail as isize;
-            cache
-                .checkpoints
-                .iter()
-                .find(|checkpoint| {
-                    checkpoint.next_block_index >= old_tail
-                        && checkpoint
-                            .next_block_index
-                            .checked_add_signed(block_delta)
-                            .is_some_and(|next| next > restart.next_block_index)
-                })
-                .copied()
-                .map(|old| {
-                    (
-                        paginator::PaginationCheckpoint {
-                            next_block_index: old
+        let tail_reusable = sources.is_none()
+            || self
+                .restart_cache
+                .as_ref()
+                .is_some_and(|cache| cache.body.len() == input.document.body.content.len());
+        let tail_source = restart_checkpoint
+            .filter(|_| tail_reusable)
+            .and_then(|restart| {
+                let cache = self.restart_cache.as_ref().expect("restart cache exists");
+                let common_suffix = common_suffix.expect("reusable restart has an exact suffix");
+                let new_tail = input.document.body.content.len() - common_suffix;
+                let old_tail = cache.body.len() - common_suffix;
+                let block_delta = new_tail as isize - old_tail as isize;
+                cache
+                    .checkpoints
+                    .iter()
+                    .find(|checkpoint| {
+                        checkpoint.next_block_index >= old_tail
+                            && checkpoint
                                 .next_block_index
                                 .checked_add_signed(block_delta)
-                                .expect("common suffix block index remains in range"),
-                            page_count: old.page_count,
-                            next_header_page_number: old.next_header_page_number,
-                        },
-                        old,
-                    )
-                })
-        });
+                                .is_some_and(|next| next > restart.next_block_index)
+                    })
+                    .copied()
+                    .map(|old| {
+                        (
+                            paginator::PaginationCheckpoint {
+                                next_block_index: old
+                                    .next_block_index
+                                    .checked_add_signed(block_delta)
+                                    .expect("common suffix block index remains in range"),
+                                page_count: old.page_count,
+                                next_header_page_number: old.next_header_page_number,
+                            },
+                            old,
+                        )
+                    })
+            });
 
         let (mut pages, mut outlines, mut checkpoints) = if restart_eligible {
             let mut recorded = paginator::paginate_shared_single_section_recorded(
@@ -2261,7 +2477,12 @@ impl Engine {
                         let old_index = old_len.saturating_sub(new_len - index);
                         return old_body.and_then(|body| body.get(old_index)).cloned();
                     }
-                    RestartBodyEntry::for_content(content, input.revision_view)
+                    RestartBodyEntry::for_content_memoized(
+                        content,
+                        input.revision_view,
+                        index,
+                        &mut restart_identity_memo,
+                    )
                 })
                 .collect::<Vec<_>>();
             let body_complete = body.len() == new_len;
@@ -2307,6 +2528,12 @@ impl Engine {
         } else {
             self.restart_cache = None;
         }
+        #[cfg(test)]
+        {
+            self.last_restart_identity_memo_peak_slots = restart_identity_memo.populated_slots;
+            self.last_restart_identity_memo_peak_bytes = restart_identity_memo.peak_retained_bytes;
+        }
+        drop(restart_identity_memo);
         let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
         result.diagnostics = diagnostics;
         result.structure = Some(structure);
@@ -2348,7 +2575,10 @@ impl Engine {
         }
 
         let fingerprint = paragraph_fingerprint(paragraph);
+        let notes_allow_reuse = self.paragraph_cache_notes_match
+            || paragraph_note_references(paragraph, input.revision_view).is_empty();
         if self.paragraph_cache_reads_enabled
+            && notes_allow_reuse
             && let Some(entry) = self.paragraph_cache.iter().find(|entry| {
                 entry.fingerprint == fingerprint
                     && entry.key.paragraph == *paragraph
@@ -2463,6 +2693,7 @@ impl Engine {
 
         let fingerprint = table_fingerprint(table);
         if self.paragraph_cache_reads_enabled
+            && self.retained_context_matches_full
             && let Some(entry) = self.table_cache.iter().find(|entry| {
                 entry.fingerprint == fingerprint
                     && entry.key.table == *table
@@ -2564,6 +2795,19 @@ impl Engine {
     #[cfg(test)]
     fn page_layout_invocation_count(&self) -> usize {
         self.page_layout_invocations
+    }
+
+    #[cfg(test)]
+    fn restart_identity_memo_computations(&self) -> usize {
+        self.last_restart_identity_computations
+    }
+
+    #[cfg(test)]
+    fn restart_identity_memo_peak(&self) -> (usize, usize) {
+        (
+            self.last_restart_identity_memo_peak_slots,
+            self.last_restart_identity_memo_peak_bytes,
+        )
     }
 
     fn publish_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
@@ -10341,7 +10585,95 @@ mod tests {
             .layout(&input)
             .expect("fresh changed note layout succeeds");
         assert_layout_results_equal(&warm_note, &fresh_note);
-        assert_eq!(engine.paragraph_cache_counts(), (699, 1_401));
+        assert_eq!(engine.paragraph_cache_counts(), (1_398, 702));
+    }
+
+    #[test]
+    fn note_part_changes_invalidate_only_referencing_paragraphs() {
+        use rdocx_oxml::footnotes::{CT_Footnote, NoteType};
+
+        for stream in [NoteStream::Footnote, NoteStream::Endnote] {
+            for operation in ["text", "insertion", "deletion"] {
+                let mut input = note_reference_cache_input(stream, operation == "deletion");
+                let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+                engine
+                    .layout_with_provenance(&input)
+                    .expect("cold note layout succeeds");
+                let before = engine.paragraph_cache_counts();
+
+                let notes = match stream {
+                    NoteStream::Footnote => input.footnotes.as_mut().expect("footnotes exist"),
+                    NoteStream::Endnote => input.endnotes.as_mut().expect("endnotes exist"),
+                };
+                match operation {
+                    "text" => {
+                        notes.footnotes[0].paragraphs[0].runs[0].content = vec![RunContent::Text(
+                            rdocx_oxml::text::CT_Text::new("changed note text"),
+                        )];
+                    }
+                    "insertion" => {
+                        let mut paragraph = CT_P::new();
+                        paragraph.add_run("inserted note text");
+                        notes.footnotes.push(CT_Footnote {
+                            id: 2,
+                            note_type: NoteType::Normal,
+                            paragraphs: vec![paragraph],
+                        });
+                    }
+                    "deletion" => {
+                        notes.footnotes.pop().expect("second note exists");
+                    }
+                    _ => unreachable!(),
+                }
+
+                let warm = engine
+                    .layout_with_provenance(&input)
+                    .expect("warm changed-note layout succeeds");
+                let fresh = Engine::new_deterministic()
+                    .expect("bundled fonts load")
+                    .layout_with_provenance(&input)
+                    .expect("fresh changed-note layout succeeds");
+                assert_layout_results_equal(&warm.0, &fresh.0);
+                assert_eq!(warm.1, fresh.1);
+
+                let after = engine.paragraph_cache_counts();
+                assert!(
+                    after.0.saturating_sub(before.0) >= 698,
+                    "{stream:?} {operation} retained too few ordinary hits: {before:?} -> {after:?}"
+                );
+                assert!(
+                    after.1.saturating_sub(before.1) <= 2,
+                    "{stream:?} {operation} rebuilt too many paragraphs: {before:?} -> {after:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn note_only_invalidation_preserves_unreferenced_entries_for_next_layout() {
+        let mut input = note_reference_cache_input(NoteStream::Footnote, false);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("cold note layout succeeds");
+
+        input.footnotes.as_mut().expect("footnotes exist").footnotes[0].paragraphs[0].runs[0]
+            .content = vec![RunContent::Text(rdocx_oxml::text::CT_Text::new(
+            "changed note text",
+        ))];
+        engine.layout(&input).expect("changed-note layout succeeds");
+
+        set_body_paragraph_text(&mut input, 350, "ordinary paragraph changed next");
+        let before = engine.paragraph_cache_counts();
+        let warm = engine
+            .layout(&input)
+            .expect("third warm layout succeeds after note edit");
+        let fresh = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout(&input)
+            .expect("third fresh layout succeeds after note edit");
+        assert_layout_results_equal(&warm, &fresh);
+        let after = engine.paragraph_cache_counts();
+        assert_eq!(after.0.saturating_sub(before.0), 699);
+        assert_eq!(after.1.saturating_sub(before.1), 1);
     }
 
     #[test]
@@ -11180,6 +11512,106 @@ mod tests {
             );
             assert!(!retained.matches(&BodyContent::Paragraph(candidate)));
         }
+    }
+
+    fn restart_identity_memo_input() -> LayoutInput {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        for index in 0..715 {
+            if (index + 1) % 50 == 0 {
+                input
+                    .document
+                    .body
+                    .add_table(safe_table(&format!("Table block {index}")));
+            } else {
+                let mut paragraph = CT_P::new();
+                paragraph.add_run(&format!("Body block {index}"));
+                input.document.body.add_paragraph(paragraph);
+            }
+        }
+        input
+    }
+
+    #[test]
+    fn restart_body_identities_are_computed_at_most_once_per_layout() {
+        let mut input = restart_identity_memo_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("initial layout succeeds");
+
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[357] else {
+            panic!("edited block is a paragraph")
+        };
+        paragraph.add_run(" changed");
+        let warm = engine.layout(&input).expect("warm edited layout succeeds");
+        assert!(engine.restart_identity_memo_computations() <= 715);
+
+        let mut fresh_engine = Engine::new_deterministic().expect("bundled fonts load");
+        let fresh = fresh_engine
+            .layout(&input)
+            .expect("fresh edited layout succeeds");
+        assert!(fresh_engine.restart_identity_memo_computations() <= 715);
+        assert_layout_results_equal(&warm, &fresh);
+    }
+
+    #[test]
+    fn memoized_restart_identity_keeps_exact_bytes_authoritative_after_fingerprint_match() {
+        let mut paragraph = CT_P::new();
+        let mut run = CT_R::new("representation");
+        run.properties = Some(CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..CT_RPr::default()
+        });
+        paragraph.runs.push(run);
+        let retained = RestartBodyEntry::for_content(
+            &BodyContent::Paragraph(paragraph.clone()),
+            RevisionView::Accepted,
+        )
+        .expect("paragraph has restart identity");
+        paragraph.runs[0]
+            .properties
+            .as_mut()
+            .expect("run properties exist")
+            .language = Some("en-GB".to_owned());
+        let candidate = BodyContent::Paragraph(paragraph);
+        let mut memo = RestartBodyIdentityMemo::new(1);
+
+        let BodyContent::Paragraph(candidate_paragraph) = &candidate else {
+            unreachable!("candidate is a paragraph")
+        };
+        assert_eq!(
+            retained.fingerprint(),
+            paragraph_fingerprint(candidate_paragraph)
+        );
+        assert!(!retained.matches_memoized(&candidate, 0, &mut memo));
+        assert_eq!(memo.computations(), 1);
+
+        let mut changed_text = candidate_paragraph.clone();
+        changed_text.add_run("fingerprint miss");
+        let changed_text = BodyContent::Paragraph(changed_text);
+        let mut fingerprint_miss_memo = RestartBodyIdentityMemo::new(1);
+        assert!(!retained.matches_memoized(&changed_text, 0, &mut fingerprint_miss_memo));
+        assert_eq!(fingerprint_miss_memo.computations(), 0);
+    }
+
+    #[test]
+    fn restart_identity_memo_transient_memory_is_bounded() {
+        let input = restart_identity_memo_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("initial layout succeeds");
+        engine.layout(&input).expect("warm layout succeeds");
+
+        let (slots, bytes) = engine.restart_identity_memo_peak();
+        assert!(slots <= input.document.body.content.len());
+        let retained_identity_bytes = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained")
+            .body
+            .iter()
+            .map(RestartBodyEntry::bytes)
+            .sum::<usize>();
+        assert!(bytes <= retained_identity_bytes);
+        assert_restart_cache_within_aggregate(&engine);
     }
 
     #[test]
@@ -12166,6 +12598,168 @@ mod tests {
             .expect("fresh undo");
         assert_layout_results_equal(&warm_undo, &fresh_undo);
         assert_layout_results_equal(&warm_undo, &original);
+    }
+
+    #[test]
+    fn sourced_insert_and_delete_restart_instead_of_repaginating() {
+        let mut input = ordinary_prose_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (primed, primed_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart state");
+        assert!(engine.restart_cache.is_some());
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("ordinary inserted paragraph");
+        input
+            .document
+            .body
+            .content
+            .insert(640, BodyContent::Paragraph(inserted));
+        let (warm_insert, warm_insert_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced insertion");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "sourced insertion recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_insert, fresh_insert_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced insertion");
+        assert_layout_results_equal(&warm_insert, &fresh_insert);
+        assert_eq!(warm_insert_sources, fresh_insert_sources);
+
+        input.document.body.content.remove(640);
+        let (warm_delete, warm_delete_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced deletion");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "sourced deletion recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        assert_layout_results_equal(&warm_delete, &primed);
+        assert_eq!(warm_delete_sources, primed_sources);
+    }
+
+    #[test]
+    fn sourced_length_change_never_reuses_shifted_tail_pages() {
+        let mut input = ordinary_prose_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (primed, _) = engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart state");
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("inserted paragraph shifts every later source path");
+        input
+            .document
+            .body
+            .content
+            .insert(640, BodyContent::Paragraph(inserted));
+        let (warm, warm_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced insertion");
+        let shared_indices = warm
+            .pages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, page)| {
+                primed
+                    .pages
+                    .iter()
+                    .any(|old| Arc::ptr_eq(page, old))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert!(!shared_indices.is_empty(), "the safe prefix must be reused");
+        assert!(
+            shared_indices.len() < warm.pages.len(),
+            "the shifted tail must contain rebuilt pages"
+        );
+        assert_eq!(
+            shared_indices,
+            (0..shared_indices.len()).collect::<Vec<_>>(),
+            "only a contiguous unchanged prefix may retain old page identity"
+        );
+        let (fresh, fresh_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced insertion");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(warm_sources, fresh_sources);
+    }
+
+    #[test]
+    fn sourced_enter_merge_and_selection_delete_restart_from_safe_prefix() {
+        let mut input = ordinary_prose_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart state");
+
+        set_body_paragraph_text(&mut input, 640, "ordinary prose before enter");
+        let mut after_enter = CT_P::new();
+        after_enter.add_run("ordinary prose after enter");
+        input
+            .document
+            .body
+            .content
+            .insert(641, BodyContent::Paragraph(after_enter));
+        let (warm_enter, warm_enter_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced Enter");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "Enter recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_enter, fresh_enter_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced Enter");
+        assert_layout_results_equal(&warm_enter, &fresh_enter);
+        assert_eq!(warm_enter_sources, fresh_enter_sources);
+
+        set_body_paragraph_text(
+            &mut input,
+            640,
+            "ordinary prose before enter ordinary prose after enter",
+        );
+        input.document.body.content.remove(641);
+        let (warm_merge, warm_merge_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced adjacent merge");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "adjacent merge recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_merge, fresh_merge_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced adjacent merge");
+        assert_layout_results_equal(&warm_merge, &fresh_merge);
+        assert_eq!(warm_merge_sources, fresh_merge_sources);
+
+        set_body_paragraph_text(&mut input, 638, "selection delete joined boundary");
+        input.document.body.content.drain(639..643);
+        let (warm_selection, warm_selection_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced selection delete");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "selection delete recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_selection, fresh_selection_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced selection delete");
+        assert_layout_results_equal(&warm_selection, &fresh_selection);
+        assert_eq!(warm_selection_sources, fresh_selection_sources);
     }
 
     #[test]

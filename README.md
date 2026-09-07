@@ -6,336 +6,196 @@
 [![License: MIT/Apache-2.0](https://img.shields.io/crates/l/rdocx.svg)](LICENSE)
 [![MSRV: 1.93](https://img.shields.io/badge/MSRV-1.93-blue.svg)](https://blog.rust-lang.org/2026/01/09/Rust-1.93.0.html)
 
-A pure Rust DOCX library — create, read, and modify Word documents programmatically. Additionally, render pixel-identical PDFs and export to HTML and Markdown, all from the same document object. No LibreOffice, no unoconv, no C dependencies.
+rdocx is a Rust toolkit for creating, reading, editing, preserving, and
+rendering Word documents. The same document object can produce DOCX, PDF, PNG,
+HTML, and Markdown without shelling out to Microsoft Word or LibreOffice.
 
-## Why rdocx?
+The public API deliberately distinguishes what can be authored today from what
+can only be read or preserved. The summary below is backed by the
+[canonical modern DOCX capability matrix](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix).
+The matrix is the authority when this overview and an individual property need
+different levels of detail.
 
-Most DOCX solutions in the ecosystem shell out to LibreOffice or wrap C/C++ libraries. rdocx is written entirely in Rust, so it compiles to a single binary with zero runtime dependencies. It works everywhere Rust does — including WASM.
+## Capability status
 
-The core focus is **DOCX**: a high-level, python-docx-inspired API for building and editing Word documents with paragraphs, tables, images, headers/footers, styles, and lists. On top of that, rdocx includes a built-in layout engine that paginates your document and can render it to **PDF** (with font subsetting, bookmarks, and selectable text) or export to **HTML** and **Markdown** — so you get faithful output in every format without leaving Rust.
+The classifications have precise meanings:
 
-## DOCX Features
+- **complete** means the public facade supports the matrix operations and the
+  modeled state survives save and reopen.
+- **partial** means part of the property family is public. The matrix names the
+  owner of the remaining work.
+- **unsupported** means the current facade cannot perform the operation. The
+  matrix names its owner.
+- **preserve-only** means input is retained without a modeled authoring
+  surface.
+- **permanent-non-goal** means the operation is intentionally outside the
+  product boundary.
 
-- **Read & write** DOCX files with a high-level API
-- **Tables** with merged cells, borders, shading, and content-based column sizing
-- **Images** — inline and anchored, with header/footer background images
-- **Headers & footers** with first-page support and per-section overrides
-- **Styles** — paragraph and character styles, theme color resolution
-- **Lists** with automatic numbering ID management
-- **Custom lists** with independent definitions, per-level number formats, and
-  configurable starting values
-- **Composable links and line breaks** inside paragraphs and table cells
-- **Template engine** with placeholder replacement (plain text and regex)
-- **TOC generation** with internal hyperlinks and dot-leader tabs
-- **Document merging** with style deduplication and numbering remapping
+Reading, mutation, and preservation are separate claims. A partial row does not
+mean that every property in that family is publicly creatable.
 
-## Output Formats
+| Major category | Current public boundary | Classification | Matrix |
+|---|---|---|---|
+| DOCX package I/O | Open, save, and byte serialization | complete | [DOCX-001](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Styles | Paragraph, character, and table style graphs have a bounded public surface | partial | [DOCX-011](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Numbering | Lists expose a useful subset of levels and instances | partial | [DOCX-012](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Headers and footers | Per-section default, first, and even stories have a bounded surface | partial | [DOCX-017](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Tables | Grids, widths, borders, and layout mode are partly public | partial | [DOCX-022](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Paragraphs | Ordinary text, alignment, spacing, indentation, and pagination | complete | [DOCX-029](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Runs | Fonts, emphasis, color, language, and ordinary inline content | complete | [DOCX-031](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Fields | Simple and complex field construction has a bounded surface | partial | [DOCX-045](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Forms | Content control creation and lifecycle are partly public | partial | [DOCX-052](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Collaboration | Comments, replies, people, and modern metadata are partly public | partial | [DOCX-060](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Drawings | Picture anchors, wrapping, crop, transforms, and effects are partly public | partial | [DOCX-064](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Equations | Transitional OfficeMath authoring and conversion | complete | [DOCX-079](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Unknown safe producer XML | Retained byte for byte when it is not modeled | preserve-only | [DOCX-080](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Legacy Word formats | Binary DOC, Word 2003 XML, and pre-OOXML payloads | permanent-non-goal | [DOCX-082](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Executable payloads | VBA, ActiveX, OLE, add-in, and embedded application execution | permanent-non-goal | [DOCX-083](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
 
-- **PDF** — built-in layout engine with text shaping (rustybuzz), Unicode line breaking, multi-section pagination, font subsetting, ToUnicode CMap, bookmarks, and images
-- **HTML** — semantic mapping from OOXML with CSS styling and base64-embedded images
-- **Markdown** — GFM-compatible output with pipe tables and formatting
-- **PNG** — page-to-image rendering via tiny-skia rasterizer
-
-## Extras
-
-- **WASM support** via standalone `rdocx-wasm` crate
-- **CLI tool** (`rdocx-cli`) — inspect, convert, diff, replace, validate, render
+The [active backlog](docs/sprints/BACKLOG.md) records the owner and status of
+every partial or unsupported row. The
+[current sprint](docs/sprints/CURRENT_SPRINT.md) is the shorter delivery view.
 
 ## Installation
+
+Most Rust applications need only the facade:
 
 ```toml
 [dependencies]
 rdocx = "0.13.1"
 ```
 
-Bundled metric-compatible fonts are always available through the deterministic
-rendering methods. The default feature adds system font discovery. Disable it
-when an application should use only deterministic bundled fonts:
+Bundled metric-compatible fonts are always available through deterministic
+rendering. The default feature also discovers system fonts. Disable default
+features when an application must use only the bundled set:
 
 ```toml
 [dependencies]
 rdocx = { version = "0.13.1", default-features = false }
 ```
 
-## Quick Start
+The workspace requires Rust 1.93 or newer and uses edition 2024.
+
+## Examples
 
 ### Create a document
 
 ```rust,no_run
 use rdocx::{Document, Length};
 
-let mut doc = Document::new();
+let mut document = Document::new();
+document.add_paragraph("Quarterly report");
 
-doc.add_paragraph("Hello, World!");
+let mut summary = document.add_paragraph("");
+summary.add_run("Status: ").bold(true);
+summary.add_run("approved");
 
-let mut para = doc.add_paragraph("");
-para.add_run("Bold text").bold(true);
-para.add_run(" and ");
-para.add_run("italic text").italic(true);
+let mut table = document.add_table(1, 2);
+assert!(table.set_column_width(0, Length::inches(2.0)));
+assert!(table.set_column_width(1, Length::inches(4.0)));
 
-doc.add_table(3, 4);
-
-doc.save("output.docx").unwrap();
+document.save("report.docx")?;
+# Ok::<(), rdocx::Error>(())
 ```
 
-### Read a document
-
-```rust,no_run
-use rdocx::Document;
-
-let doc = Document::open("report.docx").unwrap();
-
-for para in doc.paragraphs() {
-    println!("{}", para.text());
-}
-
-for table in doc.tables() {
-    for row_index in 0..table.row_count() {
-        let Some(row) = table.row(row_index) else {
-            continue;
-        };
-        for cell_index in 0..row.cell_count() {
-            let Some(cell) = row.cell(cell_index) else {
-                continue;
-            };
-            print!("{}\t", cell.text());
-        }
-        println!();
-    }
-}
-```
-
-### Convert to PDF
-
-```rust,no_run
-use rdocx::Document;
-
-let doc = Document::open("report.docx").unwrap();
-doc.save_pdf("report.pdf").unwrap();
-
-// Or get bytes directly
-let pdf_bytes = doc.to_pdf().unwrap();
-```
-
-### Convert to HTML / Markdown
-
-```rust,no_run
-use rdocx::Document;
-
-let doc = Document::open("report.docx").unwrap();
-
-let html = doc.to_html();
-let markdown = doc.to_markdown();
-```
-
-### Template replacement
+### Read and update a document
 
 ```rust,no_run
 use rdocx::Document;
 use std::collections::HashMap;
 
-let mut doc = Document::open("template.docx").unwrap();
+let mut document = Document::open("template.docx")?;
+for paragraph in document.paragraphs() {
+    println!("{}", paragraph.text());
+}
 
 let mut replacements = HashMap::new();
-replacements.insert("{{name}}", "Jane Doe");
-replacements.insert("{{date}}", "2025-01-15");
-doc.replace_all(&replacements);
-
-doc.save("filled.docx").unwrap();
-```
-
-### Merge documents
-
-```rust,no_run
-use rdocx::{Document, SectionBreak};
-
-let mut doc = Document::open("part1.docx").unwrap();
-let part2 = Document::open("part2.docx").unwrap();
-
-doc.append_with_break(&part2, SectionBreak::NextPage);
-doc.save("combined.docx").unwrap();
-```
-
-### Custom lists, links, and fixed table columns
-
-```rust,no_run
-use rdocx::{Document, Length, ListLevel};
-
-let mut doc = Document::new();
-let list_id = doc.add_list_definition(&[
-    ListLevel::bullet(),
-    ListLevel::decimal().start(3),
-]);
-
-doc.add_paragraph("A bullet").set_numbering(list_id, 0);
-doc.add_paragraph("Starts at three")
-    .set_numbering(list_id, 1);
-
-let relationship_id = doc.add_hyperlink_relationship("https://docs.rs/rdocx");
-let mut paragraph = doc.add_paragraph("");
-paragraph
-    .add_hyperlink("rdocx API documentation", &relationship_id)
-    .bold(true);
-paragraph.add_line_break();
-paragraph.add_run("Continue on a new line.");
-
-let mut table = doc.add_table(1, 2);
-assert!(table.set_column_width(0, Length::inches(2.0)));
-assert!(table.set_column_width(1, Length::inches(3.0)));
-
-doc.save("authoring.docx")?;
+replacements.insert("{{status}}", "Approved");
+document.replace_all(&replacements);
+document.save("approved.docx")?;
 # Ok::<(), rdocx::Error>(())
 ```
 
-## Stable crate family
+### Render and export
 
-Most applications should depend only on `rdocx`. The companion crates expose
-lower-level boundaries for tools that already own parsed WordprocessingML or
-layout data.
+```rust,no_run
+use rdocx::Document;
 
-| Crate | Use it when |
+let document = Document::open("report.docx")?;
+document.save_pdf("report.pdf")?;
+let first_page_png = document.render_page_to_png_deterministic(0, 150.0)?;
+let html = document.to_html();
+let markdown = document.to_markdown();
+
+assert!(first_page_png.as_ref().is_some_and(|png| !png.is_empty()));
+assert!(!html.is_empty());
+assert!(!markdown.is_empty());
+# Ok::<(), rdocx::Error>(())
+```
+
+## Surfaces
+
+| Surface | Boundary |
 |---|---|
-| [`rdocx`](https://docs.rs/rdocx) | Creating, reading, editing, or rendering complete DOCX packages |
-| [`rdocx-oxml`](https://docs.rs/rdocx-oxml) | Working directly with typed WordprocessingML elements |
-| [`rdocx-layout`](https://docs.rs/rdocx-layout) | Paginating an already assembled `LayoutInput` |
-| [`rdocx-html`](https://docs.rs/rdocx-html) | Converting parsed Word content to HTML or Markdown |
-| [`rdocx-cli`](https://crates.io/crates/rdocx-cli) | Inspecting, converting, validating, or rendering documents from a shell |
-| [`rdocx-opc`](https://docs.rs/rdocx-opc) | Maintaining legacy imports while migrating to `oxml-opc` |
-| [`rdocx-pdf`](https://docs.rs/rdocx-pdf) | Maintaining legacy imports while migrating to `oxml-pdf` |
+| [rdocx](https://docs.rs/rdocx) | Native Rust facade for complete DOCX packages, authoring, conversion, and rendering |
+| [rdocx-oxml](https://docs.rs/rdocx-oxml) | Typed WordprocessingML for callers that already own the lower-level model |
+| [rdocx-layout](https://docs.rs/rdocx-layout) | Word flow layout for callers that already own layout input |
+| [rdocx-html](https://docs.rs/rdocx-html) | HTML and Markdown conversion from parsed Word content |
+| [rdocx-cli](crates/rdocx-cli/README.md) | Shell commands for inspection, conversion, validation, rendering, replacement, and diffing |
+| [rdocx-py](crates/rdocx-py/README.md) | Python binding with a deliberately narrower facade |
+| [rdocx-wasm](crates/rdocx-wasm/README.md) | Browser and JavaScript binding with a deliberately narrower facade |
+
+The lower-level compatibility shims and all workspace crates are described in
+their crate-local READMEs. The
+[binding specification](docs/hld/10-bindings-spec.md#native-word-facade-stability)
+defines where Python, WASM, and CLI intentionally expose less than native Rust.
 
 ## CLI
 
-Install the CLI:
+Install the CLI version that belongs to the same stable family:
 
 ```sh
-cargo install rdocx-cli
+cargo install rdocx-cli --version '^0.13.1'
 ```
 
+Common commands:
+
 ```sh
-# Inspect document structure
 rdocx inspect report.docx
-
-# Extract plain text
 rdocx text report.docx
-
-# Convert to PDF
 rdocx convert report.docx --to pdf -o report.pdf
-
-# Convert to HTML or Markdown
 rdocx convert report.docx --to html -o report.html
 rdocx convert report.docx --to md -o report.md
-
-# Find and replace text
 rdocx replace report.docx --placeholder "Draft" --value "Final" -o final.docx
-
-# Diff two documents
-rdocx diff v1.docx v2.docx
+rdocx diff before.docx after.docx
 ```
 
-## How rdocx Compares
+## Evidence-based alternatives
 
-### vs. Python Libraries
+This table limits itself to functionality, license, language runtime, and host
+dependencies stated by each project's official documentation. It makes no
+performance, popularity, or footprint claim.
 
-| | rdocx | python-docx | docx2pdf | pypandoc |
+| Library | Officially documented functionality | License | Runtime or host boundary | Official evidence |
 |---|---|---|---|---|
-| Create DOCX | Yes | Yes | -- | -- |
-| Read DOCX | Yes | Yes | -- | -- |
-| DOCX to PDF | Yes (built-in) | No | Via MS Word | Via Pandoc + LaTeX |
-| DOCX to HTML | Yes (built-in) | No | No | Yes (lossy) |
-| DOCX to Markdown | Yes (built-in) | No | No | Yes (lossy) |
-| Layout engine | Yes | None | Delegates to Word | Delegates to LaTeX |
-| External runtime | **None** | None (but no PDF) | **MS Word required** | **Pandoc + LaTeX** |
-| Install size | **4 MB binary** | ~5 MB | ~31 KB + Word | 300-650 MB |
-| Runs in Docker / CI | Yes | Yes (no PDF) | No | Yes (huge image) |
-| WASM / browser | Yes | No | No | No |
+| python-docx | Create, read, and update DOCX with paragraphs, tables, and inline pictures | MIT | Python with declared Python dependencies | [Quickstart](https://python-docx.readthedocs.io/en/latest/user/quickstart.html), [project](https://github.com/python-openxml/python-docx) |
+| docx-rs | Generate and parse DOCX from Rust, WebAssembly, and JavaScript | MIT | Rust, with optional WebAssembly and JavaScript surfaces | [project](https://github.com/bokuweb/docx-rs) |
+| docx4j | Create, edit, save, and convert Open XML packages | Apache-2.0 | Java with one selected JAXB implementation | [project](https://github.com/plutext/docx4j) |
+| Aspose.Words | Create, modify, convert, render, and print documents without Office automation | Commercial license or limited evaluation | Java without Microsoft Word as a host application | [product overview](https://docs.aspose.com/words/java/product-overview/), [licensing](https://docs.aspose.com/words/java/licensing/) |
 
-**python-docx** is the most popular DOCX library in any language (~14M PyPI downloads/month), but it has **zero conversion capabilities** — no PDF, no HTML, no Markdown. Users who need PDF must bolt on a separate tool like LibreOffice (~500 MB) or a commercial API. rdocx gives you the same read/write API *plus* built-in conversion in a single 4 MB binary.
+## Roadmap and status
 
-### vs. Java Libraries
-
-| | rdocx | Apache POI | docx4j | Aspose.Words |
-|---|---|---|---|---|
-| Create DOCX | Yes | Yes | Yes | Yes |
-| Read DOCX | Yes | Yes | Yes | Yes |
-| PDF (built-in) | Yes | No | Via FOP (limited) | Yes (high fidelity) |
-| HTML (built-in) | Yes | No | Yes | Yes |
-| License | MIT / Apache-2.0 | Apache-2.0 | Apache-2.0 | **$1,199+** |
-| Total dependency size | **4 MB** | 18-28 MB + JRE | 50-80 MB + JRE | 14 MB + JRE |
-| Typical memory (moderate doc) | **10-50 MB** | 256 MB - 1 GB | 256 MB - 2 GB | 50-300 MB |
-| Cold start | **< 10 ms** | 2-5 sec | 2-5 sec | 2-5 sec |
-| Runtime required | None | JVM (~200 MB) | JVM (~200 MB) | JVM (~200 MB) |
-
-Java solutions carry the JVM's baseline overhead: 50-100 MB of RAM before a single document is loaded, and 2-5 second cold starts from class loading. Apache POI has **no built-in PDF** at all. docx4j's FOP pipeline is acknowledged by its own maintainer as limited in fidelity. Aspose has excellent PDF output but costs $1,199+ per developer. rdocx delivers comparable capabilities as a zero-dependency native binary.
-
-### vs. Other Rust Crates
-
-| | rdocx | docx-rs | docx-rust | ooxmlsdk |
-|---|---|---|---|---|
-| Create DOCX | Yes | Yes | Yes | Low-level |
-| Read DOCX | Yes | Yes | Yes | Low-level |
-| Round-trip preservation | Yes | Limited | Limited | N/A |
-| Tables, images, headers | Yes | Yes | Basic | Raw XML |
-| PDF conversion | **Yes** | No | No | No |
-| HTML / Markdown export | **Yes** | No | No | No |
-| Layout engine | **Yes** | No | No | No |
-| Page-to-image rendering | **Yes** | No | No | No |
-| Template engine | **Yes** | No | No | No |
-| Document merging | **Yes** | No | No | No |
-| Regex find/replace | **Yes** | No | No | No |
-| CLI tool | **Yes** | No | No | No |
-| WASM | Yes | Yes | No | No |
-
-**docx-rs** (1M+ downloads, 500+ stars) is the most popular Rust DOCX crate, but it is a read/write library only — no conversion, no layout engine, no PDF. The same is true for every other Rust DOCX crate. rdocx is the only Rust crate that combines DOCX read/write with a built-in layout engine and multi-format output (PDF, HTML, Markdown, PNG).
-
-### Resource Footprint
-
-| Metric | rdocx (native) | Python + LibreOffice | Java (POI + FOP) |
-|---|---|---|---|
-| Binary / install size | **4 MB** | ~500 MB | ~250 MB (JARs + JRE) |
-| Memory (moderate document) | **10-50 MB** | ~200-500 MB | ~300 MB - 1.5 GB |
-| Cold start | **< 10 ms** | ~2-4 sec (LibreOffice) | ~2-5 sec (JVM) |
-| Serverless / Lambda friendly | Yes | Difficult | Difficult |
-| Docker image overhead | **~10 MB** (musl static) | ~500 MB+ | ~250 MB+ |
-| WASM compatible | Yes | No | No |
-
-## Crate Architecture
-
-Migration guidance for the shared crate cutover is in the
-[Unreleased CHANGELOG](CHANGELOG.md#unreleased).
-
-| Family | Crate | Purpose |
-|---|---|---|
-| Shared | `oxml-core` | Units, XML helpers, and document properties |
-| Shared | `oxml-opc` | OPC package, relationships, and content types |
-| Shared | `oxml-media` | Image detection, dimensions, and media naming |
-| Shared | `oxml-drawing` | DrawingML colors, geometry, fills, lines, effects, themes, and text bodies |
-| Shared | `oxml-layout` | Layout output types, fonts, and line breaking |
-| Shared | `oxml-pdf` | PDF and PNG rendering backends |
-| Shared | `oxml-sml` | Minimal SpreadsheetML writer for chart workbooks |
-| Shared | `oxml-chart` | ChartML model and backend-neutral renderer |
-| Word | `rdocx` | High-level Document API |
-| Word | `rdocx-opc` | Deprecated compatibility shim over `oxml-opc` |
-| Word | `rdocx-oxml` | WordprocessingML types and `oxml-core` compatibility re-exports |
-| Word | `rdocx-layout` | Word flow engine, pagination, blocks, tables, and style resolution |
-| Word | `rdocx-pdf` | Deprecated compatibility shim over `oxml-pdf` |
-| Word | `rdocx-html` | HTML and Markdown conversion |
-| Word | `rdocx-cli` | CLI binary |
-| Word | `rdocx-wasm` | WASM bindings |
-| PowerPoint | `rpptx` | High-level Presentation API |
-| PowerPoint | `rpptx-oxml` | PresentationML types |
-| PowerPoint | `rpptx-layout` | Inheritance resolver and flattener |
-| PowerPoint | `rpptx-render` | Slide renderer |
-| PowerPoint | `rpptx-chart` | Deprecated compatibility shim over `oxml-chart` |
-
-## Minimum Supported Rust Version
-
-1.93 (edition 2024)
+- [Modern DOCX capability matrix](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix)
+- [Development backlog](docs/hld/14-development-backlog.md#milestone-23-from-scratch-business-documents-about-22-weeks)
+- [Current sprint](docs/sprints/CURRENT_SPRINT.md)
+- [Delivery backlog](docs/sprints/BACKLOG.md)
+- [Unreleased changelog](CHANGELOG.md#unreleased)
 
 ## License
 
-Licensed under either of
+Licensed under either of:
 
-- MIT license ([LICENSE](LICENSE) or http://opensource.org/licenses/MIT)
-- Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE](LICENSE) or <https://opensource.org/licenses/MIT>)
+- Apache License, Version 2.0 (<https://www.apache.org/licenses/LICENSE-2.0>)
 
 at your option.

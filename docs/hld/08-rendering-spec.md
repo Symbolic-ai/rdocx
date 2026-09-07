@@ -746,11 +746,15 @@ bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting earlier numbering input
 cannot leave a later generated marker stale. A direct footnote or endnote
 reference in an otherwise safe body paragraph remains cacheable. Its explicit
-note ID is part of the complete typed paragraph key, and the exact footnote and
-endnote parts remain part of the retained-work context. Changing the reference
-misses that paragraph. Changing either note part disables retained reads for
-the transaction. Note references inside tables, headers, or footers remain
-uncacheable because those retained payloads do not own body note placement.
+note ID is part of the complete typed paragraph key. Retained paragraph reads
+compare the base context separately from the exact footnote and endnote parts.
+Changing the reference misses that paragraph. Changing either note part keeps
+ordinary paragraph reads enabled but rejects and then evicts retained entries
+whose projected paragraph carries a note reference. Unaffected entries survive
+successful publication into later transactions. Restart, table, header,
+footer, and note-page reuse keep the exact full-context gate. Note references
+inside tables, headers, or footers remain uncacheable because those retained
+payloads do not own body note placement.
 Cacheable paragraph and table entries share one immutable `Arc` block with the
 active layout transaction. A private concrete side overlay holds result-local
 provenance and the paragraph structure ids consumed by paginator emission. Public
@@ -809,6 +813,21 @@ boundary inside an unchanged suffix only when the complete retained context,
 font-resolution trace, page count, displayed header page number, and exact
 typed body suffix all match. Retained prefix and tail page frames keep their
 `Arc` ownership through pagination. Newly paginated pages are allocated once.
+Result-local Word provenance permits prefix restart after a body-length change
+because source indices before the first changed block remain stable. It forbids
+retained tail attachment for that change because every later body-index source
+path shifts. The paginator therefore rebuilds from the safe prefix checkpoint
+through the document end. A source-free layout or a sourced layout with equal
+body length may still attach an exact retained suffix. Whole-body unchanged
+reuse remains length aware.
+One private lazy tri-state memo per layout supplies candidate body identities to
+the unchanged-body, first-change, and common-suffix scans and to restart-record
+publication. A fingerprint mismatch leaves its slot uncomputed. An exact match
+still compares the complete serialized bytes, and publication moves an already
+computed identity into the retained entry. The memo has one slot per candidate
+body block, retains at most one exact identity per populated slot, and is
+dropped before the layout returns. It does not change the persistent restart
+cache envelope.
 When restarted body pagination reaches the end, endnote pages are appended
 once. An attached exact cached tail already carries those pages. If any
 equality or capacity check fails, pagination continues through the normal full

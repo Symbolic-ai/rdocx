@@ -1,94 +1,78 @@
-# Current Sprint, S69
+# Current Sprint, S70
 
-**Milestone**: M22 Word depth.
+**Milestone**: M23 From-scratch business documents.
 
-**Goal**: close Word depth without opening a legacy `.doc` programme. Flat OPC,
-DOCM, DOTX, DOTM, and bounded MHTML share the current document model, while the
-strict XML lexical checks exposed by S68 move to one existing shared layer
-without weakening any owner-specific fail-closed contract. After the M22 end
-gate is clean, recover the immutable partial v0.13.0 attempt through a coherent
-shared 0.11.0 family and the exact stable Rust family at v0.13.1.
+**Goal**: establish the measured public-API completeness contract for modern
+business documents, turn the five private client documents into a non-committed
+conformance corpus, make the public capability surface visible, and close the
+three independent incremental-layout gaps reported in Issue 69.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for modern OOXML package-class support,
-  bounded interchange, and the permanent exclusion of binary `.doc`, Word 2003
-  XML, and executable payload execution.
-- `docs/hld/03-architecture.md`, for the lowest shared crate boundary, facade
-  ownership, source-preserving mutation, and avoiding duplicate parser policy.
-- `docs/hld/04-opc-and-packaging.md`, for normalized relationships, content-type
-  ownership, package-class identity, safe resource resolution, and atomic
-  package publication.
-- `docs/hld/10-bindings-spec.md`, for additive native Rust surfaces and explicit
-  binding boundaries for new package and interchange operations.
-- `docs/hld/12-testing-strategy.md`, for source-built malformed inputs,
-  differential import and export evidence, save and reopen, byte preservation,
-  and deterministic harness expectations.
-- `docs/hld/14-development-backlog.md`, for the F-238, F-239, F-X077, F-X078,
-  F-X079, and F-X080 contracts, completed prerequisites, acceptance gates, and
-  the M22 end gate.
+- `docs/hld/02-scope-and-non-goals.md`, for the M23 and M24 authoring boundary
+  and the permanent execution non-goals.
+- `docs/hld/03-architecture.md`, for facade ownership, dependency direction,
+  and preservation of unmodeled XML.
+- `docs/hld/04-opc-and-packaging.md`, for deterministic OPC ownership,
+  relationships, content types, and loss-free retention.
+- `docs/hld/08-rendering-spec.md`, for incremental layout, cache reuse,
+  source provenance, and deterministic rendering.
+- `docs/hld/10-bindings-spec.md`, for the public Rust API and binding parity
+  that the completeness audit must classify.
+- `docs/hld/12-testing-strategy.md`, for the private corpus, conformance,
+  differential, regression, and deterministic-font gates.
+- `docs/hld/13-risks-and-open-questions.md`, for corpus confidentiality,
+  completeness scope, and facade-divergence controls.
+- `docs/hld/14-development-backlog.md`, for the F-240 through F-242 and
+  F-X083 through F-X086 acceptance contracts.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X077 | Share strict XML lexical validation | M | done | - |
-| F-239 | MHTML import and export | M | done | - |
-| F-X080 | Restore CI release readiness | S | done | - |
-| F-X079 | Tag rpptx-v0.10.0 | S | done | - |
-| F-238 | Flat OPC and modern Word package variants | M | done | - |
-| F-X078 | Tag v0.13.0 | S | archived | - |
-| F-X081 | Tag rpptx-v0.11.0 | S | done | - |
-| F-X082 | Tag v0.13.1 | S | done | - |
+| F-240 | Modern DOCX completeness audit and private corpus matrix | L | done | - |
+| F-241 | Public authoring conformance harness | L | done | - |
+| F-242 | Root README product and capability overview | M | done | - |
+| F-X083 | Close confirmed Issue 67 and intake Issue 69 | S | done | - |
+| F-X084 | Narrow note-part paragraph cache invalidation | M | done | - |
+| F-X085 | Memoize restart body identities once per layout | M | done | - |
+| F-X086 | Provenance-safe restart after body-length changes | L | done | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order. F-X077 builds on the completed F-236 and
-F-237 scanners and establishes the shared lexical boundary first. F-X080
-restores the hosted CI release gates after F-X077 and F-239 have settled their
-binding surface. F-X079 then publishes the new `oxml-core` API as the
-incubating family at 0.10.0 only after CI is locally reconstructed and clean.
-F-238 builds on F-236, F-X077, and the published F-X079 graph, while F-239
-builds on F-178's HTML import foundation.
-
-F-X078 ran after the representative M22 end gate passed. Its immutable
-v0.13.0 tag published five low-level stable crates, then registry verification
-proved that F-238's new `oxml-opc` constants were newer than the published
-shared 0.10.0 archive. F-X081 published and independently verified the complete
-shared and PowerPoint family at 0.11.0. F-X082 then published and independently
-verified the complete stable family at 0.13.1 against that registry boundary
-after its own clean gate and separate final approval at the reviewed SHA.
+F-X083 lands first so Issue 67 is closed with the reporter's confirmation and
+Issue 69 is recorded as three independently reviewable changes with contributor
+credit. F-X084 through F-X086 may then proceed independently, but each remains
+its own behavioural commit and hash-harness review. F-240 is the planning
+authority for M23 and M24. It may revise provisional later stories and must
+update the shared sprint and HLD records as an explicit audit output. F-241 and
+F-242 begin after the audit fixes the capability vocabulary and corpus policy.
 
 ## Definition of done for this sprint
 
-- Flat OPC, DOCM, DOTX, and DOTM read and write through the current document
-  model while retaining package identity, macros, template semantics,
-  relationships, content types, and unsupported XML.
-- Every modern package class saves, reopens, and passes its no-repair structural
-  gate without changing executable payload bytes.
-- Bounded MHTML import and export preserve body order, formatting, tables,
-  lists, images, links, and stable declared loss records through source-built
-  differential fixtures.
-- MHTML resource resolution rejects unsafe, malformed, external, or over-limit
-  inputs before publishing partial output.
-- Embedded, glossary, and package-story malformed XML matrices execute through
-  one shared lexical validator while retaining their existing error surfaces
-  and byte-identical mutation rollback.
-- Hosted CI package inventory, Pandoc installation, and Python binding jobs
-  have mutation-sensitive local regressions and pass their reconstructed
-  release-readiness gates.
-- Binary `.doc`, Word 2003 XML, executable payload interpretation, and
-  permissive XML recovery remain out of scope.
-- The representative modern M22 document authors and renders equations,
-  rebuilds fields and a table of contents, performs advanced merge and
-  comparison, inventories embedded content, and round-trips its modern package
-  variant without losing unsupported XML or executable payloads.
-- The immutable v0.13.0 attempt and its five published low-level packages are
-  recorded accurately without moving or deleting its tag.
-- The complete shared and PowerPoint family publishes at 0.11.0 before the
-  exact seven-package stable Rust family publishes at 0.13.1. Both receive
-  separate final release approval and have their registry entries, owners,
-  annotated tags, GitHub release bodies, selected-family exclusions, and
-  applicable contribution notifications verified.
-- Full verification passes with every deterministic hash explained, every
-  package archive below 10 MiB, and the bounded sprint review clean.
+- The public `rdocx` surface is audited against the full authoring properties
+  reachable in the modeled WordprocessingML layer, including numbering
+  authoring, story scope, package support, layout, bindings, and determinism.
+- Every capability is classified as complete, partial, preserve-only,
+  unsupported, or a permanent non-goal, with a cited owning story for every
+  incomplete in-scope row.
+- The audit updates `BACKLOG.md`, `SPRINT_PLAN.md`, `CURRENT_SPRINT.md`, and the
+  affected HLD files when evidence changes the provisional plan.
+- The five client documents remain in an ignored private directory. Their
+  fingerprints, required-part inventories, structural assertions, and visual
+  expectations can drive local conformance without committing customer data.
+- A public synthetic conformance suite proves that from-scratch fixtures use
+  `Document::new()` and public `rdocx` APIs only. Raw XML injection and base
+  templates fail this gate.
+- The root README work has a stable capability vocabulary, comparison format,
+  and roadmap source that can be kept current without duplicating the backlog.
+- Issue 67 is closed only after recording the reporter's confirmation that
+  F-X075 in v0.12.0 fixed it. Issue 69 retains the reporter's attribution and
+  links each offered commit to its matching story.
+- Note-part invalidation no longer discards reusable paragraph cache entries
+  for paragraphs without note references.
+- Restart body identities are computed at most once per block per layout.
+- Safe prefix restart survives body-length changes while tail reuse remains
+  gated by valid source provenance.
+- Each Issue 69 change has focused correctness, cache-reuse, fresh-layout
+  equality, performance, and hash-harness evidence before integration.

@@ -12037,3 +12037,301 @@ is not part of this release.
 **Notes for future sessions.** Treat v0.13.1 as the current complete stable
 registry boundary. Preserve the immutable partial v0.13.0 attempt and do not
 move or republish either release tag.
+
+### F-240, Modern DOCX completeness audit and private corpus matrix
+
+**Sprint.** S70
+**Completed.** 2026-09-06
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The scope HLD now owns a closed 85-row modern DOCX
+capability matrix covering public creation, reading, mutation, removal,
+save-reopen behavior, story placement, layout, rendering, determinism, and the
+native, Python, WASM, and CLI surfaces. Every partial or unsupported row names
+one live owner from F-241 or F-243 through F-310. The five private documents
+remain ignored and appear in tracked prose only as anonymous P1 through P5
+requirement summaries.
+
+**Non-obvious choices.** Public OXML types do not count as public facade
+authoring, and raw XML preservation does not count as modeled mutation. The
+matrix treats preservation-only and permanent non-goals as closed evidence
+boundaries without implementation owners. Repository regressions enforce
+classifications, owner and evidence agreement, complete roadmap placement and
+dependencies, status alignment, capability-family coverage, and the absence of
+tracked DOCX files or private identity details.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 expanded
+the planned regressions to enforce complete and inverse row consistency,
+boundary-owner agreement, whole-plan duplicate placement, BACKLOG status
+alignment, and repository-wide DOCX privacy. Pass 3 reported zero defects,
+zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/00-vision.md`,
+`docs/hld/02-scope-and-non-goals.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The five gates are
+`test_modern_docx_capability_matrix_has_closed_classifications_and_evidence`,
+`test_every_incomplete_modern_docx_row_has_one_live_owner`,
+`test_m23_m24_roadmap_has_no_duplicate_or_dangling_story`,
+`test_private_corpus_summary_contains_no_private_identity`, and
+`test_modern_docx_matrix_covers_public_facade_and_modeled_property_families`.
+The integrated `/verify --full` gate passed at
+`b93560f12ffc76e917bf391d600dabf697466917`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep private filenames, hashes, text, XML,
+media, renders, and detailed differentials in the ignored corpus area. Update
+the existing matrix and canonical backlog when later authoring stories change a
+classification.
+
+### F-X083, Close confirmed Issue 67 and intake Issue 69
+
+**Sprint.** S70
+**Completed.** 2026-09-06
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** GitHub Issue 67 is closed as completed after the reporter
+confirmed that the F-X075 fix shipped in v0.12.0. The sole new maintainer
+comment links the confirmation, implementation, release, and the separate
+Issue 69 follow-up. Issue 69 remains open and unmodified. Its three independent
+mechanisms map to F-X084 through F-X086 with authenticated credit to
+`@emptinessform`.
+
+**Non-obvious choices.** F-X086 records both `9e48bc86`, which enables safe
+prefix restart after a body-length change, and `c8315b92`, which prevents stale
+sourced tail reuse. Neither external patch was adopted by this record-only
+story, and no external co-author trailer was copied into repository commits.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, the F-X086
+intake contract.
+
+**Tests.** `page_spanning_prose_publishes_complete_boundary_restart_records`
+and `page_spanning_prose_restarts_warm_edits_exactly` passed. Live GitHub state
+confirmed Issue 67 closed with exactly one new evidence comment at
+https://github.com/tensorbee/rdocx/issues/67#issuecomment-5562442667 and Issue
+69 still open without another comment. The integrated `/verify --full` gate
+passed at `b93560f12ffc76e917bf391d600dabf697466917`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Treat the two F-X086 commits as complementary
+inputs and review them against current main rather than merging the offered
+branch. Preserve reporter credit on any adopted implementation.
+
+### F-241, Public authoring conformance harness
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `scripts/docx_authoring_conformance.py` now owns one public
+from-scratch DOCX conformance gate and one ignored private-corpus gate. Public
+CI builds an offline temporary consumer whose sole dependency is the public
+`rdocx` facade, then proves package structure, modeled reopen state,
+unsupported diagnostics, opaque-part preservation, and repeated deterministic
+150 DPI rendering. Optional and required private modes validate anonymous P1
+through P5 identities, package graphs, production CLI projections, page
+geometry, and per-case SSIM thresholds without committing customer artifacts.
+
+**Non-obvious choices.** Relationship IDs remain part of the normalized
+package graph, and the temporary Cargo manifest is parsed to reject aliases to
+private packages. Private failures use sanitized aliases only. Source files,
+digests, thresholds, rendered evidence, and identifying content remain in the
+ignored corpus directory.
+
+**Deviations from the design plan.** Post-review verification exposed that the
+completed conformance owner still appeared as an incomplete matrix row. The
+plan's HLD impact list was corrected to include the scope HLD, DOCX-008 now
+records the completed gate, and the owner-integrity regression enforces the
+remaining live owners. Microscope pass 1 found three harness defects involving
+malformed manifest roots, relationship ID omission, and private-package
+aliases. Mutation tests cover all three remediations, and pass 2 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/12-testing-strategy.md`, and `docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `sanitized_public_authoring_fixture_passes_every_conformance_stage`
+and
+`public_fixture_rejects_base_package_raw_xml_or_private_oxml_dependency`
+passed. The integrated required-private gate passed P1 through P5 after all 44
+reference pages were visually inspected. The integrated `/verify --full` gate
+passed at `dae856078f69792beb0920f3f795b21994bbb16e`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep anonymous private manifests and evidence
+ignored. Later M23 authoring stories should extend the existing single harness
+and public consumer instead of creating parallel conformance owners.
+
+### F-X084, Narrow note-part paragraph cache invalidation
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** Retained paragraph reuse now compares base context and note
+parts separately. A footnote-only or endnote-only change keeps ordinary body
+paragraph reads enabled, rejects note-bearing entries, and evicts those entries
+after successful publication. Unaffected entries survive into the next
+transaction, while restart, table, header, footer, and note-page caches retain
+the exact full-context gate.
+
+**Non-obvious choices.** Paragraph note references are checked against the
+active revision view at both read and post-publication retention boundaries.
+The change does not weaken caches whose payloads depend on exact note state,
+and failed layouts still publish no retained state.
+
+**Deviations from the design plan.** None. Microscope pass 1 reported zero
+defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `note_part_changes_invalidate_only_referencing_paragraphs` and
+`note_only_invalidation_preserves_unreferenced_entries_for_next_layout` passed.
+The first gate was observed failing against the unmodified implementation with
+zero retained hits and 700 builds. The integrated `/verify --full` gate passed
+at `dae856078f69792beb0920f3f795b21994bbb16e`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep paragraph-only note invalidation separate
+from F-X085 body-identity memoization and F-X086 restart provenance. Those
+stories retain their own performance and correctness gates.
+
+### F-242, Root README product and capability overview
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The root README now states a bounded Rust DOCX product
+promise, defines the five capability classifications, and maps each major
+category claim to the canonical modern DOCX matrix. Installation requirements
+derive from Cargo metadata. Three concise Rust examples compile, local paths
+and anchors resolve, and the alternatives table permits only reviewed official
+functional, license, runtime, and host-dependency evidence.
+
+**Non-obvious choices.** Reading, mutation, and preservation remain separate
+claims. The comparison gate validates exact row content and an official URL
+allowlist, while its live URL mode stays outside default network-independent
+CI. Linked badge destinations pass through the same repository-local path gate
+as ordinary links and images.
+
+**Deviations from the design plan.** Completion review found that the F-X002
+backlog entry still described six root examples. The approved HLD impact list
+was extended to `docs/hld/14-development-backlog.md`, and that stale statement
+now matches the three-example gate. Microscope pass 1 found three validation
+defects involving unbound capability prose, unbound comparison cells, and
+linked badge targets. Mutation tests cover every remediation, and pass 2
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `test_root_readme_capability_claims_match_the_approved_matrix`,
+`test_root_readme_versions_match_workspace_manifests`,
+`test_root_readme_local_link_and_anchor_mutation_matrix`, and
+`test_root_readme_approved_comparison_evidence_matrix` passed. The README
+runner compiled 23 examples across 21 Rust-library READMEs and verified all 27
+workspace README inventories and 22 packaged copies. The integrated
+`/verify --full` gate passed at
+`437233a5bec1f44052fc60fcdd7538027a7ba720`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep detailed capability ownership in the
+canonical matrix and backlog. Update the bounded root summary and its existing
+validation tables when public classifications or package versions change.
+
+### F-X085, Memoize restart body identities once per layout
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** One private lazy tri-state memo now supplies exact body
+identities to the unchanged-body, first-change, common-suffix, and
+restart-record publication paths. A fingerprint miss remains
+serialization-free. A fingerprint match still compares complete bytes, and
+publication moves an already computed identity into retained restart state.
+
+**Non-obvious choices.** Unserializable candidates occupy a failed memo slot so
+they are not retried within the same layout. Test-only instrumentation counts
+the serialization boundary itself and measures peak populated slots and byte
+capacity. The memo is dropped before return, and persistent aggregate cache
+accounting remains unchanged.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that the
+initial regression counted memo requests instead of every serialization. The
+counter moved to `restart_body_identity`, and a negative mutation that bypasses
+the scan memo now fails the 715-block bound. Pass 2 reported zero defects, zero
+smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `restart_body_identities_are_computed_at_most_once_per_layout`,
+`memoized_restart_identity_keeps_exact_bytes_authoritative_after_fingerprint_match`,
+and `restart_identity_memo_transient_memory_is_bounded` passed. Existing
+thousand-page and aggregate restart-cache bounds also passed. The integrated
+`/verify --full` gate passed at
+`437233a5bec1f44052fc60fcdd7538027a7ba720`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the memo layout-local and preserve exact
+byte equality after the fingerprint prefilter. F-X086 owns restart provenance
+across body-length changes and must not weaken this at-most-once boundary.
+
+### F-X086, Provenance-safe restart after body-length changes
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Sourced insert, delete, Enter, adjacent merge, and
+multi-block selection-delete operations now restart at the last complete safe
+prefix checkpoint after a body-length change. The paginator rebuilds every
+later page so shifted Word body-index paths are regenerated, while source-free
+layouts retain exact suffix attachment. Authenticated `@emptinessform` commits
+`9e48bc86` and `c8315b92` supplied the complementary prefix and provenance-tail
+mechanisms, with contributor credit retained in the HLD and commit record.
+
+**Non-obvious choices.** Equal body length was removed only from reusable
+prefix eligibility. Whole-body unchanged detection remains length aware, and
+retained tail attachment still requires absent provenance or equal body length.
+All context, note sequence, font trace, capacity, and unsafe-state gates remain
+exact.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `sourced_insert_and_delete_restart_instead_of_repaginating`,
+`sourced_length_change_never_reuses_shifted_tail_pages`, and
+`sourced_enter_merge_and_selection_delete_restart_from_safe_prefix` passed.
+The first gate was observed failing against the prior implementation with 22
+recomputed pages. The new operations recompute at most three pages, match fresh
+layout and source paths, retain only a contiguous prefix, and keep no shifted
+sourced tail identity. The integrated `/verify --full` gate passed at
+`92dd0f8a51704ae5fd95acf704e9b088c64e97b0`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the distinction between safe prefix
+restart and unsafe shifted-tail reuse. Body-index provenance after a structural
+edit must always be rebuilt from the edit through the document end.

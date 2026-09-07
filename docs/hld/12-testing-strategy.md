@@ -741,10 +741,15 @@ collision still requires exact typed paragraph equality. Focused cases prove
 that an early direct footnote or endnote reference still permits 699 hits and
 one rebuild, while fields, numbering, drawings, and raw-child prefixes disable
 later reads. Changing the reference ID misses its paragraph key, changing a
-note part invalidates the exact retained context, note-bearing table and header
-or footer content remains conservative, a late failure publishes nothing, hits
-preserve insertion order, and FIFO eviction holds at the independently pinned
-4,096-entry and 50 MiB paragraph limits. Cacheable
+footnote or endnote part retains at least 698 of 700 ordinary hits and rebuilds
+at most two paragraphs across text, insertion, and deletion changes. Warm and
+fresh deterministic layouts and source paths remain exact. A third transaction
+after the note edit and one ordinary paragraph edit still records 699 hits and
+one build, proving unaffected entries survived publication. Note-bearing table
+and header or footer content remains conservative, full restart reuse stays
+disabled after a note change, a late failure publishes nothing, hits preserve
+insertion order, and FIFO eviction holds at the independently pinned 4,096-entry
+and 50 MiB paragraph limits. Cacheable
 active paragraph and table blocks share immutable cache payloads through a
 private representation. Warm and fresh results must retain exact pages,
 structure, provenance, and nested table paths while public block APIs remain
@@ -776,6 +781,23 @@ remain exact. A 700-paragraph source-built case requires late edit, insert,
 delete, and undo
 results to equal fresh deterministic layout while recomputing only a bounded
 page region.
+The sourced body-length regression inserts and deletes near block 640 of 700,
+then exercises Enter, adjacent merge, and multi-block selection deletion. Each
+operation restarts from a safe retained prefix and recomputes at most three
+pages while every layout field and Word source path equals a fresh deterministic
+result. Page-frame identity checks require retained identities to form only a
+contiguous prefix, so no shifted sourced tail can survive. The existing
+source-free insert, delete, and undo matrix retains exact suffix attachment.
+
+The restart-identity memo regressions build a 715-block mixed body and require
+each candidate identity to be serialized at most once across all restart scans
+and restart-record publication in one layout. Warm and fresh deterministic
+results remain exact. A forced fingerprint collision still compares complete
+serialized bytes, while a fingerprint miss leaves the candidate memo slot
+uncomputed. Test-only counters bound peak populated slots by the body length and
+peak retained identity capacity by the published restart identities. The memo
+itself is local to one layout, while the existing 5,216-entry and 64 MiB checks
+continue to govern persistent retained work.
 
 The Issue 67 release-performance rider is an ignored timing-only regression.
 It runs identical 175-paragraph and 700-paragraph sources through the reusable
@@ -1296,6 +1318,80 @@ destination only after its digest matches. `--check` verifies the complete
 directory without changing it. The primary workspace-test and MSRV jobs fetch
 both pinned corpora before running Cargo tests.
 
+## The private from-scratch DOCX conformance corpus
+
+M23 uses five client reference documents that are never committed, published,
+or fetched by repository automation. They live in a configured ignored private
+directory outside the tracked corpus tree. The repository must not contain the
+documents, their rendered pages, extracted text, identifying filenames,
+customer metadata, or a manifest that would disclose their provenance.
+
+F-240 inventories each private document locally at package-part, relationship,
+section, story, paragraph, run, table, numbering, field, drawing, and layout
+levels. Its capability matrix stores only non-identifying classifications in
+tracked documentation. Exact hashes, filenames, XML extracts, and differential
+artifacts remain beside the private corpus. A staged-path and tracked-path scan
+fails when a private artifact is about to enter repository history.
+
+The anonymous audit records only the capability families needed by each local
+reference. Counts, values, source names, text, relationship targets, media,
+rendered pages, and extracted markup are not part of this summary.
+
+| Anonymous reference | Non-identifying required families |
+|---|---|
+| P1 | Section-scoped header and footer variants, fields, drawings, text boxes, content controls, custom data bindings, custom properties, and web add-in declarations |
+| P2 | Section-scoped stories, dense tables, fields, drawings, text boxes, links, custom data bindings, custom properties, and web add-in declarations |
+| P3 | Numbering, tables, section-scoped stories, drawings, text boxes, theme, font table, settings, and web settings |
+| P4 | Multiple sections, tables, drawings, links, theme, font table, settings, and web settings |
+| P5 | Modern comment metadata, numbering, tables, section-scoped stories, drawings, text boxes, theme, font table, settings, and web settings |
+
+These are requirements for the source-built conformance documents, not
+fingerprints. The matrix maps them to F-243 through F-310 without recording the
+combination of package counts or property values from any source.
+
+`scripts/docx_authoring_conformance.py` is the single owner of the M23
+conformance gate. It provides self-test, public-only, optional-private, and
+required-private entry modes. The two evidence paths are:
+
+1. Public CI source-builds a synthetic fixture through a temporary consumer
+   whose sole dependency is `rdocx`. Construction begins exactly once with
+   `Document::new()` and uses public `rdocx` APIs only. The harness validates
+   package inventory, content types, relationships, schema child order,
+   modeled reopen state, unsupported-content diagnostics, unmodeled-part
+   preservation, and repeated deterministic 150 DPI output. A base package,
+   raw XML injection, private OXML facade, or prebuilt document fails the gate.
+2. Local required-corpus mode builds the five target documents through their
+   Rust generators and compares them with the configured private references.
+   Missing input, unexpected input count, a digest change, or missing evidence
+   fails closed. An optional-private invocation reports a skip when the ignored
+   directory is absent, while required-private mode rejects that absence. This
+   mode never prints document text or embeds source XML in a tracked report.
+
+The local comparison first normalizes ZIP metadata that is not document state,
+then checks content types, relationships, part inventory, schema child order,
+modeled properties, and required compatibility branches. It renders both sides
+with deterministic bundled fonts at the pinned resolution and records page
+count, exact dimensions, and image similarity against a reviewed per-case
+threshold outside the repository. The ignored manifest binds the anonymous
+P1 through P5 aliases to exact local digests, page expectations, and tool
+identities. Tracked-path and staged-path scans reject private document formats
+without echoing a path or digest. Feature-level tests remain authoritative when
+byte identity is not a valid expectation.
+
+F-263 closes M23 only when all five generators pass local required-corpus mode,
+the synthetic public suite passes in CI, opening and saving requires no repair,
+and every unexplained structural or visual delta has an owning story. F-240 can
+revise the M23 and M24 sprint plan if a later approved audit discovers a missing
+public authoring capability. The completed initial audit found the existing
+F-243 through F-310 boundaries sufficient for the anonymous requirements.
+
+M24 extends the synthetic conformance matrix to all declared modern DOCX
+authoring rows. Each row proves public construction, save and reopen equality,
+part ownership, binding parity where exposed, deterministic allocation, and
+honest losslessness diagnostics. Preservation-only and permanent non-goal rows
+use explicit diagnostic tests rather than an authoring test that silently
+falls back to XML.
+
 ## The Word render fidelity gate
 
 The five-document Word corpus is rendered at 150 dpi through the production
@@ -1775,19 +1871,30 @@ extensions, invalid range rejection and no partial output. Process ID and an
 atomic counter isolate temporary workspaces across concurrent runs.
 
 All 27 workspace packages explicitly declare one distinct README. The root
-README is the high-level `rdocx` guide. Each crate-local document states the
-package purpose, direct-use guidance, adjacent package relationship,
+README is the high-level `rdocx` guide. Its three Rust examples cover blank
+authoring, read and mutation, and render and export. Its major-category claims
+carry stable IDs and classifications from the 85-row modern DOCX capability
+matrix. The comparison table accepts only the reviewed official evidence for
+python-docx, docx-rs, docx4j, and Aspose.Words, and makes no volatile
+performance, popularity, price, or footprint claims. Each crate-local document
+states the package purpose, direct-use guidance, adjacent package relationship,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
-The compatibility shims direct users to their shared replacements.
-Internal binding and WASM crates state that they are not crates.io packages.
+The compatibility shims direct users to their shared replacements. Internal
+binding and WASM crates state that they are not crates.io packages.
 
 `scripts/readme_doctests.py` validates the exact package-to-README inventory,
 the documented CLI argument names, Python and JavaScript surface names,
 deterministic feature guidance, and matching dependency and import names. It
-builds the applicable libraries with locked dependencies and Cargo JSON
+derives the root dependency and CLI requirements from Cargo metadata, checks
+every root local path and Markdown anchor, and rejects a capability ID or
+classification that differs from the canonical matrix. Comparison evidence is
+an exact official-URL allowlist. Its focused `--check-official-links` mode
+resolves those sources during implementation review, while default CI remains
+network-independent. It builds the applicable libraries with locked
+dependencies and Cargo JSON
 messages, locates each emitted rlib from one package build graph, and invokes
 rustdoc with the 2024 edition, warnings denied, the dependency search path, and
-every matching `--extern` binding. It compiles 27 Rust examples across the 21
+every matching `--extern` binding. It compiles 23 Rust examples across the 21
 Rust-library READMEs. It also creates all 22 publishable archives and
 byte-compares their single packaged README with the declared source. Archive
 creation uses the same exact 22-package local source patch set as the release
@@ -1908,7 +2015,7 @@ parallel, or failure-swallowing invocation.
 | Job | Command |
 |---|---|
 | changes | On pushes and pull requests, classify changed paths for the nine filtered jobs with `dorny/paths-filter` v4.0.3 pinned to reviewed commit `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` |
-| test | Install exact uv 0.10.2, Poppler 26.01.0, LibreOffice 26.2.5.2, and Pandoc 3.10, fetch both pinned corpora, run the pinned Pandoc texmath differential and exact locked release-mode 1,000-page performance regression with one test thread, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, run the exact locked deterministic animation golden, then run `python3 scripts/golden_png_harness.py --check` |
+| test | Install exact uv 0.10.2, Poppler 26.01.0, LibreOffice 26.2.5.2, and Pandoc 3.10, fetch both pinned corpora, run the pinned Pandoc texmath differential and exact locked release-mode 1,000-page performance regression with one test thread, run `python3 scripts/docx_authoring_conformance.py --public`, run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` with an isolated uv cache and 8 MiB Rust test-thread stack, run the exact locked deterministic animation golden, then run `python3 scripts/golden_png_harness.py --check` |
 | no-default-features | `cargo test -p oxml-layout --no-default-features` |
 | wasm | Locked `wasm32-unknown-unknown` checks, `wasm-pack test --node`, and local bundler pack and fresh-install gates for `rdocx-wasm` and `rpptx-wasm` |
 | prose | `python3 scripts/prose_check.py` and `python3 scripts/sync_agent_skills.py --check` |
