@@ -29,7 +29,7 @@ and rendering behavior.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-243 | Word-compatible fresh package profiles | L | in-progress | codex |
+| F-243 | Word-compatible fresh package profiles | L | done | - |
 | F-249 | Deterministic package identifier allocation | M | pending | - |
 | F-244 | Corpus settings and document properties | L | pending | - |
 | F-245 | Corpus themes, font tables, and embedded fonts | L | pending | - |

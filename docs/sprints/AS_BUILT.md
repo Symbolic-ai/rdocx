@@ -12335,3 +12335,48 @@ sourced tail identity. The integrated `/verify --full` gate passed at
 **Notes for future sessions.** Preserve the distinction between safe prefix
 restart and unsafe shifted-tail reuse. Body-index provenance after a structural
 edit must always be rebuilt from the edit through the document end.
+
+### F-243, Word-compatible fresh package profiles
+
+**Sprint.** S71
+**Completed.** 2026-09-07
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::new()` now creates a deterministic
+Word-compatible DOCX package that owns its document, styles, settings, theme,
+font table, core properties, and application properties. The public
+`WordCreationProfile` constructor creates DOCX, DOCM, DOTX, and DOTM package
+classes with their exact main-part content types, while an explicit minimal
+profile retains the previous compact graph.
+
+**Non-obvious choices.** Main-part content type remains the single authority
+for package class. Fresh macro-capable profiles declare DOCM or DOTM identity
+without inventing a VBA project, and fresh core properties omit timestamps so
+equivalent constructions serialize identically. The complete candidate graph
+is staged and validated before it becomes a public document.
+
+**Deviations from the design plan.** None. Microscope passes 1 through 3 found
+and closed graph, conformance, and capability-classification gaps. Pass 4
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The round-trip gate
+`fresh_word_package_profile_tests::word_compatible_profiles_reopen_with_the_same_package_class`
+passed for all four package classes. Complete normalized graph, strict
+validation, default-profile, explicit-minimal-profile, deterministic-save, and
+unmodelled-content preservation regressions also passed. The integrated
+`/verify --full` gate passed at
+`0120ae6da8b2b1e4813c90663f13fa7b5dbd8e15`. The optional native Word gate was
+not configured in this environment, so no native no-repair observation is
+claimed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep package class derived from the main-part
+content type and preserve the difference between macro-capable identity and an
+actual VBA payload. Any later fresh-package part must join the same staged,
+validated, deterministic construction path.
