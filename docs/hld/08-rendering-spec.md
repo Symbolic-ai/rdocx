@@ -813,6 +813,13 @@ boundary inside an unchanged suffix only when the complete retained context,
 font-resolution trace, page count, displayed header page number, and exact
 typed body suffix all match. Retained prefix and tail page frames keep their
 `Arc` ownership through pagination. Newly paginated pages are allocated once.
+Result-local Word provenance permits prefix restart after a body-length change
+because source indices before the first changed block remain stable. It forbids
+retained tail attachment for that change because every later body-index source
+path shifts. The paginator therefore rebuilds from the safe prefix checkpoint
+through the document end. A source-free layout or a sourced layout with equal
+body length may still attach an exact retained suffix. Whole-body unchanged
+reuse remains length aware.
 One private lazy tri-state memo per layout supplies candidate body identities to
 the unchanged-body, first-change, and common-suffix scans and to restart-record
 publication. A fingerprint mismatch leaves its slot uncomputed. An exact match

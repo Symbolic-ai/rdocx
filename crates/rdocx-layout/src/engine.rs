@@ -2040,7 +2040,6 @@ impl Engine {
                         .iter()
                         .flat_map(|entry| entry.note_references().iter().copied())
                         .eq(body_note_references(input))
-                    && (sources.is_none() || cache.body.len() == input.document.body.content.len())
             });
         let reusable_restart = restart_eligible && reusable_restart_record;
         let mut restart_identity_memo =
@@ -2098,37 +2097,44 @@ impl Engine {
                 .find(|checkpoint| checkpoint.next_block_index <= first_changed)
                 .copied()
         });
-        let tail_source = restart_checkpoint.and_then(|restart| {
-            let cache = self.restart_cache.as_ref().expect("restart cache exists");
-            let common_suffix = common_suffix.expect("reusable restart has an exact suffix");
-            let new_tail = input.document.body.content.len() - common_suffix;
-            let old_tail = cache.body.len() - common_suffix;
-            let block_delta = new_tail as isize - old_tail as isize;
-            cache
-                .checkpoints
-                .iter()
-                .find(|checkpoint| {
-                    checkpoint.next_block_index >= old_tail
-                        && checkpoint
-                            .next_block_index
-                            .checked_add_signed(block_delta)
-                            .is_some_and(|next| next > restart.next_block_index)
-                })
-                .copied()
-                .map(|old| {
-                    (
-                        paginator::PaginationCheckpoint {
-                            next_block_index: old
+        let tail_reusable = sources.is_none()
+            || self
+                .restart_cache
+                .as_ref()
+                .is_some_and(|cache| cache.body.len() == input.document.body.content.len());
+        let tail_source = restart_checkpoint
+            .filter(|_| tail_reusable)
+            .and_then(|restart| {
+                let cache = self.restart_cache.as_ref().expect("restart cache exists");
+                let common_suffix = common_suffix.expect("reusable restart has an exact suffix");
+                let new_tail = input.document.body.content.len() - common_suffix;
+                let old_tail = cache.body.len() - common_suffix;
+                let block_delta = new_tail as isize - old_tail as isize;
+                cache
+                    .checkpoints
+                    .iter()
+                    .find(|checkpoint| {
+                        checkpoint.next_block_index >= old_tail
+                            && checkpoint
                                 .next_block_index
                                 .checked_add_signed(block_delta)
-                                .expect("common suffix block index remains in range"),
-                            page_count: old.page_count,
-                            next_header_page_number: old.next_header_page_number,
-                        },
-                        old,
-                    )
-                })
-        });
+                                .is_some_and(|next| next > restart.next_block_index)
+                    })
+                    .copied()
+                    .map(|old| {
+                        (
+                            paginator::PaginationCheckpoint {
+                                next_block_index: old
+                                    .next_block_index
+                                    .checked_add_signed(block_delta)
+                                    .expect("common suffix block index remains in range"),
+                                page_count: old.page_count,
+                                next_header_page_number: old.next_header_page_number,
+                            },
+                            old,
+                        )
+                    })
+            });
 
         let (mut pages, mut outlines, mut checkpoints) = if restart_eligible {
             let mut recorded = paginator::paginate_shared_single_section_recorded(
@@ -12592,6 +12598,168 @@ mod tests {
             .expect("fresh undo");
         assert_layout_results_equal(&warm_undo, &fresh_undo);
         assert_layout_results_equal(&warm_undo, &original);
+    }
+
+    #[test]
+    fn sourced_insert_and_delete_restart_instead_of_repaginating() {
+        let mut input = ordinary_prose_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (primed, primed_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart state");
+        assert!(engine.restart_cache.is_some());
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("ordinary inserted paragraph");
+        input
+            .document
+            .body
+            .content
+            .insert(640, BodyContent::Paragraph(inserted));
+        let (warm_insert, warm_insert_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced insertion");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "sourced insertion recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_insert, fresh_insert_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced insertion");
+        assert_layout_results_equal(&warm_insert, &fresh_insert);
+        assert_eq!(warm_insert_sources, fresh_insert_sources);
+
+        input.document.body.content.remove(640);
+        let (warm_delete, warm_delete_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced deletion");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "sourced deletion recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        assert_layout_results_equal(&warm_delete, &primed);
+        assert_eq!(warm_delete_sources, primed_sources);
+    }
+
+    #[test]
+    fn sourced_length_change_never_reuses_shifted_tail_pages() {
+        let mut input = ordinary_prose_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        let (primed, _) = engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart state");
+
+        let mut inserted = CT_P::new();
+        inserted.add_run("inserted paragraph shifts every later source path");
+        input
+            .document
+            .body
+            .content
+            .insert(640, BodyContent::Paragraph(inserted));
+        let (warm, warm_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced insertion");
+        let shared_indices = warm
+            .pages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, page)| {
+                primed
+                    .pages
+                    .iter()
+                    .any(|old| Arc::ptr_eq(page, old))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert!(!shared_indices.is_empty(), "the safe prefix must be reused");
+        assert!(
+            shared_indices.len() < warm.pages.len(),
+            "the shifted tail must contain rebuilt pages"
+        );
+        assert_eq!(
+            shared_indices,
+            (0..shared_indices.len()).collect::<Vec<_>>(),
+            "only a contiguous unchanged prefix may retain old page identity"
+        );
+        let (fresh, fresh_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced insertion");
+        assert_layout_results_equal(&warm, &fresh);
+        assert_eq!(warm_sources, fresh_sources);
+    }
+
+    #[test]
+    fn sourced_enter_merge_and_selection_delete_restart_from_safe_prefix() {
+        let mut input = ordinary_prose_restart_input(700);
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine
+            .layout_with_provenance(&input)
+            .expect("prime sourced restart state");
+
+        set_body_paragraph_text(&mut input, 640, "ordinary prose before enter");
+        let mut after_enter = CT_P::new();
+        after_enter.add_run("ordinary prose after enter");
+        input
+            .document
+            .body
+            .content
+            .insert(641, BodyContent::Paragraph(after_enter));
+        let (warm_enter, warm_enter_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced Enter");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "Enter recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_enter, fresh_enter_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced Enter");
+        assert_layout_results_equal(&warm_enter, &fresh_enter);
+        assert_eq!(warm_enter_sources, fresh_enter_sources);
+
+        set_body_paragraph_text(
+            &mut input,
+            640,
+            "ordinary prose before enter ordinary prose after enter",
+        );
+        input.document.body.content.remove(641);
+        let (warm_merge, warm_merge_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced adjacent merge");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "adjacent merge recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_merge, fresh_merge_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced adjacent merge");
+        assert_layout_results_equal(&warm_merge, &fresh_merge);
+        assert_eq!(warm_merge_sources, fresh_merge_sources);
+
+        set_body_paragraph_text(&mut input, 638, "selection delete joined boundary");
+        input.document.body.content.drain(639..643);
+        let (warm_selection, warm_selection_sources) = engine
+            .layout_with_provenance(&input)
+            .expect("warm sourced selection delete");
+        assert!(
+            engine.page_layout_invocation_count() <= 3,
+            "selection delete recomputed {} pages",
+            engine.page_layout_invocation_count()
+        );
+        let (fresh_selection, fresh_selection_sources) = Engine::new_deterministic()
+            .expect("bundled fonts load")
+            .layout_with_provenance(&input)
+            .expect("fresh sourced selection delete");
+        assert_layout_results_equal(&warm_selection, &fresh_selection);
+        assert_eq!(warm_selection_sources, fresh_selection_sources);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # F-X086, Provenance-safe restart after body-length changes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S70
 **Size**: L
 **Depends on**: F-X075, F-X083
@@ -97,14 +97,14 @@ only, while cold deterministic output remains identical.
 
 ## Implementation checklist
 
-- [ ] Add discriminating sourced operation and shifted-tail regressions.
-- [ ] Relax only reusable prefix eligibility after body-length changes.
-- [ ] Gate tail attachment on provenance absence or equal body length.
-- [ ] Preserve exact context, note, font, capacity, and unsafe-state gates.
-- [ ] Prove prefix page identity reuse and the absence of shifted tail reuse.
-- [ ] Preserve non-provenance suffix optimization.
-- [ ] Run scoped checks, full verification, hash checks, and routed riders.
-- [ ] Update exactly the listed HLD files.
+- [x] Add discriminating sourced operation and shifted-tail regressions.
+- [x] Relax only reusable prefix eligibility after body-length changes.
+- [x] Gate tail attachment on provenance absence or equal body length.
+- [x] Preserve exact context, note, font, capacity, and unsafe-state gates.
+- [x] Prove prefix page identity reuse and the absence of shifted tail reuse.
+- [x] Preserve non-provenance suffix optimization.
+- [x] Run scoped checks, full verification, hash checks, and routed riders.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

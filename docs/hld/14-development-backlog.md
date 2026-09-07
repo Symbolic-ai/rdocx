@@ -4515,17 +4515,21 @@ the deterministic corpus hashes do not move.
 
 Allow sourced insert, delete, Enter, merge, and selection-delete edits to reuse
 the unchanged prefix restart checkpoint even when body block count changes.
-Tail reuse remains disabled when shifted source indices would make retained
-`SourceSpan` paths stale. Review the independently offered `@emptinessform`
-commits `9e48bc86` and `c8315b92` against current main as the enabling and
-provenance-safety patches respectively, and preserve authenticated credit for
-any adopted implementation.
+The complete restart-record context gate remains exact, while whole-body
+unchanged detection remains length aware. Tail reuse requires absent provenance
+or equal body length, so shifted source indices cannot leave retained
+`SourceSpan` paths stale. The implementation adopts the complementary mechanism
+from independently offered `@emptinessform` commits `9e48bc86` and `c8315b92`
+as the enabling and provenance-safety inputs respectively, with authenticated
+contributor credit retained.
 
 **Depends on**: F-X075, F-X083.
 **Test gate**: regression. A sourced insert and delete near block 640 of 700
 recomputes at most three pages, matches a fresh layout element for element with
-equal source paths, and fails if the full-pagination veto is restored or stale
-tail provenance is reused.
+equal source paths, keeps only contiguous prefix page identity, and fails if the
+full-pagination veto is restored or stale tail provenance is reused. Enter,
+adjacent merge, and multi-block selection deletion carry the same bounded and
+exact sourced contract.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

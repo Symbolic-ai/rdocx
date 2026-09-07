@@ -781,6 +781,13 @@ remain exact. A 700-paragraph source-built case requires late edit, insert,
 delete, and undo
 results to equal fresh deterministic layout while recomputing only a bounded
 page region.
+The sourced body-length regression inserts and deletes near block 640 of 700,
+then exercises Enter, adjacent merge, and multi-block selection deletion. Each
+operation restarts from a safe retained prefix and recomputes at most three
+pages while every layout field and Word source path equals a fresh deterministic
+result. Page-frame identity checks require retained identities to form only a
+contiguous prefix, so no shifted sourced tail can survive. The existing
+source-free insert, delete, and undo matrix retains exact suffix attachment.
 
 The restart-identity memo regressions build a 715-block mixed body and require
 each candidate identity to be serialized at most once across all restart scans
