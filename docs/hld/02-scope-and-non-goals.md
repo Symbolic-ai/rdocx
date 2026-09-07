@@ -207,8 +207,8 @@ bytes remain in the ZIP package.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | DOCX-001 | package | DOCX open, save, and byte serialization | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | Y | Y | Y | complete | implementation:`crates/rdocx/src/document.rs:1955` | - |
 | DOCX-002 | package | bounded and encrypted package input and output | Y | Y | Y | NA | Y | package | Y | Y | NA | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:1962` | - |
-| DOCX-003 | package | blank Word-compatible package profiles | P | Y | P | NA | P | package | P | P | P | P | B | B | B | partial | boundary:F-243 | F-243 |
-| DOCX-004 | package | DOCM, DOTX, and DOTM identity and output selection | N | Y | P | NA | Y | package | Y | Y | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:1999` | F-243 |
+| DOCX-003 | package | blank Word-compatible package profiles | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:2057` | - |
+| DOCX-004 | package | DOCM, DOTX, and DOTM identity and output selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:2064` | - |
 | DOCX-005 | properties | core document properties | P | Y | P | P | Y | package | NA | NA | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4355` | F-244 |
 | DOCX-006 | properties | application and custom properties | N | Y | N | N | PV | package | NA | NA | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |
 | DOCX-007 | properties | document variables, compatibility facts, and defaults | N | P | N | N | PV | package | P | P | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |

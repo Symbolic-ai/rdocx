@@ -53,7 +53,7 @@ pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
     ListLevel, ListLevelSuffix, ListNumberFormat, NumberingFormat, NumberingLevel, OutlineNode,
-    RenderOptions, UnsupportedXmlRef, WordPackageClass,
+    RenderOptions, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

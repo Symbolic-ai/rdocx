@@ -2254,10 +2254,11 @@ requirements match manifests, and every capability claim maps to the approved
 matrix.
 
 ### F-243, Word-compatible fresh package profiles (L)
-Extend `Document::new()` with deterministic DOCX, DOCM, DOTX, and DOTM creation
-profiles that own all required parts, content types, relationships, and package
-metadata without copying a template. Minimal output remains available as an
-explicit profile.
+`Document::new()` creates a deterministic Word-compatible DOCX package.
+`Document::new_with_profile` selects minimal or Word-compatible DOCX, DOCM,
+DOTX, and DOTM graphs that own their declared parts, content types,
+relationships, and package metadata without copying a template. Macro-capable
+profiles do not invent VBA, and minimal output remains explicit.
 **Depends on**: F-240.
 **Test gate**: round-trip. Each profile saves, reopens with the same identity,
 and passes strict package validation and the pinned no-repair check.

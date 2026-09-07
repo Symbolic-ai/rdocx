@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::cell::Cell;
 
 use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
+use oxml_core::app_properties::AppProperties;
 use oxml_media::MediaNamer;
 use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
@@ -65,6 +66,15 @@ pub enum WordPackageClass {
     Template,
     /// A macro-enabled `.dotm` template.
     MacroEnabledTemplate,
+}
+
+/// Completeness and package class for a newly authored Word document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WordCreationProfile {
+    /// The compact package graph historically emitted by `rdocx`.
+    Minimal(WordPackageClass),
+    /// A Word-compatible blank package with the standard owned support parts.
+    WordCompatible(WordPackageClass),
 }
 
 impl WordPackageClass {
@@ -1468,6 +1478,9 @@ enum ChartPackageSource<'a> {
 const DEFAULT_STYLES_PART: &str = "/word/styles.xml";
 const DEFAULT_NUMBERING_PART: &str = "/word/numbering.xml";
 const DEFAULT_CORE_PROPERTIES_PART: &str = "/docProps/core.xml";
+const DEFAULT_APP_PROPERTIES_PART: &str = "/docProps/app.xml";
+const DEFAULT_FONT_TABLE_PART: &str = "/word/fontTable.xml";
+const DEFAULT_THEME_PART: &str = "/word/theme/theme1.xml";
 const STYLES_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
 const NUMBERING_CONTENT_TYPE: &str =
@@ -1479,6 +1492,14 @@ const CORE_PROPERTIES_CONTENT_TYPE: &str =
 const SETTINGS_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
 const DEFAULT_SETTINGS_PART: &str = "/word/settings.xml";
+const FONT_TABLE_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
+const DEFAULT_FONT_TABLE_XML: &str = concat!(
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+    r#"<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+    r#"<w:font w:name="Calibri"/><w:font w:name="Times New Roman"/>"#,
+    r#"</w:fonts>"#,
+);
 
 fn package_part_name_is_occupied(package: &OpcPackage, part_name: &str) -> bool {
     package.parts.contains_key(part_name)
@@ -1530,12 +1551,206 @@ fn owned_font_aliases(font_aliases: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-fn new_word_package() -> OpcPackage {
-    let mut package = OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
+fn new_word_package(class: WordPackageClass) -> OpcPackage {
+    let mut package = OpcPackage::with_main_part("word/document.xml", class.content_type());
     package
         .content_types
         .add_override(DEFAULT_STYLES_PART, STYLES_CONTENT_TYPE);
     package
+}
+
+fn new_word_compatible_package(
+    class: WordPackageClass,
+    document: &CT_Document,
+    styles: &CT_Styles,
+    settings: &CT_Settings,
+    core_properties: &CoreProperties,
+) -> OpcPackage {
+    let mut package = new_word_package(class);
+    package.set_part(
+        "/word/document.xml",
+        document
+            .to_xml()
+            .expect("fresh Word document model must serialize"),
+    );
+    package.set_part(
+        DEFAULT_STYLES_PART,
+        styles
+            .to_xml()
+            .expect("fresh Word styles model must serialize"),
+    );
+    package.set_part(
+        DEFAULT_SETTINGS_PART,
+        settings
+            .to_xml()
+            .expect("fresh Word settings model must serialize"),
+    );
+    package.set_part(
+        DEFAULT_CORE_PROPERTIES_PART,
+        core_properties
+            .to_xml()
+            .expect("fresh core properties model must serialize"),
+    );
+    let mut application_properties = AppProperties::default();
+    application_properties.application = Some("rdocx".to_owned());
+    application_properties.application_version = Some(env!("CARGO_PKG_VERSION").to_owned());
+    package.set_part(
+        DEFAULT_APP_PROPERTIES_PART,
+        application_properties
+            .to_xml()
+            .expect("fresh application properties model must serialize"),
+    );
+    package.set_part(
+        DEFAULT_THEME_PART,
+        oxml_drawing::theme::OFFICE_DEFAULT_XML.as_bytes().to_vec(),
+    );
+    package.set_part(
+        DEFAULT_FONT_TABLE_PART,
+        DEFAULT_FONT_TABLE_XML.as_bytes().to_vec(),
+    );
+
+    package
+        .content_types
+        .add_override(DEFAULT_SETTINGS_PART, SETTINGS_CONTENT_TYPE);
+    package
+        .content_types
+        .add_override(DEFAULT_FONT_TABLE_PART, FONT_TABLE_CONTENT_TYPE);
+    package
+        .content_types
+        .add_override(DEFAULT_THEME_PART, content_types::THEME);
+    package
+        .content_types
+        .add_override(DEFAULT_CORE_PROPERTIES_PART, content_types::CORE_PROPERTIES);
+    package.content_types.add_override(
+        DEFAULT_APP_PROPERTIES_PART,
+        content_types::EXTENDED_PROPERTIES,
+    );
+
+    package
+        .package_rels
+        .add(rel_types::CORE_PROPERTIES, "docProps/core.xml");
+    package
+        .package_rels
+        .add(rel_types::EXTENDED_PROPERTIES, "docProps/app.xml");
+    let document_relationships = package.get_or_create_part_rels("/word/document.xml");
+    document_relationships.add(rel_types::STYLES, "styles.xml");
+    document_relationships.add_with_id("rdocxSettings", rel_types::SETTINGS, "settings.xml");
+    document_relationships.add_with_id("rdocxTheme", rel_types::THEME, "theme/theme1.xml");
+    document_relationships.add_with_id("rdocxFontTable", rel_types::FONT_TABLE, "fontTable.xml");
+    package
+}
+
+fn validate_fresh_word_compatible_package(
+    package: &OpcPackage,
+    expected_class: WordPackageClass,
+) -> Result<()> {
+    let (_, actual_class) = validated_word_package_class(package)?;
+    if actual_class != expected_class {
+        return Err(Error::Other(
+            "fresh Word package class does not match its profile".to_owned(),
+        ));
+    }
+    let expected_parts = [
+        ("/word/document.xml", expected_class.content_type()),
+        (DEFAULT_STYLES_PART, STYLES_CONTENT_TYPE),
+        (DEFAULT_SETTINGS_PART, SETTINGS_CONTENT_TYPE),
+        (DEFAULT_THEME_PART, content_types::THEME),
+        (DEFAULT_FONT_TABLE_PART, FONT_TABLE_CONTENT_TYPE),
+        (DEFAULT_CORE_PROPERTIES_PART, content_types::CORE_PROPERTIES),
+        (
+            DEFAULT_APP_PROPERTIES_PART,
+            content_types::EXTENDED_PROPERTIES,
+        ),
+    ];
+    for (part_name, expected_content_type) in expected_parts {
+        if !package.parts.contains_key(part_name)
+            || package
+                .content_types
+                .overrides
+                .get(part_name)
+                .is_none_or(|actual| actual != expected_content_type)
+        {
+            return Err(Error::Other(format!(
+                "fresh Word package is missing required part {part_name}"
+            )));
+        }
+    }
+    if package.parts.len() != expected_parts.len()
+        || package.content_types.overrides.len() != expected_parts.len()
+    {
+        return Err(Error::Other(
+            "fresh Word package contains an unexpected owned part".to_owned(),
+        ));
+    }
+    let expected_package_relationships = [
+        (rel_types::DOCUMENT, "/word/document.xml"),
+        (rel_types::CORE_PROPERTIES, DEFAULT_CORE_PROPERTIES_PART),
+        (rel_types::EXTENDED_PROPERTIES, DEFAULT_APP_PROPERTIES_PART),
+    ];
+    let expected_document_relationships = [
+        (rel_types::STYLES, DEFAULT_STYLES_PART),
+        (rel_types::SETTINGS, DEFAULT_SETTINGS_PART),
+        (rel_types::THEME, DEFAULT_THEME_PART),
+        (rel_types::FONT_TABLE, DEFAULT_FONT_TABLE_PART),
+    ];
+    let document_relationships = package
+        .get_part_rels("/word/document.xml")
+        .ok_or_else(|| Error::Other("fresh Word package has no main relationships".to_owned()))?;
+    if package.package_rels.items.len() != expected_package_relationships.len()
+        || document_relationships.items.len() != expected_document_relationships.len()
+        || package.part_rels.len() != 1
+    {
+        return Err(Error::Other(
+            "fresh Word package relationship inventory is incomplete".to_owned(),
+        ));
+    }
+    for (source, relationships, expected) in [
+        (
+            "/",
+            &package.package_rels,
+            expected_package_relationships.as_slice(),
+        ),
+        (
+            "/word/document.xml",
+            document_relationships,
+            expected_document_relationships.as_slice(),
+        ),
+    ] {
+        for (relationship_type, expected_target) in expected {
+            let matching: Vec<_> = relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == *relationship_type)
+                .collect();
+            if matching.len() != 1
+                || matching[0].target_mode.is_some()
+                || OpcPackage::resolve_rel_target(source, &matching[0].target) != *expected_target
+            {
+                return Err(Error::Other(format!(
+                    "fresh Word package relationship {relationship_type} is invalid"
+                )));
+            }
+        }
+    }
+    for (source, relationships) in std::iter::once(("/", &package.package_rels)).chain(
+        package
+            .part_rels
+            .iter()
+            .map(|(source, rels)| (source.as_str(), rels)),
+    ) {
+        for relationship in &relationships.items {
+            if relationship.target_mode.as_deref() == Some("External") {
+                continue;
+            }
+            let target = OpcPackage::resolve_rel_target(source, &relationship.target);
+            if !package.parts.contains_key(&target) {
+                return Err(Error::Other(format!(
+                    "fresh Word relationship targets missing part {target}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validated_word_package_class(package: &OpcPackage) -> Result<(String, WordPackageClass)> {
@@ -1838,16 +2053,46 @@ fn nth_table_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a m
 }
 
 impl Document {
-    /// Create a new, empty document with default page setup and styles.
+    /// Create a new Word-compatible DOCX document with default page setup and styles.
     pub fn new() -> Self {
-        let mut package = new_word_package();
+        Self::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ))
+    }
+
+    /// Create a new document with explicit package completeness and class.
+    pub fn new_with_profile(profile: WordCreationProfile) -> Self {
         let document = CT_Document::new();
         let styles = CT_Styles::new_default();
+        let (class, compatible) = match profile {
+            WordCreationProfile::Minimal(class) => (class, false),
+            WordCreationProfile::WordCompatible(class) => (class, true),
+        };
+        let settings = compatible.then(CT_Settings::new);
+        let core_properties = compatible.then(CoreProperties::default);
+        let mut package = if compatible {
+            new_word_compatible_package(
+                class,
+                &document,
+                &styles,
+                settings.as_ref().expect("compatible settings exist"),
+                core_properties
+                    .as_ref()
+                    .expect("compatible core properties exist"),
+            )
+        } else {
+            new_word_package(class)
+        };
+        if compatible {
+            validate_fresh_word_compatible_package(&package, class)
+                .expect("fresh Word-compatible package graph must validate");
+        }
 
-        // Set up styles relationship
-        package
-            .get_or_create_part_rels("/word/document.xml")
-            .add(rel_types::STYLES, "styles.xml");
+        if !compatible {
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .add(rel_types::STYLES, "styles.xml");
+        }
 
         Document {
             package,
@@ -1857,14 +2102,14 @@ impl Document {
             body_namespace_bindings: Vec::new(),
             styles,
             numbering: None,
-            core_properties: None,
+            core_properties,
             custom_properties: None,
             core_properties_part_name: DEFAULT_CORE_PROPERTIES_PART.to_string(),
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: DEFAULT_STYLES_PART.to_string(),
             numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
-            settings: None,
-            settings_part_name: None,
+            settings,
+            settings_part_name: compatible.then(|| DEFAULT_SETTINGS_PART.to_owned()),
             image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             footnotes_part_name: None,
@@ -7324,7 +7569,8 @@ mod tests {
     }
 
     fn document_with_minimal_chart() -> Document {
-        let mut document = Document::new();
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
         document
             .add_chart_package(
                 ChartPackageSource::Typed {
@@ -9024,7 +9270,8 @@ mod tests {
             std::process::id()
         ));
 
-        let mut word = Document::new();
+        let mut word =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
         word.add_chart(
             ChartKind::Bar,
             Length::inches(5.0),
@@ -11385,7 +11632,8 @@ mod tests {
 
     #[test]
     fn authored_settings_do_not_overwrite_an_unrelated_conventional_part() {
-        let mut document = Document::new();
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
         let unrelated = br#"<producer:metadata xmlns:producer="urn:producer"/>"#.to_vec();
         document
             .package

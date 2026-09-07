@@ -237,6 +237,14 @@ provide bounded strict Flat OPC interchange through the same `Document` and
 CLI bindings preserve opened class identity through their existing saves but
 gain no selector or Flat OPC entry point.
 
+Native Rust also exposes the additive pre-1.0 `WordCreationProfile` enum and
+`Document::new_with_profile`. `Minimal(WordPackageClass)` preserves the compact
+source-built graph. `WordCompatible(WordPackageClass)` owns the standard blank
+support parts, and `Document::new()` selects its DOCX form. Macro-capable
+profiles select package identity without manufacturing executable content.
+Python, WASM, and CLI construction continues through `Document::new()` and
+therefore receives the compatible DOCX default without a new selector surface.
+
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
 bundled-font page targets and returns `TocRebuildReport` with entry, newly

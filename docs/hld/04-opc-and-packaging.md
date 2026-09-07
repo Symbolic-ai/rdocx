@@ -36,6 +36,15 @@ unsafe targets, duplicate relationships, and unknown types fail closed. An
 output class conversion changes only that override on a staged clone and uses
 the existing signature invalidation path.
 
+Fresh Word construction has two explicit completeness profiles. The minimal
+profile owns only the main document and styles graph. The Word-compatible
+profile also owns settings, the Office theme, the font table, core properties,
+and application properties with exact content types and internal
+relationships. `Document::new()` selects Word-compatible DOCX. DOCM and DOTM
+declare macro-capable main-part identity without inventing a VBA project. Empty
+core properties omit created and modified timestamps, so equivalent fresh
+constructions remain byte-identical.
+
 Flat OPC is a private Word facade codec over `OpcPackage`. Import first applies
 the shared strict XML 1.0 lexical gate, then resolves expanded package names,
 unique canonical absolute part names, exact data-kind selection, strict base64,
@@ -135,8 +144,11 @@ impl ContentTypes {
 }
 ```
 
-The docx presets become a short private helper in `crates/rdocx/src/document.rs`,
-and the pptx presets one in `crates/rpptx/src/package.rs`.
+The Word presets remain private package helpers in
+`crates/rdocx/src/document.rs`. The public `WordCreationProfile` chooses the
+minimal or Word-compatible graph, while `WordPackageClass` supplies the exact
+main-part content type. The PowerPoint presets remain in
+`crates/rpptx/src/package.rs`.
 
 Rejected alternatives, recorded so they are not revisited: a `PackageKind` enum
 forces the leaf crate to carry every format's content-type table and grows a
@@ -587,6 +599,13 @@ Word package-class and Flat OPC path saves use that same atomic replacement
 helper. Both byte writers stage, serialize, and reopen their output before it
 is returned or published. Flat OPC import constructs the complete package and
 validates its Word class before a `Document` becomes observable.
+
+Fresh Word-compatible construction validates the complete staged graph before
+the `Document` becomes observable. The validator requires the exact owned part
+and content-type inventory, one relationship of every required type, no extra
+relationship scope, normalized internal targets, and an existing target for
+every internal edge. Public conformance then serializes and reopens all four
+classes and compares normalized package semantics.
 
 PDF conversion has the same publication boundary. It builds a fresh candidate,
 adds every source page in order, serializes, reopens, validates, and only then

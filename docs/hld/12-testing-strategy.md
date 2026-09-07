@@ -1360,6 +1360,10 @@ required-private entry modes. The two evidence paths are:
    modeled reopen state, unsupported-content diagnostics, unmodeled-part
    preservation, and repeated deterministic 150 DPI output. A base package,
    raw XML injection, private OXML facade, or prebuilt document fails the gate.
+   The same consumer source-builds Word-compatible DOCX, DOCM, DOTX, and DOTM
+   profiles. Each profile must retain its exact main-part identity, complete
+   normalized support graph, deterministic relationship identities, omitted
+   fresh timestamps, and absence of a synthesized VBA project.
 2. Local required-corpus mode builds the five target documents through their
    Rust generators and compares them with the configured private references.
    Missing input, unexpected input count, a digest change, or missing evidence
@@ -1377,6 +1381,12 @@ P1 through P5 aliases to exact local digests, page expectations, and tool
 identities. Tracked-path and staged-path scans reject private document formats
 without echoing a path or digest. Feature-level tests remain authoritative when
 byte identity is not a valid expectation.
+
+The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
+package relationship before reopen and repeat-save. The part bytes and
+relationship identity must survive exactly. The optional repair gate is pinned
+to Microsoft Word 16.104 build 16.104.25121423 and records whether that local
+GUI check ran.
 
 F-263 closes M23 only when all five generators pass local required-corpus mode,
 the synthetic public suite passes in CI, opening and saving requires no repair,

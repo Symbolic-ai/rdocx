@@ -1226,7 +1226,10 @@ mod tests {
         "a5ad0e8eb2d1a676daa07431deb2a0f11ee32e8bb92d099d14d5d16d43708adb";
 
     fn word_comment_candidate() -> Document {
-        let mut document = Document::new();
+        let mut document =
+            Document::new_with_profile(crate::document::WordCreationProfile::Minimal(
+                crate::document::WordPackageClass::Document,
+            ));
         let mut paragraph = document.add_paragraph("");
         paragraph.add_run("Review ");
         paragraph.add_run("this sentence.");

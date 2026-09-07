@@ -5118,7 +5118,10 @@ mod tests {
 
     #[test]
     fn epub_packages_only_structurally_valid_byte_sniffed_core_images() {
-        let mut document = Document::new();
+        let mut document =
+            Document::new_with_profile(crate::document::WordCreationProfile::Minimal(
+                crate::document::WordPackageClass::Document,
+            ));
         let valid = document.embed_image(PNG_1X1, "valid.bin");
         let forged = document.embed_image(b"not a PNG", "forged.png");
         let malformed = document.embed_image(b"\x89PNG\r\n\x1a\ntruncated", "malformed.png");

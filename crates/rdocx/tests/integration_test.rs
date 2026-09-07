@@ -10,11 +10,232 @@ use rdocx::{
     BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
     RunRange, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
-use rdocx::{Document, PackageReadLimits, RevisionKind, WordPackageClass};
+use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
 
 const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const MHTML_ORACLE_HTML: &str = "<h1>Oracle title</h1><p><strong>bold</strong> <a href='https://example.test/'>link</a><img src='https://example.test/pixel.png' width='2' height='3'></p><ol><li>one</li><li>two</li></ol><table><tr><td>cell</td></tr></table>";
+
+mod fresh_word_package_profile_tests {
+    use super::*;
+    use oxml_opc::content_types;
+
+    const STYLES_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
+    const SETTINGS_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
+    const FONT_TABLE_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
+
+    fn all_classes() -> [WordPackageClass; 4] {
+        [
+            WordPackageClass::Document,
+            WordPackageClass::MacroEnabledDocument,
+            WordPackageClass::Template,
+            WordPackageClass::MacroEnabledTemplate,
+        ]
+    }
+
+    fn main_content_type(class: WordPackageClass) -> &'static str {
+        match class {
+            WordPackageClass::Document => content_types::WORD_DOCUMENT,
+            WordPackageClass::MacroEnabledDocument => content_types::WORD_DOCUMENT_MACRO_ENABLED,
+            WordPackageClass::Template => content_types::WORD_TEMPLATE,
+            WordPackageClass::MacroEnabledTemplate => content_types::WORD_TEMPLATE_MACRO_ENABLED,
+        }
+    }
+
+    fn package_from_profile(profile: WordCreationProfile) -> OpcPackage {
+        let mut document = Document::new_with_profile(profile);
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap()
+    }
+
+    fn package_bytes(package: &OpcPackage) -> Vec<u8> {
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        output.into_inner()
+    }
+
+    fn relationship_types(package: &OpcPackage, source: &str) -> Vec<String> {
+        let relationships = if source == "/" {
+            &package.package_rels
+        } else {
+            package.get_part_rels(source).unwrap()
+        };
+        let mut types: Vec<_> = relationships
+            .items
+            .iter()
+            .map(|relationship| relationship.rel_type.clone())
+            .collect();
+        types.sort_unstable();
+        types
+    }
+
+    fn assert_internal_targets_exist(package: &OpcPackage) {
+        for (source, relationships) in std::iter::once(("/", &package.package_rels)).chain(
+            package
+                .part_rels
+                .iter()
+                .map(|(source, relationships)| (source.as_str(), relationships)),
+        ) {
+            let mut ids = std::collections::HashSet::new();
+            for relationship in &relationships.items {
+                assert!(ids.insert(&relationship.id), "duplicate relationship ID");
+                if relationship.target_mode.as_deref() != Some("External") {
+                    let target = OpcPackage::resolve_rel_target(source, &relationship.target);
+                    assert!(
+                        package.get_part(&target).is_some(),
+                        "{source} targets missing part {target}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn word_compatible_profiles_reopen_with_the_same_package_class() {
+        for class in all_classes() {
+            let mut package = package_from_profile(WordCreationProfile::WordCompatible(class));
+            const PROBE: &[u8] =
+                br#"<probe xmlns="urn:rdocx:f243"><opaque keep="exact"> bytes </opaque></probe>"#;
+            package.set_part("/custom/profile-probe.xml", PROBE.to_vec());
+            package
+                .content_types
+                .add_override("/custom/profile-probe.xml", "application/xml");
+            package.package_rels.add_with_id(
+                "profileProbe",
+                "urn:rdocx:relationships/profile-probe",
+                "custom/profile-probe.xml",
+            );
+            let mut reopened =
+                Document::from_bytes(&package_bytes(&package)).expect("compatible profile reopens");
+            assert_eq!(reopened.package_class().unwrap(), class);
+            let saved = reopened.to_bytes().expect("reopened profile serializes");
+            let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+            assert_eq!(saved.get_part("/custom/profile-probe.xml"), Some(PROBE));
+            let relationship = saved
+                .package_rels
+                .get_by_id("profileProbe")
+                .expect("unmodelled relationship survives");
+            assert_eq!(
+                relationship.rel_type,
+                "urn:rdocx:relationships/profile-probe"
+            );
+            assert_eq!(relationship.target, "custom/profile-probe.xml");
+        }
+    }
+
+    #[test]
+    fn word_compatible_profiles_have_a_complete_normalized_package_graph() {
+        let required_parts = [
+            "/docProps/app.xml",
+            "/docProps/core.xml",
+            "/word/document.xml",
+            "/word/fontTable.xml",
+            "/word/settings.xml",
+            "/word/styles.xml",
+            "/word/theme/theme1.xml",
+        ];
+        for class in all_classes() {
+            let package = package_from_profile(WordCreationProfile::WordCompatible(class));
+            let mut parts: Vec<_> = package.parts.keys().map(String::as_str).collect();
+            parts.sort_unstable();
+            assert_eq!(parts, required_parts);
+            assert_eq!(package.content_types.overrides.len(), required_parts.len());
+            assert_eq!(
+                package.content_types.overrides["/word/document.xml"],
+                main_content_type(class)
+            );
+            for (part_name, expected) in [
+                ("/word/styles.xml", STYLES_CONTENT_TYPE),
+                ("/word/settings.xml", SETTINGS_CONTENT_TYPE),
+                ("/word/fontTable.xml", FONT_TABLE_CONTENT_TYPE),
+                ("/word/theme/theme1.xml", content_types::THEME),
+                ("/docProps/core.xml", content_types::CORE_PROPERTIES),
+                ("/docProps/app.xml", content_types::EXTENDED_PROPERTIES),
+            ] {
+                assert_eq!(package.content_types.overrides[part_name], expected);
+            }
+            assert_eq!(
+                relationship_types(&package, "/"),
+                [
+                    rel_types::EXTENDED_PROPERTIES,
+                    rel_types::DOCUMENT,
+                    rel_types::CORE_PROPERTIES,
+                ]
+            );
+            assert_eq!(
+                relationship_types(&package, "/word/document.xml"),
+                [
+                    rel_types::FONT_TABLE,
+                    rel_types::SETTINGS,
+                    rel_types::STYLES,
+                    rel_types::THEME,
+                ]
+            );
+            assert_internal_targets_exist(&package);
+            assert!(
+                package
+                    .package_rels
+                    .get_by_type(rel_types::VBA_PROJECT)
+                    .is_none()
+            );
+            assert!(
+                package
+                    .get_part_rels("/word/document.xml")
+                    .unwrap()
+                    .get_by_type(rel_types::VBA_PROJECT)
+                    .is_none()
+            );
+            let core =
+                std::str::from_utf8(package.get_part("/docProps/core.xml").unwrap()).unwrap();
+            assert!(!core.contains("dcterms:created"));
+            assert!(!core.contains("dcterms:modified"));
+        }
+    }
+
+    #[test]
+    fn document_new_uses_the_word_compatible_docx_profile() {
+        let default = Document::new().to_bytes().unwrap();
+        let compatible = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ))
+        .to_bytes()
+        .unwrap();
+        let minimal =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document))
+                .to_bytes()
+                .unwrap();
+        assert_eq!(default, compatible);
+        assert_ne!(minimal, compatible);
+        let minimal = OpcPackage::from_reader(std::io::Cursor::new(minimal)).unwrap();
+        let mut minimal_parts: Vec<_> = minimal.parts.keys().map(String::as_str).collect();
+        minimal_parts.sort_unstable();
+        assert_eq!(minimal_parts, ["/word/document.xml", "/word/styles.xml"]);
+        assert_eq!(relationship_types(&minimal, "/"), [rel_types::DOCUMENT]);
+        assert_eq!(
+            relationship_types(&minimal, "/word/document.xml"),
+            [rel_types::STYLES]
+        );
+    }
+
+    #[test]
+    fn equivalent_fresh_profiles_serialize_identically() {
+        for class in all_classes() {
+            let mut first = Document::new_with_profile(WordCreationProfile::WordCompatible(class));
+            let mut second = Document::new_with_profile(WordCreationProfile::WordCompatible(class));
+            let first_bytes = first.to_bytes().unwrap();
+            assert_eq!(first_bytes, second.to_bytes().unwrap());
+            assert_eq!(
+                first_bytes,
+                Document::from_bytes(&first_bytes)
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap()
+            );
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MhtmlOracleRecord {
@@ -2040,7 +2261,8 @@ fn html_import_projects_a_reopenable_word_document() {
 #[test]
 fn settings_relationship_target_is_resolved_instead_of_assumed() {
     let settings = br#"<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="comments" w:enforcement="true" w:hash="custom-hash" w:salt="custom-salt"/></w:settings>"#;
-    let mut seed = Document::new();
+    let mut seed =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
     let bytes = seed.to_bytes().unwrap();
     let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
     package.set_part("/word/config/protection.xml", settings.to_vec());

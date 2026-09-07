@@ -942,6 +942,13 @@ consuming builders for formatting so calls chain, `&mut self` methods for adding
 content that return a nested handle, and index-based `Option`-returning
 accessors that never panic.
 
+The native Word facade creates a complete Word-compatible DOCX graph by
+default. `WordCreationProfile` separates package completeness from the four
+`WordPackageClass` identities, so native callers can select DOCX, DOCM, DOTX,
+or DOTM while retaining an explicit compact package option. The compatible
+profile owns its main document, styles, settings, theme, font table, core
+properties, and application properties without loading a template.
+
 The `rdocx` facade also provides direct immutable paragraph lookup. Mutable
 and read-only paragraph handles each provide total run count and lookup, while
 only the mutable handle provides mutable run lookup. These accessors let the

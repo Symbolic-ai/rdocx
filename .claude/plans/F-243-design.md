@@ -1,6 +1,6 @@
 # F-243, Word-compatible fresh package profiles
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-240
@@ -67,8 +67,9 @@ checks. Compare semantic package trees, not producer ZIP bytes.
 |---|---|---|
 | round-trip | `word_compatible_profiles_reopen_with_the_same_package_class` | DOCX, DOCM, DOTX, and DOTM profiles retain exact identity and required owned parts after save and reopen. |
 | integration | `word_compatible_profiles_have_a_complete_normalized_package_graph` | Required content types and relationships are present once, point to existing parts, and pass strict validation. |
-| regression | `minimal_profile_preserves_the_existing_document_new_contract` | `Document::new()` remains the explicit minimal DOCX package. |
+| regression | `document_new_uses_the_word_compatible_docx_profile` | `Document::new()` uses the Word-compatible DOCX graph, while the explicit minimal DOCX profile preserves the compact package. |
 | regression | `equivalent_fresh_profiles_serialize_identically` | Two equivalent constructions and repeated saves are byte-identical. |
+| regression | `word_compatible_profile_preserves_unmodelled_package_content` | Profile-aware reopen and save preserve unrelated XML parts and relationships byte-identically. |
 | differential | pinned Word no-repair check | Every produced class opens without a repair prompt when the configured Word gate is available. |
 
 The **test gate is round-trip**. Each profile saves, reopens with the same
@@ -101,14 +102,14 @@ exact expected package-only delta as the F-243 behavior commit.
 
 ## Implementation checklist
 
-- [ ] Add the profile enum and profile-aware constructor in existing modules.
-- [ ] Construct the required parts and relationship graph deterministically.
-- [ ] Select all four exact Word main-part content types.
-- [ ] Validate the staged graph before publishing a document.
-- [ ] Add round-trip, strict package, determinism, and minimal-profile tests.
-- [ ] Extend the public conformance fixture without adding a Rust test binary.
-- [ ] Run the full gate and all routed checks.
-- [ ] Update exactly the listed HLD files.
+- [x] Add the profile enum and profile-aware constructor in existing modules.
+- [x] Construct the required parts and relationship graph deterministically.
+- [x] Select all four exact Word main-part content types.
+- [x] Validate the staged graph before publishing a document.
+- [x] Add round-trip, strict package, determinism, and minimal-profile tests.
+- [x] Extend the public conformance fixture without adding a Rust test binary.
+- [x] Run the full gate and all routed checks.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 
