@@ -2267,7 +2267,7 @@ Author the settings, core properties, application properties, custom
 properties, document variables, compatibility facts, and defaults required by
 the private corpus. Values are typed, deterministic, and removable through the
 public facade.
-**Depends on**: F-243.
+**Depends on**: F-243, F-249.
 **Test gate**: round-trip. Every authored value survives save and reopen, and
 removal deletes only its owned package content.
 
@@ -2275,7 +2275,7 @@ removal deletes only its owned package content.
 Create and select the theme, font table, language defaults, font relationships,
 and licensed embedded-font parts required by the private documents. Font
 embedding remains caller-authorized and preserves exact licensing metadata.
-**Depends on**: F-243.
+**Depends on**: F-243, F-249.
 **Test gate**: differential. Public-authored theme and font resolution matches
 the pinned Word references in deterministic layout without system-font input.
 
@@ -2294,7 +2294,7 @@ paragraph-style links, suffix, alignment, indentation, marker properties,
 legal numbering, restart controls, level overrides, and start overrides. The
 public format type accepts the complete standard set, including `none`, without
 requiring raw XML.
-**Depends on**: F-243.
+**Depends on**: F-243, F-249.
 **Test gate**: round-trip. Every typed level and override survives save and
 reopen with schema-correct order and reports no unmodeled properties when
 created solely through the public API.
