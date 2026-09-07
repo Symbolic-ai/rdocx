@@ -1,6 +1,6 @@
 # F-X085, Memoize restart body identities once per layout
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S70
 **Size**: M
 **Depends on**: F-X075, F-X083
@@ -92,14 +92,14 @@ work without changing pagination or rendered output.
 
 ## Implementation checklist
 
-- [ ] Add identity-computation and transient-memory instrumentation and tests.
-- [ ] Add the private tri-state per-layout memo.
-- [ ] Separate fingerprint filtering from exact identity comparison.
-- [ ] Share the memo across all scans and restart-record publication.
-- [ ] Reuse computed identity bytes when publishing retained entries.
-- [ ] Preserve unserializable failure and aggregate cache behavior.
-- [ ] Run scoped checks, full verification, hash checks, and routed riders.
-- [ ] Update exactly the listed HLD files.
+- [x] Add identity-computation and transient-memory instrumentation and tests.
+- [x] Add the private tri-state per-layout memo.
+- [x] Separate fingerprint filtering from exact identity comparison.
+- [x] Share the memo across all scans and restart-record publication.
+- [x] Reuse computed identity bytes when publishing retained entries.
+- [x] Preserve unserializable failure and aggregate cache behavior.
+- [x] Run scoped checks, full verification, hash checks, and routed riders.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

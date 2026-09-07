@@ -4497,10 +4497,12 @@ paragraphs hit the cache, and deterministic output hashes remain unchanged.
 
 ### F-X085, Memoize restart body identities once per layout (M)
 
-Share one lazy candidate-identity memo across unchanged-body, first-change, and
-common-suffix scans so each body block serializes its exact identity at most
-once per layout. Exact identity bytes remain authoritative after the existing
-fingerprint prefilter, and the bounded transient memory cost is measured.
+One lazy tri-state candidate-identity memo supplies unchanged-body,
+first-change, common-suffix, and restart-record publication work so each body
+block serializes its exact identity at most once per layout. Fingerprint misses
+remain serialization-free, exact identity bytes remain authoritative after a
+fingerprint match, and publication moves computed bytes into retained entries.
+Test-only counters measure the bounded transient slot and byte-capacity peaks.
 Review `@emptinessform` commit `eff0ea0c` independently and retain contributor
 credit for any adopted implementation.
 

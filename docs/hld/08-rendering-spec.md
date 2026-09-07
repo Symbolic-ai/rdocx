@@ -813,6 +813,14 @@ boundary inside an unchanged suffix only when the complete retained context,
 font-resolution trace, page count, displayed header page number, and exact
 typed body suffix all match. Retained prefix and tail page frames keep their
 `Arc` ownership through pagination. Newly paginated pages are allocated once.
+One private lazy tri-state memo per layout supplies candidate body identities to
+the unchanged-body, first-change, and common-suffix scans and to restart-record
+publication. A fingerprint mismatch leaves its slot uncomputed. An exact match
+still compares the complete serialized bytes, and publication moves an already
+computed identity into the retained entry. The memo has one slot per candidate
+body block, retains at most one exact identity per populated slot, and is
+dropped before the layout returns. It does not change the persistent restart
+cache envelope.
 When restarted body pagination reaches the end, endnote pages are appended
 once. An attached exact cached tail already carries those pages. If any
 equality or capacity check fails, pagination continues through the normal full

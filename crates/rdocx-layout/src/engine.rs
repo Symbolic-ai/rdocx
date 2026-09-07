@@ -887,6 +887,12 @@ pub struct Engine {
     last_shared_block_counts: (usize, usize),
     #[cfg(test)]
     page_layout_invocations: usize,
+    #[cfg(test)]
+    last_restart_identity_computations: usize,
+    #[cfg(test)]
+    last_restart_identity_memo_peak_slots: usize,
+    #[cfg(test)]
+    last_restart_identity_memo_peak_bytes: usize,
 }
 
 #[derive(Clone, PartialEq)]
@@ -917,6 +923,7 @@ struct ReusableEngineContext {
 #[cfg(test)]
 thread_local! {
     static RETAINED_CONTEXT_FONT_BYTES_COMPARED: Cell<usize> = const { Cell::new(0) };
+    static RESTART_BODY_IDENTITY_COMPUTATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn retained_context_fonts_match(
@@ -940,6 +947,16 @@ fn reset_retained_context_font_bytes_compared() {
 #[cfg(test)]
 fn retained_context_font_bytes_compared() -> usize {
     RETAINED_CONTEXT_FONT_BYTES_COMPARED.get()
+}
+
+#[cfg(test)]
+fn reset_restart_body_identity_computations() {
+    RESTART_BODY_IDENTITY_COMPUTATIONS.set(0);
+}
+
+#[cfg(test)]
+fn restart_body_identity_computations() -> usize {
+    RESTART_BODY_IDENTITY_COMPUTATIONS.get()
 }
 
 impl ReusableEngineContext {
@@ -1160,36 +1177,74 @@ enum RestartBodyEntry {
 }
 
 impl RestartBodyEntry {
+    #[cfg(test)]
     fn matches(&self, content: &BodyContent) -> bool {
+        if !self.fingerprint_matches(content) {
+            return false;
+        }
+        self.identity_matches(restart_body_identity(content).as_deref())
+    }
+
+    fn matches_memoized(
+        &self,
+        content: &BodyContent,
+        index: usize,
+        memo: &mut RestartBodyIdentityMemo,
+    ) -> bool {
+        if !self.fingerprint_matches(content) {
+            return false;
+        }
+        self.identity_matches(memo.identity(index, content))
+    }
+
+    #[cfg(test)]
+    fn fingerprint(&self) -> u64 {
+        match self {
+            Self::Paragraph { fingerprint, .. } | Self::Table { fingerprint, .. } => *fingerprint,
+        }
+    }
+
+    fn fingerprint_matches(&self, content: &BodyContent) -> bool {
         match (self, content) {
-            (
-                Self::Paragraph {
-                    fingerprint,
-                    identity,
-                    ..
-                },
-                BodyContent::Paragraph(paragraph),
-            ) => {
+            (Self::Paragraph { fingerprint, .. }, BodyContent::Paragraph(paragraph)) => {
                 *fingerprint == paragraph_fingerprint(paragraph)
-                    && restart_body_identity(content).as_ref() == Some(identity)
             }
-            (
-                Self::Table {
-                    fingerprint,
-                    identity,
-                    ..
-                },
-                BodyContent::Table(table),
-            ) => {
+            (Self::Table { fingerprint, .. }, BodyContent::Table(table)) => {
                 *fingerprint == table_fingerprint(table)
-                    && restart_body_identity(content).as_ref() == Some(identity)
             }
             _ => false,
         }
     }
 
+    fn identity_matches(&self, candidate: Option<&[u8]>) -> bool {
+        match self {
+            Self::Paragraph { identity, .. } | Self::Table { identity, .. } => {
+                candidate == Some(identity.as_slice())
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn for_content(content: &BodyContent, view: RevisionView) -> Option<Self> {
         let identity = restart_body_identity(content)?;
+        Self::for_content_with_identity(content, view, identity)
+    }
+
+    fn for_content_memoized(
+        content: &BodyContent,
+        view: RevisionView,
+        index: usize,
+        memo: &mut RestartBodyIdentityMemo,
+    ) -> Option<Self> {
+        let identity = memo.take_identity(index, content)?;
+        Self::for_content_with_identity(content, view, identity)
+    }
+
+    fn for_content_with_identity(
+        content: &BodyContent,
+        view: RevisionView,
+        identity: Vec<u8>,
+    ) -> Option<Self> {
         match content {
             BodyContent::Paragraph(paragraph) => {
                 let mut note_references = paragraph_note_references(paragraph, view);
@@ -1231,7 +1286,100 @@ impl RestartBodyEntry {
     }
 }
 
+enum RestartBodyIdentitySlot {
+    NotComputed,
+    Unserializable,
+    Computed(Vec<u8>),
+}
+
+struct RestartBodyIdentityMemo {
+    slots: Vec<RestartBodyIdentitySlot>,
+    #[cfg(test)]
+    computations: usize,
+    #[cfg(test)]
+    populated_slots: usize,
+    #[cfg(test)]
+    retained_bytes: usize,
+    #[cfg(test)]
+    peak_retained_bytes: usize,
+}
+
+impl RestartBodyIdentityMemo {
+    fn new(len: usize) -> Self {
+        Self {
+            slots: std::iter::repeat_with(|| RestartBodyIdentitySlot::NotComputed)
+                .take(len)
+                .collect(),
+            #[cfg(test)]
+            computations: 0,
+            #[cfg(test)]
+            populated_slots: 0,
+            #[cfg(test)]
+            retained_bytes: 0,
+            #[cfg(test)]
+            peak_retained_bytes: 0,
+        }
+    }
+
+    fn compute(&mut self, index: usize, content: &BodyContent) {
+        let Some(slot) = self.slots.get(index) else {
+            return;
+        };
+        if !matches!(slot, RestartBodyIdentitySlot::NotComputed) {
+            return;
+        }
+        let identity = restart_body_identity(content);
+        #[cfg(test)]
+        {
+            self.computations = self.computations.saturating_add(1);
+            self.populated_slots = self.populated_slots.saturating_add(1);
+        }
+        let replacement = match identity {
+            Some(identity) => {
+                #[cfg(test)]
+                {
+                    self.retained_bytes = self.retained_bytes.saturating_add(identity.capacity());
+                    self.peak_retained_bytes = self.peak_retained_bytes.max(self.retained_bytes);
+                }
+                RestartBodyIdentitySlot::Computed(identity)
+            }
+            None => RestartBodyIdentitySlot::Unserializable,
+        };
+        if let Some(slot) = self.slots.get_mut(index) {
+            *slot = replacement;
+        }
+    }
+
+    fn identity(&mut self, index: usize, content: &BodyContent) -> Option<&[u8]> {
+        self.compute(index, content);
+        match self.slots.get(index)? {
+            RestartBodyIdentitySlot::Computed(identity) => Some(identity),
+            RestartBodyIdentitySlot::NotComputed | RestartBodyIdentitySlot::Unserializable => None,
+        }
+    }
+
+    fn take_identity(&mut self, index: usize, content: &BodyContent) -> Option<Vec<u8>> {
+        self.compute(index, content);
+        let RestartBodyIdentitySlot::Computed(identity) = self.slots.get_mut(index)? else {
+            return None;
+        };
+        #[cfg(test)]
+        {
+            self.retained_bytes = self.retained_bytes.saturating_sub(identity.capacity());
+        }
+        Some(std::mem::take(identity))
+    }
+
+    #[cfg(test)]
+    fn computations(&self) -> usize {
+        self.computations
+    }
+}
+
 fn restart_body_identity(content: &BodyContent) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    RESTART_BODY_IDENTITY_COMPUTATIONS
+        .set(RESTART_BODY_IDENTITY_COMPUTATIONS.get().saturating_add(1));
     if !matches!(content, BodyContent::Paragraph(_) | BodyContent::Table(_)) {
         return None;
     }
@@ -1414,6 +1562,12 @@ impl Engine {
             last_shared_block_counts: (0, 0),
             #[cfg(test)]
             page_layout_invocations: 0,
+            #[cfg(test)]
+            last_restart_identity_computations: 0,
+            #[cfg(test)]
+            last_restart_identity_memo_peak_slots: 0,
+            #[cfg(test)]
+            last_restart_identity_memo_peak_bytes: 0,
         }
     }
 
@@ -1543,9 +1697,17 @@ impl Engine {
             self.pending_header_footer_cache_peak_entries = 0;
             self.pending_header_footer_cache_peak_bytes = 0;
             self.page_layout_invocations = 0;
+            self.last_restart_identity_computations = 0;
+            self.last_restart_identity_memo_peak_slots = 0;
+            self.last_restart_identity_memo_peak_bytes = 0;
+            reset_restart_body_identity_computations();
         }
 
         let result = self.layout_transaction(input, sources, has_wrapping_drawing);
+        #[cfg(test)]
+        {
+            self.last_restart_identity_computations = restart_body_identity_computations();
+        }
         let pending = self.pending_paragraph_cache.take().unwrap_or_default();
         let pending_tables = self.pending_table_cache.take().unwrap_or_default();
         let pending_header_footers = self.pending_header_footer_cache.take().unwrap_or_default();
@@ -1881,6 +2043,8 @@ impl Engine {
                     && (sources.is_none() || cache.body.len() == input.document.body.content.len())
             });
         let reusable_restart = restart_eligible && reusable_restart_record;
+        let mut restart_identity_memo =
+            RestartBodyIdentityMemo::new(input.document.body.content.len());
         let body_unchanged = reusable_restart_record
             && self.restart_cache.as_ref().is_some_and(|cache| {
                 cache.body.len() == input.document.body.content.len()
@@ -1890,7 +2054,10 @@ impl Engine {
                         .content
                         .iter()
                         .zip(&cache.body)
-                        .all(|(content, retained)| retained.matches(content))
+                        .enumerate()
+                        .all(|(index, (content, retained))| {
+                            retained.matches_memoized(content, index, &mut restart_identity_memo)
+                        })
             });
         let first_changed = reusable_restart.then(|| {
             let cache = self.restart_cache.as_ref().expect("restart cache exists");
@@ -1900,7 +2067,10 @@ impl Engine {
                 .content
                 .iter()
                 .zip(&cache.body)
-                .position(|(current, previous)| !previous.matches(current))
+                .enumerate()
+                .position(|(index, (current, previous))| {
+                    !previous.matches_memoized(current, index, &mut restart_identity_memo)
+                })
                 .unwrap_or_else(|| input.document.body.content.len().min(cache.body.len()))
         });
         let common_suffix = reusable_restart.then(|| {
@@ -1910,9 +2080,12 @@ impl Engine {
                 .body
                 .content
                 .iter()
+                .enumerate()
                 .rev()
                 .zip(cache.body.iter().rev())
-                .take_while(|(current, previous)| previous.matches(current))
+                .take_while(|((index, current), previous)| {
+                    previous.matches_memoized(current, *index, &mut restart_identity_memo)
+                })
                 .count()
         });
         let restart_checkpoint = first_changed.and_then(|first_changed| {
@@ -2298,7 +2471,12 @@ impl Engine {
                         let old_index = old_len.saturating_sub(new_len - index);
                         return old_body.and_then(|body| body.get(old_index)).cloned();
                     }
-                    RestartBodyEntry::for_content(content, input.revision_view)
+                    RestartBodyEntry::for_content_memoized(
+                        content,
+                        input.revision_view,
+                        index,
+                        &mut restart_identity_memo,
+                    )
                 })
                 .collect::<Vec<_>>();
             let body_complete = body.len() == new_len;
@@ -2344,6 +2522,12 @@ impl Engine {
         } else {
             self.restart_cache = None;
         }
+        #[cfg(test)]
+        {
+            self.last_restart_identity_memo_peak_slots = restart_identity_memo.populated_slots;
+            self.last_restart_identity_memo_peak_bytes = restart_identity_memo.peak_retained_bytes;
+        }
+        drop(restart_identity_memo);
         let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
         result.diagnostics = diagnostics;
         result.structure = Some(structure);
@@ -2605,6 +2789,19 @@ impl Engine {
     #[cfg(test)]
     fn page_layout_invocation_count(&self) -> usize {
         self.page_layout_invocations
+    }
+
+    #[cfg(test)]
+    fn restart_identity_memo_computations(&self) -> usize {
+        self.last_restart_identity_computations
+    }
+
+    #[cfg(test)]
+    fn restart_identity_memo_peak(&self) -> (usize, usize) {
+        (
+            self.last_restart_identity_memo_peak_slots,
+            self.last_restart_identity_memo_peak_bytes,
+        )
     }
 
     fn publish_paragraph_cache_entry(&mut self, entry: ParagraphCacheEntry) {
@@ -11309,6 +11506,106 @@ mod tests {
             );
             assert!(!retained.matches(&BodyContent::Paragraph(candidate)));
         }
+    }
+
+    fn restart_identity_memo_input() -> LayoutInput {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        for index in 0..715 {
+            if (index + 1) % 50 == 0 {
+                input
+                    .document
+                    .body
+                    .add_table(safe_table(&format!("Table block {index}")));
+            } else {
+                let mut paragraph = CT_P::new();
+                paragraph.add_run(&format!("Body block {index}"));
+                input.document.body.add_paragraph(paragraph);
+            }
+        }
+        input
+    }
+
+    #[test]
+    fn restart_body_identities_are_computed_at_most_once_per_layout() {
+        let mut input = restart_identity_memo_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("initial layout succeeds");
+
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[357] else {
+            panic!("edited block is a paragraph")
+        };
+        paragraph.add_run(" changed");
+        let warm = engine.layout(&input).expect("warm edited layout succeeds");
+        assert!(engine.restart_identity_memo_computations() <= 715);
+
+        let mut fresh_engine = Engine::new_deterministic().expect("bundled fonts load");
+        let fresh = fresh_engine
+            .layout(&input)
+            .expect("fresh edited layout succeeds");
+        assert!(fresh_engine.restart_identity_memo_computations() <= 715);
+        assert_layout_results_equal(&warm, &fresh);
+    }
+
+    #[test]
+    fn memoized_restart_identity_keeps_exact_bytes_authoritative_after_fingerprint_match() {
+        let mut paragraph = CT_P::new();
+        let mut run = CT_R::new("representation");
+        run.properties = Some(CT_RPr {
+            language: Some("en-US".to_owned()),
+            ..CT_RPr::default()
+        });
+        paragraph.runs.push(run);
+        let retained = RestartBodyEntry::for_content(
+            &BodyContent::Paragraph(paragraph.clone()),
+            RevisionView::Accepted,
+        )
+        .expect("paragraph has restart identity");
+        paragraph.runs[0]
+            .properties
+            .as_mut()
+            .expect("run properties exist")
+            .language = Some("en-GB".to_owned());
+        let candidate = BodyContent::Paragraph(paragraph);
+        let mut memo = RestartBodyIdentityMemo::new(1);
+
+        let BodyContent::Paragraph(candidate_paragraph) = &candidate else {
+            unreachable!("candidate is a paragraph")
+        };
+        assert_eq!(
+            retained.fingerprint(),
+            paragraph_fingerprint(candidate_paragraph)
+        );
+        assert!(!retained.matches_memoized(&candidate, 0, &mut memo));
+        assert_eq!(memo.computations(), 1);
+
+        let mut changed_text = candidate_paragraph.clone();
+        changed_text.add_run("fingerprint miss");
+        let changed_text = BodyContent::Paragraph(changed_text);
+        let mut fingerprint_miss_memo = RestartBodyIdentityMemo::new(1);
+        assert!(!retained.matches_memoized(&changed_text, 0, &mut fingerprint_miss_memo));
+        assert_eq!(fingerprint_miss_memo.computations(), 0);
+    }
+
+    #[test]
+    fn restart_identity_memo_transient_memory_is_bounded() {
+        let input = restart_identity_memo_input();
+        let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+        engine.layout(&input).expect("initial layout succeeds");
+        engine.layout(&input).expect("warm layout succeeds");
+
+        let (slots, bytes) = engine.restart_identity_memo_peak();
+        assert!(slots <= input.document.body.content.len());
+        let retained_identity_bytes = engine
+            .restart_cache
+            .as_ref()
+            .expect("restart record retained")
+            .body
+            .iter()
+            .map(RestartBodyEntry::bytes)
+            .sum::<usize>();
+        assert!(bytes <= retained_identity_bytes);
+        assert_restart_cache_within_aggregate(&engine);
     }
 
     #[test]

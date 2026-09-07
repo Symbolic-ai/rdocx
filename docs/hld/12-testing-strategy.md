@@ -782,6 +782,16 @@ delete, and undo
 results to equal fresh deterministic layout while recomputing only a bounded
 page region.
 
+The restart-identity memo regressions build a 715-block mixed body and require
+each candidate identity to be serialized at most once across all restart scans
+and restart-record publication in one layout. Warm and fresh deterministic
+results remain exact. A forced fingerprint collision still compares complete
+serialized bytes, while a fingerprint miss leaves the candidate memo slot
+uncomputed. Test-only counters bound peak populated slots by the body length and
+peak retained identity capacity by the published restart identities. The memo
+itself is local to one layout, while the existing 5,216-entry and 64 MiB checks
+continue to govern persistent retained work.
+
 The Issue 67 release-performance rider is an ignored timing-only regression.
 It runs identical 175-paragraph and 700-paragraph sources through the reusable
 native and deterministic bundled-fallback paths in four alternating rounds.
