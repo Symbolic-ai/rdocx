@@ -12293,3 +12293,45 @@ thousand-page and aggregate restart-cache bounds also passed. The integrated
 **Notes for future sessions.** Keep the memo layout-local and preserve exact
 byte equality after the fingerprint prefilter. F-X086 owns restart provenance
 across body-length changes and must not weaken this at-most-once boundary.
+
+### F-X086, Provenance-safe restart after body-length changes
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Sourced insert, delete, Enter, adjacent merge, and
+multi-block selection-delete operations now restart at the last complete safe
+prefix checkpoint after a body-length change. The paginator rebuilds every
+later page so shifted Word body-index paths are regenerated, while source-free
+layouts retain exact suffix attachment. Authenticated `@emptinessform` commits
+`9e48bc86` and `c8315b92` supplied the complementary prefix and provenance-tail
+mechanisms, with contributor credit retained in the HLD and commit record.
+
+**Non-obvious choices.** Equal body length was removed only from reusable
+prefix eligibility. Whole-body unchanged detection remains length aware, and
+retained tail attachment still requires absent provenance or equal body length.
+All context, note sequence, font trace, capacity, and unsafe-state gates remain
+exact.
+
+**Deviations from the design plan.** None. Microscope passes 1 and 2 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `sourced_insert_and_delete_restart_instead_of_repaginating`,
+`sourced_length_change_never_reuses_shifted_tail_pages`, and
+`sourced_enter_merge_and_selection_delete_restart_from_safe_prefix` passed.
+The first gate was observed failing against the prior implementation with 22
+recomputed pages. The new operations recompute at most three pages, match fresh
+layout and source paths, retain only a contiguous prefix, and keep no shifted
+sourced tail identity. The integrated `/verify --full` gate passed at
+`92dd0f8a51704ae5fd95acf704e9b088c64e97b0`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve the distinction between safe prefix
+restart and unsafe shifted-tail reuse. Body-index provenance after a structural
+edit must always be rebuilt from the edit through the document end.
