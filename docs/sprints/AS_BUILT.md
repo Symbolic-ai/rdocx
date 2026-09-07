@@ -12206,3 +12206,90 @@ at `dae856078f69792beb0920f3f795b21994bbb16e`.
 **Notes for future sessions.** Keep paragraph-only note invalidation separate
 from F-X085 body-identity memoization and F-X086 restart provenance. Those
 stories retain their own performance and correctness gates.
+
+### F-242, Root README product and capability overview
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The root README now states a bounded Rust DOCX product
+promise, defines the five capability classifications, and maps each major
+category claim to the canonical modern DOCX matrix. Installation requirements
+derive from Cargo metadata. Three concise Rust examples compile, local paths
+and anchors resolve, and the alternatives table permits only reviewed official
+functional, license, runtime, and host-dependency evidence.
+
+**Non-obvious choices.** Reading, mutation, and preservation remain separate
+claims. The comparison gate validates exact row content and an official URL
+allowlist, while its live URL mode stays outside default network-independent
+CI. Linked badge destinations pass through the same repository-local path gate
+as ordinary links and images.
+
+**Deviations from the design plan.** Completion review found that the F-X002
+backlog entry still described six root examples. The approved HLD impact list
+was extended to `docs/hld/14-development-backlog.md`, and that stale statement
+now matches the three-example gate. Microscope pass 1 found three validation
+defects involving unbound capability prose, unbound comparison cells, and
+linked badge targets. Mutation tests cover every remediation, and pass 2
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `test_root_readme_capability_claims_match_the_approved_matrix`,
+`test_root_readme_versions_match_workspace_manifests`,
+`test_root_readme_local_link_and_anchor_mutation_matrix`, and
+`test_root_readme_approved_comparison_evidence_matrix` passed. The README
+runner compiled 23 examples across 21 Rust-library READMEs and verified all 27
+workspace README inventories and 22 packaged copies. The integrated
+`/verify --full` gate passed at
+`437233a5bec1f44052fc60fcdd7538027a7ba720`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep detailed capability ownership in the
+canonical matrix and backlog. Update the bounded root summary and its existing
+validation tables when public classifications or package versions change.
+
+### F-X085, Memoize restart body identities once per layout
+
+**Sprint.** S70
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** One private lazy tri-state memo now supplies exact body
+identities to the unchanged-body, first-change, common-suffix, and
+restart-record publication paths. A fingerprint miss remains
+serialization-free. A fingerprint match still compares complete bytes, and
+publication moves an already computed identity into retained restart state.
+
+**Non-obvious choices.** Unserializable candidates occupy a failed memo slot so
+they are not retried within the same layout. Test-only instrumentation counts
+the serialization boundary itself and measures peak populated slots and byte
+capacity. The memo is dropped before return, and persistent aggregate cache
+accounting remains unchanged.
+
+**Deviations from the design plan.** None. Microscope pass 1 found that the
+initial regression counted memo requests instead of every serialization. The
+counter moved to `restart_body_identity`, and a negative mutation that bypasses
+the scan memo now fails the 715-block bound. Pass 2 reported zero defects, zero
+smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/08-rendering-spec.md`,
+`docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `restart_body_identities_are_computed_at_most_once_per_layout`,
+`memoized_restart_identity_keeps_exact_bytes_authoritative_after_fingerprint_match`,
+and `restart_identity_memo_transient_memory_is_bounded` passed. Existing
+thousand-page and aggregate restart-cache bounds also passed. The integrated
+`/verify --full` gate passed at
+`437233a5bec1f44052fc60fcdd7538027a7ba720`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the memo layout-local and preserve exact
+byte equality after the fingerprint prefilter. F-X086 owns restart provenance
+across body-length changes and must not weaken this at-most-once boundary.

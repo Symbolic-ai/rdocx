@@ -32,10 +32,10 @@ three independent incremental-layout gaps reported in Issue 69.
 |------|-------|------|--------|-------|
 | F-240 | Modern DOCX completeness audit and private corpus matrix | L | done | - |
 | F-241 | Public authoring conformance harness | L | done | - |
-| F-242 | Root README product and capability overview | M | in-progress | codex |
+| F-242 | Root README product and capability overview | M | done | - |
 | F-X083 | Close confirmed Issue 67 and intake Issue 69 | S | done | - |
 | F-X084 | Narrow note-part paragraph cache invalidation | M | done | - |
-| F-X085 | Memoize restart body identities once per layout | M | in-progress | codex |
+| F-X085 | Memoize restart body identities once per layout | M | done | - |
 | F-X086 | Provenance-safe restart after body-length changes | L | pending | - |
 
 ## Sequencing note

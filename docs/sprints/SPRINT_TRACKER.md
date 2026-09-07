@@ -400,6 +400,8 @@ defended.
 | F-X083 | S70 | S | 1 | 1 | 2026-09-06 | Closed confirmed Issue 67 with release evidence and mapped the three Issue 69 mechanisms to independent credited stories |
 | F-241 | S70 | L | 4 | 1 | 2026-09-07 | Added public-only from-scratch DOCX conformance and ignored required-private package, modeled, privacy, and visual evidence |
 | F-X084 | S70 | M | 2 | 1 | 2026-09-07 | Preserved ordinary paragraph cache reuse across note-only changes while retaining exact gates for note-bearing and related caches |
+| F-242 | S70 | M | 2 | 1 | 2026-09-07 | Replaced volatile root README claims with matrix-backed capabilities, official comparison evidence, and metadata-derived validation |
+| F-X085 | S70 | M | 2 | 1 | 2026-09-07 | Shared one lazy exact-identity memo across restart scans and publication with bounded transient-memory evidence |
 
 ## Velocity
 
