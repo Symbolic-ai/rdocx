@@ -1651,7 +1651,7 @@ fn import_rich_fragment(
     }
     remap_body_identities(&mut fragment, &mut document.identifiers, identity_state)?;
     let insert_at = document.document.body.content.len();
-    document.insert_document(insert_at, &fragment);
+    document.insert_document_content_staged(insert_at, &fragment)?;
     Ok(document.document.body.content.drain(insert_at..).collect())
 }
 

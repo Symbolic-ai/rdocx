@@ -9906,26 +9906,30 @@ impl Document {
     pub fn insert_document(&mut self, index: usize, other: &Document) {
         let mut candidate = self.clone_for_staging();
         candidate
-            .reserve_merge_bundles(other)
+            .insert_document_content_staged(index, other)
             .expect("document insertion preflight failed");
-        candidate.invalidate_layout();
-        candidate
-            .merge_styles(other)
-            .expect("document insertion style merge failed");
+        self.commit_staged_mutation(candidate);
+    }
 
-        let insert_at = index.min(candidate.document.body.content.len());
+    /// Insert into a caller-owned staged candidate and return any preflight failure.
+    pub(crate) fn insert_document_content_staged(
+        &mut self,
+        index: usize,
+        other: &Document,
+    ) -> Result<()> {
+        self.reserve_merge_bundles(other)?;
+        self.invalidate_layout();
+        self.merge_styles(other)?;
+
+        let insert_at = index.min(self.document.body.content.len());
         for (i, content) in other.document.body.content.iter().enumerate() {
-            candidate
-                .document
+            self.document
                 .body
                 .content
                 .insert(insert_at + i, content.clone());
         }
 
-        candidate
-            .remap_merged_numbering(other, insert_at)
-            .expect("document insertion numbering remap failed");
-        self.commit_staged_mutation(candidate);
+        self.remap_merged_numbering(other, insert_at)
     }
 
     fn append_document_content(&mut self, other: &Document) -> Result<()> {

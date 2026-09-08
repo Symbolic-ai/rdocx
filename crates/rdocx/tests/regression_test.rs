@@ -18,8 +18,8 @@ use rdocx::{
     HyperlinkRef, Length, ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText,
     MailMergeImage, MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat,
     RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
-    RunRef, StyleBuilder, TableRef, TcField, TocEntrySelection, TocField, TocRebuildReport,
-    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    RunRef, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
+    TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
@@ -13558,6 +13558,25 @@ fn invalid_rich_merge_input_leaves_the_template_and_outputs_uncommitted() {
     assert_atomic_error(
         document_with_content_controls(&wrap_word_body(scalar_body)),
         one_value("Value", MailMergeValue::Fragment(linked_fragment(true))),
+    );
+
+    let mut conflicting_default = Document::new();
+    conflicting_default
+        .add_style(StyleBuilder::paragraph("SourceDefault", "Source Default"))
+        .unwrap();
+    conflicting_default
+        .set_default_style(StyleType::Paragraph, "SourceDefault")
+        .unwrap();
+    conflicting_default
+        .add_paragraph("source default")
+        .style("SourceDefault");
+    conflicting_default.validate_style_graph().unwrap();
+    assert_atomic_error(
+        document_with_content_controls(&wrap_word_body(scalar_body)),
+        one_value(
+            "Value",
+            MailMergeValue::Fragment(conflicting_default.to_bytes().unwrap()),
+        ),
     );
 
     let inline_fragment_body = r#"<w:p><w:r><w:t>prefix</w:t></w:r><w:fldSimple w:instr="MERGEFIELD Value"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p><w:sectPr/>"#;
