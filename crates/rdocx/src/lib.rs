@@ -77,6 +77,7 @@ pub use math::{
 pub use odt::{OdtDiagnostic, OdtReadResult, OdtWriteResult};
 pub use oxml_chart::{ChartData, ChartKind};
 pub use oxml_core::Length;
+pub use oxml_drawing::color::RgbColor;
 pub use oxml_opc::PackageReadLimits;
 #[cfg(feature = "digital-signatures")]
 pub use oxml_opc::{

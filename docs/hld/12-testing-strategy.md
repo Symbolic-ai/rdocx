@@ -650,6 +650,22 @@ workbook rejection, nested ZIP limits, and atomic residual-scan failure. The
 native-only API is absent from Python, WASM, and CLI wrappers. No sample invokes
 redaction, so all 49 hash entries remain unchanged.
 
+The portable authored-chart regression gate constructs line, bar, pie, and
+doughnut documents through the public API. It checks typed titles, explicit
+visible axes, value-axis formats, series and indexed point colors, one-series
+category legends, the explicit doughnut hole, relationship-owned theme
+assembly, collision handling, malformed-theme repair, exact workbook data, and
+save/reopen preservation. Its ignored external oracle constructs one line, bar,
+and doughnut candidate with literal percentage values and a two-color palette.
+Microsoft Word for Mac 16.112.2 build 16.112.26082125 must open the exact
+`948f939135f26f9ebcac15da1d9fec5bcd75cf550e2ea608ef55380afa25440f`
+candidate without repair. Apple Pages 14.5 build 7045.0.17 must render the
+declared axes, values, colors, doughnut hole, and legend, then export DOCX bytes
+whose raw ChartML caches and embedded workbooks retain the source semantics.
+The Pages export may use legal literal caches that remain outside the typed
+reference-cache parser. No standard sample authors a chart, so all 49 hash
+entries remain unchanged.
+
 The watermark golden gate builds a five-page document in code, renders with
 bundled fonts, and compares the exact PNG-byte digest for every page. It also
 requires the selected watermark group to precede ordinary header and body

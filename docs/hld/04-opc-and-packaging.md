@@ -429,6 +429,14 @@ document state. The mutation becomes visible only after the typed ChartML,
 SpreadsheetML workbook, relationships, content types, and structured drawing
 all serialize successfully.
 
+An authored Word chart also requires an effective internal document-theme
+relationship whose resolved part has the theme content type. The facade keeps
+an existing effective theme byte-identical. Otherwise it stages the Office
+default under a collision-safe `/word/theme/themeN.xml` name and either
+retargets the existing ineffective theme relationship or adds one. The theme
+part, relationship, and content-type override participate in the same cloned
+package transaction as the chart. Preserved charts do not synthesize themes.
+
 ## Media
 
 `oxml-media` owns image-byte interpretation and bounded, format-neutral media
