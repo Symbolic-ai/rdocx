@@ -9909,7 +9909,9 @@ impl Document {
             .reserve_merge_bundles(other)
             .expect("document insertion preflight failed");
         candidate.invalidate_layout();
-        candidate.merge_styles(other);
+        candidate
+            .merge_styles(other)
+            .expect("document insertion style merge failed");
 
         let insert_at = index.min(candidate.document.body.content.len());
         for (i, content) in other.document.body.content.iter().enumerate() {
@@ -9929,7 +9931,7 @@ impl Document {
     fn append_document_content(&mut self, other: &Document) -> Result<()> {
         self.reserve_merge_bundles(other)?;
         self.invalidate_layout();
-        self.merge_styles(other);
+        self.merge_styles(other)?;
         let start_idx = self.document.body.content.len();
         self.document
             .body
@@ -9991,12 +9993,13 @@ impl Document {
     }
 
     /// Merge styles from another document, avoiding duplicates.
-    fn merge_styles(&mut self, other: &Document) {
+    fn merge_styles(&mut self, other: &Document) -> Result<()> {
         for style in &other.styles.styles {
             if self.styles.get_by_id(&style.style_id).is_none() {
                 self.styles.styles.push(style.clone());
             }
         }
+        style::validate_style_graph(&self.styles)
     }
 
     /// Merge numbering from another document and remap IDs in the merged content.
@@ -18544,6 +18547,68 @@ mod tests {
         }
     }
 
+    fn assert_style_graph_merge_failure_is_atomic(destination: &Document, source: &Document) {
+        destination.validate_style_graph().unwrap();
+        source.validate_style_graph().unwrap();
+        for mutation in [
+            (|document: &mut Document, other: &Document| document.append(other))
+                as fn(&mut Document, &Document),
+            |document, other| document.append_with_break(other, crate::SectionBreak::NextPage),
+            |document, other| document.insert_document(0, other),
+        ] {
+            let mut document = destination.clone_for_staging();
+            let before = document.to_bytes().unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mutation(&mut document, source);
+            }));
+            assert!(result.is_err());
+            assert_eq!(document.to_bytes().unwrap(), before);
+            document.validate_style_graph().unwrap();
+        }
+    }
+
+    #[test]
+    fn append_variants_reject_conflicting_style_graphs_before_mutation() {
+        let mut destination = Document::new();
+        destination.add_paragraph("destination");
+
+        let mut conflicting_default = Document::new();
+        conflicting_default
+            .add_style(StyleBuilder::paragraph("SourceDefault", "Source Default"))
+            .unwrap();
+        conflicting_default
+            .set_default_style(StyleType::Paragraph, "SourceDefault")
+            .unwrap();
+        conflicting_default
+            .add_paragraph("source default")
+            .style("SourceDefault");
+        assert_style_graph_merge_failure_is_atomic(&destination, &conflicting_default);
+
+        destination
+            .add_style(StyleBuilder::paragraph(
+                "CollisionParagraph",
+                "Destination Collision",
+            ))
+            .unwrap();
+        let mut conflicting_link = Document::new();
+        conflicting_link
+            .add_style(StyleBuilder::character(
+                "CollisionCharacter",
+                "Collision Character",
+            ))
+            .unwrap();
+        conflicting_link
+            .add_style(
+                StyleBuilder::paragraph("CollisionParagraph", "Source Collision")
+                    .linked_style("CollisionCharacter"),
+            )
+            .unwrap();
+        conflicting_link
+            .add_paragraph("source link")
+            .style("CollisionParagraph");
+        assert_style_graph_merge_failure_is_atomic(&destination, &conflicting_link);
+    }
+
     #[test]
     fn append_with_section_break() {
         let mut doc_a = Document::new();
@@ -18594,6 +18659,7 @@ mod tests {
         let styles_before = doc_a.styles.styles.len();
         doc_a.append(&doc_b);
         let styles_after = doc_a.styles.styles.len();
+        doc_a.validate_style_graph().unwrap();
 
         // Heading1 already existed, so only CustomB should be added
         assert_eq!(styles_after, styles_before + 1);
