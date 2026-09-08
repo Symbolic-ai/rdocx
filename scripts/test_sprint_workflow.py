@@ -8188,7 +8188,9 @@ Pedro Assumpcao and the rdocx maintainers.
         }
         incomplete = {"partial", "unsupported"}
         expected_owners = {
-            f"F-{number:03d}" for number in range(244, 311) if number != 249
+            f"F-{number:03d}"
+            for number in range(244, 311)
+            if number not in {244, 249}
         }
         self.assertEqual(
             {row["Owner"] for row in rows if row["Owner"] != "-"},

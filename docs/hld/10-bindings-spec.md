@@ -245,6 +245,14 @@ profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
 
+Native Rust re-exports `CoreProperties`, `AppProperties`, `CustomProperty`,
+`CustomPropertyValue`, `Twips`, and the bounded settings value types. `Document`
+provides borrowed readers, staged setters, selective removals, and whole-part
+removals for these property families. Document variables and compatibility
+settings use stable string keys. Default tab stop retains exact integer twips.
+Python, WASM, and CLI receive preserved package behavior but do not gain new
+entry points.
+
 Native Word mutations share one private document identifier owner. Existing
 method signatures stay unchanged, but fallible operations can report imported,
 preserved, overflow, and pending-collision errors before publication. Save and

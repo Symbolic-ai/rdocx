@@ -1,6 +1,6 @@
 # F-244, Corpus settings and document properties
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-243, F-249
@@ -96,14 +96,14 @@ their current bytes and layout behavior.
 
 ## Implementation checklist
 
-- [ ] Load and retain relationship-resolved application property state.
-- [ ] Extend typed settings projections in the existing settings module.
-- [ ] Add public read, set, and remove methods for each story-owned family.
-- [ ] Make cross-part mutation fail closed and atomic.
-- [ ] Prove deterministic creation, save-reopen, selective removal, and raw
+- [x] Load and retain relationship-resolved application property state.
+- [x] Extend typed settings projections in the existing settings module.
+- [x] Add public read, set, and remove methods for each story-owned family.
+- [x] Make cross-part mutation fail closed and atomic.
+- [x] Prove deterministic creation, save-reopen, selective removal, and raw
   preservation.
-- [ ] Run the full gate and routed package dry-run.
-- [ ] Update exactly the listed HLD files.
+- [x] Run the full gate and routed package dry-run.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

@@ -247,6 +247,13 @@ relationship. If that conventional part name is already occupied without the
 core-properties relationship, serialization returns an error before changing
 the package.
 
+The Word facade applies the same package-level ownership rule to application
+and custom properties. New property families reserve collision-safe part and
+relationship identities before publishing typed state. Removing a whole
+family deletes only its resolved part, exact package relationship, and exact
+content-type override. Removing the final custom property prunes that graph
+only when the facade created it. Producer-owned empty parts remain present.
+
 The Word facade owns external hyperlink relationships at the document part
 boundary. `Document::add_hyperlink_relationship` allocates the relationship,
 and `Paragraph::add_hyperlink` writes a schema-ordered `w:hyperlink` that
@@ -350,6 +357,14 @@ schema-positioned subtree while preserving unrelated settings bytes. Creating
 defaults without a settings relationship allocates a collision-safe settings
 part and adds the relationship and content type through the existing package
 path.
+
+The bounded settings authoring surface also projects document variables,
+compatibility settings, default tab stop in integer twips, character spacing
+control, and theme font languages. Reads accept in-scope Word namespace
+aliases. Each mutation replaces only its modeled child or repeated child set,
+uses fixed `w:` prefixes for new XML, and inserts at the schema position.
+Unmodeled children inside `w:compat` and `w:docVars`, plus every unrelated
+top-level settings child, retain their bytes and namespace context.
 
 Watermark authoring follows the document-to-header graph rather than assuming
 conventional header names. The facade materializes a missing default, first, or

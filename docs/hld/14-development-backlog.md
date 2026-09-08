@@ -2266,8 +2266,11 @@ and passes strict package validation and the pinned no-repair check.
 ### F-244, Corpus settings and document properties (L)
 Author the settings, core properties, application properties, custom
 properties, document variables, compatibility facts, and defaults required by
-the private corpus. Values are typed, deterministic, and removable through the
-public facade.
+the private corpus. The bounded settings set is compatibility settings, default
+tab stop, character spacing control, document variables, and theme font
+languages. Values are typed, deterministic, and removable through the public
+facade. Core, application, and custom properties use relationship-resolved
+package parts with selective custom-property and whole-part removal.
 **Depends on**: F-243, F-249.
 **Test gate**: round-trip. Every authored value survives save and reopen, and
 removal deletes only its owned package content.

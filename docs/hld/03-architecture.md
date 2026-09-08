@@ -971,6 +971,15 @@ or DOTM while retaining an explicit compact package option. The compatible
 profile owns its main document, styles, settings, theme, font table, core
 properties, and application properties without loading a template.
 
+Core, application, and custom property models are relationship-resolved
+package state owned by `Document`. The native facade exposes their existing
+concrete `oxml-core` types. Property creation, replacement, selective custom
+property removal, and whole-part removal all run on a staged document clone so
+the part, package relationship, content type, and typed model publish together.
+An empty custom-properties part is pruned only when the current facade created
+it. Settings mutations use the same staged boundary and keep the existing
+relationship-resolved target.
+
 The `rdocx` facade also provides direct immutable paragraph lookup. Mutable
 and read-only paragraph handles each provide total run count and lookup, while
 only the mutable handle provides mutable run lookup. These accessors let the

@@ -1414,6 +1414,17 @@ identities. Tracked-path and staged-path scans reject private document formats
 without echoing a path or digest. Feature-level tests remain authoritative when
 byte identity is not a valid expectation.
 
+The feature-level property gate authors core, application, and custom
+properties plus the bounded settings defaults through public APIs. It saves and
+reopens every typed value, proves selective removal leaves unrelated graphs
+intact, and compares two equivalent fresh outputs byte for byte.
+
+Settings mutation fixtures bind the Word namespace through aliases and place
+foreign subtrees before, inside, and after modeled settings. They assert exact
+foreign subtree bytes after mutation and assert the schema order of default tab
+stop, character spacing control, compatibility settings, document variables,
+and theme font language.
+
 The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
 package relationship before reopen and repeat-save. The part bytes and
 relationship identity must survive exactly. The optional repair gate is pinned

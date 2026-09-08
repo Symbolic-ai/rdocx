@@ -240,6 +240,326 @@ mod fresh_word_package_profile_tests {
     }
 }
 
+mod settings_and_properties_tests {
+    use super::*;
+    use rdocx::{
+        AppProperties, CharacterSpacingControl, CompatibilitySetting, CoreProperties,
+        CustomProperty, CustomPropertyValue, ThemeFontLanguage, Twips,
+    };
+
+    const CUSTOM_FMTID: &str = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}";
+    const COMPATIBILITY_URI: &str = "http://schemas.microsoft.com/office/word";
+
+    #[test]
+    fn authored_settings_and_properties_survive_reopen() {
+        let mut document = Document::new();
+        document
+            .set_core_properties(CoreProperties {
+                title: Some("Quarterly proposal".to_owned()),
+                creator: Some("Example author".to_owned()),
+                subject: Some("Corpus settings".to_owned()),
+                description: Some("Source-built metadata".to_owned()),
+                keywords: Some("proposal, deterministic".to_owned()),
+                last_modified_by: Some("Example reviewer".to_owned()),
+                created: Some("2026-09-07T00:00:00Z".to_owned()),
+                modified: Some("2026-09-07T01:00:00Z".to_owned()),
+            })
+            .unwrap();
+        let mut application = AppProperties::default();
+        application.template = Some("Business.dotx".to_owned());
+        application.manager = Some("Example manager".to_owned());
+        application.company = Some("Example company".to_owned());
+        application.pages = Some(7);
+        application.words = Some(420);
+        application.application = Some("rdocx test".to_owned());
+        application.application_version = Some("1.0".to_owned());
+        document
+            .set_application_properties(application.clone())
+            .unwrap();
+        document
+            .set_custom_property(CustomProperty {
+                fmtid: CUSTOM_FMTID.to_owned(),
+                pid: 2,
+                name: Some("ClientCode".to_owned()),
+                value: CustomPropertyValue::Lpwstr("EXAMPLE-001".to_owned()),
+            })
+            .unwrap();
+        document.set_document_variable("Customer", "Ada").unwrap();
+        document
+            .set_compatibility_setting("compatibilityMode", COMPATIBILITY_URI, "15")
+            .unwrap();
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document
+            .set_character_spacing_control(CharacterSpacingControl::CompressPunctuation)
+            .unwrap();
+        document
+            .set_theme_font_language(ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("ja-JP".to_owned()),
+                bidi: Some("ar-SA".to_owned()),
+            })
+            .unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened.core_properties().unwrap().title.as_deref(),
+            Some("Quarterly proposal")
+        );
+        assert_eq!(reopened.application_properties(), Some(&application));
+        assert_eq!(
+            reopened.custom_property("ClientCode").unwrap().value,
+            CustomPropertyValue::Lpwstr("EXAMPLE-001".to_owned())
+        );
+        assert_eq!(reopened.document_variable("Customer"), Some("Ada"));
+        assert_eq!(
+            reopened.compatibility_settings(),
+            [CompatibilitySetting {
+                name: "compatibilityMode".to_owned(),
+                uri: COMPATIBILITY_URI.to_owned(),
+                value: "15".to_owned(),
+            }]
+        );
+        assert_eq!(reopened.default_tab_stop(), Some(Twips(720)));
+        assert_eq!(
+            reopened.character_spacing_control(),
+            Some(CharacterSpacingControl::CompressPunctuation)
+        );
+        assert_eq!(
+            reopened.theme_font_language().unwrap(),
+            &ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("ja-JP".to_owned()),
+                bidi: Some("ar-SA".to_owned()),
+            }
+        );
+
+        assert_eq!(
+            reopened.remove_document_variable("Customer").unwrap(),
+            Some("Ada".to_owned())
+        );
+        assert!(
+            reopened
+                .remove_compatibility_setting("compatibilityMode", COMPATIBILITY_URI)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            reopened.remove_default_tab_stop().unwrap(),
+            Some(Twips(720))
+        );
+        assert_eq!(
+            reopened.remove_character_spacing_control().unwrap(),
+            Some(CharacterSpacingControl::CompressPunctuation)
+        );
+        assert!(reopened.remove_theme_font_language().unwrap().is_some());
+        let removed_bytes = reopened.to_bytes().unwrap();
+        let removed = Document::from_bytes(&removed_bytes).unwrap();
+        assert_eq!(removed.document_variable("Customer"), None);
+        assert!(removed.compatibility_settings().is_empty());
+        assert_eq!(removed.default_tab_stop(), None);
+        assert_eq!(removed.character_spacing_control(), None);
+        assert_eq!(removed.theme_font_language(), None);
+    }
+
+    #[test]
+    fn removing_one_property_family_prunes_only_its_owned_graph() {
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        document
+            .set_core_properties(CoreProperties {
+                title: Some("Retained title".to_owned()),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut application = AppProperties::default();
+        application.company = Some("Retained company".to_owned());
+        document.set_application_properties(application).unwrap();
+        document
+            .set_custom_property(CustomProperty {
+                fmtid: CUSTOM_FMTID.to_owned(),
+                pid: 2,
+                name: Some("RemoveMe".to_owned()),
+                value: CustomPropertyValue::Bool(true),
+            })
+            .unwrap();
+        document.set_document_variable("KeepMe", "yes").unwrap();
+
+        assert!(
+            document
+                .remove_custom_property("RemoveMe")
+                .unwrap()
+                .is_some()
+        );
+        let bytes = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::CUSTOM_PROPERTIES)
+                .is_none()
+        );
+        assert!(package.get_part("/docProps/custom.xml").is_none());
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_some()
+        );
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::EXTENDED_PROPERTIES)
+                .is_some()
+        );
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.title(), Some("Retained title"));
+        assert_eq!(
+            reopened
+                .application_properties()
+                .unwrap()
+                .company
+                .as_deref(),
+            Some("Retained company")
+        );
+        assert_eq!(reopened.document_variable("KeepMe"), Some("yes"));
+
+        assert!(reopened.remove_application_properties().unwrap().is_some());
+        assert!(reopened.remove_core_properties().unwrap().is_some());
+        let bytes = reopened.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::EXTENDED_PROPERTIES)
+                .is_none()
+        );
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+        );
+        assert!(
+            package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .get_by_type(rel_types::SETTINGS)
+                .is_some()
+        );
+
+        let mut settings_only =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        settings_only
+            .set_document_variable("Temporary", "value")
+            .unwrap();
+        assert_eq!(
+            settings_only.remove_document_variable("Temporary").unwrap(),
+            Some("value".to_owned())
+        );
+        let settings_only = settings_only.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(settings_only)).unwrap();
+        assert!(
+            package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .get_by_type(rel_types::SETTINGS)
+                .is_none()
+        );
+        assert!(package.get_part("/word/settings.xml").is_none());
+    }
+
+    #[test]
+    fn settings_mutation_preserves_unmodeled_children_in_schema_order() {
+        const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let settings = format!(
+            r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:producer"><q:defaultTabStop q:val="360"/><x:before x:keep="exact"><x:child/></x:before><q:characterSpacingControl q:val="doNotCompress"/><q:compat><q:compatSetting q:name="compatibilityMode" q:uri="{COMPATIBILITY_URI}" q:val="14"/><x:inside x:keep="exact"/></q:compat><q:docVars><q:docVar q:name="Original" q:val="one"/><x:variable x:keep="exact"/></q:docVars><x:after x:keep="exact"/><q:themeFontLang q:val="en-US" q:eastAsia="zh-CN"/></q:settings>"#
+        );
+        package.set_part("/word/settings.xml", settings.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document
+            .set_character_spacing_control(
+                CharacterSpacingControl::CompressPunctuationAndJapaneseKana,
+            )
+            .unwrap();
+        document
+            .set_compatibility_setting("compatibilityMode", COMPATIBILITY_URI, "15")
+            .unwrap();
+        document.set_document_variable("Added", "two").unwrap();
+        assert_eq!(
+            document.remove_document_variable("Original").unwrap(),
+            Some("one".to_owned())
+        );
+        document
+            .set_theme_font_language(ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("ja-JP".to_owned()),
+                bidi: None,
+            })
+            .unwrap();
+
+        let saved =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let output = std::str::from_utf8(saved.get_part("/word/settings.xml").unwrap()).unwrap();
+        assert!(output.contains(r#"<x:before x:keep="exact"><x:child/></x:before>"#));
+        assert!(output.contains(r#"<x:inside x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:variable x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:after x:keep="exact"/>"#));
+        assert!(!output.contains("Original"));
+        assert!(output.contains("Added"));
+        assert!(
+            output.find("defaultTabStop").unwrap()
+                < output.find("characterSpacingControl").unwrap()
+        );
+        assert!(
+            output.find("characterSpacingControl").unwrap() < output.find("compatSetting").unwrap()
+        );
+        assert!(output.find("compatSetting").unwrap() < output.find("docVar").unwrap());
+        assert!(output.find("docVar").unwrap() < output.find("themeFontLang").unwrap());
+    }
+
+    #[test]
+    fn fresh_property_output_has_no_clock_or_host_input() {
+        fn authored() -> Vec<u8> {
+            let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            document
+                .set_core_properties(CoreProperties {
+                    title: Some("Deterministic metadata".to_owned()),
+                    ..Default::default()
+                })
+                .unwrap();
+            let mut application = AppProperties::default();
+            application.application = Some("rdocx".to_owned());
+            application.application_version = Some("test".to_owned());
+            document.set_application_properties(application).unwrap();
+            document.to_bytes().unwrap()
+        }
+
+        let first = authored();
+        let second = authored();
+        assert_eq!(first, second);
+
+        let mut invalid =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let before = invalid.to_bytes().unwrap();
+        assert!(invalid.set_default_tab_stop(Twips(-1)).is_err());
+        assert_eq!(invalid.to_bytes().unwrap(), before);
+        let package = OpcPackage::from_reader(std::io::Cursor::new(first)).unwrap();
+        let core = std::str::from_utf8(package.get_part("/docProps/core.xml").unwrap()).unwrap();
+        assert!(!core.contains("dcterms:created"));
+        assert!(!core.contains("dcterms:modified"));
+    }
+}
+
 #[test]
 fn identifier_scopes_do_not_alias_or_overreach() {
     let mut document = Document::new();

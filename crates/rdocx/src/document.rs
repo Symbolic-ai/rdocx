@@ -29,13 +29,16 @@ use rdocx_oxml::header_footer::{
 use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::numbering::{CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
-use rdocx_oxml::settings::{CT_Settings, DocumentProtection};
+use rdocx_oxml::settings::{
+    CT_Settings, CharacterSpacingControl, CompatibilitySetting, DocumentProtection,
+    ThemeFontLanguage,
+};
 use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 
-use oxml_core::custom_properties::CustomProperties;
+use oxml_core::custom_properties::{CustomProperties, CustomProperty};
 use rdocx_oxml::core_properties::CoreProperties;
 
 use crate::Length;
@@ -2000,6 +2003,12 @@ impl DocumentIdentifiers {
                 self.authored_story_relationship_ids.remove(&owner);
             }
         }
+        if let Some(authored) = self.authored_bundle_relationship_ids.get_mut(&owner) {
+            authored.retain(|id| !removed.contains(id));
+            if authored.is_empty() {
+                self.authored_bundle_relationship_ids.remove(&owner);
+            }
+        }
         if let Some(provisional) = self.provisional_relationship_ids.get_mut(&owner) {
             provisional.retain(|id| !removed.contains(id));
             if provisional.is_empty() {
@@ -2613,10 +2622,13 @@ pub struct Document {
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     pub(crate) core_properties: Option<CoreProperties>,
-    /// Read-only custom document properties resolved from package relationships.
+    pub(crate) application_properties: Option<AppProperties>,
     pub(crate) custom_properties: Option<CustomProperties>,
     /// Package part containing the core properties, resolved from `_rels/.rels`.
     core_properties_part_name: Option<String>,
+    application_properties_part_name: Option<String>,
+    custom_properties_part_name: Option<String>,
+    custom_properties_owned: bool,
     /// Part name for the main document
     pub(crate) doc_part_name: String,
     /// Part name the styles were loaded from, and where they are written back.
@@ -2630,6 +2642,8 @@ pub struct Document {
     pub(crate) settings: Option<CT_Settings>,
     /// Existing settings relationship target. No conventional target is assumed.
     settings_part_name: Option<String>,
+    /// Whether this facade instance created an optional settings graph.
+    settings_owned: bool,
     /// Shared package and WordprocessingML identifier allocation state.
     pub(crate) identifiers: DocumentIdentifiers,
     /// Typed footnotes loaded through the main document relationship.
@@ -2695,8 +2709,6 @@ const NUMBERING_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml";
 const CORE_PROPERTIES_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
-const CORE_PROPERTIES_CONTENT_TYPE: &str =
-    "application/vnd.openxmlformats-package.core-properties+xml";
 const SETTINGS_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
 const DEFAULT_SETTINGS_PART: &str = "/word/settings.xml";
@@ -2763,6 +2775,7 @@ fn new_word_compatible_package(
     styles: &CT_Styles,
     settings: &CT_Settings,
     core_properties: &CoreProperties,
+    application_properties: &AppProperties,
 ) -> OpcPackage {
     let mut package = new_word_package(class);
     package.set_part(
@@ -2789,9 +2802,6 @@ fn new_word_compatible_package(
             .to_xml()
             .expect("fresh core properties model must serialize"),
     );
-    let mut application_properties = AppProperties::default();
-    application_properties.application = Some("rdocx".to_owned());
-    application_properties.application_version = Some(env!("CARGO_PKG_VERSION").to_owned());
     package.set_part(
         DEFAULT_APP_PROPERTIES_PART,
         application_properties
@@ -2836,6 +2846,13 @@ fn new_word_compatible_package(
     document_relationships.add_with_id("rdocxTheme", rel_types::THEME, "theme/theme1.xml");
     document_relationships.add_with_id("rdocxFontTable", rel_types::FONT_TABLE, "fontTable.xml");
     package
+}
+
+fn default_application_properties() -> AppProperties {
+    let mut properties = AppProperties::default();
+    properties.application = Some("rdocx".to_owned());
+    properties.application_version = Some(env!("CARGO_PKG_VERSION").to_owned());
+    properties
 }
 
 fn validate_fresh_word_compatible_package(
@@ -3773,6 +3790,7 @@ impl Document {
         };
         let settings = compatible.then(CT_Settings::new);
         let core_properties = compatible.then(CoreProperties::default);
+        let application_properties = compatible.then(default_application_properties);
         let mut package = if compatible {
             new_word_compatible_package(
                 class,
@@ -3782,6 +3800,9 @@ impl Document {
                 core_properties
                     .as_ref()
                     .expect("compatible core properties exist"),
+                application_properties
+                    .as_ref()
+                    .expect("compatible application properties exist"),
             )
         } else {
             new_word_package(class)
@@ -3808,13 +3829,19 @@ impl Document {
             styles,
             numbering: None,
             core_properties,
+            application_properties,
             custom_properties: None,
             core_properties_part_name: compatible.then(|| DEFAULT_CORE_PROPERTIES_PART.to_owned()),
+            application_properties_part_name: compatible
+                .then(|| DEFAULT_APP_PROPERTIES_PART.to_owned()),
+            custom_properties_part_name: None,
+            custom_properties_owned: false,
             doc_part_name: "/word/document.xml".to_string(),
             styles_part_name: Some(DEFAULT_STYLES_PART.to_owned()),
             numbering_part_name: None,
             settings,
             settings_part_name: compatible.then(|| DEFAULT_SETTINGS_PART.to_owned()),
+            settings_owned: false,
             identifiers,
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             footnotes_part_name: None,
@@ -3848,13 +3875,18 @@ impl Document {
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
+            application_properties: self.application_properties.clone(),
             custom_properties: self.custom_properties.clone(),
             core_properties_part_name: self.core_properties_part_name.clone(),
+            application_properties_part_name: self.application_properties_part_name.clone(),
+            custom_properties_part_name: self.custom_properties_part_name.clone(),
+            custom_properties_owned: self.custom_properties_owned,
             doc_part_name: self.doc_part_name.clone(),
             styles_part_name: self.styles_part_name.clone(),
             numbering_part_name: self.numbering_part_name.clone(),
             settings: self.settings.clone(),
             settings_part_name: self.settings_part_name.clone(),
+            settings_owned: self.settings_owned,
             identifiers: self.identifiers.clone(),
             footnotes: self.footnotes.clone(),
             footnotes_part_name: self.footnotes_part_name.clone(),
@@ -4988,7 +5020,21 @@ impl Document {
             .and_then(|part| package.get_part(part))
             .and_then(|xml| CoreProperties::from_xml(xml).ok());
 
-        let custom_properties = package
+        let application_properties_part_name = package
+            .package_rels
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == rel_types::EXTENDED_PROPERTIES
+                    && relationship_is_internal(relationship)
+            })
+            .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target));
+        let application_properties = application_properties_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+            .and_then(|xml| AppProperties::from_xml(xml).ok());
+
+        let custom_properties_part_name = package
             .package_rels
             .items
             .iter()
@@ -4996,8 +5042,10 @@ impl Document {
                 relationship.rel_type == rel_types::CUSTOM_PROPERTIES
                     && relationship_is_internal(relationship)
             })
-            .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target))
-            .and_then(|part| package.get_part(&part))
+            .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target));
+        let custom_properties = custom_properties_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
             .and_then(|xml| CustomProperties::from_xml(xml).ok());
 
         let footnotes_part_name = resolve_part(rel_types::FOOTNOTES);
@@ -5041,13 +5089,18 @@ impl Document {
             styles,
             numbering,
             core_properties,
+            application_properties,
             custom_properties,
             core_properties_part_name,
+            application_properties_part_name,
+            custom_properties_part_name,
+            custom_properties_owned: false,
             doc_part_name,
             styles_part_name,
             numbering_part_name,
             settings,
             settings_part_name,
+            settings_owned: false,
             identifiers,
             footnotes,
             footnotes_part_name,
@@ -5312,6 +5365,12 @@ impl Document {
         if self.core_properties.is_some() {
             self.reserve_core_properties_bundle()?;
         }
+        if self.application_properties.is_some() {
+            self.reserve_application_properties_bundle()?;
+        }
+        if self.custom_properties.is_some() {
+            self.reserve_custom_properties_bundle()?;
+        }
         Ok(())
     }
 
@@ -5472,6 +5531,24 @@ impl Document {
             let core_part = self.reserve_core_properties_bundle()?;
             self.package.set_part(&core_part, core_xml);
         }
+        if let Some(application_xml) = self
+            .application_properties
+            .as_ref()
+            .map(AppProperties::to_xml)
+            .transpose()?
+        {
+            let application_part = self.reserve_application_properties_bundle()?;
+            self.package.set_part(&application_part, application_xml);
+        }
+        if let Some(custom_xml) = self
+            .custom_properties
+            .as_ref()
+            .map(CustomProperties::to_xml)
+            .transpose()?
+        {
+            let custom_part = self.reserve_custom_properties_bundle()?;
+            self.package.set_part(&custom_part, custom_xml);
+        }
 
         Ok(())
     }
@@ -5570,15 +5647,55 @@ impl Document {
     }
 
     fn reserve_core_properties_bundle(&mut self) -> Result<String> {
+        let existing = self.core_properties_part_name.clone();
+        let part_name = self.reserve_package_properties_bundle(
+            existing.as_deref(),
+            DEFAULT_CORE_PROPERTIES_PART,
+            rel_types::CORE_PROPERTIES,
+            content_types::CORE_PROPERTIES,
+        )?;
+        self.core_properties_part_name = Some(part_name.clone());
+        Ok(part_name)
+    }
+
+    fn reserve_application_properties_bundle(&mut self) -> Result<String> {
+        let existing = self.application_properties_part_name.clone();
+        let part_name = self.reserve_package_properties_bundle(
+            existing.as_deref(),
+            DEFAULT_APP_PROPERTIES_PART,
+            rel_types::EXTENDED_PROPERTIES,
+            content_types::EXTENDED_PROPERTIES,
+        )?;
+        self.application_properties_part_name = Some(part_name.clone());
+        Ok(part_name)
+    }
+
+    fn reserve_custom_properties_bundle(&mut self) -> Result<String> {
+        let existing = self.custom_properties_part_name.clone();
+        let part_name = self.reserve_package_properties_bundle(
+            existing.as_deref(),
+            "/docProps/custom.xml",
+            rel_types::CUSTOM_PROPERTIES,
+            content_types::CUSTOM_PROPERTIES,
+        )?;
+        self.custom_properties_part_name = Some(part_name.clone());
+        Ok(part_name)
+    }
+
+    fn reserve_package_properties_bundle(
+        &mut self,
+        existing: Option<&str>,
+        preferred: &str,
+        rel_type: &str,
+        content_type: &str,
+    ) -> Result<String> {
         self.identifiers.observe_package_graph(&self.package)?;
-        let part_name = match self.core_properties_part_name.as_deref() {
+        let part_name = match existing {
             Some(part_name) => part_name.to_owned(),
-            None => self
-                .identifiers
-                .reserve_preferred_part_name(DEFAULT_CORE_PROPERTIES_PART)?,
+            None => self.identifiers.reserve_preferred_part_name(preferred)?,
         };
         let already_linked = self.package.package_rels.items.iter().any(|relationship| {
-            relationship.rel_type == CORE_PROPERTIES_REL_TYPE
+            relationship.rel_type == rel_type
                 && relationship_is_internal(relationship)
                 && OpcPackage::resolve_rel_target("/", &relationship.target) == part_name
         });
@@ -5589,15 +5706,12 @@ impl Document {
         };
         self.package
             .content_types
-            .add_override(&part_name, CORE_PROPERTIES_CONTENT_TYPE);
+            .add_override(&part_name, content_type);
         self.identifiers.register_content_type_override(&part_name);
         if let Some(id) = pending_id {
             let target = part_name.strip_prefix('/').unwrap_or(&part_name);
-            self.package
-                .package_rels
-                .add_with_id(&id, CORE_PROPERTIES_REL_TYPE, target);
+            self.package.package_rels.add_with_id(&id, rel_type, target);
         }
-        self.core_properties_part_name = Some(part_name.clone());
         Ok(part_name)
     }
 
@@ -7955,6 +8069,7 @@ impl Document {
     /// Enable or disable automatic document hyphenation.
     pub fn set_auto_hyphenation(&mut self, enabled: bool) -> Result<()> {
         let mut candidate = self.clone_for_staging();
+        let created = candidate.settings_part_name.is_none();
         candidate
             .identifiers
             .observe_package_graph(&candidate.package)?;
@@ -7970,6 +8085,7 @@ impl Document {
             .set_automatic_hyphenation(enabled)?;
         candidate.invalidate_layout();
         candidate.settings_part_name = Some(part_name.clone());
+        candidate.settings_owned |= created;
         candidate
             .ensure_part_relationship_checked(
                 &part_name,
@@ -7991,6 +8107,7 @@ impl Document {
     /// Set document-wide OfficeMath defaults in the relationship-resolved settings part.
     pub fn set_math_properties(&mut self, properties: MathProperties) -> Result<()> {
         let mut candidate = self.clone_for_staging();
+        let created = candidate.settings_part_name.is_none();
         candidate
             .identifiers
             .observe_package_graph(&candidate.package)?;
@@ -8006,6 +8123,7 @@ impl Document {
             .set_math_properties(properties)?;
         candidate.invalidate_layout();
         candidate.settings_part_name = Some(part_name.clone());
+        candidate.settings_owned |= created;
         candidate
             .ensure_part_relationship_checked(
                 &part_name,
@@ -8019,7 +8137,418 @@ impl Document {
         Ok(())
     }
 
+    /// Return a document variable by name.
+    pub fn document_variable(&self, name: &str) -> Option<&str> {
+        self.settings.as_ref()?.document_variable(name)
+    }
+
+    /// Set a document variable in the relationship-resolved settings part.
+    pub fn set_document_variable(&mut self, name: &str, value: &str) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_document_variable(name.to_owned(), value.to_owned())?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove one document variable by name.
+    pub fn remove_document_variable(&mut self, name: &str) -> Result<Option<String>> {
+        let Some(settings) = &self.settings else {
+            return Ok(None);
+        };
+        if settings.document_variable(name).is_none() {
+            return Ok(None);
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        let removed = candidate
+            .settings
+            .as_mut()
+            .expect("settings candidate retains its model")
+            .remove_document_variable(name)?
+            .map(|variable| variable.value);
+        candidate.prune_empty_owned_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(removed)
+    }
+
+    /// Return typed compatibility settings in package order.
+    pub fn compatibility_settings(&self) -> &[CompatibilitySetting] {
+        self.settings
+            .as_ref()
+            .map(CT_Settings::compatibility_settings)
+            .unwrap_or_default()
+    }
+
+    /// Add or replace one compatibility setting selected by name and URI.
+    pub fn set_compatibility_setting(&mut self, name: &str, uri: &str, value: &str) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_compatibility_setting(CompatibilitySetting {
+                name: name.to_owned(),
+                uri: uri.to_owned(),
+                value: value.to_owned(),
+            })?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove one compatibility setting selected by name and URI.
+    pub fn remove_compatibility_setting(
+        &mut self,
+        name: &str,
+        uri: &str,
+    ) -> Result<Option<CompatibilitySetting>> {
+        let Some(settings) = &self.settings else {
+            return Ok(None);
+        };
+        if !settings
+            .compatibility_settings()
+            .iter()
+            .any(|setting| setting.name == name && setting.uri == uri)
+        {
+            return Ok(None);
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        let removed = candidate
+            .settings
+            .as_mut()
+            .expect("settings candidate retains its model")
+            .remove_compatibility_setting(name, uri)?;
+        candidate.prune_empty_owned_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(removed)
+    }
+
+    pub fn default_tab_stop(&self) -> Option<oxml_core::Twips> {
+        self.settings.as_ref()?.default_tab_stop()
+    }
+
+    pub fn set_default_tab_stop(&mut self, value: oxml_core::Twips) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_default_tab_stop(value)?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    pub fn remove_default_tab_stop(&mut self) -> Result<Option<oxml_core::Twips>> {
+        if self.default_tab_stop().is_none() {
+            return Ok(None);
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        let removed = candidate
+            .settings
+            .as_mut()
+            .expect("settings candidate retains its model")
+            .remove_default_tab_stop()?;
+        candidate.prune_empty_owned_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(removed)
+    }
+
+    pub fn character_spacing_control(&self) -> Option<CharacterSpacingControl> {
+        self.settings.as_ref()?.character_spacing_control()
+    }
+
+    pub fn set_character_spacing_control(&mut self, value: CharacterSpacingControl) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_character_spacing_control(value)?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    pub fn remove_character_spacing_control(&mut self) -> Result<Option<CharacterSpacingControl>> {
+        if self.character_spacing_control().is_none() {
+            return Ok(None);
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        let removed = candidate
+            .settings
+            .as_mut()
+            .expect("settings candidate retains its model")
+            .remove_character_spacing_control()?;
+        candidate.prune_empty_owned_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(removed)
+    }
+
+    pub fn theme_font_language(&self) -> Option<&ThemeFontLanguage> {
+        self.settings.as_ref()?.theme_font_language()
+    }
+
+    pub fn set_theme_font_language(&mut self, value: ThemeFontLanguage) -> Result<()> {
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_theme_font_language(value)?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    pub fn remove_theme_font_language(&mut self) -> Result<Option<ThemeFontLanguage>> {
+        if self.theme_font_language().is_none() {
+            return Ok(None);
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        let removed = candidate
+            .settings
+            .as_mut()
+            .expect("settings candidate retains its model")
+            .remove_theme_font_language()?;
+        candidate.prune_empty_owned_settings();
+        self.commit_staged_mutation(candidate);
+        Ok(removed)
+    }
+
+    fn settings_mutation_candidate(&self) -> Result<Self> {
+        let mut candidate = self.clone_for_staging();
+        let created = candidate.settings_part_name.is_none();
+        candidate
+            .identifiers
+            .observe_package_graph(&candidate.package)?;
+        let part_name = match &candidate.settings_part_name {
+            Some(part_name) => part_name.clone(),
+            None => candidate
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_SETTINGS_PART)?,
+        };
+        candidate.invalidate_layout();
+        candidate.settings_part_name = Some(part_name.clone());
+        candidate.settings_owned |= created;
+        candidate
+            .ensure_part_relationship_checked(
+                &part_name,
+                rel_types::SETTINGS,
+                SETTINGS_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("settings relationship allocation failed: {error}"))
+            })?;
+        Ok(candidate)
+    }
+
+    fn prune_empty_owned_settings(&mut self) {
+        if !self.settings_owned || !self.settings.as_ref().is_some_and(CT_Settings::is_empty) {
+            return;
+        }
+        let Some(part_name) = self.settings_part_name.take() else {
+            return;
+        };
+        let owner = self.doc_part_name.clone();
+        let mut removed_ids = Vec::new();
+        if let Some(relationships) = self.package.get_part_rels_mut(&owner) {
+            relationships.items.retain(|relationship| {
+                let remove = relationship.rel_type == rel_types::SETTINGS
+                    && relationship_is_internal(relationship)
+                    && OpcPackage::resolve_rel_target(&owner, &relationship.target) == part_name;
+                if remove {
+                    removed_ids.push(relationship.id.clone());
+                }
+                !remove
+            });
+        }
+        self.identifiers
+            .retire_authored_story_relationships(&owner, removed_ids);
+        self.package.remove_part(&part_name);
+        self.package.remove_part_rels(&part_name);
+        self.package.content_types.remove_override(&part_name);
+        self.identifiers.retire_authored_part(&part_name);
+        self.settings = None;
+        self.settings_owned = false;
+    }
+
     // ---- Metadata access ----
+
+    /// Return the complete core-properties model.
+    pub fn core_properties(&self) -> Option<&CoreProperties> {
+        self.core_properties.as_ref()
+    }
+
+    /// Replace the complete core-properties model.
+    pub fn set_core_properties(&mut self, properties: CoreProperties) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_core_properties_bundle()?;
+        candidate.core_properties = Some(properties);
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove the complete core-properties part and its package relationship.
+    pub fn remove_core_properties(&mut self) -> Result<Option<CoreProperties>> {
+        let Some(properties) = self.core_properties.clone() else {
+            return Ok(None);
+        };
+        let mut candidate = self.clone_for_staging();
+        if let Some(part_name) = candidate.core_properties_part_name.take() {
+            candidate.remove_package_properties_bundle(&part_name, rel_types::CORE_PROPERTIES);
+        }
+        candidate.core_properties = None;
+        self.commit_staged_mutation(candidate);
+        Ok(Some(properties))
+    }
+
+    /// Return the complete application-properties model.
+    pub fn application_properties(&self) -> Option<&AppProperties> {
+        self.application_properties.as_ref()
+    }
+
+    /// Replace the complete application-properties model.
+    pub fn set_application_properties(&mut self, properties: AppProperties) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_application_properties_bundle()?;
+        candidate.application_properties = Some(properties);
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove the complete application-properties part and package relationship.
+    pub fn remove_application_properties(&mut self) -> Result<Option<AppProperties>> {
+        let Some(properties) = self.application_properties.clone() else {
+            return Ok(None);
+        };
+        let mut candidate = self.clone_for_staging();
+        if let Some(part_name) = candidate.application_properties_part_name.take() {
+            candidate.remove_package_properties_bundle(&part_name, rel_types::EXTENDED_PROPERTIES);
+        }
+        candidate.application_properties = None;
+        self.commit_staged_mutation(candidate);
+        Ok(Some(properties))
+    }
+
+    /// Return all custom properties in package order.
+    pub fn custom_properties(&self) -> &[CustomProperty] {
+        self.custom_properties
+            .as_ref()
+            .map(|properties| properties.properties.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Return a custom property by its case-sensitive name.
+    pub fn custom_property(&self, name: &str) -> Option<&CustomProperty> {
+        self.custom_properties()
+            .iter()
+            .find(|property| property.name.as_deref() == Some(name))
+    }
+
+    /// Add or replace one named custom property.
+    pub fn set_custom_property(&mut self, property: CustomProperty) -> Result<()> {
+        let Some(name) = property.name.as_deref().filter(|name| !name.is_empty()) else {
+            return Err(Error::Other(
+                "an authored custom property requires a non-empty name".to_owned(),
+            ));
+        };
+        if property.pid < 2 {
+            return Err(Error::Other(
+                "an authored custom property pid must be at least 2".to_owned(),
+            ));
+        }
+        if self
+            .custom_properties()
+            .iter()
+            .any(|existing| existing.name.as_deref() != Some(name) && existing.pid == property.pid)
+        {
+            return Err(Error::Other(format!(
+                "custom property pid {} is already in use",
+                property.pid
+            )));
+        }
+
+        let mut candidate = self.clone_for_staging();
+        let created = candidate.custom_properties_part_name.is_none();
+        candidate.reserve_custom_properties_bundle()?;
+        let properties = candidate
+            .custom_properties
+            .get_or_insert_with(CustomProperties::default);
+        if let Some(index) = properties
+            .properties
+            .iter()
+            .position(|existing| existing.name.as_deref() == Some(name))
+        {
+            properties
+                .properties
+                .retain(|existing| existing.name.as_deref() != Some(name));
+            properties.properties.insert(index, property);
+        } else {
+            properties.properties.push(property);
+        }
+        candidate.custom_properties_owned |= created;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove one named custom property.
+    pub fn remove_custom_property(&mut self, name: &str) -> Result<Option<CustomProperty>> {
+        let Some(removed) = self
+            .custom_properties()
+            .iter()
+            .find(|property| property.name.as_deref() == Some(name))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let mut candidate = self.clone_for_staging();
+        let properties = candidate
+            .custom_properties
+            .as_mut()
+            .expect("custom property lookup proved the model exists");
+        properties
+            .properties
+            .retain(|property| property.name.as_deref() != Some(name));
+        if properties.properties.is_empty() && candidate.custom_properties_owned {
+            if let Some(part_name) = candidate.custom_properties_part_name.take() {
+                candidate
+                    .remove_package_properties_bundle(&part_name, rel_types::CUSTOM_PROPERTIES);
+            }
+            candidate.custom_properties = None;
+            candidate.custom_properties_owned = false;
+        }
+        self.commit_staged_mutation(candidate);
+        Ok(Some(removed))
+    }
+
+    /// Remove the complete custom-properties part and package relationship.
+    pub fn remove_custom_properties(&mut self) -> Result<Option<Vec<CustomProperty>>> {
+        let Some(properties) = self.custom_properties.clone() else {
+            return Ok(None);
+        };
+        let mut candidate = self.clone_for_staging();
+        if let Some(part_name) = candidate.custom_properties_part_name.take() {
+            candidate.remove_package_properties_bundle(&part_name, rel_types::CUSTOM_PROPERTIES);
+        }
+        candidate.custom_properties = None;
+        candidate.custom_properties_owned = false;
+        self.commit_staged_mutation(candidate);
+        Ok(Some(properties.properties))
+    }
+
+    fn remove_package_properties_bundle(&mut self, part_name: &str, rel_type: &str) {
+        let mut removed_ids = Vec::new();
+        self.package.package_rels.items.retain(|relationship| {
+            let remove = relationship.rel_type == rel_type
+                && relationship_is_internal(relationship)
+                && OpcPackage::resolve_rel_target("/", &relationship.target) == part_name;
+            if remove {
+                removed_ids.push(relationship.id.clone());
+            }
+            !remove
+        });
+        self.identifiers
+            .retire_authored_story_relationships("/", removed_ids);
+        self.package.remove_part(part_name);
+        self.package.remove_part_rels(part_name);
+        self.package.content_types.remove_override(part_name);
+        self.identifiers.retire_authored_part(part_name);
+    }
 
     /// Get the document title.
     pub fn title(&self) -> Option<&str> {

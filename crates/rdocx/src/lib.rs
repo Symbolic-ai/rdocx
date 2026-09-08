@@ -76,7 +76,10 @@ pub use math::{
 };
 pub use odt::{OdtDiagnostic, OdtReadResult, OdtWriteResult};
 pub use oxml_chart::{ChartData, ChartKind};
-pub use oxml_core::Length;
+pub use oxml_core::app_properties::AppProperties;
+pub use oxml_core::core_properties::CoreProperties;
+pub use oxml_core::custom_properties::{CustomProperty, CustomPropertyValue};
+pub use oxml_core::{Length, Twips};
 pub use oxml_opc::PackageReadLimits;
 #[cfg(feature = "digital-signatures")]
 pub use oxml_opc::{
@@ -96,7 +99,8 @@ pub use rdocx_oxml::math::{
     MathSubSuperscript, MatrixBaseJustification, OfficeMath,
 };
 pub use rdocx_oxml::settings::{
-    CryptAlgorithmClass, CryptAlgorithmType, CryptProviderType, DocumentProtection, ProtectionMode,
+    CharacterSpacingControl, CompatibilitySetting, CryptAlgorithmClass, CryptAlgorithmType,
+    CryptProviderType, DocumentProtection, ProtectionMode, ThemeFontLanguage,
 };
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
