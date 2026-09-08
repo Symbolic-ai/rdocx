@@ -1,102 +1,62 @@
-# Current Sprint, S64
+# Current Sprint, S65
 
-**Milestone**: M21 Presentation depth with a cross-cutting Word correction.
+**Milestone**: M22 Word depth with a cross-cutting chart correction.
 
-**Goal**: turn common modern content sources into editable or explicitly
-preserved slide content. HTML maps a bounded DOM and CSS subset into ordinary
-slide shapes, while PDF import offers either a preserved page graphic or a
-declared editable subset. Neither path promises arbitrary browser or PDF-engine
-compatibility.
-
-Issue 67 identified a restart-pagination regression in the unreleased F-X073
-work while this sprint was at its release boundary. S64 also removes that
-bounded performance cliff before the separately reviewed stable Word release.
+**Goal**: author, convert, lay out, and render modern Word equations. In
+parallel, make authored Word charts portable across Word and Pages while
+retaining their editable workbook data.
 
 ## Spec references
 
-- `docs/hld/02-scope-and-non-goals.md`, for bounded format support, explicit
-  unsupported-content policy, and the prohibition on implied compatibility.
-- `docs/hld/03-architecture.md`, for facade-owned import, transactional model
-  publication, and reuse of existing package, layout, and rendering layers.
-- `docs/hld/04-opc-and-packaging.md`, for relationship-safe embedded resources,
-  MIME resolution, and package limits.
-- `docs/hld/06-presentationml-model.md`, for editable slide shapes, text,
-  tables, pictures, links, and preserved source content.
-- `docs/hld/08-rendering-spec.md`, for shared geometry, text, image, and path
-  lowering used by deterministic source comparisons, plus complete-boundary
-  restart pagination for page-spanning prose.
-- `docs/hld/10-bindings-spec.md`, for additive native facade surfaces and the
-  rule that Python, WASM, and CLI exposure is explicit rather than implied.
+- `docs/hld/03-architecture.md`, for facade-owned authoring and transactional
+  publication through existing model and package layers.
+- `docs/hld/04-opc-and-packaging.md`, for relationship-safe chart, workbook,
+  theme, and content-type assembly.
+- `docs/hld/05-drawingml-model.md`, for Office theme defaults and typed color
+  semantics.
+- `docs/hld/09-charts-spec.md`, for editable chart data, schema-ordered
+  ChartML, formulas, caches, plots, axes, and legends.
+- `docs/hld/10-bindings-spec.md`, for the native Word facade and explicit
+  pre-1.0 source-compatibility decisions.
 - `docs/hld/12-testing-strategy.md`, for source-built differential fixtures,
-  deterministic fonts, external oracle discipline, and unchanged hash gates.
-- `docs/hld/14-development-backlog.md`, for the F-224 and F-225 acceptance
-  gates, the F-X075 regression boundary, dependency order, and the M21
-  completion boundary.
+  external oracle discipline, and unchanged deterministic hash gates.
+- `docs/hld/14-development-backlog.md`, for the F-228 through F-230 and
+  F-X077 acceptance gates and dependency order.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-224 | HTML slide content import | L | done | - |
-| F-225 | PDF page content import | L | done | - |
-| F-X074 | Tag rpptx-v0.9.0 | S | done | - |
-| F-X075 | Preserve restart pagination across page-spanning paragraphs | M | done | - |
-| F-X076 | Tag v0.12.0 | S | done | - |
+| F-X077 | Portable authored Word charts | L | pending | - |
+| F-228 | OfficeMath model and authoring | L | pending | - |
+| F-229 | OfficeMath layout and PDF rendering | M | pending | - |
+| F-230 | MathML and LaTeX conversion | M | pending | - |
 
 ## Sequencing note
 
-Rows are listed in dependency order, not F-ID order.
-
-Both stories can begin independently because F-224 depends on the completed
-F-110 and F-112 authoring surfaces, while F-225 depends on the completed F-109,
-F-110, and F-111 shape and picture surfaces. Their designs must agree on shared
-image, text, path, link, diagnostic, and transactional publication semantics.
-The integrated sprint review validates those interactions before M21 closes.
-F-X075 is a late cross-cutting correction requested after Issue 67 reproduced
-an unreleased F-X073 regression. It is independent of the presentation
-implementation, but its stable release follows the reviewed
-`rpptx-v0.9.0` publication so the selected package families remain separate.
-F-X076 owns that later stable publication and its seven reviewed contribution
-notifications.
+Rows are listed in review order, not F-ID order. F-X077 is a late
+cross-cutting correction requested after editable chart export exposed missing
+theme, axis, number-format, point-color, and legend semantics in consumers
+outside Word. It is independent of the OfficeMath dependency chain and lands
+first so the consuming Symbolic integration can use a reviewed public API.
+F-228 then establishes the equation model. F-229 and F-230 depend on that
+model and may proceed independently after it lands.
 
 ## Definition of done for this sprint
 
-- Source-built HTML projects the declared DOM and CSS subset into editable
-  shapes, text, tables, images, and links, then matches the pinned browser
-  structure and pixels after save and reopen.
-- Unsupported HTML structure and style produce stable source-path diagnostics
-  without publishing a partial presentation or implying browser compatibility.
-- PDF pages import through both the preserved page-graphic path and the
-  declared editable text, raster image, path, and link subset.
-- Imported PDF page geometry and source rendering match the pinned reference,
-  while font substitutions and unsupported operators remain explicit stable
-  diagnostics.
-- Both import paths reuse the existing PresentationML authoring, package,
-  layout, and rendering surfaces without introducing a second rendering engine.
-- A portable source-built representative deck combines comments, sections,
-  minimal SmartArt preservation, exact media bytes, timeline fade, signatures,
-  the macro-enabled package variant, notes, and a three-up handout. A separate
-  captured no-repair signed deck supplies authentic SmartArt release evidence.
-  Recorded PowerPoint 16.104 static, movie, A4 portrait notes, and A4 portrait
-  handout outputs bind directly to that signed source through one configured
-  oracle directory. The exact captured bytes and their saved/reopened form both
-  pass the complete package, collaboration, section, media, playback, timing,
-  signature, slide-order, and authentic SmartArt semantic contract. All three
-  static pages pass exact normalized token
-  cardinality and order, 6-pixel full-page ink, and per-region raster
-  boundaries, with only the page-one audio rectangle masked. Page three proves
-  the complete SmartArt graph and relationships plus visible three-node text
-  and ink. Notes pass exact per-page tokens, exact band cardinality, 0.06
-  normalized semantic-component size, and 0.35 ink-occupancy boundaries without
-  equating placement across different notes masters. Handout output passes
-  exact token and 0.05 normalized thumbnail geometry boundaries.
-- Full verification passes with every deterministic hash explained, every
-  package archive below 10 MiB, and the bounded sprint review clean.
-- Page-spanning ordinary prose keeps one recorded pagination pass, publishes
-  only complete-boundary restart checkpoints, and reuses bounded warm work
-  without weakening any existing unsafe-state exclusion.
-- The reviewed `rpptx-v0.9.0` release publishes and independently verifies the
-  exact 15-package incubating family before sprint closure.
-- The reviewed `v0.12.0` release publishes and independently verifies the exact
-  seven-package stable family, retains unpublished bindings, and records all
-  seven contribution notifications without changing record state.
+- Authored line, bar, pie, and doughnut charts retain exact editable workbook
+  categories, series, values, formulas, and caches after save and reopen.
+- Chart packages add a relationship-owned default Office theme only when no
+  document theme exists, without replacing or mutating caller-owned themes.
+- Authored axes are explicitly visible in schema order, value-axis number
+  formats preserve literal percentages, and caller palettes style series and
+  required category points.
+- Microsoft Word 16.104 opens source-built chart documents without repair. A
+  pinned Pages build renders the intended axes, colors, legend, and values,
+  then exports semantically exact editable charts.
+- OfficeMath authors and round-trips the supported equation tree while
+  preserving unsupported sibling XML.
+- Supported equations lay out and render against the pinned Word PDF oracle,
+  and supported MathML and LaTeX conversions preserve their normalized tree.
+- Full verification passes with every deterministic hash explained, public
+  package dry-runs remain bounded, and the integrated sprint review is clean.

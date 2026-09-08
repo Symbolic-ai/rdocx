@@ -1218,16 +1218,21 @@ inventory.
 
 #### Sprint S65, OfficeMath
 
-**Goal**: author, convert, lay out, and render modern Word equations.
+**Goal**: author, convert, lay out, and render modern Word equations, while a
+late cross-cutting correction makes authored charts portable across Word and
+Pages without flattening their editable data.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-228 | OfficeMath model and authoring | L |
 | F-229 | OfficeMath layout and PDF rendering | M |
 | F-230 | MathML and LaTeX conversion | M |
+| F-X077 | Portable authored Word charts | L |
 
 The equation model preserves unsupported siblings and remains independent of
-legacy Equation Editor objects.
+legacy Equation Editor objects. F-X077 is independent of the OfficeMath wave.
+It gives authored charts explicit portable package and presentation defaults
+while retaining their embedded workbook as the source of editable data.
 
 #### Sprint S66, Fields and dynamic tables of contents
 

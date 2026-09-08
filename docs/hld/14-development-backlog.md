@@ -2102,6 +2102,24 @@ stable diagnostics for constructs that cannot round-trip.
 **Test gate**: differential. Supported source-built equations preserve their
 normalized expression tree through both conversion directions.
 
+### F-X077, Portable authored Word charts (L)
+Make authored Word charts portable without flattening their editable workbook
+data. A document that authors its first chart gains a relationship-owned Office
+theme only when it has no theme already. Authored axes explicitly remain
+visible in schema order, value axes receive the chart number format, and a
+caller palette can style series plus category points for one-series bars, pies,
+and doughnuts. Pie and doughnut charts retain category legend semantics.
+Optional category and value axis titles remain typed ChartML rather than raw
+post-serialization replacement. Existing themes remain authoritative, package
+publication remains transactional, and unsupported ChartML remains preserved.
+**Depends on**: F-158.
+**Test gate**: differential. Source-built line, bar, pie, and doughnut documents
+save, reopen, and retain exact categories, series, values, formulas, caches,
+relationships, content types, and editable workbook data. Microsoft Word
+16.104 opens the documents without repair. A pinned Pages build renders the
+axes, brandable colors, category legend, and literal percentage values, then
+exports a DOCX whose chart and workbook semantics remain exact.
+
 ### F-231, Extended field evaluation (L)
 Evaluate TOC, TC, formula, mail-merge control, and barcode fields while
 retaining unavailable field instructions and cached results.
