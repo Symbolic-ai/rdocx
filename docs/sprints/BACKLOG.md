@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 8 | 0 | 16 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 91 | 85 | 1 | 1  |
-| **Total** | **409** | **319** | **1** | **85** |
+| X, Cross-cutting (opportunistic)            | 91 | 85 | 2 | 0  |
+| **Total** | **409** | **319** | **2** | **84** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -627,5 +627,5 @@ regenerated, never hand-edited.
 | F-X085 | Memoize restart body identities once per layout | S70 | M | done |
 | F-X086 | Provenance-safe restart after body-length changes | S70 | L | done |
 | F-X087 | Portable authored Word charts from PR 71 | S71 | L | in-progress |
-| F-X088 | Verify and close Issue 69 after S70 fixes | S71 | S | pending |
+| F-X088 | Verify and close Issue 69 after S70 fixes | S71 | S | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

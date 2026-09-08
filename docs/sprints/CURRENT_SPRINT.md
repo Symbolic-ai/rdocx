@@ -44,7 +44,7 @@ issue is closed.
 | F-247 | Complete numbering level and instance model | L | pending | - |
 | F-248 | Style-linked numbering, counters, TOC, and REF | L | pending | - |
 | F-X087 | Portable authored Word charts from PR 71 | L | in-progress | codex |
-| F-X088 | Verify and close Issue 69 after S70 fixes | S | pending | - |
+| F-X088 | Verify and close Issue 69 after S70 fixes | S | in-progress | codex |
 
 ## Sequencing note
 
