@@ -8484,16 +8484,6 @@ impl Document {
         self.settings.as_ref()?.theme_font_language()
     }
 
-    pub fn set_theme_font_language(&mut self, value: ThemeFontLanguage) -> Result<()> {
-        let mut candidate = self.settings_mutation_candidate()?;
-        candidate
-            .settings
-            .get_or_insert_with(CT_Settings::new)
-            .set_theme_font_language(value)?;
-        self.commit_staged_mutation(candidate);
-        Ok(())
-    }
-
     pub fn remove_theme_font_language(&mut self) -> Result<Option<ThemeFontLanguage>> {
         if self.theme_font_language().is_none() {
             return Ok(None);
@@ -8544,7 +8534,13 @@ impl Document {
 
     /// Set the document-wide Latin, East Asian, and bidirectional languages.
     pub fn set_language_defaults(&mut self, value: ThemeFontLanguage) -> Result<()> {
-        self.set_theme_font_language(value)
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_theme_font_language(value)?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Return font-table records with related embedded bytes deobfuscated.

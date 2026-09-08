@@ -959,7 +959,7 @@ mod settings_and_properties_tests {
             .set_character_spacing_control(CharacterSpacingControl::CompressPunctuation)
             .unwrap();
         document
-            .set_theme_font_language(ThemeFontLanguage {
+            .set_language_defaults(ThemeFontLanguage {
                 latin: Some("en-GB".to_owned()),
                 east_asia: Some("ja-JP".to_owned()),
                 bidi: Some("ar-SA".to_owned()),
@@ -1164,7 +1164,7 @@ mod settings_and_properties_tests {
             Some("one".to_owned())
         );
         document
-            .set_theme_font_language(ThemeFontLanguage {
+            .set_language_defaults(ThemeFontLanguage {
                 latin: Some("en-GB".to_owned()),
                 east_asia: Some("ja-JP".to_owned()),
                 bidi: None,
