@@ -1,6 +1,6 @@
 # F-X088, Verify and close Issue 69 after S70 fixes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: S
 **Depends on**: F-X084, F-X085, F-X086
@@ -45,12 +45,22 @@ deterministic font mode:
 - `sourced_enter_merge_and_selection_delete_restart_from_safe_prefix`
 
 Run the complete `/verify --full` gate at the reviewed S71 SHA and require the
-49-entry hash harness to remain unchanged. Post one Issue 69 comment that
-credits `@emptinessform`, identifies the exact regressions and reviewed SHA,
-states that v0.13.1 remains affected, and says the fixes will be included in the
-next stable release without promising a date. Close the issue and verify its
-final state. Preserve the issue and four offered commit identities in the next
-stable release contribution inventory.
+49-entry hash harness to remain unchanged. Authenticate the reporter fork and
+use its timing harness if committed. When no committed harness exists,
+reconstruct the reported 700 four-line paragraphs, one 3 by 3 table every 50
+paragraphs, 63-page workload in temporary instrumentation. Compare exact
+v0.13.1 and S71 source archives in the same release-mode deterministic-font
+environment. Use a warmup and multiple alternating rounds at three body
+positions. Report min and median timing, available work counters, exact
+environment, and every material difference from the reporter environment. Do
+not commit the harness or generated artifacts.
+
+Post Issue 69 evidence that credits `@emptinessform`, identifies the exact
+regressions and reviewed SHA, states that v0.13.1 remains affected, and says the
+fixes will be included in the next stable release without promising a date.
+Close the issue only when correctness and timing evidence both support closure,
+then verify its final state. Preserve the issue and four offered commit
+identities in the next stable release contribution inventory.
 
 ## Rejected alternatives
 
@@ -58,9 +68,10 @@ stable release contribution inventory.
   regression coverage.
 - Close on commit ancestry alone. The issue reports interacting hot paths that
   require combined current-state verification.
-- Claim the reporter's timing result was reproduced. The existing deterministic
-  regressions prove bounded work and exact output, not the reporter's external
-  benchmark environment.
+- Claim the reporter's exact editor harness was reproduced. Its committed fork
+  tree does not contain that harness. The temporary direct-engine reconstruction
+  must distinguish matched workload properties from OS, hardware, and editor
+  integration differences.
 - Claim v0.13.1 contains the fix. Its release SHA predates F-X084 through
   F-X086.
 
@@ -72,11 +83,13 @@ stable release contribution inventory.
 | regression | restart identity memo test | Each candidate body identity is computed at most once per layout within the bounded memo. |
 | regression | three sourced body edit tests | Insert, delete, Enter, merge, and selection delete reuse a safe prefix without stale tail provenance. |
 | release comparison | S71 ancestry and v0.13.1 exclusion | The completed fixes are present in S71 and absent from the released tag. |
+| timing comparison | temporary release-mode Issue 69 reconstruction | Exact v0.13.1 and S71 source archives run in one deterministic-font environment with warmup, alternating rounds, three positions, min and median timing, and cache or page work counters. |
 | full gate | `/verify --full` | Workspace, deterministic oracle, package, supply-chain, prose, and 49-entry hash gates pass at one reviewed SHA. |
-| external state | Issue 69 closure verification | The authenticated comment contains exact evidence and credit, and the issue is closed. |
+| external state | Issue 69 closure verification | The authenticated comments contain exact correctness and qualified timing evidence plus contributor credit, and the issue is closed as completed. |
 
-The **test gate is regression**. All six focused tests and the full gate must
-pass on the same reviewed S71 SHA before the external issue state changes.
+The **test gate is regression**. All six focused tests, the full gate, and the
+same-environment timing comparison must pass before final external issue
+closure.
 
 ## HLD impact
 
@@ -101,14 +114,17 @@ layout optimizations and must not change deterministic cold output.
 
 ## Implementation checklist
 
-- [ ] Confirm F-X084, F-X085, and F-X086 are ancestors of S71 and absent from v0.13.1.
-- [ ] Run all six focused deterministic-font regressions.
-- [ ] Run `/verify --full` and confirm the hash harness remains 49 of 49.
-- [ ] Record the exact reviewed SHA and evidence in the Issue 69 comment.
-- [ ] Credit `@emptinessform` and state the v0.13.1 and next stable release facts.
-- [ ] Close Issue 69 and verify its authenticated final state.
-- [ ] Preserve Issue 69 and all four offered commits in the next stable release inventory.
-- [ ] Update exactly the listed HLD files.
+- [x] Confirm F-X084, F-X085, and F-X086 are ancestors of S71 and absent from v0.13.1.
+- [x] Run all six focused deterministic-font regressions.
+- [x] Run `/verify --full` and confirm the hash harness remains 49 of 49.
+- [x] Authenticate the reporter fork and determine whether its timing harness is committed.
+- [x] Compare exact v0.13.1 and S71 archives with a temporary release-mode deterministic-font reconstruction.
+- [x] Record warmup, alternating rounds, three-position min and median timing, work counters, and environment caveats.
+- [x] Record the exact reviewed SHA and evidence in the Issue 69 comment.
+- [x] Credit `@emptinessform` and state the v0.13.1 and next stable release facts.
+- [x] Close Issue 69 and verify its authenticated final state.
+- [x] Preserve Issue 69 and all four offered commits in the next stable release inventory.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

@@ -4580,19 +4580,37 @@ the issue only after their combined evidence passes on the reviewed S71 SHA.
 F-X084 owns note-reference-aware paragraph cache invalidation. F-X085 owns the
 once-per-layout restart identity memo. F-X086 owns provenance-safe restart for
 insert, delete, Enter, merge, and selection-delete body-length changes. Preserve
-`@emptinessform`'s report and offered commits `4777a741`, `eff0ea0c`,
-`9e48bc86`, and `c8315b92` in the next stable release contribution inventory.
+`@emptinessform`'s report and offered commits
+`4777a74167495a5116289e1f905dfd9ad4dbe807`,
+`eff0ea0c28b5eaf08180b09b58e0c0f486b7433b`,
+`9e48bc86876c294b8daa314e577e84b6fcd7ac97`, and
+`c8315b92857c951146fc866cd044b214194a09a8` in the next stable release
+contribution inventory.
 
-The closure comment credits the reporter, links the six focused regressions,
+The closure evidence credits the reporter, links the six focused regressions,
 states that v0.13.1 remains affected, and says the fixes will ship in the next
-stable release without promising a date. It must not claim that the reporter's
-timing harness was reproduced unless that measurement is actually observed.
+stable release without promising a date. The reporter fork contains no
+committed timing harness. The qualified temporary reconstruction uses exact
+v0.13.1 and S71 source archives, release mode, deterministic bundled fonts, the
+reported 700 four-line paragraph and 3 by 3 table workload, a 63-page prime,
+three positions, warmup, and alternating measured rounds. It reports min and
+median times plus paragraph-cache and page-layout work, and distinguishes direct
+engine model mutation on macOS from the reporter's Windows editor environment.
 
 **Depends on**: F-X084, F-X085, F-X086.
-**Test gate**: regression. All six focused deterministic-font regressions pass,
-the complete workspace gate and 49-entry hash harness pass unchanged, the fixes
-are present on S71 and absent from v0.13.1, and the authenticated Issue 69
-closure records the exact evidence and contributor credit.
+**Test gate**: regression, passed at reviewed S71 SHA
+`667416b1b54968b1524d57232c44f73a175fd27a`. All six focused
+deterministic-font regressions passed, the complete workspace gate passed, and
+the 49-entry hash harness remained unchanged. F-X084 through F-X086 are present
+on S71 and absent from v0.13.1. In the 21-sample-per-operation timing
+comparison, all S71 medians are at most 22.269 milliseconds. Footnote insertion
+falls from a 48.157 millisecond v0.13.1 median to 14.688 milliseconds on S71,
+and footnote deletion falls from 52.845 to 22.269 milliseconds. Both note edits
+change from zero paragraph-cache hits and 700 builds to 699 hits and one build.
+The authenticated evidence credits `@emptinessform`, preserves all four offered
+commits, records the environment caveats, and states that the fixes will be in
+the next stable release without a date. Issue 69 is closed as completed at
+<https://github.com/tensorbee/rdocx/issues/69#issuecomment-5592205748>.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

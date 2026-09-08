@@ -2057,9 +2057,35 @@ at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`, byte-identical
 GitHub release notes, incubating-family exclusion, and unpublished binding and
 WASM carriers. Its selected contribution inventory is empty, so no external
 notification was required. Issue 69 is addressed by the completed S70 F-X084
-through F-X086 mechanisms. F-X088 verifies those fixes together at the reviewed
-S71 SHA, records contributor credit, states that v0.13.1 remains affected, and
-closes the issue only after the complete evidence gate passes.
+through F-X086 mechanisms. F-X088 verified those fixes together at reviewed
+S71 SHA `667416b1b54968b1524d57232c44f73a175fd27a`. All six focused
+deterministic-font regressions and the complete gate passed, including 49 of 49
+unchanged hash entries. The authenticated evidence comment credits
+`@emptinessform`. The reporter fork does not contain a committed timing harness,
+so closure evidence uses a temporary direct-engine reconstruction. It matches
+the reported 700 four-line paragraphs, one 3 by 3 table every 50 paragraphs,
+63-page prime, three body positions, warm cache, release mode, and deterministic
+bundled fonts. Seven alternating measured rounds after warmup produce 21
+samples per operation and build on one Apple M5 Max macOS 26.6.2 environment
+with rustc 1.97.1. S71 min and median times in milliseconds are 13.832 and
+15.310 for typing, 14.213 and 14.688 for footnote insertion, 19.928 and 22.269
+for footnote deletion, 13.549 and 13.978 for Enter, 13.389 and 14.159 for merge,
+and 13.360 and 13.956 for selection deletion. The corresponding v0.13.1
+footnote medians are 48.157 and 52.845 milliseconds. Note insertion and deletion
+change from zero paragraph-cache hits and 700 builds on v0.13.1 to 699 hits and
+one build on S71. Direct model mutation on macOS excludes the reporter's
+Windows editor and UI overhead, and page-layout invocations remain the full
+output page count in both builds for this table workload.
+
+The authenticated correctness and timing evidence states that v0.13.1 remains
+affected while the fixes will be included in the next stable release without a
+promised date. Issue 69 is closed as completed at
+<https://github.com/tensorbee/rdocx/issues/69#issuecomment-5592205748>. The next
+stable release contribution inventory retains Issue 69 and offered commits
+`4777a74167495a5116289e1f905dfd9ad4dbe807`,
+`eff0ea0c28b5eaf08180b09b58e0c0f486b7433b`,
+`9e48bc86876c294b8daa314e577e84b6fcd7ac97`, and
+`c8315b92857c951146fc866cd044b214194a09a8`.
 The failed stable 0.11.0 release gate is not a passing family gate. Its
 annotated tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full
