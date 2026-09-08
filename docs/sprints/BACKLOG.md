@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 6 | 2 | 16 |
+| M23, From-scratch business documents           | 24 | 8 | 0 | 16 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
 | X, Cross-cutting (opportunistic)            | 89 | 85 | 0 | 0  |
-| **Total** | **407** | **317** | **2** | **84** |
+| **Total** | **407** | **319** | **0** | **84** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -456,9 +456,9 @@ regenerated, never hand-edited.
 | F-241 | Public authoring conformance harness | S70 | L | done |
 | F-242 | Root README product and capability overview | S70 | M | done |
 | F-243 | Word-compatible fresh package profiles | S71 | L | done |
-| F-244 | Corpus settings and document properties | S71 | L | in-progress |
+| F-244 | Corpus settings and document properties | S71 | L | done |
 | F-245 | Corpus themes, font tables, and embedded fonts | S71 | L | done |
-| F-246 | Corpus style authoring | S71 | L | in-progress |
+| F-246 | Corpus style authoring | S71 | L | done |
 | F-247 | Complete numbering level and instance model | S71 | L | pending |
 | F-248 | Style-linked numbering, counters, TOC, and REF | S71 | L | pending |
 | F-249 | Deterministic package identifier allocation | S71 | M | done |

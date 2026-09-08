@@ -407,6 +407,8 @@ defended.
 | F-243 | S71 | L | 4 | 1 | 2026-09-07 | Added deterministic Word-compatible DOCX, DOCM, DOTX, and DOTM creation profiles with complete owned package graphs and an explicit compact profile |
 | F-249 | S71 | M | 2 | 1 | 2026-09-07 | Centralized deterministic Word package identifiers with collision-safe staged allocation and case-insensitive OPC identity validation |
 | F-245 | S71 | L | 4 | 2 | 2026-09-08 | Added public theme and font-table authoring, licensed embedded-font ownership, and deterministic authored-font layout resolution |
+| F-244 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic settings plus core, application, and custom property authoring with deterministic removal and raw XML preservation |
+| F-246 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic paragraph, character, and table style graphs with effective resolution and pinned Word formatting parity |
 
 ## Velocity
 

@@ -31,9 +31,9 @@ and rendering behavior.
 |------|-------|------|--------|-------|
 | F-243 | Word-compatible fresh package profiles | L | done | - |
 | F-249 | Deterministic package identifier allocation | M | done | - |
-| F-244 | Corpus settings and document properties | L | in-progress | codex |
+| F-244 | Corpus settings and document properties | L | done | - |
 | F-245 | Corpus themes, font tables, and embedded fonts | L | done | - |
-| F-246 | Corpus style authoring | L | in-progress | codex |
+| F-246 | Corpus style authoring | L | done | - |
 | F-247 | Complete numbering level and instance model | L | pending | - |
 | F-248 | Style-linked numbering, counters, TOC, and REF | L | pending | - |
 

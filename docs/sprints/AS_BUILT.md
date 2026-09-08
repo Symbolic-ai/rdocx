@@ -12476,3 +12476,86 @@ and python-pptx riders.
 identity as part of every embedded-font mutation. Keep theme aliases and
 embedded bytes ahead of bundled fallback, and never make document-owned fonts
 observable through system discovery or the bundled asset inventory.
+
+### F-244, Corpus settings and document properties
+
+**Sprint.** S71
+**Completed.** 2026-09-08
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The Word facade now owns relationship-resolved core,
+application, and custom properties plus the bounded corpus settings subset.
+Callers can read, set, and remove application properties, custom values,
+document variables, compatibility settings, default tab stops, character
+spacing control, and language defaults through atomic package mutations.
+
+**Non-obvious choices.** Optional parts are removed only when they are
+facade-owned and empty. Every mutation stages typed state, relationships,
+content types, and package bytes together. Parsed aliases and unmodelled
+settings children retain their original bytes and schema positions.
+
+**Deviations from the design plan.** None. Three microscope passes closed the
+atomicity, preservation, namespace, and workflow-owner gaps. Pass 3 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `authored_settings_and_properties_survive_reopen`,
+`removing_one_property_family_prunes_only_its_owned_graph`,
+`settings_mutation_preserves_unmodeled_children_in_schema_order`, and
+`fresh_property_output_has_no_clock_or_host_input` passed. The integrated
+`/verify --full` gate passed at
+`11f2a2fe653b56c3cc2a3231ff3195c58ede1e72` with pinned LibreOffice and
+Poppler riders, all package archives below 10 MiB, and clean supply-chain
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep optional property-part ownership explicit.
+A malformed or foreign lookalike must remain preserved and unevaluated, and a
+failed cross-part mutation must publish no typed or package state.
+
+### F-246, Corpus style authoring
+
+**Sprint.** S71
+**Completed.** 2026-09-08
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The public Word facade now creates, updates, defaults,
+removes, and validates paragraph, character, and table styles as one graph.
+Effective paragraph, run, and table formatting follows authored defaults,
+based-on chains, reciprocal links, next styles, theme fonts, and conditional
+table regions through deterministic layout.
+
+**Non-obvious choices.** Mutations validate a complete candidate graph before
+publishing it. Removal rejects live references rather than detaching them.
+Canonical generated empty style scalars use deterministic writer output, while
+producer-specific aliases and attributes retain exact source snapshots.
+
+**Deviations from the design plan.** None. Ten microscope passes closed graph,
+resolver, table-cascade, fragment-remapping, serializer, and completion-record
+gaps. Pass 10 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md`.
+
+**Tests.** `source_built_style_graph_matches_pinned_word_effective_formatting`,
+`invalid_style_graph_never_publishes_a_partial_mutation`,
+`authored_style_graph_survives_save_and_reopen`, and
+`style_removal_rejects_live_references_and_preserves_unknown_xml` passed. The
+integrated `/verify --full` gate passed at
+`11f2a2fe653b56c3cc2a3231ff3195c58ede1e72` with pinned LibreOffice and
+Poppler riders, all package archives below 10 MiB, and clean supply-chain
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep style ids type-compatible across based-on,
+link, and next edges. Preserve unmodelled XML and lexical producer details, and
+invalidate layout exactly once after a complete valid graph is published.
