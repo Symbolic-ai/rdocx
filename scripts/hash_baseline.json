@@ -11,7 +11,7 @@
     "feature_showcase:pdf/bytes": "a9035ceb5183ba12deedde68aae833a3af0e54e0fc9791ef851629b83fe91f87",
     "feature_showcase:pdf/pages": "9c46894bd67eeab233be138863ab5fb0a61e5d96f27f781bdd53dfb02778d91d",
     "feature_showcase:pdf/resources": "23f3e0a8a1b942352c4c38082d871445a0a1f4779d42491026f6cf3bf220fbd2",
-    "feature_showcase:word/document.xml": "3afc92178fe9e0e932d2685988ed6cc541124d3d8c806504b429b6db78990762",
+    "feature_showcase:word/document.xml": "7c38b482fb5611c39edaf3a7931e62a49fef81861e76e05d5039830db7cc7053",
     "feature_showcase:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "feature_showcase:word/styles.xml": "b815acd04cc89189d5b2b0caf822435d941c8cc70077f34932e4a2b3ce1b6595",
     "invoice:page1.png": "850572f788d246ac8beceec0a68ac5da63d4904327315a712140cea977fe1bcd",
@@ -46,9 +46,9 @@
     "report:pdf/bytes": "1cdc7e52fbe553b3193536cffaed2ef3af0d0bf288130b098837d788935e4c8b",
     "report:pdf/pages": "781d5e3a9a67064b61324001c34a95bda691bcc6492fe28274a71d8c2120495b",
     "report:pdf/resources": "cabc4cbad4abfbb595669566cc9ef98e9b96eb7c885f7fbce6a482a4e669b6bf",
-    "report:word/document.xml": "5a834b2ebe01156c082f25ea05483c135d3718beae7d80b2224e0a02f9b93365",
+    "report:word/document.xml": "a879be8fcb630c39824270e40b0a34dba56fb5c04010f27720da4b96df76f12a",
     "report:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "report:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4"
   },
-  "reason": "F-198 adds the page-one English hyphenation example, rendering representation as repre- and sentation"
+  "reason": "F-249 deterministic package identifier allocation resolves colliding drawing identifiers and assigns relationships in final story order for feature_showcase and report"
 }
