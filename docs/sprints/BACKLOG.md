@@ -38,8 +38,8 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 0 | 0 | 12 |
-| X, Cross-cutting (opportunistic)            | 80 | 71 | 3 | 3  |
-| **Total** | **327** | **282** | **6** | **36** |
+| X, Cross-cutting (opportunistic)            | 80 | 72 | 3 | 2  |
+| **Total** | **327** | **283** | **6** | **35** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -529,5 +529,5 @@ regenerated, never hand-edited.
 | F-X074 | Tag rpptx-v0.9.0                          | S64 | S | done |
 | F-X075 | Preserve restart pagination across page-spanning paragraphs | S64 | M | done |
 | F-X076 | Tag v0.12.0                               | S64 | S | done |
-| F-X077 | Portable authored Word charts             | S65 | L | pending |
+| F-X077 | Portable authored Word charts             | S65 | L | done |
 <!-- AUTOGEN:backlog-MX END -->

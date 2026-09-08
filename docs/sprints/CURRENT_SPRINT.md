@@ -27,7 +27,7 @@ retaining their editable workbook data.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X077 | Portable authored Word charts | L | pending | - |
+| F-X077 | Portable authored Word charts | L | done | - |
 | F-228 | OfficeMath model and authoring | L | pending | - |
 | F-229 | OfficeMath layout and PDF rendering | M | pending | - |
 | F-230 | MathML and LaTeX conversion | M | pending | - |
@@ -51,9 +51,10 @@ model and may proceed independently after it lands.
 - Authored axes are explicitly visible in schema order, value-axis number
   formats preserve literal percentages, and caller palettes style series and
   required category points.
-- Microsoft Word 16.104 opens source-built chart documents without repair. A
-  pinned Pages build renders the intended axes, colors, legend, and values,
-  then exports semantically exact editable charts.
+- Microsoft Word 16.112.2 build 16.112.26082125 opens source-built chart
+  documents without repair. Pages 14.5 build 7045.0.17 renders the intended
+  axes, colors, legend, doughnut, and values, then exports semantically exact
+  editable charts.
 - OfficeMath authors and round-trips the supported equation tree while
   preserving unsupported sibling XML.
 - Supported equations lay out and render against the pinned Word PDF oracle,

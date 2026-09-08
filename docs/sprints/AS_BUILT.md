@@ -11234,3 +11234,55 @@ https://github.com/tensorbee/rdocx/issues/67#issuecomment-5522284889.
 seven-package family. Verify each downloaded registry package, owner, annotated
 tag target, release-body bytes, unpublished carrier, contribution state, and
 notification URL before completing a release story.
+
+### F-X077, Portable authored Word charts
+
+**Sprint.** S65
+**Completed.** 2026-09-08
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Authored Word charts now carry the package and ChartML
+semantics needed to remain editable and render consistently in Microsoft Word
+and Apple Pages. The public data input accepts typed axis titles and an RGB
+palette. Authored charts serialize explicit visible axes, value formats,
+series and category-point colors, category legends, and doughnut hole size,
+while the Word facade transactionally supplies a relationship-owned Office
+theme only when the document has no effective theme.
+
+**Non-obvious choices.** Brand policy remains with callers rather than rdocx.
+An empty palette keeps theme-derived behavior. A supplied palette cycles by
+series and by category where consumers require explicit points. An internal
+theme relationship is effective only when its target exists and has the theme
+content type. Numeric caches preserve an omitted optional format code until a
+caller changes it. This avoids gratuitous source normalization.
+
+**Deviations from the design plan.** The external candidate uses line, bar,
+and doughnut charts rather than duplicating pie and doughnut in the viewer
+document. Focused Rust coverage still exercises both pie and doughnut. Pages
+rewrites some reference caches as legal literal caches, so the external gate
+validates their raw ChartML and embedded workbook semantics without expanding
+this story into typed literal-cache mutation.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md` covers Word chart
+assembly. `docs/hld/05-drawingml-model.md` covers typed sRGB construction.
+`docs/hld/09-charts-spec.md` covers authoring and portability.
+`docs/hld/10-bindings-spec.md` covers the native pre-1.0 chart input.
+`docs/hld/12-testing-strategy.md` covers the portable chart oracle.
+`docs/hld/14-development-backlog.md` covers F-X077.
+
+**Tests.** `authored_charts_emit_portable_viewer_defaults`,
+`authored_chart_adds_a_relationship_owned_default_theme`,
+`authored_chart_preserves_an_existing_document_theme`,
+`authored_chart_replaces_a_theme_without_its_required_content_type`,
+`authored_chart_theme_name_does_not_collide_with_existing_parts`,
+`optional_numeric_cache_format_remains_omitted`, and
+`word_and_pages_open_portable_authored_charts`. Complete portable workspace,
+Clippy, rustdoc, WASM, package dry-run, archive-size, dependency-policy, and
+README gates pass. The four exact LibreOffice 26.2.5.2 Linux oracles remain for
+hosted CI because their pinned installer is Linux x86_64 only.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Pages 14.5 exports legal `c:strLit` and
+`c:numLit` caches for some plots. They remain byte-preserved, but future typed
+mutation of a Pages-exported chart must first model those literal cache forms.

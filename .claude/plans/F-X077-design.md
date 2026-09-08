@@ -1,6 +1,6 @@
 # F-X077, Portable authored Word charts
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S65
 **Size**: L
 **Depends on**: F-158
@@ -88,13 +88,14 @@ mapping its visual pie contract to a doughnut chart.
 | package | theme ownership and collision | Chart authoring reuses an existing theme, otherwise adds one collision-safe theme part, relationship, and content type transactionally. |
 | round-trip | typed ChartML additions | Titles, explicit false deletion state, series styles, data-point styles, and unrelated raw siblings survive parse, mutate, save, and reopen in schema order. |
 | compatibility | existing chart kinds | Bar, line, area, scatter, radar, pie, and doughnut authoring still saves and reopens with exact formulas, caches, categories, series, and values. |
-| external oracle | Word and Pages | Word 16.104 opens without repair. A pinned Pages build renders axes, palette colors, category legend, and literal percentages, then exports semantically exact editable chart data. |
+| external oracle | Word and Pages | Word 16.112.2 build 16.112.26082125 opens without repair. Pages 14.5 build 7045.0.17 renders axes, palette colors, category legend, doughnut shape, and literal percentages, then exports semantically exact editable chart data. |
 | integration | changed and consuming crates | Focused crate tests, the complete workspace, hash harness, and public package dry-runs pass. |
 
 The **test gate is differential**. Source-built line, bar, pie, and doughnut
-documents save and reopen with exact editable workbook semantics. Word 16.104
-opens them without repair. A pinned Pages build renders the authored semantics
-and exports a DOCX whose chart and workbook data remain exact.
+documents save and reopen with exact editable workbook semantics. Word 16.112.2
+build 16.112.26082125 opens them without repair. Pages 14.5 build 7045.0.17
+renders the authored semantics and exports a DOCX whose chart and workbook data
+remain exact.
 
 ## HLD impact
 
@@ -124,15 +125,15 @@ not author charts. Any delta blocks integration until classified and approved.
 
 ## Implementation checklist
 
-- [ ] Add failing source-built tests for theme ownership, axis semantics,
+- [x] Add failing source-built tests for theme ownership, axis semantics,
   value formatting, titles, palette styles, point colors, and legends.
-- [ ] Extend the typed ChartML model and writer in schema order.
-- [ ] Extend the cohesive `ChartData` authoring input and facade export.
-- [ ] Stage a default Office theme only when an authored chart needs one.
-- [ ] Prove exact chart and workbook semantics after save and reopen.
-- [ ] Record pinned Word and Pages interoperability evidence.
-- [ ] Run focused crates, full verification, hash harness, and package dry-runs.
-- [ ] Update exactly the six listed HLD files.
+- [x] Extend the typed ChartML model and writer in schema order.
+- [x] Extend the cohesive `ChartData` authoring input and facade export.
+- [x] Stage a default Office theme only when an authored chart needs one.
+- [x] Prove exact chart and workbook semantics after save and reopen.
+- [x] Record pinned Word and Pages interoperability evidence.
+- [x] Run focused crates, full verification, hash harness, and package dry-runs.
+- [x] Update exactly the six listed HLD files.
 
 ## Open questions
 

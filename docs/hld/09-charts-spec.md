@@ -405,6 +405,9 @@ pub struct ChartData {
     pub categories: Vec<String>,
     pub series: Vec<(String, Vec<f64>)>,
     pub number_format: Option<String>,
+    pub category_axis_title: Option<String>,
+    pub value_axis_title: Option<String>,
+    pub palette: Vec<RgbColor>,
 }
 
 pub fn authored_chart_parts(
@@ -446,6 +449,17 @@ valid. Pie and doughnut charts accept one series. Scatter categories must
 parse as finite numeric values. Each owning facade validates that both chart
 extents are positive before staging package mutation.
 
+Axis titles are typed rich-text ChartML. Cartesian axes explicitly serialize
+`c:delete val="0"`, and the value axis receives the same number format used by
+the cache and workbook. An empty palette retains theme-derived styling. A
+nonempty palette cycles by series. One-series bars and all pie and doughnut
+plots additionally serialize indexed category-point colors. Pie and doughnut
+plots retain their category legend with one series. Doughnut authoring emits
+the default 50 percent hole explicitly so consumers do not degrade it to pie.
+Numeric-reference caches accept an omitted optional `c:formatCode`, preserve
+that omission while unchanged, and materialize it when the caller selects a
+non-General format.
+
 The Presentation facade owns its mutation because package parts and
 relationships are not available through `SlideMut`. One call writes the typed
 chart part, one editable workbook part, the slide-to-chart and
@@ -482,13 +496,18 @@ the embedded workbook. An external workbook, malformed ChartML or
 SpreadsheetML, missing relationship target, nested archive limit, or remaining
 raw trace rejects the complete document mutation.
 
-The reviewed Word candidate has SHA-256
-`79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b`.
-Microsoft Word 16.104, Info.plist build 16.104.25121423, opened that exact file
-without a repair warning. In the human-action gate, Edit Data opened the
-embedded workbook in Excel and the user successfully changed the chart data.
-The workbook initially carried `Category` and `Revenue` columns with `North,
-12.5`, `South, 19.0`, and `West, 14.25`.
+The reviewed portable Word candidate has SHA-256
+`948f939135f26f9ebcac15da1d9fec5bcd75cf550e2ea608ef55380afa25440f`.
+Microsoft Word 16.112.2, Info.plist build 16.112.26082125, opened that exact
+file without a repair warning. Apple Pages 14.5, build 7045.0.17, rendered its
+line, bar, and doughnut charts with visible axes, literal percentage values,
+explicit blue and orange colors, and the category legend. Pages then exported
+a DOCX with SHA-256
+`1d0e4ec8f29cacd46ffa7e49952db0edaa90a1b8b65bcf60c4a228ba1a8d1c59`.
+Its ChartML and embedded workbooks retain the exact categories, series, values,
+and palette colors. Pages legally rewrites some reference caches as literal
+caches. Those values remain preserved raw until the typed model grows literal
+cache mutation.
 
 The native chart candidate has SHA-256
 `e6e9f7eef1c774d0414c5d0c3f1202da1a28635b5d089e15455b7adc3f66cb00`.

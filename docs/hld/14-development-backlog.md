@@ -2116,9 +2116,10 @@ publication remains transactional, and unsupported ChartML remains preserved.
 **Test gate**: differential. Source-built line, bar, pie, and doughnut documents
 save, reopen, and retain exact categories, series, values, formulas, caches,
 relationships, content types, and editable workbook data. Microsoft Word
-16.104 opens the documents without repair. A pinned Pages build renders the
-axes, brandable colors, category legend, and literal percentage values, then
-exports a DOCX whose chart and workbook semantics remain exact.
+16.112.2 build 16.112.26082125 opens the documents without repair. Apple Pages
+14.5 build 7045.0.17 renders the axes, brandable colors, category legend,
+literal percentage values, and doughnut hole, then exports a DOCX whose chart
+and workbook semantics remain exact.
 
 ### F-231, Extended field evaluation (L)
 Evaluate TOC, TC, formula, mail-merge control, and barcode fields while

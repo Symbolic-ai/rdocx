@@ -47,6 +47,11 @@ their original slots rather than appending them at the end.
 **`a:t` whitespace.** Leading and trailing whitespace is significant and needs
 `xml:space="preserve"`. Cheap to guard, and infuriating to diagnose later.
 
+Callers that own concrete color policy construct `ColorChoice` through
+`ColorChoice::srgb(RgbColor)`. This keeps brand palettes typed at the facade
+boundary while the DrawingML writer remains responsible for canonical
+`a:srgbClr` serialization and schema order.
+
 ## Colour, the part everyone gets wrong
 
 Resolution is three stages, in this order:

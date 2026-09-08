@@ -439,6 +439,15 @@ pub enum ColorChoice {
 }
 
 impl ColorChoice {
+    /// Creates an sRGB colour without transforms.
+    pub fn srgb(value: RgbColor) -> Self {
+        Self::Srgb {
+            value,
+            transforms: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
     /// Parses a colour after the caller has consumed its start event.
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
         reject_conflicting_a_prefix(start)?;
@@ -1379,6 +1388,7 @@ mod tests {
             }
         );
         assert_eq!(write(&colour), br#"<a:srgbClr val="12ABEF"/>"#);
+        assert_eq!(ColorChoice::srgb(RgbColor::new(0x12, 0xAB, 0xEF)), colour);
     }
 
     #[test]
