@@ -2056,7 +2056,10 @@ under sole owner `mantissaman (Atul Sharma)`, immutable annotated tag `v0.13.1`
 at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`, byte-identical
 GitHub release notes, incubating-family exclusion, and unpublished binding and
 WASM carriers. Its selected contribution inventory is empty, so no external
-notification was required. Issue 69 remains a separate performance follow-up.
+notification was required. Issue 69 is addressed by the completed S70 F-X084
+through F-X086 mechanisms. F-X088 verifies those fixes together at the reviewed
+S71 SHA, records contributor credit, states that v0.13.1 remains affected, and
+closes the issue only after the complete evidence gate passes.
 The failed stable 0.11.0 release gate is not a passing family gate. Its
 annotated tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full

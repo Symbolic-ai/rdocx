@@ -626,4 +626,6 @@ regenerated, never hand-edited.
 | F-X084 | Narrow note-part paragraph cache invalidation | S70 | M | done |
 | F-X085 | Memoize restart body identities once per layout | S70 | M | done |
 | F-X086 | Provenance-safe restart after body-length changes | S70 | L | done |
+| F-X087 | Portable authored Word charts from PR 71 | S71 | L | pending |
+| F-X088 | Verify and close Issue 69 after S70 fixes | S71 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

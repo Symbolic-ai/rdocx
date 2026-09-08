@@ -4545,6 +4545,55 @@ full-pagination veto is restored or stale tail provenance is reused. Enter,
 adjacent merge, and multi-block selection deletion carry the same bounded and
 exact sourced contract.
 
+### F-X087, Portable authored Word charts from PR 71 (L)
+
+Integrate Kevin Brown's PR 71 contribution as a hardened S71 scope exception.
+Authored Word charts remain editable across Microsoft Word and Apple Pages
+without image flattening. Typed axis titles, explicit visible axes, value-axis
+number formats, generic RGB palettes, category-point colours, pie and doughnut
+legends, and explicit doughnut holes serialize in schema order. A chart gains a
+relationship-owned Office theme only when no valid theme exists. A related
+theme is valid only when its target exists, has the theme content type, and
+parses as a DrawingML theme.
+
+The Word mutation stages the complete `Document`, typed theme state, package,
+and deterministic identifier owner before one commit. `RgbColor` is re-exported
+through `oxml-chart`, `rdocx`, and `rpptx`. Preserve Kevin Brown's contribution
+credit and do not import the PR's stale S65 ledgers or its now-occupied F-X077
+identity.
+
+**Depends on**: F-158, F-245, F-249.
+**Test gate**: differential. At the reviewed S71 implementation SHA,
+source-built line, bar, pie, and doughnut documents save and reopen with exact
+chart and editable-workbook semantics. Microsoft Word 16.112.2 build
+16.112.26082125 opens the exact candidate without repair. Apple Pages 14.5
+build 7045.0.17 renders the authored axes, colours, legend, percentages, and
+doughnut shape, then exports a DOCX whose chart and workbook data remain exact.
+Malformed correctly typed themes fail or are replaced on a staged candidate
+without changing retained source bytes. The hash harness remains unchanged at
+49 of 49.
+
+### F-X088, Verify and close Issue 69 after S70 fixes (S)
+
+Verify the live Issue 69 report against the three completed S70 fixes and close
+the issue only after their combined evidence passes on the reviewed S71 SHA.
+F-X084 owns note-reference-aware paragraph cache invalidation. F-X085 owns the
+once-per-layout restart identity memo. F-X086 owns provenance-safe restart for
+insert, delete, Enter, merge, and selection-delete body-length changes. Preserve
+`@emptinessform`'s report and offered commits `4777a741`, `eff0ea0c`,
+`9e48bc86`, and `c8315b92` in the next stable release contribution inventory.
+
+The closure comment credits the reporter, links the six focused regressions,
+states that v0.13.1 remains affected, and says the fixes will ship in the next
+stable release without promising a date. It must not claim that the reporter's
+timing harness was reproduced unless that measurement is actually observed.
+
+**Depends on**: F-X084, F-X085, F-X086.
+**Test gate**: regression. All six focused deterministic-font regressions pass,
+the complete workspace gate and 49-entry hash harness pass unchanged, the fixes
+are present on S71 and absent from v0.13.1, and the authenticated Issue 69
+closure records the exact evidence and contributor credit.
+
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts
 for each of the seven samples, and no PDF. PDF is a first-class output of this
