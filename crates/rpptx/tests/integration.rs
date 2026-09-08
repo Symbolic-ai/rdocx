@@ -1598,6 +1598,50 @@ fn embedded_extract_replace_and_remove_are_atomic_and_never_execute_payloads() {
 }
 
 #[test]
+fn embedded_removal_mutates_a_case_equivalent_physical_relationship_owner() {
+    const LOGICAL_OWNER: &str = "/custom/activeX/activeX1.xml";
+    const PHYSICAL_OWNER: &str = "/CUSTOM/ACTIVEX/ACTIVEX1.XML";
+    let mut package = embedded_fixture_package(false);
+    let relationships = package.part_rels.remove(LOGICAL_OWNER).unwrap();
+    package
+        .part_rels
+        .insert(PHYSICAL_OWNER.to_owned(), relationships);
+
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert_eq!(
+        presentation
+            .extract_embedded_content(LOGICAL_OWNER, "binary-rel")
+            .unwrap(),
+        b"activex-executable"
+    );
+    presentation
+        .remove_embedded_content(
+            LOGICAL_OWNER,
+            "binary-rel",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+
+    let saved_bytes = presentation.to_bytes().unwrap();
+    let saved = open_opc(&saved_bytes, "mixed-case embedded relationship removal");
+    assert!(!saved.part_rels.contains_key(PHYSICAL_OWNER));
+    assert!(!saved.part_rels.contains_key(LOGICAL_OWNER));
+    assert!(!saved.contains_part(LOGICAL_OWNER));
+    assert!(!saved.contains_part("/custom/activeX/activeX1.bin"));
+    assert!(
+        !String::from_utf8_lossy(saved.get_part(SLIDE_TWO_PART).unwrap()).contains("control-rel")
+    );
+    let reopened = Presentation::from_bytes(&saved_bytes).unwrap();
+    assert!(
+        reopened
+            .embedded_content()
+            .unwrap()
+            .iter()
+            .all(|content| { content.kind != EmbeddedContentKind::ActiveXControl })
+    );
+}
+
+#[test]
 fn ordinary_presentation_edits_preserve_every_retained_executable_payload_byte() {
     let package = embedded_fixture_package(true);
     let retained = [
@@ -2306,20 +2350,11 @@ fn duplicate_relationship_ids_and_semantic_attributes_fail_closed() {
             target: "https://example.com/ambiguous".to_owned(),
             target_mode: Some("External".to_owned()),
         });
-    let mut presentation =
-        Presentation::from_bytes(&package_bytes(duplicate_relationship)).unwrap();
-    let before = presentation.to_bytes().unwrap();
-    assert!(presentation.embedded_content().is_err());
     assert!(
-        presentation
-            .remove_embedded_content(
-                SLIDE_TWO_PART,
-                "ole-rel",
-                EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
-            )
+        duplicate_relationship
+            .write_to(Cursor::new(Vec::new()))
             .is_err()
     );
-    assert_eq!(presentation.to_bytes().unwrap(), before);
 
     let mut duplicate_vba_signature = embedded_fixture_package(false);
     duplicate_vba_signature
@@ -2331,21 +2366,11 @@ fn duplicate_relationship_ids_and_semantic_attributes_fail_closed() {
             target: "https://example.com/ambiguous-signature-id".to_owned(),
             target_mode: Some("External".to_owned()),
         });
-    let mut presentation =
-        Presentation::from_bytes(&package_bytes(duplicate_vba_signature)).unwrap();
-    let before = presentation.to_bytes().unwrap();
-    assert!(presentation.embedded_content().is_err());
     assert!(
-        presentation
-            .replace_embedded_content(
-                PRESENTATION_PART,
-                "vba-rel",
-                b"must-not-land",
-                EmbeddedMutationPolicy::RemoveInvalidatedSignatures,
-            )
+        duplicate_vba_signature
+            .write_to(Cursor::new(Vec::new()))
             .is_err()
     );
-    assert_eq!(presentation.to_bytes().unwrap(), before);
 
     for (label, part, needle, duplicate_namespace) in [
         (
@@ -5071,7 +5096,7 @@ fn smartart_transfer_source_package() -> OpcPackage {
         .retain(|relationship| relationship.rel_type != rel_types::NOTES_SLIDE);
     package.parts.remove(NOTES_PART);
     package.part_rels.remove(NOTES_PART);
-    package.content_types.overrides.remove(NOTES_PART);
+    package.content_types.remove_override(NOTES_PART);
     package
 }
 
@@ -6266,6 +6291,128 @@ fn add_replace_extract_and_remove_embedded_media_are_atomic() {
 }
 
 #[test]
+fn mixed_case_slide_owner_is_preserved_across_media_mutations() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaPoster, MediaSourceInput};
+
+    const MIXED_SLIDE_PART: &str = "/CUSTOM/SLIDES/SECOND.XML";
+    let mut package = fixture_package();
+    let slide = package.parts.remove(SLIDE_TWO_PART).unwrap();
+    package.parts.insert(MIXED_SLIDE_PART.to_owned(), slide);
+    let relationships = package.part_rels.remove(SLIDE_TWO_PART).unwrap();
+    package
+        .part_rels
+        .insert(MIXED_SLIDE_PART.to_owned(), relationships);
+    package
+        .get_part_rels_mut(PRESENTATION_PART)
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.id == "ordered-first")
+        .unwrap()
+        .target = "slides/SECOND.XML".to_owned();
+
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation
+        .add_picture(
+            0,
+            &poster,
+            "picture.png",
+            Emu(0),
+            Emu(0),
+            Some(Emu(10)),
+            Some(Emu(10)),
+        )
+        .unwrap();
+    let pictured_bytes = presentation.to_bytes().unwrap();
+    let pictured = open_opc(&pictured_bytes, "mixed-case picture add");
+    assert!(pictured.part_rels.contains_key(MIXED_SLIDE_PART));
+    presentation = Presentation::from_bytes(&pictured_bytes).unwrap();
+    presentation
+        .add_media(
+            0,
+            MediaKind::Audio,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"ID3mixed-case-owner-original",
+                filename: "original.mp3",
+                content_type: "audio/mpeg",
+            }),
+            MediaPoster {
+                bytes: &poster,
+                filename: "poster.png",
+            },
+            Emu(1),
+            Emu(2),
+            Emu(30),
+            Emu(20),
+            rpptx::MediaPlaybackSettings::default(),
+        )
+        .unwrap();
+    let shape_id = presentation.media(0).unwrap()[0].shape_id;
+    let added = open_opc(&presentation.to_bytes().unwrap(), "mixed-case media add");
+    assert!(added.part_rels.contains_key(MIXED_SLIDE_PART));
+    assert!(!added.part_rels.contains_key(SLIDE_TWO_PART));
+
+    presentation
+        .replace_media(
+            0,
+            shape_id,
+            MediaSourceInput::Embedded(EmbeddedMediaInput {
+                bytes: b"ID3mixed-case-owner-replacement",
+                filename: "replacement.mp3",
+                content_type: "audio/mpeg",
+            }),
+        )
+        .unwrap();
+    let replaced = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "mixed-case media replacement",
+    );
+    assert!(replaced.part_rels.contains_key(MIXED_SLIDE_PART));
+    assert!(!replaced.part_rels.contains_key(SLIDE_TWO_PART));
+
+    presentation.remove_media(0, shape_id).unwrap();
+    let removed = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "mixed-case media removal",
+    );
+    assert!(removed.part_rels.contains_key(MIXED_SLIDE_PART));
+    assert!(!removed.part_rels.contains_key(SLIDE_TWO_PART));
+}
+
+#[test]
+fn mixed_case_presentation_owner_is_preserved_when_adding_a_slide() {
+    const PRESENTATION: &str = "/ppt/presentation.xml";
+    const MIXED_PRESENTATION_PART: &str = "/PPT/PRESENTATION.XML";
+    let mut seed = Presentation::new().unwrap();
+    seed.add_slide(0).unwrap();
+    let mut package = open_opc(&seed.to_bytes().unwrap(), "mixed-case add-slide source");
+    let presentation_xml = package.parts.remove(PRESENTATION).unwrap();
+    package
+        .parts
+        .insert(MIXED_PRESENTATION_PART.to_owned(), presentation_xml);
+    let relationships = package.part_rels.remove(PRESENTATION).unwrap();
+    package
+        .part_rels
+        .insert(MIXED_PRESENTATION_PART.to_owned(), relationships);
+    package
+        .package_rels
+        .items
+        .iter_mut()
+        .find(|relationship| relationship.rel_type == rel_types::DOCUMENT)
+        .unwrap()
+        .target = "ppt/presentation.xml".to_owned();
+
+    let mut presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    presentation.add_slide(0).unwrap();
+    let saved_bytes = presentation.to_bytes().unwrap();
+    let saved = open_opc(&saved_bytes, "mixed-case presentation add slide");
+    assert!(saved.part_rels.contains_key(MIXED_PRESENTATION_PART));
+    assert!(!saved.part_rels.contains_key(PRESENTATION));
+    assert_eq!(Presentation::from_bytes(&saved_bytes).unwrap().len(), 2);
+}
+
+#[test]
 fn media_replacement_switches_office_source_kind_in_both_directions() {
     use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
     use rpptx_oxml::picture::MediaSource as PictureMediaSource;
@@ -7283,6 +7430,89 @@ fn media_removal_deletes_only_parts_owned_by_the_removed_relationships() {
     presentation.remove_media(0, media[1].shape_id).unwrap();
     let package = OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap();
     assert!(package.get_part(&part).is_none());
+}
+
+#[test]
+fn media_pruning_treats_case_variant_targets_as_the_same_surviving_part() {
+    use rpptx::{EmbeddedMediaInput, MediaKind, MediaLocation, MediaPoster, MediaSourceInput};
+
+    let payload = b"ID3case-variant-shared-audio";
+    let poster = valid_one_pixel_png();
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    for left in [Emu(1), Emu(40)] {
+        presentation
+            .add_media(
+                0,
+                MediaKind::Audio,
+                MediaSourceInput::Embedded(EmbeddedMediaInput {
+                    bytes: payload,
+                    filename: "shared.mp3",
+                    content_type: "audio/mpeg",
+                }),
+                MediaPoster {
+                    bytes: &poster,
+                    filename: "poster.png",
+                },
+                left,
+                Emu(2),
+                Emu(30),
+                Emu(20),
+                rpptx::MediaPlaybackSettings::default(),
+            )
+            .unwrap();
+    }
+    let media = presentation.media(0).unwrap();
+    let first_shape_id = media[0].shape_id;
+    let second_shape_id = media[1].shape_id;
+    let part = match &media[0].source {
+        MediaLocation::Embedded { part_name, .. } => part_name.clone(),
+        MediaLocation::Linked { .. } => panic!("expected embedded media"),
+    };
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "case-variant media target source",
+    );
+    let slide = CT_Slide::from_xml(package.get_part(SLIDE_TWO_PART).unwrap()).unwrap();
+    let pictures = slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            ShapeTreeChild::Picture(picture) if picture.media.is_some() => Some(picture),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let second_ids = [
+        pictures[1]
+            .standard_media_relationship_id()
+            .unwrap()
+            .to_owned(),
+        pictures[1]
+            .media
+            .as_ref()
+            .unwrap()
+            .source
+            .relationship_id()
+            .to_owned(),
+    ];
+    for relationship in &mut package.get_part_rels_mut(SLIDE_TWO_PART).unwrap().items {
+        if second_ids.contains(&relationship.id) {
+            relationship.target.make_ascii_uppercase();
+        }
+    }
+
+    let mut reopened = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    reopened.remove_media(0, first_shape_id).unwrap();
+    assert_eq!(
+        reopened.extract_media(0, second_shape_id).unwrap(),
+        Some(payload.to_vec())
+    );
+    let saved = open_opc(
+        &reopened.to_bytes().unwrap(),
+        "case-variant media target saved",
+    );
+    assert!(saved.get_part(&part).is_some());
 }
 
 #[test]
@@ -11821,36 +12051,41 @@ fn core_properties_are_loaded_lazily_and_written_with_valid_graph() {
 fn occupied_conventional_core_part_is_not_overwritten_without_relationship() {
     const OCCUPIED_CORE_PART: &str = "/docProps/core.xml";
     let occupied = b"producer-owned bytes outside the core relationship graph";
-    let mut package = fixture_package();
-    package.set_part(OCCUPIED_CORE_PART, occupied.to_vec());
-    let source_bytes = package_bytes(package);
-    let mut presentation = Presentation::from_bytes(&source_bytes).unwrap();
-    presentation.core_properties_mut().subject = Some("must not overwrite".to_owned());
+    for (case, actual_part) in [
+        ("canonical", OCCUPIED_CORE_PART),
+        ("mixed-case", "/DOCPROPS/CORE.XML"),
+    ] {
+        let mut package = fixture_package();
+        package.set_part(actual_part, occupied.to_vec());
+        let source_bytes = package_bytes(package);
+        let mut presentation = Presentation::from_bytes(&source_bytes).unwrap();
+        presentation.core_properties_mut().subject = Some("must not overwrite".to_owned());
 
-    let error = presentation.to_bytes().unwrap_err();
-    assert!(matches!(
-        error,
-        Error::CorePropertiesPartCollision { ref part_name }
-            if part_name == OCCUPIED_CORE_PART
-    ));
+        let error = presentation.to_bytes().unwrap_err();
+        assert!(matches!(
+            error,
+            Error::CorePropertiesPartCollision { ref part_name }
+                if part_name == OCCUPIED_CORE_PART
+        ));
 
-    let output = std::env::temp_dir().join(format!(
-        "rpptx-f115-core-collision-{}.pptx",
-        std::process::id()
-    ));
-    fs::write(&output, b"existing output").unwrap();
-    assert!(presentation.save(&output).is_err());
-    assert_eq!(fs::read(&output).unwrap(), b"existing output");
-    fs::remove_file(&output).unwrap();
+        let output = std::env::temp_dir().join(format!(
+            "rpptx-f115-core-collision-{case}-{}.pptx",
+            std::process::id()
+        ));
+        fs::write(&output, b"existing output").unwrap();
+        assert!(presentation.save(&output).is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"existing output");
+        fs::remove_file(&output).unwrap();
 
-    let source = open_opc(&source_bytes, "occupied core source");
-    assert_eq!(source.get_part(OCCUPIED_CORE_PART).unwrap(), occupied);
-    assert!(
-        source
-            .package_rels
-            .get_by_type(rel_types::CORE_PROPERTIES)
-            .is_none()
-    );
+        let source = open_opc(&source_bytes, "occupied core source");
+        assert_eq!(source.get_part(actual_part).unwrap(), occupied);
+        assert!(
+            source
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -12208,8 +12443,8 @@ fn remove_slide_removes_its_part_relationship_notes_and_custom_show_entries() {
     assert!(!package.parts.contains_key(NOTES_PART));
     assert!(!package.part_rels.contains_key(SLIDE_TWO_PART));
     assert!(!package.part_rels.contains_key(NOTES_PART));
-    assert!(!package.content_types.overrides.contains_key(SLIDE_TWO_PART));
-    assert!(!package.content_types.overrides.contains_key(NOTES_PART));
+    assert!(!package.content_types.contains_override(SLIDE_TWO_PART));
+    assert!(!package.content_types.contains_override(NOTES_PART));
     assert!(
         package
             .get_part_rels(PRESENTATION_PART)

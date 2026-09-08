@@ -47,7 +47,10 @@ pub(crate) fn load_glossary(
     let glossary = relationships
         .items
         .iter()
-        .filter(|relationship| relationship.rel_type == rel_types::GLOSSARY_DOCUMENT)
+        .filter(|relationship| {
+            relationship.rel_type == rel_types::GLOSSARY_DOCUMENT
+                && crate::document::relationship_is_internal(relationship)
+        })
         .collect::<Vec<_>>();
     if glossary.is_empty() {
         return Ok(None);
@@ -68,25 +71,12 @@ pub(crate) fn load_glossary(
         ));
     }
     let relationship = glossary[0];
-    if relationship
-        .target_mode
-        .as_deref()
-        .is_some_and(|mode| mode != "Internal")
-    {
-        return Err(Error::Other(
-            "the glossary relationship must be internal".to_owned(),
-        ));
-    }
     validate_internal_target(document_part, &relationship.target)?;
     let part_name = OpcPackage::resolve_rel_target(document_part, &relationship.target);
     let xml = package
         .get_part(&part_name)
         .ok_or_else(|| Error::Other("the glossary relationship target is missing".to_owned()))?;
-    if package
-        .content_types
-        .overrides
-        .get(&part_name)
-        .map(String::as_str)
+    if package.content_types.override_for(&part_name)
         != Some(oxml_opc::content_types::WORD_GLOSSARY)
     {
         return Err(Error::Other(
@@ -375,8 +365,7 @@ impl Document {
             .ok_or_else(|| Error::Other("stale building block ordinal".to_owned()))?;
         apply_block(part, block.clone())?;
         candidate.glossary_dirty = true;
-        let bytes = candidate.to_bytes()?;
-        let reopened = Document::from_bytes(&bytes)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .building_blocks()?
             .into_iter()

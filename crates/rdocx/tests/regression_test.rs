@@ -19,7 +19,7 @@ use rdocx::{
     MailMergeImage, MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat,
     RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
     RunRef, StyleBuilder, TableRef, TcField, TocEntrySelection, TocField, TocRebuildReport,
-    UnsupportedXmlRef,
+    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
@@ -1462,6 +1462,64 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
 }
 
 #[test]
+fn toc_bookmark_ids_names_and_references_follow_final_heading_order() {
+    let source = |reference: &str, headings: &str| {
+        wrap_word_body(&format!(
+            r#"
+            <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+            <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+            <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+            <w:p><w:fldSimple w:instr="REF {reference}"><w:r><w:t>reference</w:t></w:r></w:fldSimple></w:p>
+            {headings}
+            "#
+        ))
+    };
+    let later =
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Later</w:t></w:r></w:p>"#;
+    let earlier =
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Earlier</w:t></w:r></w:p>"#;
+
+    let mut history = document_with_field_parts(&source("_Toc1", later), None, None);
+    history.rebuild_toc().unwrap();
+    let later_index = history.content_count() - 1;
+    history
+        .insert_paragraph(later_index, "Earlier")
+        .style("Heading1");
+    history.rebuild_toc().unwrap();
+
+    let final_headings = format!("{earlier}{later}");
+    let mut final_order = document_with_field_parts(&source("_Toc2", &final_headings), None, None);
+    final_order.rebuild_toc().unwrap();
+
+    let history_xml = document_xml(&mut history);
+    let final_xml = document_xml(&mut final_order);
+    let bookmark_pairs = |xml: &str| {
+        xml.match_indices("<w:bookmarkStart")
+            .map(|(start, _)| {
+                let element = &xml[start..start + xml[start..].find("/>").unwrap()];
+                let value = |attribute: &str| {
+                    let prefix = format!(r#"{attribute}=""#);
+                    let value = &element[element.find(&prefix).unwrap() + prefix.len()..];
+                    value[..value.find('"').unwrap()].to_owned()
+                };
+                (value("w:id"), value("w:name"))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(history_xml, final_xml);
+    assert_eq!(bookmark_pairs(&history_xml), bookmark_pairs(&final_xml));
+    assert_eq!(
+        bookmark_pairs(&history_xml),
+        [
+            ("1".to_owned(), "_Toc1".to_owned()),
+            ("2".to_owned(), "_Toc2".to_owned())
+        ]
+    );
+    assert!(history_xml.contains(r#"w:instr="REF _Toc2""#));
+    assert_eq!(history.to_bytes().unwrap(), final_order.to_bytes().unwrap());
+}
+
+#[test]
 fn toc_rebuild_uses_final_deterministic_page_targets() {
     let body = r#"
         <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-1" \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
@@ -1664,6 +1722,23 @@ fn toc_bookmark_allocation_uses_the_final_id_lazily() {
     assert!(
         document_xml(&mut document).contains(&format!("w:id=\"{}\" w:name=\"_Toc1\"", i32::MAX))
     );
+}
+
+#[test]
+fn toc_bookmark_reservation_failure_is_atomic() {
+    let toc = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p><w:p><w:r><w:t>old</w:t></w:r></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let body = format!(
+        r#"{toc}<w:p><w:bookmarkStart w:id="{}" w:name="prior"/><w:r><w:t>Prior</w:t></w:r><w:bookmarkEnd w:id="{}"/></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>"#,
+        i32::MAX,
+        i32::MAX
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    let before = document_xml(&mut document);
+
+    let error = document.rebuild_toc().unwrap_err();
+
+    assert!(error.to_string().contains("bookmark ID range"), "{error}");
+    assert_eq!(document_xml(&mut document), before);
 }
 
 #[test]
@@ -12993,6 +13068,39 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     let mut fragment_package =
         oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(fragment.to_bytes().unwrap()))
             .unwrap();
+    let styles_xml = String::from_utf8(
+        fragment_package
+            .get_part("/word/styles.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replacen(
+        r#"<w:name w:val="Fragment style"/>"#,
+        r#"<w:name w:val="Fragment style"/><s:link xmlns:s="http://schemas.openxmlformats.org/wordprocessingml/2006/main" s:val='Collision'/>"#,
+        1,
+    );
+    assert!(styles_xml.contains("s:val='Collision'"));
+    fragment_package.set_part("/word/styles.xml", styles_xml.into_bytes());
+    let mut numbering_xml = String::from_utf8(
+        fragment_package
+            .get_part("/word/numbering.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replacen(
+        r#"<w:numFmt w:val="decimal"/>"#,
+        r#"<w:numFmt w:val="decimal"/><w:pStyle w:val="Collision"/>"#,
+        1,
+    );
+    let abstract_start = numbering_xml.find("<w:abstractNum ").unwrap();
+    let abstract_open_end = abstract_start + numbering_xml[abstract_start..].find('>').unwrap() + 1;
+    numbering_xml.insert_str(
+        abstract_open_end,
+        r#"<n:styleLink xmlns:n="http://schemas.openxmlformats.org/wordprocessingml/2006/main" n:val='Collision'/><n:numStyleLink xmlns:n="http://schemas.openxmlformats.org/wordprocessingml/2006/main" n:val='Collision'/>"#,
+    );
+    fragment_package.set_part("/word/numbering.xml", numbering_xml.into_bytes());
     let fragment_image = fragment_package
         .get_part_rels("/word/document.xml")
         .unwrap()
@@ -13012,6 +13120,12 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     fragment_package
         .get_or_create_part_rels(&fragment_image_part)
         .add("urn:rdocx:test:fragment-payload", "fragment-payload.bin");
+    let discarded_header_relationship = fragment_package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_external(
+            oxml_opc::relationship::rel_types::HEADER,
+            "https://example.invalid/discarded-header",
+        );
     let fragment_xml = String::from_utf8(
         fragment_package
             .get_part("/word/document.xml")
@@ -13022,7 +13136,15 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     .replace(
         "<w:body>",
         r#"<w:body><w:p><w:bookmarkStart w:id="7" w:name="fragmentMark"/><w:hyperlink w:anchor="fragmentMark"><w:r><w:t>linked</w:t></w:r></w:hyperlink><w:bookmarkEnd w:id="7"/></w:p><w:sdt><w:sdtPr><w:id w:val="11"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
-    );
+    )
+    .replace(
+        "<w:sectPr>",
+        &format!(
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="{discarded_header_relationship}"/>"#
+        ),
+    )
+    .replace("xmlns:r=", "xmlns:rel=")
+    .replace("r:", "rel:");
     fragment_package.set_part("/word/document.xml", fragment_xml.into_bytes());
     let mut fragment_output = std::io::Cursor::new(Vec::new());
     fragment_package.write_to(&mut fragment_output).unwrap();
@@ -13069,6 +13191,14 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
         .filter(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
         .count();
     assert_eq!(image_relationships, 3);
+    assert!(
+        package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .all(|relationship| relationship.rel_type != oxml_opc::relationship::rel_types::HEADER)
+    );
     let payload_parts = package
         .parts
         .iter()
@@ -13105,6 +13235,7 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     let hyperlink_anchors = attribute_values(r#"w:anchor=""#);
     let content_control_ids = attribute_values(r#"<w:id w:val=""#);
     let drawing_ids = attribute_values(r#"wp:docPr id=""#);
+    let non_visual_drawing_ids = attribute_values(r#"pic:cNvPr id=""#);
     assert_eq!(bookmark_ids.len(), 2, "{xml}");
     assert_ne!(bookmark_ids[0], bookmark_ids[1], "{xml}");
     assert_eq!(bookmark_names.len(), 2, "{xml}");
@@ -13113,6 +13244,17 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     assert_ne!(content_control_ids[0], content_control_ids[1], "{xml}");
     assert_eq!(drawing_ids.len(), 3, "{xml}");
     assert_eq!(drawing_ids.iter().collect::<HashSet<_>>().len(), 3, "{xml}");
+    assert_eq!(
+        non_visual_drawing_ids.iter().collect::<HashSet<_>>().len(),
+        non_visual_drawing_ids.len(),
+        "{xml}"
+    );
+    assert!(
+        content_control_ids
+            .iter()
+            .any(|id| drawing_ids.contains(id)),
+        "content-control and wp:docPr ids are separate scopes: {xml}"
+    );
     assert_eq!(xml.matches(">controlled<").count(), 2, "{xml}");
     let fragment_numbering = output
         .paragraphs()
@@ -13125,6 +13267,18 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     assert!(output.style("Collision").is_some());
     assert!(output.style("CollisionMerge1").is_some());
     assert!(output.style("CollisionMerge2").is_some());
+    let styles_xml =
+        String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(
+        styles_xml.matches("s:val='CollisionMerge1'").count(),
+        1,
+        "{styles_xml}"
+    );
+    assert_eq!(
+        styles_xml.matches("s:val='CollisionMerge2'").count(),
+        1,
+        "{styles_xml}"
+    );
     assert_eq!(
         xml.matches(r#"<w:pStyle w:val="CollisionMerge1"/>"#)
             .count(),
@@ -13137,6 +13291,42 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
         1,
         "{xml}"
     );
+    let numbering_xml =
+        String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(
+        numbering_xml
+            .matches(r#"<w:pStyle w:val="CollisionMerge1"/>"#)
+            .count(),
+        1,
+        "{numbering_xml}"
+    );
+    assert_eq!(
+        numbering_xml
+            .matches(r#"<w:pStyle w:val="CollisionMerge2"/>"#)
+            .count(),
+        1,
+        "{numbering_xml}"
+    );
+    for element in ["styleLink", "numStyleLink"] {
+        assert_eq!(
+            numbering_xml
+                .matches(&format!(
+                    "<n:{element} xmlns:n=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" n:val='CollisionMerge1'"
+                ))
+                .count(),
+            1,
+            "{numbering_xml}"
+        );
+        assert_eq!(
+            numbering_xml
+                .matches(&format!(
+                    "<n:{element} xmlns:n=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" n:val='CollisionMerge2'"
+                ))
+                .count(),
+            1,
+            "{numbering_xml}"
+        );
+    }
 }
 
 #[test]
@@ -15332,17 +15522,25 @@ fn unsafe_or_malformed_word_embedded_graphs_fail_closed_without_mutation() {
         });
     let mut invalid_reachability =
         Document::from_bytes(&f236_package_bytes(invalid_reachability)).unwrap();
-    let before = invalid_reachability.to_bytes().unwrap();
-    assert!(
-        invalid_reachability
-            .remove_embedded_content(
-                "/word/document.xml",
-                "ole-rel",
-                EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
-            )
-            .is_err()
+    invalid_reachability
+        .remove_embedded_content(
+            "/word/document.xml",
+            "ole-rel",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    let package = f249_package(&invalid_reachability.to_bytes().unwrap());
+    assert!(!package.parts.contains_key("/word/embeddings/object1.bin"));
+    assert_eq!(
+        package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .get_by_id("invalid-reachability")
+            .unwrap()
+            .target_mode
+            .as_deref(),
+        Some("ProducerDefined")
     );
-    assert_eq!(invalid_reachability.to_bytes().unwrap(), before);
 
     let mut invalid_run_owner = f236_embedded_package(false);
     let invalid_run_owner_xml =
@@ -15462,12 +15660,12 @@ fn unsafe_or_malformed_word_embedded_graphs_fail_closed_without_mutation() {
             target: "embeddings/object1.bin".to_owned(),
             target_mode: None,
         });
-    assert!(
-        Document::from_bytes(&f236_package_bytes(duplicate_identity))
-            .unwrap()
-            .embedded_content()
-            .is_err()
-    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    assert!(matches!(
+        duplicate_identity.write_to(&mut output),
+        Err(oxml_opc::OpcError::InvalidRelationship)
+    ));
+    assert!(output.into_inner().is_empty());
 
     let mut ambiguous_owner = f236_embedded_package(false);
     let xml = String::from_utf8(
@@ -18633,4 +18831,514 @@ fn f236_open_package(bytes: &[u8]) -> oxml_opc::OpcPackage {
 
 fn f236_hex(bytes: [u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn f249_package(bytes: &[u8]) -> oxml_opc::OpcPackage {
+    oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap()
+}
+
+fn f249_assert_mutation_history(label: &str, mut build: impl FnMut(bool) -> Document) {
+    let mut before = build(true);
+    let before = before.to_bytes().unwrap();
+    let mut after = build(false);
+    let after = after.to_bytes().unwrap();
+    assert_eq!(before, after, "{label} changed final-order package bytes");
+
+    let package = f249_package(&before);
+    assert!(package.part_rels.values().all(|relationships| {
+        relationships
+            .items
+            .iter()
+            .all(|relationship| !relationship.id.starts_with("rdocxDeferred"))
+    }));
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    for relationship_type in [
+        oxml_opc::relationship::rel_types::STYLES,
+        oxml_opc::relationship::rel_types::NUMBERING,
+    ] {
+        let relationship = relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == relationship_type)
+            .unwrap_or_else(|| panic!("{label} is missing {relationship_type}"));
+        assert!(
+            relationship
+                .id
+                .strip_prefix("rId")
+                .is_some_and(|suffix| suffix.parse::<u32>().is_ok()),
+            "{label} retained nonnumeric bundle id {}",
+            relationship.id
+        );
+    }
+}
+
+fn f249_minimal_document(text: &str) -> Document {
+    let mut document =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    document.add_paragraph(text);
+    document
+}
+
+fn f249_minimal_toc_document() -> Document {
+    let mut seed = f249_minimal_document("Heading");
+    seed.paragraph_mut(0).unwrap().style("Heading1");
+    let mut package = f249_package(&seed.to_bytes().unwrap());
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let toc = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p><w:p><w:r><w:t>stale</w:t></w:r></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    package.set_part(
+        "/word/document.xml",
+        xml.replacen("<w:body>", &format!("<w:body>{toc}"), 1)
+            .into_bytes(),
+    );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+fn f249_minimal_embedded_document() -> Document {
+    let mut seed = f249_minimal_document("embedded");
+    let mut package = f249_package(&seed.to_bytes().unwrap());
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let owner = r#"<w:p xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:r><w:object><v:shape id="opaque"/><o:OLEObject q:id="ole-rel" ProgID="opaque"/></w:object></w:r></w:p>"#;
+    package.set_part(
+        "/word/document.xml",
+        xml.replacen("</w:body>", &format!("{owner}</w:body>"), 1)
+            .into_bytes(),
+    );
+    package.set_part("/word/embeddings/object1.bin", b"before".to_vec());
+    package.content_types.add_override(
+        "/word/embeddings/object1.bin",
+        "application/vnd.openxmlformats-officedocument.oleObject",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "ole-rel",
+            oxml_opc::relationship::rel_types::OLE_OBJECT,
+            "embeddings/object1.bin",
+        );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+fn f249_minimal_building_block_document() -> Document {
+    let mut seed = f249_minimal_document("building block");
+    let mut package = f249_package(&seed.to_bytes().unwrap());
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "glossary-rel",
+            oxml_opc::relationship::rel_types::GLOSSARY_DOCUMENT,
+            "glossary/document.xml",
+        );
+    package.content_types.add_override(
+        "/word/glossary/document.xml",
+        oxml_opc::content_types::WORD_GLOSSARY,
+    );
+    package.set_part(
+        "/word/glossary/document.xml",
+        format!(
+            r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts><w:docPart><w:docPartPr><w:name w:val="entry"/></w:docPartPr><w:docPartBody><w:p><w:r><w:t>body</w:t></w:r></w:p></w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#
+        )
+        .into_bytes(),
+    );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+fn f249_open_error(label: &str, package: oxml_opc::OpcPackage) -> String {
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let bytes = output.into_inner();
+    let parsed = f249_package(&bytes);
+    Document::from_bytes(&bytes)
+        .err()
+        .unwrap_or_else(|| {
+            panic!(
+                "{label} collision package must fail to open: {:?}",
+                parsed.part_rels
+            )
+        })
+        .to_string()
+}
+
+fn f249_equivalent_document(reverse: bool) -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_paragraph("second");
+    document.add_paragraph("third");
+    document.add_paragraph("fourth");
+    let range = |body_index| RunRange {
+        start: RunPosition {
+            body_index,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index,
+            run_index: 1,
+        },
+    };
+
+    let (red_image, blue_image) = if reverse {
+        let blue = document.embed_image(b"blue-image", "blue.png");
+        let red = document.embed_image(b"red-image", "red.png");
+        (red, blue)
+    } else {
+        let red = document.embed_image(b"red-image", "red.png");
+        let blue = document.embed_image(b"blue-image", "blue.png");
+        (red, blue)
+    };
+    let (bullet, decimal) = if reverse {
+        let decimal = document.add_list_definition(&[ListLevel::decimal()]);
+        let bullet = document.add_list_definition(&[ListLevel::bullet()]);
+        (bullet, decimal)
+    } else {
+        let bullet = document.add_list_definition(&[ListLevel::bullet()]);
+        let decimal = document.add_list_definition(&[ListLevel::decimal()]);
+        (bullet, decimal)
+    };
+    if reverse {
+        document.add_bookmark("Second", range(1)).unwrap();
+        document.add_bookmark("First", range(0)).unwrap();
+        document
+            .add_comment(range(3), "Author", Some("A"), "Second comment")
+            .unwrap();
+        document
+            .add_comment(range(2), "Author", Some("A"), "First comment")
+            .unwrap();
+    } else {
+        document.add_bookmark("First", range(0)).unwrap();
+        document.add_bookmark("Second", range(1)).unwrap();
+        document
+            .add_comment(range(2), "Author", Some("A"), "First comment")
+            .unwrap();
+        document
+            .add_comment(range(3), "Author", Some("A"), "Second comment")
+            .unwrap();
+    }
+    document.add_paragraph("bullet").set_numbering(bullet, 0);
+    document.add_paragraph("decimal").set_numbering(decimal, 0);
+    let mut table = document.add_table(1, 2);
+    table
+        .cell(0, 0)
+        .unwrap()
+        .add_picture(&red_image, Length::inches(1.0), Length::inches(1.0));
+    table
+        .cell(0, 1)
+        .unwrap()
+        .add_picture(&blue_image, Length::inches(1.0), Length::inches(1.0));
+    document
+}
+
+#[test]
+fn equivalent_construction_orders_allocate_declared_stable_identifiers() {
+    let left = f249_equivalent_document(false).to_bytes().unwrap();
+    let right = f249_equivalent_document(true).to_bytes().unwrap();
+    if left != right {
+        let left_package = f249_package(&left);
+        let right_package = f249_package(&right);
+        let mut different = left_package
+            .parts
+            .iter()
+            .filter_map(|(name, bytes)| {
+                (right_package.get_part(name) != Some(bytes)).then_some(name.as_str())
+            })
+            .collect::<Vec<_>>();
+        if left_package.package_rels.items != right_package.package_rels.items {
+            different.push("/_rels/.rels");
+        }
+        for (owner, relationships) in &left_package.part_rels {
+            if right_package
+                .get_part_rels(owner)
+                .is_none_or(|right| right.items != relationships.items)
+            {
+                different.push(owner);
+            }
+        }
+        panic!(
+            "equivalent packages differ in {different:?}\nLEFT DOC\n{}\nRIGHT DOC\n{}\nLEFT COMMENTS\n{}\nRIGHT COMMENTS\n{}",
+            String::from_utf8_lossy(left_package.get_part("/word/document.xml").unwrap()),
+            String::from_utf8_lossy(right_package.get_part("/word/document.xml").unwrap()),
+            String::from_utf8_lossy(left_package.get_part("/word/comments.xml").unwrap()),
+            String::from_utf8_lossy(right_package.get_part("/word/comments.xml").unwrap())
+        );
+    }
+
+    let package = f249_package(&left);
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let comments_xml =
+        std::str::from_utf8(package.get_part("/word/comments.xml").unwrap()).unwrap();
+    let numbering_xml =
+        std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(
+        document_xml.contains(r#"<w:bookmarkStart w:id="0""#),
+        "{document_xml}"
+    );
+    assert!(
+        document_xml.contains(r#"<w:bookmarkStart w:id="1""#),
+        "{document_xml}"
+    );
+    assert!(
+        document_xml.contains(r#"<wp:docPr id="1""#),
+        "{document_xml}"
+    );
+    assert!(
+        document_xml.contains(r#"<wp:docPr id="2""#),
+        "{document_xml}"
+    );
+    assert!(comments_xml.contains(r#"w:id="0""#), "{comments_xml}");
+    assert!(comments_xml.contains(r#"w:id="1""#), "{comments_xml}");
+    assert!(comments_xml.find("First comment") < comments_xml.find("Second comment"));
+    assert!(
+        numbering_xml.contains(r#"<w:abstractNum w:abstractNumId="0""#),
+        "{numbering_xml}"
+    );
+    assert!(
+        numbering_xml.contains(r#"<w:abstractNum w:abstractNumId="1""#),
+        "{numbering_xml}"
+    );
+    assert!(
+        numbering_xml.contains(r#"<w:num w:numId="1""#),
+        "{numbering_xml}"
+    );
+    assert!(
+        numbering_xml.contains(r#"<w:num w:numId="2""#),
+        "{numbering_xml}"
+    );
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let images = relationships
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .map(|relationship| (relationship.id.as_str(), relationship.target.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        images,
+        [("rId1", "media/image1.png"), ("rId2", "media/image2.png")]
+    );
+    assert_eq!(
+        package.get_part("/word/media/image1.png"),
+        Some(b"red-image".as_slice())
+    );
+    assert_eq!(
+        package.get_part("/word/media/image2.png"),
+        Some(b"blue-image".as_slice())
+    );
+    assert_eq!(
+        package
+            .content_types
+            .defaults
+            .get("png")
+            .map(String::as_str),
+        Some("image/png")
+    );
+}
+
+#[test]
+fn repeated_saves_are_byte_identical_after_allocation() {
+    let mut document = f249_equivalent_document(false);
+    let first = document.to_bytes().unwrap();
+    let second = document.to_bytes().unwrap();
+    assert_eq!(first, second);
+    let mut reopened = Document::from_bytes(&first).unwrap();
+    let reopened_bytes = reopened.to_bytes().unwrap();
+    if first != reopened_bytes {
+        let left = f249_package(&first);
+        let right = f249_package(&reopened_bytes);
+        let mut names = left
+            .parts
+            .keys()
+            .chain(right.parts.keys())
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        let different = names
+            .into_iter()
+            .filter(|name| left.get_part(name) != right.get_part(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        panic!(
+            "reopened package differs in {different:?}\nFIRST:\n{}\nREOPENED:\n{}",
+            String::from_utf8_lossy(left.get_part("/word/document.xml").unwrap()),
+            String::from_utf8_lossy(right.get_part("/word/document.xml").unwrap())
+        );
+    }
+}
+
+#[test]
+fn internal_reopen_mutations_preserve_minimal_bundle_history() {
+    f249_assert_mutation_history("comparison", |list_before| {
+        let mut original = f249_minimal_document("original");
+        let mut edited = f249_minimal_document("edited");
+        if list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+            edited.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+            .compare(&edited, "Ada", "2026-09-07T09:00:00Z")
+            .unwrap();
+        if !list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+    });
+
+    f249_assert_mutation_history("revision", |list_before| {
+        let mut original = f249_minimal_document("original");
+        let mut edited = f249_minimal_document("edited");
+        if list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+            edited.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+            .compare(&edited, "Ada", "2026-09-07T09:00:00Z")
+            .unwrap();
+        assert!(original.accept_all().unwrap() > 0);
+        if !list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+    });
+
+    f249_assert_mutation_history("redaction", |list_before| {
+        let mut document = f249_minimal_document("secret");
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        assert_eq!(document.redact_text("secret").unwrap().total(), 1);
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+
+    f249_assert_mutation_history("TOC rebuild", |list_before| {
+        let mut document = f249_minimal_toc_document();
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+
+    f249_assert_mutation_history("embedded replacement", |list_before| {
+        let mut document = f249_minimal_embedded_document();
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+            .replace_embedded_content(
+                "/word/document.xml",
+                "ole-rel",
+                b"after",
+                EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+            )
+            .unwrap();
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+
+    f249_assert_mutation_history("building block replacement", |list_before| {
+        let mut document = f249_minimal_building_block_document();
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        let mut replacement = document.building_blocks().unwrap()[0].block.clone();
+        replacement.name = "replacement".to_owned();
+        document
+            .replace_building_block("/word/glossary/document.xml", 0, replacement)
+            .unwrap();
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+}
+
+#[test]
+fn imported_and_preserved_collisions_fail_before_mutation() {
+    let mut document = f249_equivalent_document(false);
+    let bytes = document.to_bytes().unwrap();
+
+    let mut relationship_collision = f249_package(&bytes);
+    let duplicate = relationship_collision
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    relationship_collision
+        .get_or_create_part_rels("/word/document.xml")
+        .items
+        .push(duplicate);
+    let mut output = std::io::Cursor::new(Vec::new());
+    assert!(matches!(
+        relationship_collision.write_to(&mut output),
+        Err(oxml_opc::OpcError::InvalidRelationship)
+    ));
+    assert!(output.into_inner().is_empty());
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(r#"<wp:docPr id="2""#, r#"<wp:docPr id="1""#, 1);
+    assert_ne!(xml, collided, "second drawing id must be present");
+    package.set_part("/word/document.xml", collided.into_bytes());
+    let error = f249_open_error("drawing", package);
+    assert!(error.contains("duplicate drawing id 1"), "{error}");
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(
+        r#"<w:bookmarkStart w:id="1""#,
+        r#"<w:bookmarkStart w:id="0""#,
+        1,
+    );
+    assert_ne!(xml, collided, "second bookmark id must be present");
+    package.set_part("/word/document.xml", collided.into_bytes());
+    let error = f249_open_error("bookmark", package);
+    assert!(error.contains("duplicate bookmark id 0"), "{error}");
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/comments.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(r#"w:id="1""#, r#"w:id="0""#, 1);
+    assert_ne!(xml, collided, "second comment id must be present");
+    package.set_part("/word/comments.xml", collided.into_bytes());
+    let error = f249_open_error("comment", package);
+    assert!(error.contains("duplicate comment id 0"), "{error}");
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(
+        r#"<w:abstractNum w:abstractNumId="1""#,
+        r#"<w:abstractNum w:abstractNumId="0""#,
+        1,
+    );
+    assert_ne!(
+        xml, collided,
+        "second abstract numbering id must be present"
+    );
+    package.set_part("/word/numbering.xml", collided.into_bytes());
+    let error = f249_open_error("abstract numbering", package);
+    assert!(
+        error.contains("duplicate abstract numbering id 0"),
+        "{error}"
+    );
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(r#"<w:num w:numId="2""#, r#"<w:num w:numId="1""#, 1);
+    assert_ne!(
+        xml, collided,
+        "second numbering instance id must be present"
+    );
+    package.set_part("/word/numbering.xml", collided.into_bytes());
+    let error = f249_open_error("numbering instance", package);
+    assert!(
+        error.contains("duplicate numbering instance id 1"),
+        "{error}"
+    );
 }

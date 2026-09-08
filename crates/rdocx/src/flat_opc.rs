@@ -1,7 +1,7 @@
 //! Strict Flat OPC import and deterministic export for Word packages.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 use base64::Engine;
@@ -83,9 +83,7 @@ impl Document {
     /// Serialize a staged copy as deterministic Flat OPC XML.
     pub fn to_flat_opc_bytes(&self) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.package_signatures_invalidated |=
-            candidate.retained_package_signature_would_be_invalidated()?;
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -138,7 +136,7 @@ fn parse_flat_package(bytes: &[u8], limits: PackageReadLimits) -> Result<OpcPack
                 }
                 let (name, content_type) = part_attributes(&reader, element)?;
                 validate_part_name(&name)?;
-                if !seen_names.insert(name.clone()) {
+                if !seen_names.insert(part_identity(&name)) {
                     return Err(invalid(format!("duplicate Flat OPC part name {name}")));
                 }
                 let mut inherited_namespaces = package_namespaces.clone();
@@ -387,7 +385,7 @@ fn parts_to_package(parts: Vec<FlatPart>) -> Result<OpcPackage> {
     let mut data_parts = Vec::new();
 
     for part in parts {
-        if part.name == "/_rels/.rels" {
+        if part.name.eq_ignore_ascii_case("/_rels/.rels") {
             require_relationship_part(&part)?;
             if package_rels
                 .replace(parse_relationships(&part.data)?)
@@ -403,7 +401,8 @@ fn parts_to_package(parts: Vec<FlatPart>) -> Result<OpcPackage> {
             {
                 return Err(invalid("duplicate relationship owner"));
             }
-        } else if part.content_type == content_types::RELATIONSHIPS || part.name.contains("/_rels/")
+        } else if part.content_type == content_types::RELATIONSHIPS
+            || part_identity(&part.name).contains("/_rels/")
         {
             return Err(invalid(format!(
                 "malformed Flat OPC relationship part name {}",
@@ -415,8 +414,8 @@ fn parts_to_package(parts: Vec<FlatPart>) -> Result<OpcPackage> {
     }
     let opaque_parts = alternative_format_targets(&part_rels);
     for part in data_parts {
-        let expected_xml =
-            !opaque_parts.contains(&part.name) && xml_content_type(&part.content_type);
+        let expected_xml = !opaque_parts.contains(&part_identity(&part.name))
+            && xml_content_type(&part.content_type);
         if part.is_xml != expected_xml {
             let expected = if expected_xml {
                 "xmlData"
@@ -431,10 +430,11 @@ fn parts_to_package(parts: Vec<FlatPart>) -> Result<OpcPackage> {
         content_types.add_override(&part.name, &part.content_type);
         package_parts.insert(part.name, part.data);
     }
-    if part_rels
-        .keys()
-        .any(|owner| !package_parts.contains_key(owner))
-    {
+    if part_rels.keys().any(|owner| {
+        !package_parts
+            .keys()
+            .any(|part| part.eq_ignore_ascii_case(owner))
+    }) {
         return Err(invalid(
             "Flat OPC relationship part has no owning package part",
         ));
@@ -445,6 +445,9 @@ fn parts_to_package(parts: Vec<FlatPart>) -> Result<OpcPackage> {
         package_rels.ok_or_else(|| invalid("package relationships are missing"))?;
     package.part_rels = part_rels;
     package.parts = package_parts;
+    package
+        .write_to(Cursor::new(Vec::new()))
+        .map_err(|error| invalid(format!("invalid Flat OPC package graph: {error}")))?;
     Ok(package)
 }
 
@@ -475,12 +478,12 @@ fn write_flat_package(package: &OpcPackage) -> Result<Vec<u8>> {
             name: name.clone(),
             content_type: content_type.to_owned(),
             data: data.clone(),
-            is_xml: !opaque_parts.contains(name) && xml_content_type(content_type),
+            is_xml: !opaque_parts.contains(&part_identity(name)) && xml_content_type(content_type),
         });
     }
     parts.sort_by(|left, right| left.name.cmp(&right.name));
     for pair in parts.windows(2) {
-        if pair[0].name == pair[1].name {
+        if pair[0].name.eq_ignore_ascii_case(&pair[1].name) {
             return Err(invalid(format!(
                 "duplicate Flat OPC part name {}",
                 pair[0].name
@@ -898,11 +901,19 @@ fn validate_part_name(name: &str) -> Result<()> {
 }
 
 fn relationship_owner(name: &str) -> Option<String> {
-    let (directory, file) = name.rsplit_once("/_rels/")?;
-    if directory.contains("/_rels/") || file.contains('/') || !file.ends_with(".rels") {
+    let identity = part_identity(name);
+    let separator = identity.rfind("/_rels/")?;
+    let directory = &name[..separator];
+    let file = &name[separator + "/_rels/".len()..];
+    if part_identity(directory).contains("/_rels/")
+        || file.contains('/')
+        || !file
+            .get(file.len().saturating_sub(".rels".len())..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".rels"))
+    {
         return None;
     }
-    let owner_file = file.strip_suffix(".rels")?;
+    let owner_file = &file[..file.len() - ".rels".len()];
     if owner_file.is_empty() {
         return None;
     }
@@ -1077,10 +1088,16 @@ fn alternative_format_targets(
                 let is_internal =
                     matches!(relationship.target_mode.as_deref(), None | Some("Internal"));
                 (is_internal && ALT_CHUNK_RELATIONSHIPS.contains(&relationship.rel_type.as_str()))
-                    .then(|| OpcPackage::resolve_rel_target(owner, &relationship.target))
+                    .then(|| {
+                        part_identity(&OpcPackage::resolve_rel_target(owner, &relationship.target))
+                    })
             })
         })
         .collect()
+}
+
+fn part_identity(name: &str) -> String {
+    name.to_ascii_lowercase()
 }
 
 fn xml_content_type(content_type: &str) -> bool {

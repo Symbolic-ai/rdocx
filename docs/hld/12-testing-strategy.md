@@ -410,6 +410,38 @@ An alias-prefixed self-closing paragraph-property element retains exact producer
 attributes. An end-marker content control retains modeled identity, binding,
 type, end properties, and ordered raw property slots after save and reopen.
 
+Word identifier allocation has a source-built regression gate. Two documents
+created through different request orders must produce identical complete DOCX
+bytes and the declared relationship, bookmark, comment, drawing, numbering,
+part, and content-type identities in final recursive document order. Repeated
+save and reopen must not advance allocation. Collision cases cover per-owner
+relationships, bookmarks, comments, `wp:docPr`, abstract numbering, numbering
+instances, content-type keys, and normalized ZIP part names. Namespace aliases
+are accepted only through their expanded names, unrelated categories remain
+independent, overflow is atomic, and imported raw owners retain exact bytes.
+Content-type cases include `png` against `PNG` and case variants of a full part
+name. They require linear case-insensitive duplicate detection, deterministic
+lookup for directly mutated invalid public maps, serialization rejection of
+those conflicts, and exact unchanged producer bytes and order under default and
+all-feature builds. ZIP entries, package parts, and resolved relationship
+targets reserve case-insensitive part identities while retaining producer
+spelling. Mutation-history cases include building-block replacement. Header and
+footer cases reject cross-type or unrelated header-shaped relationship targets
+for text, raw XML, image, and background-image setter families.
+Current-graph relationship cases add an unreferenced theme edge after chart
+authoring and require chart `rId1` followed by theme `rId2`. A producer theme
+captured on package open keeps its original id, while unknown internal and
+external authored edges retain their targets and modes under deterministic
+ordering. The SHA-bound F-159 Word candidate remains unchanged.
+Opaque relationship coverage places a late direct relationship behind a raw
+body attribute and allocates a modeled relationship in both opposite orders.
+The raw bytes and raw relationship id remain fixed while the modeled edge
+canonicalizes identically. OPC coverage also exercises mixed-case special ZIP
+parts and relationship owners, case-equivalent get, set, contains, and remove
+operations, Word and PowerPoint main-part reopen, signature discovery and
+coverage, duplicate relationship ids, direct part-map conflicts, and a sentinel
+destination that remains unchanged after pre-serialization validation fails.
+
 The RTF reader differential records Microsoft Word 16.104 build
 16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
 covers body order, run and paragraph formatting, tables, list overrides, PNG

@@ -98,6 +98,28 @@ content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
 
+**Word package identifiers belong to the `rdocx` facade.** One private
+`DocumentIdentifiers` value owns category-specific occupied sets for each
+document. It scans normalized package parts, relationship owners, typed
+WordprocessingML, preserved XML, and content types. Part-name and resolved
+relationship-target occupancy uses ASCII-case-insensitive package identity
+while package maps retain producer spelling. Facade operations reserve
+complete identifier bundles on staged state, while serialization derives
+authored identifiers from final recursive document order before publishing the
+candidate. Relationship identifiers remain scoped to their owning part, and
+only identities captured at package open have preserved provenance. Current
+graph edges added later join authored semantic canonicalization even when no
+modeled `r:id` refers to them. Internal and external edges retain their targets
+and modes while receiving deterministic type-and-target order. Relationship
+attributes in retained body XML and raw drawing payloads are fixed occupants.
+Their values are found by expanded office relationship namespace, including
+bindings inherited by the document body, and are never remapped without a safe
+raw rewrite.
+bookmark, comment, drawing, abstract-numbering, and numbering-instance values
+remain separate namespaces. Rich-merge content-control `w:id` and non-visual
+drawing `cNvPr` values remain separate merge-local scopes rather than package
+identifier-owner categories.
+
 Bounded MHTML import and export use that same seam. The private MIME reader and
 writer live in the existing `rdocx` HTML owner, project through the existing
 HTML import path, and use `rdocx-html` only through its existing outbound

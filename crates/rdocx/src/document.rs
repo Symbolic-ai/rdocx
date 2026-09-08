@@ -1,7 +1,7 @@
 //! The main Document type — entry point for the rdocx API.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +10,6 @@ use std::cell::Cell;
 
 use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
 use oxml_core::app_properties::AppProperties;
-use oxml_media::MediaNamer;
 use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, PackageReadLimits};
@@ -23,7 +22,7 @@ use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
-use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline};
+use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline, drawing_ns};
 use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
 };
@@ -1389,6 +1388,1215 @@ pub enum BodyContentRef<'a> {
     UnsupportedXml(UnsupportedXmlRef<'a>),
 }
 
+/// Package and WordprocessingML identity state owned by the document facade.
+///
+/// Each set represents one OOXML scope. References are deliberately excluded
+/// from definition sets, so a bookmark end, comment anchor, or numbering use
+/// does not collide with the definition it names.
+#[derive(Clone, Debug)]
+pub(crate) struct DocumentIdentifiers {
+    relationship_ids: HashMap<String, HashSet<String>>,
+    bookmark_ids: HashSet<i32>,
+    comment_ids: HashSet<i32>,
+    drawing_ids: HashSet<u32>,
+    abstract_numbering_ids: HashSet<u32>,
+    numbering_instance_ids: HashSet<u32>,
+    part_names: HashSet<String>,
+    content_type_defaults: HashSet<String>,
+    content_type_overrides: HashSet<String>,
+    authored_content_type_defaults: HashSet<String>,
+    preserved_relationship_ids: HashMap<String, HashSet<String>>,
+    preserved_bookmark_ids: HashSet<i32>,
+    preserved_comment_ids: HashSet<i32>,
+    preserved_drawing_ids: HashSet<u32>,
+    preserved_abstract_numbering_ids: HashSet<u32>,
+    preserved_numbering_instance_ids: HashSet<u32>,
+    preserved_part_names: HashSet<String>,
+    authored_bookmark_ids: HashSet<i32>,
+    authored_comment_ids: HashSet<i32>,
+    authored_toc_bookmark_ids: HashSet<i32>,
+    authored_bookmark_names: HashSet<String>,
+    authored_story_parts: HashSet<String>,
+    authored_story_relationship_ids: HashMap<String, HashSet<String>>,
+    authored_bundle_relationship_ids: HashMap<String, HashSet<String>>,
+    provisional_relationship_ids: HashMap<String, HashSet<String>>,
+}
+
+impl DocumentIdentifiers {
+    fn scan(package: &OpcPackage) -> Result<Self> {
+        let mut identifiers = Self {
+            relationship_ids: HashMap::new(),
+            bookmark_ids: HashSet::new(),
+            comment_ids: HashSet::new(),
+            drawing_ids: HashSet::new(),
+            abstract_numbering_ids: HashSet::new(),
+            numbering_instance_ids: HashSet::new(),
+            part_names: package
+                .parts
+                .keys()
+                .map(|part_name| part_name_identity(part_name))
+                .collect(),
+            content_type_defaults: package
+                .content_types
+                .defaults
+                .keys()
+                .map(|extension| extension.to_ascii_lowercase())
+                .collect(),
+            content_type_overrides: package
+                .content_types
+                .overrides
+                .keys()
+                .map(|part_name| part_name.to_ascii_lowercase())
+                .collect(),
+            authored_content_type_defaults: HashSet::new(),
+            preserved_relationship_ids: HashMap::new(),
+            preserved_bookmark_ids: HashSet::new(),
+            preserved_comment_ids: HashSet::new(),
+            preserved_drawing_ids: HashSet::new(),
+            preserved_abstract_numbering_ids: HashSet::new(),
+            preserved_numbering_instance_ids: HashSet::new(),
+            preserved_part_names: HashSet::new(),
+            authored_bookmark_ids: HashSet::new(),
+            authored_comment_ids: HashSet::new(),
+            authored_toc_bookmark_ids: HashSet::new(),
+            authored_bookmark_names: HashSet::new(),
+            authored_story_parts: HashSet::new(),
+            authored_story_relationship_ids: HashMap::new(),
+            authored_bundle_relationship_ids: HashMap::new(),
+            provisional_relationship_ids: HashMap::new(),
+        };
+        identifiers.part_names.extend(
+            package
+                .part_rels
+                .keys()
+                .map(|name| part_name_identity(name)),
+        );
+        identifiers.part_names.extend(
+            package
+                .content_types
+                .overrides
+                .keys()
+                .map(|name| part_name_identity(name)),
+        );
+
+        identifiers.scan_relationships("/", &package.package_rels.items)?;
+        let mut relationship_owners = package.part_rels.iter().collect::<Vec<_>>();
+        relationship_owners.sort_by_key(|(owner, _)| owner.as_str());
+        for (owner, relationships) in relationship_owners {
+            identifiers.scan_relationships(owner, &relationships.items)?;
+        }
+        let mut identity_parts: HashMap<String, HashSet<IdentifierXmlCategory>> = HashMap::new();
+        if let Some(main_part) = package.main_document_part() {
+            identity_parts
+                .entry(part_name_identity(&main_part))
+                .or_default()
+                .extend([
+                    IdentifierXmlCategory::Bookmark,
+                    IdentifierXmlCategory::Drawing,
+                ]);
+            if let Some(relationships) = package.get_part_rels(&main_part) {
+                for relationship in &relationships.items {
+                    let categories: &[IdentifierXmlCategory] = match relationship.rel_type.as_str()
+                    {
+                        rel_types::HEADER
+                        | rel_types::FOOTER
+                        | rel_types::FOOTNOTES
+                        | rel_types::ENDNOTES
+                        | rel_types::GLOSSARY_DOCUMENT => &[
+                            IdentifierXmlCategory::Bookmark,
+                            IdentifierXmlCategory::Drawing,
+                        ],
+                        rel_types::COMMENTS => &[
+                            IdentifierXmlCategory::Bookmark,
+                            IdentifierXmlCategory::Comment,
+                            IdentifierXmlCategory::Drawing,
+                        ],
+                        rel_types::NUMBERING => &[
+                            IdentifierXmlCategory::AbstractNumbering,
+                            IdentifierXmlCategory::NumberingInstance,
+                        ],
+                        _ => &[],
+                    };
+                    if !categories.is_empty() && relationship_is_internal(relationship) {
+                        identity_parts
+                            .entry(part_name_identity(&OpcPackage::resolve_rel_target(
+                                &main_part,
+                                &relationship.target,
+                            )))
+                            .or_default()
+                            .extend(categories.iter().copied());
+                    }
+                }
+            }
+        }
+
+        let mut parts = package.parts.iter().collect::<Vec<_>>();
+        parts.sort_by_key(|(part_name, _)| part_name.as_str());
+        for (part_name, bytes) in parts {
+            if let Some(categories) = identity_parts.get(&part_name_identity(part_name))
+                && identifier_xml_is_well_formed(bytes)
+            {
+                identifiers
+                    .scan_xml_definitions(bytes, categories)
+                    .map_err(|error| {
+                        Error::Other(format!(
+                            "cannot scan identifiers in XML part {part_name}: {error}"
+                        ))
+                    })?;
+            }
+        }
+        identifiers.preserved_relationship_ids = identifiers.relationship_ids.clone();
+        identifiers.preserved_bookmark_ids = identifiers.bookmark_ids.clone();
+        identifiers.preserved_comment_ids = identifiers.comment_ids.clone();
+        identifiers.preserved_drawing_ids = identifiers.drawing_ids.clone();
+        identifiers.preserved_abstract_numbering_ids = identifiers.abstract_numbering_ids.clone();
+        identifiers.preserved_numbering_instance_ids = identifiers.numbering_instance_ids.clone();
+        identifiers.preserved_part_names = identifiers.part_names.clone();
+        Ok(identifiers)
+    }
+
+    fn scan_relationships(
+        &mut self,
+        owner: &str,
+        relationships: &[oxml_opc::relationship::Relationship],
+    ) -> Result<()> {
+        let owner_identity = relationship_owner_identity(owner);
+        for relationship in relationships {
+            if !self
+                .relationship_ids
+                .entry(owner_identity.clone())
+                .or_default()
+                .insert(relationship.id.clone())
+            {
+                return Err(Error::Other(format!(
+                    "duplicate relationship id {} in owner {owner}",
+                    relationship.id
+                )));
+            }
+            if relationship_is_internal(relationship) {
+                self.part_names
+                    .insert(part_name_identity(&OpcPackage::resolve_rel_target(
+                        owner,
+                        &relationship.target,
+                    )));
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_xml_definitions(
+        &mut self,
+        xml: &[u8],
+        categories: &HashSet<IdentifierXmlCategory>,
+    ) -> Result<()> {
+        let mut reader = NsReader::from_reader(xml);
+        let mut buffer = Vec::new();
+        loop {
+            let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+                Ok(value) => value,
+                Err(error) => return Err(Error::Other(error.to_string())),
+            };
+            match event {
+                Event::Start(ref element) | Event::Empty(ref element) => {
+                    let local = element.local_name();
+                    let is_drawing = matches!(
+                        &namespace,
+                        ResolveResult::Bound(namespace)
+                            if namespace.as_ref() == drawing_ns::WP.as_bytes()
+                    );
+                    let is_word = matches!(
+                        &namespace,
+                        ResolveResult::Bound(namespace)
+                            if namespace.as_ref() == WORD_NAMESPACE.as_bytes()
+                    );
+                    let category = if is_drawing && local.as_ref() == b"docPr" {
+                        Some(IdentifierXmlCategory::Drawing)
+                    } else if is_word && local.as_ref() == b"bookmarkStart" {
+                        Some(IdentifierXmlCategory::Bookmark)
+                    } else if is_word && local.as_ref() == b"comment" {
+                        Some(IdentifierXmlCategory::Comment)
+                    } else if is_word && local.as_ref() == b"abstractNum" {
+                        Some(IdentifierXmlCategory::AbstractNumbering)
+                    } else if is_word && local.as_ref() == b"num" {
+                        Some(IdentifierXmlCategory::NumberingInstance)
+                    } else {
+                        None
+                    };
+                    if let Some(category) = category.filter(|value| categories.contains(value)) {
+                        self.scan_xml_id(&reader, element, category)?;
+                    }
+                }
+                Event::Eof => return Ok(()),
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+
+    fn scan_xml_id(
+        &mut self,
+        reader: &NsReader<&[u8]>,
+        element: &BytesStart<'_>,
+        category: IdentifierXmlCategory,
+    ) -> Result<()> {
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+            let accepted = match category {
+                IdentifierXmlCategory::Drawing => {
+                    matches!(namespace, ResolveResult::Unbound) && local.as_ref() == b"id"
+                }
+                IdentifierXmlCategory::Bookmark | IdentifierXmlCategory::Comment => {
+                    matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == WORD_NAMESPACE.as_bytes())
+                        && local.as_ref() == b"id"
+                }
+                IdentifierXmlCategory::AbstractNumbering => {
+                    matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == WORD_NAMESPACE.as_bytes())
+                        && local.as_ref() == b"abstractNumId"
+                }
+                IdentifierXmlCategory::NumberingInstance => {
+                    matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == WORD_NAMESPACE.as_bytes())
+                        && local.as_ref() == b"numId"
+                }
+            };
+            if !accepted {
+                continue;
+            }
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .map_err(|error| Error::Other(error.to_string()))?;
+            match category {
+                IdentifierXmlCategory::Drawing => {
+                    let value = value
+                        .parse::<u32>()
+                        .map_err(|_| Error::Other(format!("invalid drawing id {value}")))?;
+                    Self::insert_unique(&mut self.drawing_ids, value, "drawing")?;
+                }
+                IdentifierXmlCategory::Bookmark => {
+                    let value = value
+                        .parse::<i32>()
+                        .map_err(|_| Error::Other(format!("invalid bookmark id {value}")))?;
+                    Self::insert_unique(&mut self.bookmark_ids, value, "bookmark")?;
+                }
+                IdentifierXmlCategory::Comment => {
+                    let value = value
+                        .parse::<i32>()
+                        .map_err(|_| Error::Other(format!("invalid comment id {value}")))?;
+                    Self::insert_unique(&mut self.comment_ids, value, "comment")?;
+                }
+                IdentifierXmlCategory::AbstractNumbering => {
+                    let value = value.parse::<u32>().map_err(|_| {
+                        Error::Other(format!("invalid abstract numbering id {value}"))
+                    })?;
+                    Self::insert_unique(
+                        &mut self.abstract_numbering_ids,
+                        value,
+                        "abstract numbering",
+                    )?;
+                }
+                IdentifierXmlCategory::NumberingInstance => {
+                    let value = value.parse::<u32>().map_err(|_| {
+                        Error::Other(format!("invalid numbering instance id {value}"))
+                    })?;
+                    Self::insert_unique(
+                        &mut self.numbering_instance_ids,
+                        value,
+                        "numbering instance",
+                    )?;
+                }
+            }
+            break;
+        }
+        Ok(())
+    }
+
+    fn insert_unique<T: std::hash::Hash + Eq + std::fmt::Display + Copy>(
+        occupied: &mut HashSet<T>,
+        value: T,
+        category: &str,
+    ) -> Result<()> {
+        if occupied.insert(value) {
+            Ok(())
+        } else {
+            Err(Error::Other(format!(
+                "duplicate {category} id {value} in imported or preserved XML"
+            )))
+        }
+    }
+
+    pub(crate) fn reserve_bookmark_id(&mut self) -> Result<i32> {
+        let id = reserve_lowest_i32(&mut self.bookmark_ids, 0, "bookmark")?;
+        self.authored_bookmark_ids.insert(id);
+        Ok(id)
+    }
+
+    pub(crate) fn reserve_preferred_bookmark_id(&mut self, preferred: i32) -> Result<i32> {
+        if preferred >= 0 && self.bookmark_ids.insert(preferred) {
+            Ok(preferred)
+        } else {
+            reserve_lowest_i32(&mut self.bookmark_ids, 0, "bookmark")
+        }
+    }
+
+    pub(crate) fn restore_authored_bookmark(&mut self, id: i32, name: &str) {
+        self.authored_toc_bookmark_ids.insert(id);
+        self.authored_bookmark_names.insert(name.to_owned());
+    }
+
+    pub(crate) fn is_authored_bookmark(&self, id: i32) -> bool {
+        self.authored_toc_bookmark_ids.contains(&id)
+    }
+
+    pub(crate) fn authored_bookmark_names(&self) -> &HashSet<String> {
+        &self.authored_bookmark_names
+    }
+
+    pub(crate) fn reserve_comment_id(&mut self) -> Result<i32> {
+        let id = reserve_i32(&mut self.comment_ids, 0, "comment")?;
+        self.authored_comment_ids.insert(id);
+        Ok(id)
+    }
+
+    pub(crate) fn reserve_drawing_id(&mut self) -> Result<u32> {
+        reserve_u32(&mut self.drawing_ids, 1, "drawing")
+    }
+
+    fn reserve_numbering_ids(&mut self) -> Result<(u32, u32)> {
+        let mut abstract_ids = self.abstract_numbering_ids.clone();
+        let mut instance_ids = self.numbering_instance_ids.clone();
+        let abstract_id = reserve_u32(&mut abstract_ids, 0, "abstract numbering")?;
+        let instance_id = reserve_u32(&mut instance_ids, 1, "numbering instance")?;
+        self.abstract_numbering_ids = abstract_ids;
+        self.numbering_instance_ids = instance_ids;
+        Ok((abstract_id, instance_id))
+    }
+
+    fn reserve_abstract_numbering_id(&mut self) -> Result<u32> {
+        reserve_u32(&mut self.abstract_numbering_ids, 0, "abstract numbering")
+    }
+
+    fn reserve_numbering_instance_id(&mut self) -> Result<u32> {
+        reserve_u32(&mut self.numbering_instance_ids, 1, "numbering instance")
+    }
+
+    pub(crate) fn reserve_relationship_id_checked(&mut self, owner: &str) -> Result<String> {
+        self.ensure_relationship_capacity(owner, 1)?;
+        let owner = relationship_owner_identity(owner);
+        let occupied = self.relationship_ids.entry(owner).or_default();
+        let maximum = occupied
+            .iter()
+            .filter_map(|id| id.strip_prefix("rId")?.parse::<u32>().ok())
+            .max();
+        let mut candidate = maximum.map_or(Ok(0), |value| {
+            value
+                .checked_add(1)
+                .ok_or_else(|| Error::Other("relationship id range is exhausted".to_owned()))
+        })?;
+        loop {
+            let id = format!("rId{candidate}");
+            if occupied.insert(id.clone()) {
+                return Ok(id);
+            }
+            candidate = candidate
+                .checked_add(1)
+                .ok_or_else(|| Error::Other("relationship id range is exhausted".to_owned()))?;
+        }
+    }
+
+    fn reserve_bundle_relationship_id_checked(
+        &mut self,
+        owner: &str,
+        rel_type: &str,
+    ) -> Result<String> {
+        let stem = match rel_type {
+            rel_types::STYLES => "rdocxDeferredStyles",
+            rel_types::NUMBERING => "rdocxDeferredNumbering",
+            rel_types::SETTINGS => "rdocxDeferredSettings",
+            rel_types::FOOTNOTES => "rdocxDeferredFootnotes",
+            rel_types::COMMENTS => "rdocxDeferredComments",
+            crate::comments::COMMENTS_EXTENDED_REL_TYPE => "rdocxDeferredCommentsExtended",
+            _ => {
+                return Err(Error::Other(format!(
+                    "relationship type {rel_type} is not a document bundle"
+                )));
+            }
+        };
+        self.ensure_relationship_capacity(owner, 1)?;
+        let owner = relationship_owner_identity(owner);
+        let occupied = self.relationship_ids.entry(owner.clone()).or_default();
+        let mut ordinal = 0u32;
+        loop {
+            let id = if ordinal == 0 {
+                stem.to_owned()
+            } else {
+                format!("{stem}{ordinal}")
+            };
+            if occupied.insert(id.clone()) {
+                self.authored_bundle_relationship_ids
+                    .entry(owner.clone())
+                    .or_default()
+                    .insert(id.clone());
+                self.provisional_relationship_ids
+                    .entry(owner.clone())
+                    .or_default()
+                    .insert(id.clone());
+                return Ok(id);
+            }
+            ordinal = ordinal.checked_add(1).ok_or_else(|| {
+                Error::Other("bundle relationship id range is exhausted".to_owned())
+            })?;
+        }
+    }
+
+    pub(crate) fn reserve_requested_relationship_id_checked(
+        &mut self,
+        owner: &str,
+        requested: &str,
+    ) -> Result<String> {
+        let owner = relationship_owner_identity(owner);
+        let numeric_request = requested
+            .strip_prefix("rId")
+            .and_then(|value| value.parse::<u32>().ok());
+        let is_available = !self
+            .relationship_ids
+            .get(&owner)
+            .is_some_and(|occupied| occupied.contains(requested));
+        if is_available {
+            if numeric_request.is_some() {
+                let provisional_count = self
+                    .provisional_relationship_ids
+                    .get(&owner)
+                    .map_or(0, HashSet::len);
+                let maximum = self
+                    .relationship_ids
+                    .get(&owner)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.strip_prefix("rId")?.parse::<u32>().ok())
+                    .chain(numeric_request)
+                    .max();
+                ensure_numeric_relationship_capacity(maximum, provisional_count)?;
+            }
+            self.relationship_ids
+                .entry(owner.clone())
+                .or_default()
+                .insert(requested.to_owned());
+            Ok(requested.to_owned())
+        } else {
+            self.reserve_relationship_id_checked(&owner)
+        }
+    }
+
+    fn ensure_relationship_capacity(&self, owner: &str, additional: usize) -> Result<()> {
+        let owner = relationship_owner_identity(owner);
+        let maximum = self
+            .relationship_ids
+            .get(&owner)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| id.strip_prefix("rId")?.parse::<u32>().ok())
+            .max();
+        let provisional_count = self
+            .provisional_relationship_ids
+            .get(&owner)
+            .map_or(0, HashSet::len)
+            .checked_add(additional)
+            .ok_or_else(|| Error::Other("relationship id range is exhausted".to_owned()))?;
+        ensure_numeric_relationship_capacity(maximum, provisional_count)
+    }
+
+    fn reserve_part_name(
+        &mut self,
+        directory: &str,
+        stem: &str,
+        extension: &str,
+    ) -> Result<String> {
+        let mut namer = oxml_media::MediaNamer::scan(
+            directory,
+            stem,
+            self.part_names.iter().map(String::as_str),
+        );
+        loop {
+            let part_name = namer.next_part_name(extension);
+            if self.part_names.insert(part_name_identity(&part_name)) {
+                return Ok(part_name);
+            }
+        }
+    }
+
+    pub(crate) fn reserve_preferred_part_name(&mut self, preferred: &str) -> Result<String> {
+        if !preferred.starts_with('/') {
+            return Err(Error::Other(format!(
+                "preferred part name {preferred} is not absolute"
+            )));
+        }
+        let (directory, filename) = preferred.rsplit_once('/').ok_or_else(|| {
+            Error::Other(format!("preferred part name {preferred} has no directory"))
+        })?;
+        let (name, extension) = filename.rsplit_once('.').ok_or_else(|| {
+            Error::Other(format!("preferred part name {preferred} has no extension"))
+        })?;
+        if name.is_empty() || extension.is_empty() {
+            return Err(Error::Other(format!(
+                "preferred part name {preferred} has an empty stem or extension"
+            )));
+        }
+        let digit_start = name
+            .bytes()
+            .rposition(|byte| !byte.is_ascii_digit())
+            .map_or(0, |index| index + 1);
+        let suffix = &name[digit_start..];
+        let stem = suffix
+            .parse::<usize>()
+            .ok()
+            .filter(|suffix| *suffix > 0)
+            .map_or(name, |_| &name[..digit_start]);
+        if stem.is_empty() {
+            return Err(Error::Other(format!(
+                "preferred part name {preferred} has no family stem"
+            )));
+        }
+        if self.part_names.insert(part_name_identity(preferred)) {
+            return Ok(preferred.to_owned());
+        }
+        self.reserve_part_name(directory, stem, extension)
+    }
+
+    fn register_content_type_default(&mut self, extension: &str) {
+        let extension = extension.to_ascii_lowercase();
+        self.content_type_defaults.insert(extension.clone());
+        self.authored_content_type_defaults.insert(extension);
+    }
+
+    pub(crate) fn register_content_type_override(&mut self, part_name: &str) {
+        self.content_type_overrides
+            .insert(part_name.to_ascii_lowercase());
+    }
+
+    pub(crate) fn retire_authored_story_relationships(
+        &mut self,
+        owner: &str,
+        relationship_ids: impl IntoIterator<Item = String>,
+    ) {
+        let owner = relationship_owner_identity(owner);
+        let preserved = self
+            .preserved_relationship_ids
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default();
+        let removed = relationship_ids
+            .into_iter()
+            .filter(|id| !preserved.contains(id))
+            .collect::<HashSet<_>>();
+        if let Some(occupied) = self.relationship_ids.get_mut(&owner) {
+            occupied.retain(|id| !removed.contains(id));
+            if occupied.is_empty() {
+                self.relationship_ids.remove(&owner);
+            }
+        }
+        if let Some(authored) = self.authored_story_relationship_ids.get_mut(&owner) {
+            authored.retain(|id| !removed.contains(id));
+            if authored.is_empty() {
+                self.authored_story_relationship_ids.remove(&owner);
+            }
+        }
+        if let Some(provisional) = self.provisional_relationship_ids.get_mut(&owner) {
+            provisional.retain(|id| !removed.contains(id));
+            if provisional.is_empty() {
+                self.provisional_relationship_ids.remove(&owner);
+            }
+        }
+    }
+
+    pub(crate) fn retire_authored_part(&mut self, part_name: &str) {
+        let identity = part_name_identity(part_name);
+        if !self.preserved_part_names.contains(&identity) {
+            self.part_names.remove(&identity);
+        }
+        self.content_type_overrides
+            .remove(&part_name.to_ascii_lowercase());
+    }
+
+    pub(crate) fn retire_authored_comment_ids(
+        &mut self,
+        comment_ids: impl IntoIterator<Item = i32>,
+    ) {
+        for id in comment_ids {
+            if self.authored_comment_ids.remove(&id) && !self.preserved_comment_ids.contains(&id) {
+                self.comment_ids.remove(&id);
+            }
+        }
+    }
+
+    pub(crate) fn relationship_is_preserved(&self, owner: &str, id: &str) -> bool {
+        let owner = relationship_owner_identity(owner);
+        self.preserved_relationship_ids
+            .get(&owner)
+            .is_some_and(|ids| ids.contains(id))
+    }
+
+    fn part_is_preserved(&self, part_name: &str) -> bool {
+        self.preserved_part_names
+            .contains(&part_name_identity(part_name))
+    }
+
+    pub(crate) fn reserve_fragment_part_name(&mut self, preferred: &str) -> Result<String> {
+        if self.part_names.insert(part_name_identity(preferred)) {
+            return Ok(preferred.to_owned());
+        }
+        let (stem, extension) = preferred
+            .rsplit_once('.')
+            .map_or((preferred, ""), |(stem, extension)| (stem, extension));
+        let mut ordinal = 1u64;
+        loop {
+            let candidate = if extension.is_empty() {
+                format!("{stem}-merge-{ordinal}")
+            } else {
+                format!("{stem}-merge-{ordinal}.{extension}")
+            };
+            if self.part_names.insert(part_name_identity(&candidate)) {
+                return Ok(candidate);
+            }
+            ordinal = ordinal.checked_add(1).ok_or_else(|| {
+                Error::Other("rich mail merge part-name range is exhausted".to_owned())
+            })?;
+        }
+    }
+
+    pub(crate) fn observe_package_graph(&mut self, package: &OpcPackage) -> Result<()> {
+        for part_name in package
+            .parts
+            .keys()
+            .chain(package.part_rels.keys())
+            .chain(package.content_types.overrides.keys())
+        {
+            let identity = part_name_identity(part_name);
+            if self.part_names.insert(identity.clone()) {
+                self.preserved_part_names.insert(identity);
+            }
+        }
+        self.content_type_defaults.extend(
+            package
+                .content_types
+                .defaults
+                .keys()
+                .map(|extension| extension.to_ascii_lowercase()),
+        );
+        self.content_type_overrides.extend(
+            package
+                .content_types
+                .overrides
+                .keys()
+                .map(|part_name| part_name.to_ascii_lowercase()),
+        );
+
+        let mut owners = std::iter::once(("/", &package.package_rels))
+            .chain(
+                package
+                    .part_rels
+                    .iter()
+                    .map(|(owner, relationships)| (owner.as_str(), relationships)),
+            )
+            .collect::<Vec<_>>();
+        owners.sort_by_key(|(owner, _)| *owner);
+        for (owner, relationships) in owners {
+            let owner_identity = relationship_owner_identity(owner);
+            let mut seen = HashSet::new();
+            for relationship in &relationships.items {
+                if !seen.insert(relationship.id.clone()) {
+                    return Err(Error::Other(format!(
+                        "duplicate relationship id {} in owner {owner}",
+                        relationship.id
+                    )));
+                }
+                let occupied = self
+                    .relationship_ids
+                    .entry(owner_identity.clone())
+                    .or_default();
+                occupied.insert(relationship.id.clone());
+                if relationship_is_internal(relationship) {
+                    let part_name = part_name_identity(&OpcPackage::resolve_rel_target(
+                        owner,
+                        &relationship.target,
+                    ));
+                    if self.part_names.insert(part_name.clone()) {
+                        self.preserved_part_names.insert(part_name);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn reconcile_provenance(&mut self, source: &Self) {
+        self.preserved_relationship_ids = intersect_relationship_registry(
+            &source.preserved_relationship_ids,
+            &self.relationship_ids,
+        );
+        self.authored_story_relationship_ids = intersect_relationship_registry(
+            &source.authored_story_relationship_ids,
+            &self.relationship_ids,
+        );
+        self.authored_bundle_relationship_ids = intersect_relationship_registry(
+            &source.authored_bundle_relationship_ids,
+            &self.relationship_ids,
+        );
+        self.provisional_relationship_ids = intersect_relationship_registry(
+            &source.provisional_relationship_ids,
+            &self.relationship_ids,
+        );
+        self.preserved_bookmark_ids = source
+            .preserved_bookmark_ids
+            .intersection(&self.bookmark_ids)
+            .copied()
+            .collect();
+        self.preserved_comment_ids = source
+            .preserved_comment_ids
+            .intersection(&self.comment_ids)
+            .copied()
+            .collect();
+        self.preserved_drawing_ids = source
+            .preserved_drawing_ids
+            .intersection(&self.drawing_ids)
+            .copied()
+            .collect();
+        self.preserved_abstract_numbering_ids = source
+            .preserved_abstract_numbering_ids
+            .intersection(&self.abstract_numbering_ids)
+            .copied()
+            .collect();
+        self.preserved_numbering_instance_ids = source
+            .preserved_numbering_instance_ids
+            .intersection(&self.numbering_instance_ids)
+            .copied()
+            .collect();
+        self.preserved_part_names = source
+            .preserved_part_names
+            .intersection(&self.part_names)
+            .cloned()
+            .collect();
+        self.authored_bookmark_ids = source
+            .authored_bookmark_ids
+            .intersection(&self.bookmark_ids)
+            .copied()
+            .collect();
+        self.authored_comment_ids = source
+            .authored_comment_ids
+            .intersection(&self.comment_ids)
+            .copied()
+            .collect();
+        self.authored_toc_bookmark_ids = source
+            .authored_toc_bookmark_ids
+            .intersection(&self.bookmark_ids)
+            .copied()
+            .collect();
+        self.authored_bookmark_names = source.authored_bookmark_names.clone();
+        self.authored_story_parts = source
+            .authored_story_parts
+            .iter()
+            .filter(|part_name| self.part_names.contains(&part_name_identity(part_name)))
+            .cloned()
+            .collect();
+        self.authored_content_type_defaults = source
+            .authored_content_type_defaults
+            .intersection(&self.content_type_defaults)
+            .cloned()
+            .collect();
+    }
+}
+
+fn intersect_relationship_registry(
+    source: &HashMap<String, HashSet<String>>,
+    occupied: &HashMap<String, HashSet<String>>,
+) -> HashMap<String, HashSet<String>> {
+    source
+        .iter()
+        .filter_map(|(owner, ids)| {
+            let owner = relationship_owner_identity(owner);
+            let retained = ids
+                .intersection(occupied.get(&owner)?)
+                .cloned()
+                .collect::<HashSet<_>>();
+            (!retained.is_empty()).then_some((owner, retained))
+        })
+        .collect()
+}
+
+fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((_, Event::Eof)) => return true,
+            Ok(_) => buffer.clear(),
+            Err(_) => return false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum IdentifierXmlCategory {
+    Drawing,
+    Bookmark,
+    Comment,
+    AbstractNumbering,
+    NumberingInstance,
+}
+
+fn reserve_lowest_i32(occupied: &mut HashSet<i32>, minimum: i32, category: &str) -> Result<i32> {
+    let candidate = (minimum..=i32::MAX)
+        .find(|value| !occupied.contains(value))
+        .ok_or_else(|| Error::Other(format!("{category} id range is exhausted")))?;
+    if !occupied.insert(candidate) {
+        return Err(Error::Other(format!(
+            "pending {category} id collision for {candidate}"
+        )));
+    }
+    Ok(candidate)
+}
+
+fn reserve_i32(occupied: &mut HashSet<i32>, minimum: i32, category: &str) -> Result<i32> {
+    let candidate = occupied
+        .iter()
+        .copied()
+        .max()
+        .and_then(|value| value.checked_add(1))
+        .filter(|value| *value >= minimum)
+        .or_else(|| (minimum..=i32::MAX).find(|value| !occupied.contains(value)))
+        .ok_or_else(|| Error::Other(format!("{category} id range is exhausted")))?;
+    if !occupied.insert(candidate) {
+        return Err(Error::Other(format!(
+            "pending {category} id collision for {candidate}"
+        )));
+    }
+    Ok(candidate)
+}
+
+fn reserve_u32(occupied: &mut HashSet<u32>, minimum: u32, category: &str) -> Result<u32> {
+    let candidate = occupied
+        .iter()
+        .copied()
+        .max()
+        .and_then(|value| value.checked_add(1))
+        .filter(|value| *value >= minimum)
+        .or_else(|| occupied.is_empty().then_some(minimum))
+        .ok_or_else(|| Error::Other(format!("{category} id range is exhausted")))?;
+    if !occupied.insert(candidate) {
+        return Err(Error::Other(format!(
+            "pending {category} id collision for {candidate}"
+        )));
+    }
+    Ok(candidate)
+}
+
+fn ensure_numeric_relationship_capacity(maximum: Option<u32>, required: usize) -> Result<()> {
+    let available = maximum.map_or(u64::from(u32::MAX) + 1, |value| u64::from(u32::MAX - value));
+    if u64::try_from(required).map_or(true, |required| required > available) {
+        Err(Error::Other(
+            "relationship id range is exhausted".to_owned(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn reserve_relationship_from_cursor(
+    occupied: &mut HashSet<String>,
+    cursor: &mut u32,
+) -> Result<String> {
+    loop {
+        let id = format!("rId{cursor}");
+        if occupied.insert(id.clone()) {
+            if let Some(next) = cursor.checked_add(1) {
+                *cursor = next;
+            }
+            return Ok(id);
+        }
+        *cursor = cursor
+            .checked_add(1)
+            .ok_or_else(|| Error::Other("relationship id range is exhausted".to_owned()))?;
+    }
+}
+
+fn reserve_part_from_set(
+    occupied: &mut HashSet<String>,
+    directory: &str,
+    stem: &str,
+    extension: &str,
+) -> Result<String> {
+    let mut namer =
+        oxml_media::MediaNamer::scan(directory, stem, occupied.iter().map(String::as_str));
+    loop {
+        let part = namer.next_part_name(extension);
+        if occupied.insert(part_name_identity(&part)) {
+            return Ok(part);
+        }
+    }
+}
+
+fn part_name_identity(part_name: &str) -> String {
+    part_name.to_ascii_lowercase()
+}
+
+fn relationship_owner_identity(owner: &str) -> String {
+    if owner == "/" {
+        "/".to_owned()
+    } else {
+        part_name_identity(owner)
+    }
+}
+
+fn hdr_ftr_type_order(value: HdrFtrType) -> u8 {
+    match value {
+        HdrFtrType::Default => 0,
+        HdrFtrType::First => 1,
+        HdrFtrType::Even => 2,
+    }
+}
+
+fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
+    xml_relationship_ids_in_order_with_bindings(xml, &[])
+}
+
+fn xml_relationship_ids_in_order_with_bindings(
+    xml: &[u8],
+    inherited_bindings: &[(String, String)],
+) -> Result<Vec<String>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut ids = Vec::new();
+    loop {
+        let (_, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    let (namespace, _) = reader.resolver().resolve_attribute(attribute.key);
+                    let inherited_relationship_prefix =
+                        matches!(namespace, ResolveResult::Unknown(_))
+                            && attribute.key.as_ref().contains(&b':')
+                            && attribute
+                                .key
+                                .as_ref()
+                                .split(|byte| *byte == b':')
+                                .next()
+                                .and_then(|prefix| std::str::from_utf8(prefix).ok())
+                                .is_some_and(|prefix| {
+                                    let declaration = format!("xmlns:{prefix}");
+                                    inherited_bindings.iter().any(|(name, value)| {
+                                        name == &declaration && value == drawing_ns::R
+                                    })
+                                });
+                    if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                        || inherited_relationship_prefix
+                    {
+                        let id = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                            .map_err(|error| {
+                                Error::Other(format!("invalid story relationship id: {error}"))
+                            })?
+                            .into_owned();
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            }
+            Event::Eof => return Ok(ids),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn rewrite_authored_doc_pr_ids(xml: &[u8], occupied: &mut HashSet<u32>) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut edits = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                let namespace = reader.resolver().resolve_element(element.name()).0;
+                let is_doc_pr = matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::WP.as_bytes())
+                    && element.local_name().as_ref() == b"docPr";
+                let mut replaced = false;
+                for attribute in element.attributes() {
+                    let attribute = attribute
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    let (attribute_namespace, local) =
+                        reader.resolver().resolve_attribute(attribute.key);
+                    if is_doc_pr
+                        && matches!(attribute_namespace, ResolveResult::Unbound)
+                        && local.as_ref() == b"id"
+                    {
+                        let id = reserve_u32(occupied, 1, "drawing")?;
+                        let Some((start, end)) =
+                            story_attribute_value_span(&xml[before..after], attribute.key.as_ref())
+                        else {
+                            return Err(Error::Other(
+                                "story drawing id source was not found".to_owned(),
+                            ));
+                        };
+                        edits.push((before + start, before + end, id.to_string().into_bytes()));
+                        replaced = true;
+                    }
+                }
+                if is_doc_pr && !replaced {
+                    return Err(Error::Other(
+                        "wp:docPr requires an unqualified id attribute".to_owned(),
+                    ));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut updated = xml.to_vec();
+    edits.sort_by_key(|(start, _, _)| *start);
+    for (start, end, replacement) in edits.into_iter().rev() {
+        updated.splice(start..end, replacement);
+    }
+    Ok(updated)
+}
+
+fn remap_xml_relationship_ids(xml: &[u8], remap: &HashMap<String, String>) -> Result<Vec<u8>> {
+    if remap.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut edits = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| {
+                            Error::Other(format!("invalid story relationship id: {error}"))
+                        })?;
+                    if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
+                        && matches!(local.as_ref(), b"id" | b"embed" | b"link")
+                        && let Some(updated) = remap.get(value.as_ref())
+                    {
+                        let Some((start, end)) =
+                            story_attribute_value_span(&xml[before..after], attribute.key.as_ref())
+                        else {
+                            return Err(Error::Other(
+                                "story relationship attribute source was not found".to_owned(),
+                            ));
+                        };
+                        edits.push((before + start, before + end, updated.as_bytes().to_vec()));
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut updated = xml.to_vec();
+    edits.sort_by_key(|(start, _, _)| *start);
+    for (start, end, replacement) in edits.into_iter().rev() {
+        updated.splice(start..end, replacement);
+    }
+    Ok(updated)
+}
+
+fn story_attribute_value_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize, usize)> {
+    let mut index = 1usize;
+    while index < element.len() && !element[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    while index < element.len() {
+        while index < element.len() && element[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= element.len() || matches!(element[index], b'>' | b'/') {
+            return None;
+        }
+        let name_start = index;
+        while index < element.len()
+            && !element[index].is_ascii_whitespace()
+            && element[index] != b'='
+        {
+            index += 1;
+        }
+        let name_end = index;
+        while index < element.len() && element[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if element.get(index) != Some(&b'=') {
+            return None;
+        }
+        index += 1;
+        while index < element.len() && element[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let quote = *element.get(index)?;
+        if !matches!(quote, b'\'' | b'"') {
+            return None;
+        }
+        index += 1;
+        let value_start = index;
+        while index < element.len() && element[index] != quote {
+            index += 1;
+        }
+        let value_end = index;
+        if &element[name_start..name_end] == attribute_name {
+            return Some((value_start, value_end));
+        }
+        index += 1;
+    }
+    None
+}
+
+enum DrawingMut<'a> {
+    Inline(&'a mut CT_Inline),
+    Anchor(&'a mut CT_Anchor),
+}
+
+impl DrawingMut<'_> {
+    fn set_doc_pr_id(&mut self, id: u32) {
+        match self {
+            Self::Inline(drawing) => drawing.doc_pr_id = id,
+            Self::Anchor(drawing) => drawing.doc_pr_id = id,
+        }
+    }
+
+    fn remap_relationship(&mut self, remap: &HashMap<String, String>) {
+        let (embed_id, chart_rel_id) = match self {
+            Self::Inline(drawing) => (&mut drawing.embed_id, &mut drawing.chart_rel_id),
+            Self::Anchor(drawing) => (&mut drawing.embed_id, &mut drawing.chart_rel_id),
+        };
+        if let Some(updated) = remap.get(embed_id) {
+            embed_id.clone_from(updated);
+        }
+        if let Some(id) = chart_rel_id
+            && let Some(updated) = remap.get(id)
+        {
+            id.clone_from(updated);
+        }
+    }
+}
+
 /// A Word document (.docx file).
 ///
 /// This is the main entry point for reading, creating, and modifying
@@ -1408,22 +2616,22 @@ pub struct Document {
     /// Read-only custom document properties resolved from package relationships.
     pub(crate) custom_properties: Option<CustomProperties>,
     /// Package part containing the core properties, resolved from `_rels/.rels`.
-    core_properties_part_name: String,
+    core_properties_part_name: Option<String>,
     /// Part name for the main document
     pub(crate) doc_part_name: String,
     /// Part name the styles were loaded from, and where they are written back.
     /// Resolved through the relationship rather than assumed, so a document
     /// that keeps its styles somewhere other than `/word/styles.xml` is
     /// updated in place instead of gaining an orphaned second part.
-    styles_part_name: String,
+    styles_part_name: Option<String>,
     /// Part name for numbering definitions, resolved the same way.
-    numbering_part_name: String,
+    numbering_part_name: Option<String>,
     /// Typed document settings loaded through the main document relationship.
     pub(crate) settings: Option<CT_Settings>,
     /// Existing settings relationship target. No conventional target is assumed.
     settings_part_name: Option<String>,
-    /// Collision-free allocator for image media parts.
-    image_namer: MediaNamer,
+    /// Shared package and WordprocessingML identifier allocation state.
+    pub(crate) identifiers: DocumentIdentifiers,
     /// Typed footnotes loaded through the main document relationship.
     pub(crate) footnotes: rdocx_oxml::footnotes::CT_Footnotes,
     /// Existing footnotes relationship target. No conventional target is assumed on read.
@@ -1501,42 +2709,32 @@ const DEFAULT_FONT_TABLE_XML: &str = concat!(
     r#"</w:fonts>"#,
 );
 
-fn package_part_name_is_occupied(package: &OpcPackage, part_name: &str) -> bool {
-    package.parts.contains_key(part_name)
-        || package.part_rels.contains_key(part_name)
-        || package.content_types.overrides.contains_key(part_name)
+pub(crate) fn relationship_is_internal(
+    relationship: &oxml_opc::relationship::Relationship,
+) -> bool {
+    matches!(relationship.target_mode.as_deref(), None | Some("Internal"))
 }
 
-fn available_settings_part_name(package: &OpcPackage) -> Result<String> {
-    if !package_part_name_is_occupied(package, DEFAULT_SETTINGS_PART) {
-        return Ok(DEFAULT_SETTINGS_PART.to_owned());
+fn bundle_relationship_order(rel_type: &str) -> Option<u8> {
+    match rel_type {
+        rel_types::STYLES => Some(0),
+        rel_types::SETTINGS => Some(1),
+        rel_types::NUMBERING => Some(2),
+        rel_types::FOOTNOTES => Some(3),
+        rel_types::COMMENTS => Some(4),
+        crate::comments::COMMENTS_EXTENDED_REL_TYPE => Some(5),
+        _ => None,
     }
+}
 
-    let prefix = "/word/settings";
-    let suffix = ".xml";
-    let maximum = package
-        .parts
-        .keys()
-        .chain(package.part_rels.keys())
-        .chain(package.content_types.overrides.keys())
-        .filter_map(|part_name| {
-            part_name
-                .strip_prefix(prefix)
-                .and_then(|value| value.strip_suffix(suffix))
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|number| *number > 0)
-        })
-        .max()
-        .unwrap_or(0);
-    let number = maximum
-        .checked_add(1)
-        .ok_or_else(|| Error::Other("no free Word settings part name".to_owned()))?;
-    Ok(format!("{prefix}{number}{suffix}"))
+fn bundle_relationship_precedes_story(rel_type: &str) -> bool {
+    matches!(rel_type, rel_types::STYLES | rel_types::SETTINGS)
 }
 
 #[cfg(test)]
 thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    static FAIL_NEXT_HEADER_FOOTER_SERIALIZATION: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -1663,11 +2861,10 @@ fn validate_fresh_word_compatible_package(
         ),
     ];
     for (part_name, expected_content_type) in expected_parts {
-        if !package.parts.contains_key(part_name)
+        if !package.contains_part(part_name)
             || package
                 .content_types
-                .overrides
-                .get(part_name)
+                .override_for(part_name)
                 .is_none_or(|actual| actual != expected_content_type)
         {
             return Err(Error::Other(format!(
@@ -1739,11 +2936,11 @@ fn validate_fresh_word_compatible_package(
             .map(|(source, rels)| (source.as_str(), rels)),
     ) {
         for relationship in &relationships.items {
-            if relationship.target_mode.as_deref() == Some("External") {
+            if !relationship_is_internal(relationship) {
                 continue;
             }
             let target = OpcPackage::resolve_rel_target(source, &relationship.target);
-            if !package.parts.contains_key(&target) {
+            if !package.contains_part(&target) {
                 return Err(Error::Other(format!(
                     "fresh Word relationship targets missing part {target}"
                 )));
@@ -1789,13 +2986,12 @@ fn validated_word_package_class(package: &OpcPackage) -> Result<(String, WordPac
     } else {
         format!("/{target}")
     };
-    if !package.parts.contains_key(&doc_part_name) {
+    if !package.contains_part(&doc_part_name) {
         return Err(Error::NoDocumentPart);
     }
     let content_type = package
         .content_types
-        .overrides
-        .get(&doc_part_name)
+        .override_for(&doc_part_name)
         .ok_or_else(|| {
             Error::Other("Word main part requires an exact content-type override".to_owned())
         })?;
@@ -2052,6 +3248,513 @@ fn nth_table_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a m
     None
 }
 
+fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
+            BodyContent::Table(table) => visit_table(table, visitor),
+            BodyContent::ContentControl(control) => visit_sdt(control, visitor),
+            BodyContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn visit_paragraph(paragraph: &CT_P, visitor: &mut impl FnMut(&CT_P)) {
+    visitor(paragraph);
+    for (_, _, _, control) in &paragraph.content_controls {
+        visit_sdt(control, visitor);
+    }
+}
+
+fn visit_table(table: &CT_Tbl, visitor: &mut impl FnMut(&CT_P)) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt(control, visitor);
+        }
+        if let Some(row) = table.rows.get(index) {
+            visit_row(row, visitor);
+        }
+    }
+}
+
+fn visit_row(row: &CT_Row, visitor: &mut impl FnMut(&CT_P)) {
+    for index in 0..=row.cells.len() {
+        for (_, _, control) in row
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt(control, visitor);
+        }
+        if let Some(cell) = row.cells.get(index) {
+            visit_cell(cell, visitor);
+        }
+    }
+}
+
+fn visit_cell(cell: &CT_Tc, visitor: &mut impl FnMut(&CT_P)) {
+    for item in &cell.content {
+        match item {
+            CellContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
+            CellContent::Table(table) => visit_table(table, visitor),
+            CellContent::ContentControl(control) => visit_sdt(control, visitor),
+        }
+    }
+}
+
+fn visit_sdt(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_P)) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
+            SdtContent::Table(table) => visit_table(table, visitor),
+            SdtContent::Row(row) => visit_row(row, visitor),
+            SdtContent::Cell(cell) => visit_cell(cell, visitor),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+            SdtContent::ContentControl(nested) => visit_sdt(nested, visitor),
+        }
+    }
+}
+
+fn visit_body_paragraphs_mut(content: &mut [BodyContent], visitor: &mut impl FnMut(&mut CT_P)) {
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => visit_paragraph_mut(paragraph, visitor),
+            BodyContent::Table(table) => visit_table_mut(table, visitor),
+            BodyContent::ContentControl(control) => visit_sdt_mut(control, visitor),
+            BodyContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn visit_paragraph_mut(paragraph: &mut CT_P, visitor: &mut impl FnMut(&mut CT_P)) {
+    visitor(paragraph);
+    for (_, _, _, control) in &mut paragraph.content_controls {
+        visit_sdt_mut(control, visitor);
+    }
+}
+
+fn visit_table_mut(table: &mut CT_Tbl, visitor: &mut impl FnMut(&mut CT_P)) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter_mut()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt_mut(control, visitor);
+        }
+        if let Some(row) = table.rows.get_mut(index) {
+            visit_row_mut(row, visitor);
+        }
+    }
+}
+
+fn visit_row_mut(row: &mut CT_Row, visitor: &mut impl FnMut(&mut CT_P)) {
+    for index in 0..=row.cells.len() {
+        for (_, _, control) in row
+            .content_controls
+            .iter_mut()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt_mut(control, visitor);
+        }
+        if let Some(cell) = row.cells.get_mut(index) {
+            visit_cell_mut(cell, visitor);
+        }
+    }
+}
+
+fn visit_cell_mut(cell: &mut CT_Tc, visitor: &mut impl FnMut(&mut CT_P)) {
+    for item in &mut cell.content {
+        match item {
+            CellContent::Paragraph(paragraph) => visit_paragraph_mut(paragraph, visitor),
+            CellContent::Table(table) => visit_table_mut(table, visitor),
+            CellContent::ContentControl(control) => visit_sdt_mut(control, visitor),
+        }
+    }
+}
+
+fn visit_sdt_mut(control: &mut CT_Sdt, visitor: &mut impl FnMut(&mut CT_P)) {
+    for item in &mut control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => visit_paragraph_mut(paragraph, visitor),
+            SdtContent::Table(table) => visit_table_mut(table, visitor),
+            SdtContent::Row(row) => visit_row_mut(row, visitor),
+            SdtContent::Cell(cell) => visit_cell_mut(cell, visitor),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+            SdtContent::ContentControl(nested) => visit_sdt_mut(nested, visitor),
+        }
+    }
+}
+
+fn collect_relationship_ids(content: &[BodyContent], output: &mut Vec<String>) {
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => {
+                collect_paragraph_relationship_ids(paragraph, output)
+            }
+            BodyContent::Table(table) => collect_table_relationship_ids(table, output),
+            BodyContent::ContentControl(control) => collect_sdt_relationship_ids(control, output),
+            BodyContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn collect_paragraph_relationship_ids(paragraph: &CT_P, output: &mut Vec<String>) {
+    if let Some(section) = paragraph
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.sect_pr.as_ref())
+    {
+        for reference in section.header_refs.iter().chain(&section.footer_refs) {
+            if !output.contains(&reference.rel_id) {
+                output.push(reference.rel_id.clone());
+            }
+        }
+    }
+    for index in 0..=paragraph.runs.len() {
+        for (_, _, _, control) in paragraph
+            .content_controls
+            .iter()
+            .filter(|(at, _, _, _)| *at == index)
+        {
+            collect_sdt_relationship_ids(control, output);
+        }
+        for hyperlink in paragraph
+            .hyperlinks
+            .iter()
+            .filter(|hyperlink| hyperlink.run_start == index)
+        {
+            if let Some(id) = &hyperlink.rel_id
+                && !output.contains(id)
+            {
+                output.push(id.clone());
+            }
+        }
+        let Some(run) = paragraph.runs.get(index) else {
+            continue;
+        };
+        for content in &run.content {
+            let RunContent::Drawing(drawing) = content else {
+                continue;
+            };
+            let id = drawing
+                .inline
+                .as_ref()
+                .filter(|drawing| drawing.raw_xml.is_none())
+                .map(|drawing| drawing.chart_rel_id.as_ref().unwrap_or(&drawing.embed_id))
+                .or_else(|| {
+                    drawing
+                        .anchor
+                        .as_ref()
+                        .filter(|drawing| drawing.raw_xml.is_none())
+                        .map(|drawing| drawing.chart_rel_id.as_ref().unwrap_or(&drawing.embed_id))
+                });
+            if let Some(id) = id
+                && !output.contains(id)
+            {
+                output.push(id.clone());
+            }
+        }
+    }
+}
+
+fn collect_table_relationship_ids(table: &CT_Tbl, output: &mut Vec<String>) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            collect_sdt_relationship_ids(control, output);
+        }
+        if let Some(row) = table.rows.get(index) {
+            for cell_index in 0..=row.cells.len() {
+                for (_, _, control) in row
+                    .content_controls
+                    .iter()
+                    .filter(|(at, _, _)| *at == cell_index)
+                {
+                    collect_sdt_relationship_ids(control, output);
+                }
+                if let Some(cell) = row.cells.get(cell_index) {
+                    for item in &cell.content {
+                        match item {
+                            CellContent::Paragraph(paragraph) => {
+                                collect_paragraph_relationship_ids(paragraph, output)
+                            }
+                            CellContent::Table(table) => {
+                                collect_table_relationship_ids(table, output)
+                            }
+                            CellContent::ContentControl(control) => {
+                                collect_sdt_relationship_ids(control, output)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_sdt_relationship_ids(control: &CT_Sdt, output: &mut Vec<String>) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => {
+                collect_paragraph_relationship_ids(paragraph, output)
+            }
+            SdtContent::Table(table) => collect_table_relationship_ids(table, output),
+            SdtContent::Row(row) => {
+                let table = CT_Tbl {
+                    properties: None,
+                    grid: None,
+                    rows: vec![row.clone()],
+                    extra_xml: Vec::new(),
+                    content_controls: Vec::new(),
+                };
+                collect_table_relationship_ids(&table, output);
+            }
+            SdtContent::Cell(cell) => {
+                for item in &cell.content {
+                    match item {
+                        CellContent::Paragraph(paragraph) => {
+                            collect_paragraph_relationship_ids(paragraph, output)
+                        }
+                        CellContent::Table(table) => collect_table_relationship_ids(table, output),
+                        CellContent::ContentControl(control) => {
+                            collect_sdt_relationship_ids(control, output)
+                        }
+                    }
+                }
+            }
+            SdtContent::ContentControl(nested) => collect_sdt_relationship_ids(nested, output),
+            SdtContent::Run(run) => {
+                for content in &run.content {
+                    if let RunContent::Drawing(drawing) = content
+                        && let Some(id) = drawing
+                            .inline
+                            .as_ref()
+                            .filter(|drawing| drawing.raw_xml.is_none())
+                            .map(|drawing| {
+                                drawing.chart_rel_id.as_ref().unwrap_or(&drawing.embed_id)
+                            })
+                            .or_else(|| {
+                                drawing
+                                    .anchor
+                                    .as_ref()
+                                    .filter(|drawing| drawing.raw_xml.is_none())
+                                    .map(|drawing| {
+                                        drawing.chart_rel_id.as_ref().unwrap_or(&drawing.embed_id)
+                                    })
+                            })
+                        && !output.contains(id)
+                    {
+                        output.push(id.clone());
+                    }
+                }
+            }
+            SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn visit_authored_drawings(content: &[BodyContent], visitor: &mut impl FnMut(&CT_Drawing)) {
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => visit_paragraph_drawings(paragraph, visitor),
+            BodyContent::Table(table) => visit_table_drawings(table, visitor),
+            BodyContent::ContentControl(control) => visit_sdt_drawings(control, visitor),
+            BodyContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn visit_authored_drawings_mut(
+    content: &mut [BodyContent],
+    visitor: &mut impl FnMut(&mut CT_Drawing),
+) {
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => visit_paragraph_drawings_mut(paragraph, visitor),
+            BodyContent::Table(table) => visit_table_drawings_mut(table, visitor),
+            BodyContent::ContentControl(control) => visit_sdt_drawings_mut(control, visitor),
+            BodyContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn authored_drawing(drawing: &CT_Drawing) -> bool {
+    drawing
+        .inline
+        .as_ref()
+        .is_some_and(|value| value.raw_xml.is_none())
+        || drawing
+            .anchor
+            .as_ref()
+            .is_some_and(|value| value.raw_xml.is_none())
+}
+
+fn visit_run_drawings(run: &CT_R, visitor: &mut impl FnMut(&CT_Drawing)) {
+    for content in &run.content {
+        if let RunContent::Drawing(drawing) = content
+            && authored_drawing(drawing)
+        {
+            visitor(drawing);
+        }
+    }
+}
+
+fn visit_run_drawings_mut(run: &mut CT_R, visitor: &mut impl FnMut(&mut CT_Drawing)) {
+    for content in &mut run.content {
+        if let RunContent::Drawing(drawing) = content
+            && authored_drawing(drawing)
+        {
+            visitor(drawing);
+        }
+    }
+}
+
+fn visit_paragraph_drawings(paragraph: &CT_P, visitor: &mut impl FnMut(&CT_Drawing)) {
+    for index in 0..=paragraph.runs.len() {
+        for (_, _, _, control) in paragraph
+            .content_controls
+            .iter()
+            .filter(|(at, _, _, _)| *at == index)
+        {
+            visit_sdt_drawings(control, visitor);
+        }
+        if let Some(run) = paragraph.runs.get(index) {
+            visit_run_drawings(run, visitor);
+        }
+    }
+}
+
+fn visit_paragraph_drawings_mut(paragraph: &mut CT_P, visitor: &mut impl FnMut(&mut CT_Drawing)) {
+    for index in 0..=paragraph.runs.len() {
+        for (_, _, _, control) in paragraph
+            .content_controls
+            .iter_mut()
+            .filter(|(at, _, _, _)| *at == index)
+        {
+            visit_sdt_drawings_mut(control, visitor);
+        }
+        if let Some(run) = paragraph.runs.get_mut(index) {
+            visit_run_drawings_mut(run, visitor);
+        }
+    }
+}
+
+fn visit_table_drawings(table: &CT_Tbl, visitor: &mut impl FnMut(&CT_Drawing)) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt_drawings(control, visitor);
+        }
+        if let Some(row) = table.rows.get(index) {
+            visit_row_drawings(row, visitor);
+        }
+    }
+}
+
+fn visit_table_drawings_mut(table: &mut CT_Tbl, visitor: &mut impl FnMut(&mut CT_Drawing)) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter_mut()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt_drawings_mut(control, visitor);
+        }
+        if let Some(row) = table.rows.get_mut(index) {
+            visit_row_drawings_mut(row, visitor);
+        }
+    }
+}
+
+fn visit_row_drawings(row: &CT_Row, visitor: &mut impl FnMut(&CT_Drawing)) {
+    for index in 0..=row.cells.len() {
+        for (_, _, control) in row
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt_drawings(control, visitor);
+        }
+        if let Some(cell) = row.cells.get(index) {
+            visit_cell_drawings(cell, visitor);
+        }
+    }
+}
+
+fn visit_row_drawings_mut(row: &mut CT_Row, visitor: &mut impl FnMut(&mut CT_Drawing)) {
+    for index in 0..=row.cells.len() {
+        for (_, _, control) in row
+            .content_controls
+            .iter_mut()
+            .filter(|(at, _, _)| *at == index)
+        {
+            visit_sdt_drawings_mut(control, visitor);
+        }
+        if let Some(cell) = row.cells.get_mut(index) {
+            visit_cell_drawings_mut(cell, visitor);
+        }
+    }
+}
+
+fn visit_cell_drawings(cell: &CT_Tc, visitor: &mut impl FnMut(&CT_Drawing)) {
+    for item in &cell.content {
+        match item {
+            CellContent::Paragraph(paragraph) => visit_paragraph_drawings(paragraph, visitor),
+            CellContent::Table(table) => visit_table_drawings(table, visitor),
+            CellContent::ContentControl(control) => visit_sdt_drawings(control, visitor),
+        }
+    }
+}
+
+fn visit_cell_drawings_mut(cell: &mut CT_Tc, visitor: &mut impl FnMut(&mut CT_Drawing)) {
+    for item in &mut cell.content {
+        match item {
+            CellContent::Paragraph(paragraph) => visit_paragraph_drawings_mut(paragraph, visitor),
+            CellContent::Table(table) => visit_table_drawings_mut(table, visitor),
+            CellContent::ContentControl(control) => visit_sdt_drawings_mut(control, visitor),
+        }
+    }
+}
+
+fn visit_sdt_drawings(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_Drawing)) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => visit_paragraph_drawings(paragraph, visitor),
+            SdtContent::Table(table) => visit_table_drawings(table, visitor),
+            SdtContent::Row(row) => visit_row_drawings(row, visitor),
+            SdtContent::Cell(cell) => visit_cell_drawings(cell, visitor),
+            SdtContent::Run(run) => visit_run_drawings(run, visitor),
+            SdtContent::ContentControl(nested) => visit_sdt_drawings(nested, visitor),
+            SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+fn visit_sdt_drawings_mut(control: &mut CT_Sdt, visitor: &mut impl FnMut(&mut CT_Drawing)) {
+    for item in &mut control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => visit_paragraph_drawings_mut(paragraph, visitor),
+            SdtContent::Table(table) => visit_table_drawings_mut(table, visitor),
+            SdtContent::Row(row) => visit_row_drawings_mut(row, visitor),
+            SdtContent::Cell(cell) => visit_cell_drawings_mut(cell, visitor),
+            SdtContent::Run(run) => visit_run_drawings_mut(run, visitor),
+            SdtContent::ContentControl(nested) => visit_sdt_drawings_mut(nested, visitor),
+            SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
 impl Document {
     /// Create a new Word-compatible DOCX document with default page setup and styles.
     pub fn new() -> Self {
@@ -2093,6 +3796,8 @@ impl Document {
                 .get_or_create_part_rels("/word/document.xml")
                 .add(rel_types::STYLES, "styles.xml");
         }
+        let identifiers = DocumentIdentifiers::scan(&package)
+            .expect("a freshly constructed package has valid identifiers");
 
         Document {
             package,
@@ -2104,13 +3809,13 @@ impl Document {
             numbering: None,
             core_properties,
             custom_properties: None,
-            core_properties_part_name: DEFAULT_CORE_PROPERTIES_PART.to_string(),
+            core_properties_part_name: compatible.then(|| DEFAULT_CORE_PROPERTIES_PART.to_owned()),
             doc_part_name: "/word/document.xml".to_string(),
-            styles_part_name: DEFAULT_STYLES_PART.to_string(),
-            numbering_part_name: DEFAULT_NUMBERING_PART.to_string(),
+            styles_part_name: Some(DEFAULT_STYLES_PART.to_owned()),
+            numbering_part_name: None,
             settings,
             settings_part_name: compatible.then(|| DEFAULT_SETTINGS_PART.to_owned()),
-            image_namer: MediaNamer::scan("/word/media", "image", std::iter::empty()),
+            identifiers,
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             footnotes_part_name: None,
             footnotes_dirty: false,
@@ -2150,7 +3855,7 @@ impl Document {
             numbering_part_name: self.numbering_part_name.clone(),
             settings: self.settings.clone(),
             settings_part_name: self.settings_part_name.clone(),
-            image_namer: self.image_namer.clone(),
+            identifiers: self.identifiers.clone(),
             footnotes: self.footnotes.clone(),
             footnotes_part_name: self.footnotes_part_name.clone(),
             footnotes_dirty: self.footnotes_dirty,
@@ -2170,6 +3875,910 @@ impl Document {
             deterministic_layout_cache: Mutex::new(None),
             bundled_fallback_layout_engine: Mutex::new(None),
         }
+    }
+
+    fn canonicalize_authored_identifiers(&mut self) -> Result<()> {
+        self.canonicalize_bookmark_ids()?;
+        self.canonicalize_comment_ids()?;
+        self.canonicalize_numbering_ids()?;
+        self.canonicalize_drawing_ids()?;
+        Ok(())
+    }
+
+    fn canonicalize_bookmark_ids(&mut self) -> Result<()> {
+        let mut semantic = Vec::new();
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            for marker in &paragraph.bookmark_markers {
+                if marker.is_start()
+                    && let Some(id) = marker.id()
+                    && self.identifiers.authored_bookmark_ids.contains(&id)
+                    && !semantic.contains(&id)
+                {
+                    semantic.push(id);
+                }
+            }
+        });
+        let mut occupied = self.identifiers.preserved_bookmark_ids.clone();
+        let mut remap = HashMap::new();
+        for old in semantic {
+            remap.insert(old, reserve_lowest_i32(&mut occupied, 0, "bookmark")?);
+        }
+        if !remap.is_empty() {
+            visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+                let _ = paragraph.remap_authored_bookmark_ids(&remap);
+            });
+            for (old, new) in remap {
+                self.identifiers.authored_bookmark_ids.remove(&old);
+                self.identifiers.authored_bookmark_ids.insert(new);
+            }
+        }
+        self.canonicalize_toc_bookmark_ids()?;
+        Ok(())
+    }
+
+    fn canonicalize_toc_bookmark_ids(&mut self) -> Result<()> {
+        let mut semantic = Vec::new();
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            for marker in &paragraph.bookmark_markers {
+                if marker.is_start()
+                    && let Some(id) = marker.id()
+                    && self.identifiers.authored_toc_bookmark_ids.contains(&id)
+                    && !semantic.contains(&id)
+                {
+                    semantic.push(id);
+                }
+            }
+        });
+        if semantic.is_empty() {
+            return Ok(());
+        }
+        let mut occupied = self.identifiers.bookmark_ids.clone();
+        for id in &self.identifiers.authored_toc_bookmark_ids {
+            occupied.remove(id);
+        }
+        let mut next = occupied.iter().copied().max().unwrap_or(0).checked_add(1);
+        let mut remap = BTreeMap::new();
+        for old in semantic {
+            let new = next.ok_or_else(|| {
+                Error::Other("table of contents exhausted the bookmark ID range".to_owned())
+            })?;
+            occupied.insert(new);
+            next = new.checked_add(1);
+            if old != new {
+                remap.insert(old.to_string(), new.to_string());
+            }
+        }
+        if remap.is_empty() {
+            return Ok(());
+        }
+        let xml = self.document.to_xml()?;
+        let updated = crate::field::patch_bookmark_ids(&xml, &remap)?;
+        self.document = CT_Document::from_xml(&updated)?;
+        for (old, new) in remap {
+            let old = old.parse::<i32>().expect("bookmark remap key is numeric");
+            let new = new.parse::<i32>().expect("bookmark remap value is numeric");
+            self.identifiers.bookmark_ids.remove(&old);
+            self.identifiers.bookmark_ids.insert(new);
+            self.identifiers.preserved_bookmark_ids.remove(&old);
+            self.identifiers.preserved_bookmark_ids.insert(new);
+            self.identifiers.authored_toc_bookmark_ids.remove(&old);
+            self.identifiers.authored_toc_bookmark_ids.insert(new);
+        }
+        Ok(())
+    }
+
+    fn canonicalize_comment_ids(&mut self) -> Result<()> {
+        let mut semantic = Vec::new();
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            for marker in &paragraph.comment_ranges {
+                if let rdocx_oxml::text::CommentRangeMarker::Start { id, .. } = marker
+                    && self.identifiers.comment_ids.contains(id)
+                    && !self.identifiers.preserved_comment_ids.contains(id)
+                    && !semantic.contains(id)
+                {
+                    semantic.push(*id);
+                }
+            }
+        });
+        if let Some(comments) = &self.comments {
+            for comment in &comments.comments {
+                if !self.identifiers.preserved_comment_ids.contains(&comment.id)
+                    && self.identifiers.comment_ids.contains(&comment.id)
+                    && !semantic.contains(&comment.id)
+                {
+                    semantic.push(comment.id);
+                }
+            }
+        }
+        let mut occupied = self.identifiers.preserved_comment_ids.clone();
+        let mut remap = HashMap::new();
+        for old in semantic {
+            remap.insert(old, reserve_i32(&mut occupied, 0, "comment")?);
+        }
+        if remap.is_empty() {
+            return Ok(());
+        }
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            for marker in &mut paragraph.comment_ranges {
+                match marker {
+                    rdocx_oxml::text::CommentRangeMarker::Start { id, .. }
+                    | rdocx_oxml::text::CommentRangeMarker::End { id, .. } => {
+                        if let Some(updated) = remap.get(id) {
+                            *id = *updated;
+                        }
+                    }
+                }
+            }
+            for run in &mut paragraph.runs {
+                for content in &mut run.content {
+                    if let RunContent::CommentReference { id, .. } = content
+                        && let Some(updated) = remap.get(id)
+                    {
+                        *id = *updated;
+                    }
+                }
+            }
+        });
+        if let Some(comments) = &mut self.comments {
+            for comment in &mut comments.comments {
+                if let Some(updated) = remap.get(&comment.id) {
+                    comment.id = *updated;
+                }
+            }
+            if self.identifiers.preserved_comment_ids.is_empty() {
+                comments.comments.sort_by_key(|comment| comment.id);
+                let mut para_remap = HashMap::new();
+                let mut next_para_id = 1u32;
+                for comment in &mut comments.comments {
+                    for para_id in comment.paragraph_ids.iter_mut().flatten() {
+                        let updated = format!("{next_para_id:08X}");
+                        next_para_id = next_para_id.checked_add(1).ok_or_else(|| {
+                            Error::Other("comment paragraph id range is exhausted".to_owned())
+                        })?;
+                        para_remap.insert(para_id.clone(), updated.clone());
+                        *para_id = updated;
+                    }
+                }
+                if let Some(extended) = &mut self.comments_extended {
+                    for entry in &mut extended.comments {
+                        if let Some(updated) = para_remap.get(&entry.para_id) {
+                            entry.para_id.clone_from(updated);
+                        }
+                        if let Some(parent) = &mut entry.para_id_parent
+                            && let Some(updated) = para_remap.get(parent)
+                        {
+                            parent.clone_from(updated);
+                        }
+                    }
+                    extended
+                        .comments
+                        .sort_by(|left, right| left.para_id.cmp(&right.para_id));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn canonicalize_numbering_ids(&mut self) -> Result<()> {
+        let Some(numbering) = self.numbering.as_ref() else {
+            return Ok(());
+        };
+        let mut semantic_nums = Vec::new();
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            if let Some(id) = paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.num_id)
+                && !self
+                    .identifiers
+                    .preserved_numbering_instance_ids
+                    .contains(&id)
+                && self.identifiers.numbering_instance_ids.contains(&id)
+                && !semantic_nums.contains(&id)
+            {
+                semantic_nums.push(id);
+            }
+        });
+        for instance in &numbering.nums {
+            if !self
+                .identifiers
+                .preserved_numbering_instance_ids
+                .contains(&instance.num_id)
+                && self
+                    .identifiers
+                    .numbering_instance_ids
+                    .contains(&instance.num_id)
+                && !semantic_nums.contains(&instance.num_id)
+            {
+                semantic_nums.push(instance.num_id);
+            }
+        }
+        let abstract_by_num = numbering
+            .nums
+            .iter()
+            .map(|instance| (instance.num_id, instance.abstract_num_id))
+            .collect::<HashMap<_, _>>();
+        let mut occupied_nums = self.identifiers.preserved_numbering_instance_ids.clone();
+        let mut occupied_abstract = self.identifiers.preserved_abstract_numbering_ids.clone();
+        let mut num_remap = HashMap::new();
+        let mut abstract_remap = HashMap::new();
+        for old_num in semantic_nums {
+            num_remap.insert(
+                old_num,
+                reserve_u32(&mut occupied_nums, 1, "numbering instance")?,
+            );
+            if let Some(old_abstract) = abstract_by_num.get(&old_num)
+                && !self
+                    .identifiers
+                    .preserved_abstract_numbering_ids
+                    .contains(old_abstract)
+                && !abstract_remap.contains_key(old_abstract)
+            {
+                abstract_remap.insert(
+                    *old_abstract,
+                    reserve_u32(&mut occupied_abstract, 0, "abstract numbering")?,
+                );
+            }
+        }
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            if let Some(id) = paragraph
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.num_id.as_mut())
+                && let Some(updated) = num_remap.get(id)
+            {
+                *id = *updated;
+            }
+        });
+        let numbering = self.numbering.as_mut().expect("checked above");
+        for definition in &mut numbering.abstract_nums {
+            if let Some(updated) = abstract_remap.get(&definition.abstract_num_id) {
+                definition.abstract_num_id = *updated;
+            }
+        }
+        for instance in &mut numbering.nums {
+            if let Some(updated) = num_remap.get(&instance.num_id) {
+                instance.num_id = *updated;
+            }
+            if let Some(updated) = abstract_remap.get(&instance.abstract_num_id) {
+                instance.abstract_num_id = *updated;
+            }
+        }
+        if self.identifiers.preserved_abstract_numbering_ids.is_empty()
+            && self.identifiers.preserved_numbering_instance_ids.is_empty()
+        {
+            numbering
+                .abstract_nums
+                .sort_by_key(|definition| definition.abstract_num_id);
+            numbering.nums.sort_by_key(|instance| instance.num_id);
+        }
+        Ok(())
+    }
+
+    fn opaque_relationship_ids_from_serialized_story(
+        &self,
+        modeled_relationships: &[String],
+    ) -> Result<Vec<String>> {
+        let nested_namespace_owners = self
+            .package
+            .get_part(&self.doc_part_name)
+            .map(nested_modeled_namespace_owners)
+            .transpose()?
+            .unwrap_or_default();
+        let serialize = |document: &CT_Document| -> Result<Vec<u8>> {
+            let xml = document.to_xml()?;
+            replay_nested_namespace_declarations(&xml, &nested_namespace_owners)
+        };
+
+        let current_xml = serialize(&self.document)?;
+        let current_relationships = xml_relationship_ids_in_order(&current_xml)?;
+        let mut masked = self.document.clone();
+        let mut masked_values = HashSet::new();
+        let mut remap = HashMap::new();
+        for (index, relationship_id) in modeled_relationships.iter().enumerate() {
+            let mut ordinal = index;
+            let sentinel = loop {
+                let candidate = format!("rdocx-modeled-relationship-{ordinal}");
+                if !current_relationships.contains(&candidate)
+                    && masked_values.insert(candidate.clone())
+                {
+                    break candidate;
+                }
+                ordinal = ordinal
+                    .checked_add(modeled_relationships.len().max(1))
+                    .ok_or_else(|| {
+                        Error::Other("modeled relationship mask range is exhausted".to_owned())
+                    })?;
+            };
+            remap.insert(relationship_id.clone(), sentinel);
+        }
+
+        visit_authored_drawings_mut(&mut masked.body.content, &mut |drawing| {
+            if let Some(mut drawing) = drawing
+                .inline
+                .as_mut()
+                .map(DrawingMut::Inline)
+                .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
+            {
+                drawing.remap_relationship(&remap);
+            }
+        });
+        visit_body_paragraphs_mut(&mut masked.body.content, &mut |paragraph| {
+            for hyperlink in &mut paragraph.hyperlinks {
+                if let Some(id) = &mut hyperlink.rel_id
+                    && let Some(updated) = remap.get(id)
+                {
+                    id.clone_from(updated);
+                }
+            }
+            if let Some(section) = paragraph
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.sect_pr.as_mut())
+            {
+                for reference in section
+                    .header_refs
+                    .iter_mut()
+                    .chain(&mut section.footer_refs)
+                {
+                    if let Some(updated) = remap.get(&reference.rel_id) {
+                        reference.rel_id.clone_from(updated);
+                    }
+                }
+            }
+        });
+        if let Some(section) = &mut masked.body.sect_pr {
+            for reference in section
+                .header_refs
+                .iter_mut()
+                .chain(&mut section.footer_refs)
+            {
+                if let Some(updated) = remap.get(&reference.rel_id) {
+                    reference.rel_id.clone_from(updated);
+                }
+            }
+        }
+
+        let masked_xml = serialize(&masked)?;
+        Ok(xml_relationship_ids_in_order(&masked_xml)?
+            .into_iter()
+            .filter(|id| !masked_values.contains(id) && current_relationships.contains(id))
+            .collect())
+    }
+
+    fn canonicalize_drawing_ids(&mut self) -> Result<()> {
+        let owner = self.doc_part_name.clone();
+        let owner_identity = relationship_owner_identity(&owner);
+        if let Some(section) = &mut self.document.body.sect_pr {
+            section
+                .header_refs
+                .sort_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type));
+            section
+                .footer_refs
+                .sort_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type));
+        }
+        let preserved_relationships = self
+            .identifiers
+            .preserved_relationship_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let authored_bundle_relationships = self
+            .identifiers
+            .authored_bundle_relationship_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        let mut story_relationships = Vec::new();
+        collect_relationship_ids(&self.document.body.content, &mut story_relationships);
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !story_relationships.contains(&reference.rel_id) {
+                    story_relationships.push(reference.rel_id.clone());
+                }
+            }
+        }
+        let opaque_relationships =
+            self.opaque_relationship_ids_from_serialized_story(&story_relationships)?;
+        let relationships = self
+            .package
+            .get_part_rels(&owner)
+            .map(|relationships| relationships.items.clone())
+            .unwrap_or_default();
+        story_relationships.retain(|id| {
+            !preserved_relationships.contains(id)
+                && relationships
+                    .iter()
+                    .any(|relationship| relationship.id == *id)
+        });
+        let mut bundle_relationships = relationships
+            .iter()
+            .filter_map(|relationship| {
+                (!preserved_relationships.contains(&relationship.id)
+                    && authored_bundle_relationships.contains(&relationship.id)
+                    && relationship_is_internal(relationship))
+                .then(|| {
+                    bundle_relationship_order(&relationship.rel_type).map(|order| {
+                        (
+                            order,
+                            relationship.target.as_str(),
+                            relationship.id.as_str(),
+                            bundle_relationship_precedes_story(&relationship.rel_type),
+                        )
+                    })
+                })
+                .flatten()
+            })
+            .collect::<Vec<_>>();
+        bundle_relationships.sort_unstable();
+        let mut semantic_relationships = bundle_relationships
+            .iter()
+            .filter(|(_, _, _, precedes_story)| *precedes_story)
+            .map(|(_, _, id, _)| (*id).to_owned())
+            .collect::<Vec<_>>();
+        semantic_relationships.extend(story_relationships);
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !preserved_relationships.contains(&reference.rel_id)
+                    && !semantic_relationships.contains(&reference.rel_id)
+                {
+                    semantic_relationships.push(reference.rel_id.clone());
+                }
+            }
+        }
+        let mut unreferenced_relationships = relationships
+            .iter()
+            .filter(|relationship| {
+                !preserved_relationships.contains(&relationship.id)
+                    && !semantic_relationships.contains(&relationship.id)
+                    && !authored_bundle_relationships.contains(&relationship.id)
+                    && !opaque_relationships.contains(&relationship.id)
+            })
+            .map(|relationship| {
+                let internal = relationship_is_internal(relationship);
+                let target = if internal {
+                    part_name_identity(&OpcPackage::resolve_rel_target(
+                        &owner,
+                        &relationship.target,
+                    ))
+                } else {
+                    relationship.target.clone()
+                };
+                (
+                    !internal,
+                    relationship.rel_type.as_str(),
+                    target,
+                    relationship.target_mode.as_deref().unwrap_or(""),
+                    relationship.id.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        unreferenced_relationships.sort_unstable();
+        semantic_relationships.extend(
+            unreferenced_relationships
+                .into_iter()
+                .map(|(_, _, _, _, id)| id.to_owned()),
+        );
+        semantic_relationships.extend(
+            bundle_relationships
+                .into_iter()
+                .filter(|(_, _, _, precedes_story)| !precedes_story)
+                .map(|(_, _, id, _)| id.to_owned()),
+        );
+
+        let mut occupied_relationships = preserved_relationships.clone();
+        occupied_relationships.extend(opaque_relationships);
+        occupied_relationships.extend(
+            relationships
+                .iter()
+                .filter(|relationship| !semantic_relationships.contains(&relationship.id))
+                .map(|relationship| relationship.id.clone()),
+        );
+        let mut relationship_cursor = if semantic_relationships.is_empty() {
+            0
+        } else {
+            preserved_relationships
+                .iter()
+                .filter_map(|id| id.strip_prefix("rId")?.parse::<u32>().ok())
+                .max()
+                .map_or(Ok(0), |maximum| {
+                    maximum.checked_add(1).ok_or_else(|| {
+                        Error::Other("relationship id range is exhausted".to_owned())
+                    })
+                })?
+        };
+        let mut relationship_remap = HashMap::new();
+        for old in &semantic_relationships {
+            let updated = reserve_relationship_from_cursor(
+                &mut occupied_relationships,
+                &mut relationship_cursor,
+            )?;
+            relationship_remap.insert(old.clone(), updated);
+        }
+        if let Some(relationships) = self.package.get_part_rels_mut(&owner) {
+            for relationship in &mut relationships.items {
+                if let Some(updated) = relationship_remap.get(&relationship.id) {
+                    relationship.id.clone_from(updated);
+                }
+            }
+            let mut authored = Vec::new();
+            relationships.items.retain(|relationship| {
+                if preserved_relationships.contains(&relationship.id) {
+                    true
+                } else {
+                    authored.push(relationship.clone());
+                    false
+                }
+            });
+            authored.sort_by_key(|relationship| {
+                relationship
+                    .id
+                    .strip_prefix("rId")
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .unwrap_or(u32::MAX)
+            });
+            relationships.items.extend(authored);
+        }
+        if !relationship_remap.is_empty() {
+            if let Some(occupied) = self.identifiers.relationship_ids.get_mut(&owner_identity) {
+                for old in relationship_remap.keys() {
+                    occupied.remove(old);
+                }
+                occupied.extend(relationship_remap.values().cloned());
+            }
+            if let Some(authored) = self
+                .identifiers
+                .authored_story_relationship_ids
+                .get_mut(&owner_identity)
+            {
+                let remapped = authored
+                    .iter()
+                    .map(|id| relationship_remap.get(id).unwrap_or(id).clone())
+                    .collect();
+                *authored = remapped;
+            }
+            if let Some(authored) = self
+                .identifiers
+                .authored_bundle_relationship_ids
+                .get_mut(&owner_identity)
+            {
+                let remapped = authored
+                    .iter()
+                    .map(|id| relationship_remap.get(id).unwrap_or(id).clone())
+                    .collect();
+                *authored = remapped;
+            }
+            if let Some(provisional) = self
+                .identifiers
+                .provisional_relationship_ids
+                .get_mut(&owner_identity)
+            {
+                provisional.retain(|id| !relationship_remap.contains_key(id));
+                if provisional.is_empty() {
+                    self.identifiers
+                        .provisional_relationship_ids
+                        .remove(&owner_identity);
+                }
+            }
+        }
+        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
+        let mut drawing_count = 0usize;
+        visit_authored_drawings(&self.document.body.content, &mut |_| drawing_count += 1);
+        let mut drawing_ids = Vec::with_capacity(drawing_count);
+        for _ in 0..drawing_count {
+            drawing_ids.push(reserve_u32(&mut occupied_drawings, 1, "drawing")?);
+        }
+        let mut drawing_ids = drawing_ids.into_iter();
+        let mut drawing_error = None;
+        visit_authored_drawings_mut(&mut self.document.body.content, &mut |drawing| {
+            let Some(mut drawing) = drawing
+                .inline
+                .as_mut()
+                .map(DrawingMut::Inline)
+                .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
+            else {
+                drawing_error = Some(Error::Other(
+                    "authored drawing has no inline or anchor payload".to_owned(),
+                ));
+                return;
+            };
+            let Some(id) = drawing_ids.next() else {
+                drawing_error = Some(Error::Other(
+                    "authored drawing identifier count changed during canonicalization".to_owned(),
+                ));
+                return;
+            };
+            drawing.set_doc_pr_id(id);
+            drawing.remap_relationship(&relationship_remap);
+        });
+        if let Some(error) = drawing_error {
+            return Err(error);
+        }
+        if drawing_ids.next().is_some() {
+            return Err(Error::Other(
+                "authored drawing identifier count changed during canonicalization".to_owned(),
+            ));
+        }
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            for hyperlink in &mut paragraph.hyperlinks {
+                if let Some(id) = &mut hyperlink.rel_id
+                    && let Some(updated) = relationship_remap.get(id)
+                {
+                    id.clone_from(updated);
+                }
+            }
+            if let Some(section) = paragraph
+                .properties
+                .as_mut()
+                .and_then(|properties| properties.sect_pr.as_mut())
+            {
+                for reference in section
+                    .header_refs
+                    .iter_mut()
+                    .chain(&mut section.footer_refs)
+                {
+                    if let Some(updated) = relationship_remap.get(&reference.rel_id) {
+                        reference.rel_id.clone_from(updated);
+                    }
+                }
+            }
+        });
+        if let Some(section) = &mut self.document.body.sect_pr {
+            for reference in section
+                .header_refs
+                .iter_mut()
+                .chain(&mut section.footer_refs)
+            {
+                if let Some(updated) = relationship_remap.get(&reference.rel_id) {
+                    reference.rel_id.clone_from(updated);
+                }
+            }
+        }
+        self.canonicalize_header_footer_relationships()?;
+        self.canonicalize_image_parts()?;
+        Ok(())
+    }
+
+    fn active_header_footer_parts(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        for (relationship_id, is_header) in self.header_footer_rel_ids() {
+            if let Some(part) = self.header_footer_part_name(&relationship_id, is_header)
+                && !parts.contains(&part)
+            {
+                parts.push(part);
+            }
+        }
+        parts
+    }
+
+    fn main_story_relationship_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        collect_relationship_ids(&self.document.body.content, &mut ids);
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !ids.contains(&reference.rel_id) {
+                    ids.push(reference.rel_id.clone());
+                }
+            }
+        }
+        ids
+    }
+
+    fn canonicalize_header_footer_relationships(&mut self) -> Result<()> {
+        let parts = self.active_header_footer_parts();
+        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
+        visit_authored_drawings(&self.document.body.content, &mut |drawing| {
+            if let Some(inline) = &drawing.inline {
+                occupied_drawings.insert(inline.doc_pr_id);
+            }
+            if let Some(anchor) = &drawing.anchor {
+                occupied_drawings.insert(anchor.doc_pr_id);
+            }
+        });
+
+        for owner in parts {
+            let owner_identity = relationship_owner_identity(&owner);
+            let fully_authored = self.identifiers.authored_story_parts.contains(&owner);
+            let partially_authored = self
+                .identifiers
+                .authored_story_relationship_ids
+                .get(&owner_identity)
+                .cloned()
+                .unwrap_or_default();
+            if !fully_authored && partially_authored.is_empty() {
+                continue;
+            }
+            let xml = self
+                .package
+                .get_part(&owner)
+                .ok_or_else(|| Error::Other(format!("story part {owner} is missing")))?
+                .to_vec();
+            let referenced = xml_relationship_ids_in_order(&xml)?;
+            let preserved = self
+                .identifiers
+                .preserved_relationship_ids
+                .get(&owner_identity)
+                .cloned()
+                .unwrap_or_default();
+            let relationships = self
+                .package
+                .get_part_rels(&owner)
+                .map(|relationships| relationships.items.clone())
+                .unwrap_or_default();
+            let semantic = referenced
+                .into_iter()
+                .filter(|id| {
+                    (fully_authored && !preserved.contains(id) || partially_authored.contains(id))
+                        && relationships
+                            .iter()
+                            .any(|relationship| relationship.id == *id)
+                })
+                .collect::<Vec<_>>();
+            let mut occupied = preserved.clone();
+            occupied.extend(
+                relationships
+                    .iter()
+                    .filter(|relationship| !semantic.contains(&relationship.id))
+                    .map(|relationship| relationship.id.clone()),
+            );
+            let mut cursor = if semantic.is_empty() {
+                0
+            } else {
+                preserved
+                    .iter()
+                    .filter_map(|id| id.strip_prefix("rId")?.parse::<u32>().ok())
+                    .max()
+                    .map_or(Ok(0), |maximum| {
+                        maximum.checked_add(1).ok_or_else(|| {
+                            Error::Other("relationship id range is exhausted".to_owned())
+                        })
+                    })?
+            };
+            let mut remap = HashMap::new();
+            for old in semantic {
+                remap.insert(
+                    old,
+                    reserve_relationship_from_cursor(&mut occupied, &mut cursor)?,
+                );
+            }
+            if let Some(owner_relationships) = self.package.get_part_rels_mut(&owner) {
+                for relationship in &mut owner_relationships.items {
+                    if let Some(updated) = remap.get(&relationship.id) {
+                        relationship.id.clone_from(updated);
+                    }
+                }
+                if fully_authored {
+                    let mut authored = owner_relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| !preserved.contains(&relationship.id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    authored.sort_by_key(|relationship| {
+                        relationship
+                            .id
+                            .strip_prefix("rId")
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .unwrap_or(u32::MAX)
+                    });
+                    let mut authored = authored.into_iter();
+                    for relationship in &mut owner_relationships.items {
+                        if !preserved.contains(&relationship.id) {
+                            *relationship = authored
+                                .next()
+                                .expect("each authored relationship slot has a value");
+                        }
+                    }
+                }
+            }
+            let xml = remap_xml_relationship_ids(&xml, &remap)?;
+            if let Some(ids) = self
+                .identifiers
+                .authored_story_relationship_ids
+                .get_mut(&owner_identity)
+            {
+                *ids = ids
+                    .drain()
+                    .map(|id| remap.get(&id).cloned().unwrap_or(id))
+                    .collect();
+            }
+            let xml = if fully_authored {
+                rewrite_authored_doc_pr_ids(&xml, &mut occupied_drawings)?
+            } else {
+                xml
+            };
+            self.package.set_part(&owner, xml);
+        }
+        Ok(())
+    }
+
+    fn canonicalize_image_parts(&mut self) -> Result<()> {
+        let mut ordered = Vec::new();
+        let mut owners = vec![(
+            self.doc_part_name.clone(),
+            self.main_story_relationship_ids(),
+        )];
+        for owner in self.active_header_footer_parts() {
+            let owner_identity = relationship_owner_identity(&owner);
+            if self.identifiers.authored_story_parts.contains(&owner)
+                || self
+                    .identifiers
+                    .authored_story_relationship_ids
+                    .contains_key(&owner_identity)
+            {
+                let ids = self
+                    .package
+                    .get_part(&owner)
+                    .map(xml_relationship_ids_in_order)
+                    .transpose()?
+                    .unwrap_or_default();
+                owners.push((owner, ids));
+            }
+        }
+        for (owner, ids) in &owners {
+            let Some(relationships) = self.package.get_part_rels(owner) else {
+                continue;
+            };
+            for id in ids {
+                if let Some(relationship) = relationships.get_by_id(id)
+                    && relationship.rel_type == rel_types::IMAGE
+                {
+                    let part = OpcPackage::resolve_rel_target(owner, &relationship.target);
+                    if !self.identifiers.part_is_preserved(&part) && !ordered.contains(&part) {
+                        ordered.push(part);
+                    }
+                }
+            }
+        }
+        let mut occupied = self.identifiers.preserved_part_names.clone();
+        occupied.extend(
+            self.package
+                .parts
+                .keys()
+                .filter(|part| !ordered.contains(part))
+                .map(|part| part_name_identity(part)),
+        );
+        let mut remap = HashMap::new();
+        for old in ordered {
+            let extension = old
+                .rsplit_once('.')
+                .map(|(_, extension)| extension)
+                .unwrap_or("bin")
+                .to_owned();
+            remap.insert(
+                old,
+                reserve_part_from_set(&mut occupied, "/word/media", "image", &extension)?,
+            );
+        }
+        for (owner, _) in &owners {
+            if let Some(relationships) = self.package.get_part_rels_mut(owner) {
+                for relationship in &mut relationships.items {
+                    if relationship.rel_type == rel_types::IMAGE {
+                        let old = OpcPackage::resolve_rel_target(owner, &relationship.target);
+                        if let Some(updated) = remap.get(&old) {
+                            relationship.target = relative_descendant_target(owner, updated);
+                        }
+                    }
+                }
+            }
+        }
+        let mut moved = Vec::new();
+        for (old, updated) in remap {
+            if old != updated
+                && let Some(bytes) = self.package.remove_part(&old)
+            {
+                moved.push((updated.clone(), bytes));
+                if let Some(content_type) = self.package.content_types.remove_override(&old) {
+                    self.package
+                        .content_types
+                        .add_override(&updated, &content_type);
+                }
+            }
+        }
+        for (part_name, bytes) in moved {
+            self.package.set_part(&part_name, bytes);
+        }
+        Ok(())
     }
 
     /// Commit staged package state without discarding reusable layout work.
@@ -2251,9 +4860,7 @@ impl Document {
     /// and all other package payloads remain present.
     pub fn to_bytes_as(&self, class: WordPackageClass) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.package_signatures_invalidated |=
-            candidate.retained_package_signature_would_be_invalidated()?;
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         candidate
             .package
             .content_types
@@ -2311,7 +4918,7 @@ impl Document {
         certificate_der: &[u8],
     ) -> Result<oxml_opc::SignatureReport> {
         let mut candidate = self.clone_for_staging();
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         let report = candidate
             .package
             .sign(private_key_pkcs8_der, certificate_der)?;
@@ -2331,7 +4938,9 @@ impl Document {
         // Resolve the part a relationship of the given type points at.
         let resolve_part = |rel_type: &str| -> Option<String> {
             let rels = package.get_part_rels(&doc_part_name)?;
-            let rel = rels.get_by_type(rel_type)?;
+            let rel = rels.items.iter().find(|relationship| {
+                relationship.rel_type == rel_type && relationship_is_internal(relationship)
+            })?;
             Some(OpcPackage::resolve_rel_target(&doc_part_name, &rel.target))
         };
 
@@ -2367,7 +4976,12 @@ impl Document {
         // Core properties are a package-level relationship, not a document part.
         let core_properties_part_name = package
             .package_rels
-            .get_by_type(CORE_PROPERTIES_REL_TYPE)
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == CORE_PROPERTIES_REL_TYPE
+                    && relationship_is_internal(relationship)
+            })
             .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target));
         let core_properties = core_properties_part_name
             .as_deref()
@@ -2376,16 +4990,15 @@ impl Document {
 
         let custom_properties = package
             .package_rels
-            .get_by_type(rel_types::CUSTOM_PROPERTIES)
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == rel_types::CUSTOM_PROPERTIES
+                    && relationship_is_internal(relationship)
+            })
             .map(|rel| OpcPackage::resolve_rel_target("/", &rel.target))
             .and_then(|part| package.get_part(&part))
             .and_then(|xml| CustomProperties::from_xml(xml).ok());
-
-        let image_namer = MediaNamer::scan(
-            "/word/media",
-            "image",
-            package.parts.keys().map(String::as_str),
-        );
 
         let footnotes_part_name = resolve_part(rel_types::FOOTNOTES);
         let footnotes = footnotes_part_name
@@ -2418,6 +5031,7 @@ impl Document {
 
         let package_signatures_invalidated =
             crate::embedded::known_invalid_package_signature_on_open(&package);
+        let identifiers = DocumentIdentifiers::scan(&package)?;
         Ok(Document {
             package,
             document,
@@ -2428,15 +5042,13 @@ impl Document {
             numbering,
             core_properties,
             custom_properties,
-            core_properties_part_name: core_properties_part_name
-                .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_string()),
+            core_properties_part_name,
             doc_part_name,
-            styles_part_name: styles_part_name.unwrap_or_else(|| DEFAULT_STYLES_PART.to_string()),
-            numbering_part_name: numbering_part_name
-                .unwrap_or_else(|| DEFAULT_NUMBERING_PART.to_string()),
+            styles_part_name,
+            numbering_part_name,
             settings,
             settings_part_name,
-            image_namer,
+            identifiers,
             footnotes,
             footnotes_part_name,
             footnotes_dirty: false,
@@ -2578,28 +5190,26 @@ impl Document {
 
     /// Save the document to a file path.
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        self.package_signatures_invalidated |=
-            self.retained_package_signature_would_be_invalidated()?;
-        self.flush_to_package()?;
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_package()?;
         crate::embedded::persist_invalidated_package_signature(
-            &mut self.package,
-            self.package_signatures_invalidated,
+            &mut candidate.package,
+            candidate.package_signatures_invalidated,
         )?;
-        self.package.save(path)?;
+        candidate.package.save(path)?;
         Ok(())
     }
 
     /// Save the document to a byte vector.
     pub fn to_bytes(&mut self) -> Result<Vec<u8>> {
-        self.package_signatures_invalidated |=
-            self.retained_package_signature_would_be_invalidated()?;
-        self.flush_to_package()?;
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_package()?;
         crate::embedded::persist_invalidated_package_signature(
-            &mut self.package,
-            self.package_signatures_invalidated,
+            &mut candidate.package,
+            candidate.package_signatures_invalidated,
         )?;
         let mut buf = std::io::Cursor::new(Vec::new());
-        self.package.write_to(&mut buf)?;
+        candidate.package.write_to(&mut buf)?;
         Ok(buf.into_inner())
     }
 
@@ -2620,9 +5230,7 @@ impl Document {
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn to_encrypted_bytes(&self, password: &str) -> Result<Vec<u8>> {
         let mut candidate = self.clone_for_staging();
-        candidate.package_signatures_invalidated |=
-            candidate.retained_package_signature_would_be_invalidated()?;
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         crate::embedded::persist_invalidated_package_signature(
             &mut candidate.package,
             candidate.package_signatures_invalidated,
@@ -2632,6 +5240,79 @@ impl Document {
             .package
             .write_encrypted_to(&mut encrypted, password)?;
         Ok(encrypted)
+    }
+
+    pub(crate) fn prepare_staged_package(&mut self) -> Result<()> {
+        self.preflight_flush_required_bundles()?;
+        self.canonicalize_authored_identifiers()?;
+        self.package_signatures_invalidated |=
+            self.retained_package_signature_would_be_invalidated()?;
+        self.flush_to_package()
+    }
+
+    pub(crate) fn prepare_and_reopen_staged(mut self) -> Result<Self> {
+        self.prepare_staged_package()?;
+        self.reopen_prepared_staged()
+    }
+
+    pub(crate) fn reopen_prepared_staged(self) -> Result<Self> {
+        self.reopen_prepared_staged_with_limits(PackageReadLimits::UNBOUNDED)
+    }
+
+    pub(crate) fn reopen_prepared_staged_with_limits(
+        self,
+        limits: PackageReadLimits,
+    ) -> Result<Self> {
+        let provenance = self.identifiers.clone();
+        let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
+        let package_signatures_invalidated = self.package_signatures_invalidated;
+        let mut output = std::io::Cursor::new(Vec::new());
+        self.package.write_to(&mut output)?;
+        let mut reopened = Self::from_bytes_with_limits(output.get_ref(), limits)?;
+        reopened.identifiers.reconcile_provenance(&provenance);
+        reopened.embedded_invalidated_signatures = embedded_invalidated_signatures;
+        reopened.package_signatures_invalidated = package_signatures_invalidated;
+        Ok(reopened)
+    }
+
+    fn preflight_flush_required_bundles(&mut self) -> Result<()> {
+        self.reserve_styles_bundle()?;
+        if self.numbering.is_some() {
+            self.reserve_numbering_bundle()?;
+        }
+        if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
+            self.reserve_footnotes_bundle()?;
+        }
+        if let Some(part_name) = self.comments_part_name.clone()
+            && self.comments.is_some()
+        {
+            self.ensure_part_relationship_checked(
+                &part_name,
+                rel_types::COMMENTS,
+                crate::comments::COMMENTS_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("comments relationship allocation failed: {error}"))
+            })?;
+        }
+        if let Some(part_name) = self.comments_extended_part_name.clone()
+            && self.comments_extended.is_some()
+        {
+            self.ensure_part_relationship_checked(
+                &part_name,
+                crate::comments::COMMENTS_EXTENDED_REL_TYPE,
+                crate::comments::COMMENTS_EXTENDED_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!(
+                    "comments-extended relationship allocation failed: {error}"
+                ))
+            })?;
+        }
+        if self.core_properties.is_some() {
+            self.reserve_core_properties_bundle()?;
+        }
+        Ok(())
     }
 
     /// Write the in-memory document/styles back into the OPC package parts.
@@ -2673,20 +5354,40 @@ impl Document {
         // rdocx's defaults written out, so make sure it is reachable: an
         // unreferenced, untyped part would simply be ignored by Word.
         let styles_xml = self.styles.to_xml()?;
-        let styles_part = self.styles_part_name.clone();
+        let styles_part_name = self.styles_part_name.clone();
+        let styles_part = self
+            .reserve_document_part_bundle(
+                styles_part_name.as_deref(),
+                DEFAULT_STYLES_PART,
+                rel_types::STYLES,
+                STYLES_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("styles relationship allocation failed: {error}"))
+            })?;
+        self.styles_part_name = Some(styles_part.clone());
         self.package.set_part(&styles_part, styles_xml);
-        self.ensure_part_relationship(&styles_part, rel_types::STYLES, STYLES_CONTENT_TYPE);
 
         // Serialize numbering definitions if we have any
-        if let Some(ref numbering) = self.numbering {
-            let numbering_xml = numbering.to_xml()?;
-            let numbering_part = self.numbering_part_name.clone();
+        if let Some(numbering_xml) = self
+            .numbering
+            .as_ref()
+            .map(CT_Numbering::to_xml)
+            .transpose()?
+        {
+            let numbering_part_name = self.numbering_part_name.clone();
+            let numbering_part = self
+                .reserve_document_part_bundle(
+                    numbering_part_name.as_deref(),
+                    DEFAULT_NUMBERING_PART,
+                    rel_types::NUMBERING,
+                    NUMBERING_CONTENT_TYPE,
+                )
+                .map_err(|error| {
+                    Error::Other(format!("numbering relationship allocation failed: {error}"))
+                })?;
+            self.numbering_part_name = Some(numbering_part.clone());
             self.package.set_part(&numbering_part, numbering_xml);
-            self.ensure_part_relationship(
-                &numbering_part,
-                rel_types::NUMBERING,
-                NUMBERING_CONTENT_TYPE,
-            );
         }
 
         // F-155 exposes settings as a read-only projection. Parsed settings
@@ -2699,21 +5400,19 @@ impl Document {
         // Preserve parsed footnote bytes until a facade mutation makes the typed view dirty.
         if self.footnotes_dirty && !self.footnotes.footnotes.is_empty() {
             let fx = self.footnotes.to_xml_footnotes()?;
+            let footnotes_part_name = self.footnotes_part_name.clone();
             let footnotes_part = self
-                .footnotes_part_name
-                .clone()
-                .unwrap_or_else(|| "/word/footnotes.xml".to_owned());
+                .reserve_document_part_bundle(
+                    footnotes_part_name.as_deref(),
+                    "/word/footnotes.xml",
+                    rel_types::FOOTNOTES,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+                )
+                .map_err(|error| {
+                    Error::Other(format!("footnotes relationship allocation failed: {error}"))
+                })?;
+            self.footnotes_part_name = Some(footnotes_part.clone());
             self.package.set_part(&footnotes_part, fx);
-            self.package.content_types.add_override(
-                &footnotes_part,
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
-            );
-            let rels = self
-                .package
-                .get_or_create_part_rels(&self.doc_part_name.clone());
-            if rels.get_by_type(rel_types::FOOTNOTES).is_none() {
-                rels.add(rel_types::FOOTNOTES, "footnotes.xml");
-            }
         }
 
         // An existing comments part is modelled and flushed to its resolved
@@ -2723,11 +5422,14 @@ impl Document {
         {
             let xml = comments.to_xml()?;
             self.package.set_part(&part_name, xml);
-            self.ensure_part_relationship(
+            self.ensure_part_relationship_checked(
                 &part_name,
                 rel_types::COMMENTS,
                 crate::comments::COMMENTS_CONTENT_TYPE,
-            );
+            )
+            .map_err(|error| {
+                Error::Other(format!("comments relationship allocation failed: {error}"))
+            })?;
         }
 
         if let (Some(comments), Some(part_name)) = (
@@ -2736,11 +5438,16 @@ impl Document {
         ) {
             let xml = comments.to_xml()?;
             self.package.set_part(&part_name, xml);
-            self.ensure_part_relationship(
+            self.ensure_part_relationship_checked(
                 &part_name,
                 crate::comments::COMMENTS_EXTENDED_REL_TYPE,
                 crate::comments::COMMENTS_EXTENDED_CONTENT_TYPE,
-            );
+            )
+            .map_err(|error| {
+                Error::Other(format!(
+                    "comments-extended relationship allocation failed: {error}"
+                ))
+            })?;
         }
 
         if self.glossary_dirty {
@@ -2756,28 +5463,14 @@ impl Document {
         }
 
         // Serialize core properties to the package relationship's target.
-        if let Some(ref props) = self.core_properties {
-            let core_xml = props.to_xml()?;
-            self.package
-                .set_part(&self.core_properties_part_name, core_xml);
-            self.package.content_types.add_override(
-                &self.core_properties_part_name,
-                CORE_PROPERTIES_CONTENT_TYPE,
-            );
-            if self
-                .package
-                .package_rels
-                .get_by_type(CORE_PROPERTIES_REL_TYPE)
-                .is_none()
-            {
-                let target = self
-                    .core_properties_part_name
-                    .strip_prefix('/')
-                    .unwrap_or(&self.core_properties_part_name);
-                self.package
-                    .package_rels
-                    .add(CORE_PROPERTIES_REL_TYPE, target);
-            }
+        if let Some(core_xml) = self
+            .core_properties
+            .as_ref()
+            .map(CoreProperties::to_xml)
+            .transpose()?
+        {
+            let core_part = self.reserve_core_properties_bundle()?;
+            self.package.set_part(&core_part, core_xml);
         }
 
         Ok(())
@@ -2785,27 +5478,158 @@ impl Document {
 
     /// Make sure `part_name` is reachable from the main document: it needs a
     /// relationship of `rel_type` and a content-type override.
-    fn ensure_part_relationship(&mut self, part_name: &str, rel_type: &str, content_type: &str) {
+    pub(crate) fn ensure_part_relationship_checked(
+        &mut self,
+        part_name: &str,
+        rel_type: &str,
+        content_type: &str,
+    ) -> Result<()> {
+        let doc_part_name = self.doc_part_name.clone();
+        let already_linked =
+            self.package
+                .get_part_rels(&doc_part_name)
+                .is_some_and(|relationships| {
+                    relationships.items.iter().any(|relationship| {
+                        relationship.rel_type == rel_type
+                            && relationship_is_internal(relationship)
+                            && OpcPackage::resolve_rel_target(&doc_part_name, &relationship.target)
+                                == part_name
+                    })
+                });
+        let pending_id = if already_linked {
+            None
+        } else {
+            Some(
+                self.identifiers
+                    .reserve_relationship_id_checked(&doc_part_name)?,
+            )
+        };
         self.package
             .content_types
             .add_override(part_name, content_type);
+        self.identifiers.register_content_type_override(part_name);
+        if let Some(id) = pending_id {
+            // Relationship targets are relative to the source part's directory.
+            let target = relative_target(&doc_part_name, part_name);
+            self.package
+                .get_or_create_part_rels(&doc_part_name)
+                .add_with_id(&id, rel_type, &target);
+            if bundle_relationship_order(rel_type).is_some() {
+                self.identifiers
+                    .authored_bundle_relationship_ids
+                    .entry(relationship_owner_identity(&doc_part_name))
+                    .or_default()
+                    .insert(id);
+            }
+        }
+        Ok(())
+    }
 
-        let doc_part_name = self.doc_part_name.clone();
+    fn reserve_document_part_bundle(
+        &mut self,
+        existing: Option<&str>,
+        preferred: &str,
+        rel_type: &str,
+        content_type: &str,
+    ) -> Result<String> {
+        self.identifiers.observe_package_graph(&self.package)?;
+        let part_name = match existing {
+            Some(part_name) => part_name.to_owned(),
+            None => self.identifiers.reserve_preferred_part_name(preferred)?,
+        };
+        let owner = self.doc_part_name.clone();
         let already_linked = self
             .package
-            .get_part_rels(&doc_part_name)
-            .and_then(|rels| rels.get_by_type(rel_type))
-            .map(|rel| OpcPackage::resolve_rel_target(&doc_part_name, &rel.target))
-            .is_some_and(|target| target == part_name);
-        if already_linked {
-            return;
-        }
-
-        // Relationship targets are relative to the source part's directory.
-        let target = relative_target(&doc_part_name, part_name);
+            .get_part_rels(&owner)
+            .is_some_and(|relationships| {
+                relationships.items.iter().any(|relationship| {
+                    relationship.rel_type == rel_type
+                        && relationship_is_internal(relationship)
+                        && OpcPackage::resolve_rel_target(&owner, &relationship.target) == part_name
+                })
+            });
+        let pending_id = if already_linked {
+            None
+        } else {
+            Some(
+                self.identifiers
+                    .reserve_bundle_relationship_id_checked(&owner, rel_type)?,
+            )
+        };
         self.package
-            .get_or_create_part_rels(&doc_part_name)
-            .add(rel_type, &target);
+            .content_types
+            .add_override(&part_name, content_type);
+        self.identifiers.register_content_type_override(&part_name);
+        if let Some(id) = pending_id {
+            let target = relative_target(&owner, &part_name);
+            self.package
+                .get_or_create_part_rels(&owner)
+                .add_with_id(&id, rel_type, &target);
+        }
+        Ok(part_name)
+    }
+
+    fn reserve_core_properties_bundle(&mut self) -> Result<String> {
+        self.identifiers.observe_package_graph(&self.package)?;
+        let part_name = match self.core_properties_part_name.as_deref() {
+            Some(part_name) => part_name.to_owned(),
+            None => self
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_CORE_PROPERTIES_PART)?,
+        };
+        let already_linked = self.package.package_rels.items.iter().any(|relationship| {
+            relationship.rel_type == CORE_PROPERTIES_REL_TYPE
+                && relationship_is_internal(relationship)
+                && OpcPackage::resolve_rel_target("/", &relationship.target) == part_name
+        });
+        let pending_id = if already_linked {
+            None
+        } else {
+            Some(self.identifiers.reserve_relationship_id_checked("/")?)
+        };
+        self.package
+            .content_types
+            .add_override(&part_name, CORE_PROPERTIES_CONTENT_TYPE);
+        self.identifiers.register_content_type_override(&part_name);
+        if let Some(id) = pending_id {
+            let target = part_name.strip_prefix('/').unwrap_or(&part_name);
+            self.package
+                .package_rels
+                .add_with_id(&id, CORE_PROPERTIES_REL_TYPE, target);
+        }
+        self.core_properties_part_name = Some(part_name.clone());
+        Ok(part_name)
+    }
+
+    pub(crate) fn add_internal_relationship_checked(
+        &mut self,
+        owner: &str,
+        rel_type: &str,
+        target: &str,
+    ) -> Result<String> {
+        let id = self.identifiers.reserve_relationship_id_checked(owner)?;
+        self.package
+            .get_or_create_part_rels(owner)
+            .add_with_id(&id, rel_type, target);
+        Ok(id)
+    }
+
+    fn add_external_relationship_checked(
+        &mut self,
+        owner: &str,
+        rel_type: &str,
+        target: &str,
+    ) -> Result<String> {
+        let id = self.identifiers.reserve_relationship_id_checked(owner)?;
+        self.package.get_or_create_part_rels(owner).items.push(
+            oxml_opc::relationship::Relationship {
+                id: id.clone(),
+                rel_type: rel_type.to_owned(),
+                target: target.to_owned(),
+                target_mode: Some("External".to_owned()),
+            },
+        );
+        Ok(id)
     }
 
     /// Stage a chart, its editable workbook, and the Word drawing that reaches them.
@@ -2823,24 +5647,32 @@ impl Document {
 
         let mut package = self.package.clone();
         let mut document = self.document.clone();
-        let mut chart_namer = MediaNamer::scan(
-            "/word/charts",
-            "chart",
-            package.parts.keys().map(String::as_str),
-        );
-        let mut workbook_namer = MediaNamer::scan(
-            "/word/embeddings",
-            "Workbook",
-            package.parts.keys().map(String::as_str),
-        );
-        let chart_part = chart_namer.next_part_name("xml");
-        let workbook_part = workbook_namer.next_part_name("xlsx");
-
-        let document_relationship_id = package.get_or_create_part_rels(&self.doc_part_name).add(
-            rel_types::CHART,
-            &relative_target(&self.doc_part_name, &chart_part),
-        );
-        let workbook_relationship_id = package.get_or_create_part_rels(&chart_part).add(
+        let mut identifiers = self.identifiers.clone();
+        identifiers.observe_package_graph(&package)?;
+        let chart_part = identifiers.reserve_part_name("/word/charts", "chart", "xml")?;
+        let workbook_part =
+            identifiers.reserve_part_name("/word/embeddings", "Workbook", "xlsx")?;
+        let document_relationship_id = identifiers
+            .reserve_relationship_id_checked(&self.doc_part_name)
+            .map_err(|error| {
+                Error::Other(format!("chart relationship allocation failed: {error}"))
+            })?;
+        package
+            .get_or_create_part_rels(&self.doc_part_name)
+            .add_with_id(
+                &document_relationship_id,
+                rel_types::CHART,
+                &relative_target(&self.doc_part_name, &chart_part),
+            );
+        let workbook_relationship_id = identifiers
+            .reserve_relationship_id_checked(&chart_part)
+            .map_err(|error| {
+                Error::Other(format!(
+                    "chart workbook relationship allocation failed: {error}"
+                ))
+            })?;
+        package.get_or_create_part_rels(&chart_part).add_with_id(
+            &workbook_relationship_id,
             rel_types::PACKAGE,
             &relative_target(&chart_part, &workbook_part),
         );
@@ -2857,8 +5689,9 @@ impl Document {
             }
         };
 
-        let inline =
+        let mut inline =
             CT_Inline::new_chart(&document_relationship_id, width.to_emu(), height.to_emu());
+        inline.doc_pr_id = identifiers.reserve_drawing_id()?;
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
             alt_drawings: Vec::new(),
@@ -2880,12 +5713,15 @@ impl Document {
         package
             .content_types
             .add_override(&chart_part, content_types::CHART);
+        identifiers.register_content_type_override(&chart_part);
         package
             .content_types
             .add_override(&workbook_part, content_types::EMBEDDED_WORKBOOK);
+        identifiers.register_content_type_override(&workbook_part);
 
         self.package = package;
         self.document = document;
+        self.identifiers = identifiers;
         self.invalidate_layout();
         Ok(())
     }
@@ -3000,11 +5836,15 @@ impl Document {
     /// Add a footnote with the given text; returns its id. Pair with
     /// `Paragraph::add_footnote_ref` to reference it from the body.
     pub fn add_footnote(&mut self, text: &str) -> i32 {
-        self.invalidate_layout();
-        self.footnotes_dirty = true;
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_footnotes_bundle()
+            .expect("an in-memory document can allocate a footnotes part");
+        candidate.invalidate_layout();
+        candidate.footnotes_dirty = true;
         use rdocx_oxml::footnotes::CT_Footnote;
         use rdocx_oxml::text::CT_P;
-        let id = self
+        let id = candidate
             .footnotes
             .footnotes
             .iter()
@@ -3014,11 +5854,12 @@ impl Document {
             + 1;
         let mut p = CT_P::new();
         p.add_run(text);
-        self.footnotes.footnotes.push(CT_Footnote {
+        candidate.footnotes.footnotes.push(CT_Footnote {
             id,
             note_type: rdocx_oxml::footnotes::NoteType::Normal,
             paragraphs: vec![p],
         });
+        self.commit_staged_mutation(candidate);
         id
     }
 
@@ -3268,10 +6109,36 @@ impl Document {
         width: Length,
         height: Length,
     ) -> Paragraph<'_> {
-        self.invalidate_layout();
-        let rel_id = self.embed_image(image_data, image_filename);
+        self.try_add_picture(image_data, image_filename, width, height)
+            .expect("an in-memory document cannot exhaust image identifiers");
+        let Some(BodyContent::Paragraph(paragraph)) = self.document.body.content.last_mut() else {
+            unreachable!("picture staging appends one paragraph")
+        };
+        Paragraph { inner: paragraph }
+    }
 
-        let inline = CT_Inline::new(&rel_id, width.to_emu(), height.to_emu());
+    fn try_add_picture(
+        &mut self,
+        image_data: &[u8],
+        image_filename: &str,
+        width: Length,
+        height: Length,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        let (part_name, format) = candidate.reserve_image_part(image_data, image_filename)?;
+        let owner = candidate.doc_part_name.clone();
+        let rel_id = candidate
+            .identifiers
+            .reserve_relationship_id_checked(&owner)?;
+        let drawing_id = candidate.identifiers.reserve_drawing_id()?;
+        let rel_target = candidate.install_reserved_image_part(&part_name, image_data, format);
+        candidate
+            .package
+            .get_or_create_part_rels(&owner)
+            .add_with_id(&rel_id, rel_types::IMAGE, &rel_target);
+
+        let mut inline = CT_Inline::new(&rel_id, width.to_emu(), height.to_emu());
+        inline.doc_pr_id = drawing_id;
 
         let drawing = CT_Drawing::inline(inline);
         let run = CT_R {
@@ -3284,11 +6151,14 @@ impl Document {
 
         let mut p = CT_P::new();
         p.runs.push(run);
-        self.document.body.content.push(BodyContent::Paragraph(p));
-        match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
-            _ => unreachable!(),
-        }
+        candidate
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(p));
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
     }
 
     /// Add an editable inline chart to the document.
@@ -3324,12 +6194,16 @@ impl Document {
                 filename: image_filename.to_owned(),
             })?;
 
-        Ok(self.add_picture(
+        self.try_add_picture(
             image_data,
             image_filename,
             Length::emu(native_size.width_emu),
             Length::emu(native_size.height_emu),
-        ))
+        )?;
+        let Some(BodyContent::Paragraph(paragraph)) = self.document.body.content.last_mut() else {
+            unreachable!("picture staging appends one paragraph")
+        };
+        Ok(Paragraph { inner: paragraph })
     }
 
     /// Add a full-page background image behind text.
@@ -3343,11 +6217,11 @@ impl Document {
         image_data: &[u8],
         image_filename: &str,
     ) -> Paragraph<'_> {
-        self.invalidate_layout();
-        let rel_id = self.embed_image(image_data, image_filename);
+        let mut candidate = self.clone_for_staging();
+        let rel_id = candidate.embed_image(image_data, image_filename);
 
         // Get page dimensions from section properties (default US Letter)
-        let sect = self
+        let sect = candidate
             .document
             .body
             .sect_pr
@@ -3365,7 +6239,11 @@ impl Document {
             .to_emu()
             .0;
 
-        let anchor = CT_Anchor::background(&rel_id, page_width_emu, page_height_emu);
+        let mut anchor = CT_Anchor::background(&rel_id, page_width_emu, page_height_emu);
+        anchor.doc_pr_id = candidate
+            .identifiers
+            .reserve_drawing_id()
+            .expect("an in-memory document cannot exhaust every drawing identifier");
         let drawing = CT_Drawing::anchor(anchor);
         let run = CT_R {
             alt_drawings: Vec::new(),
@@ -3377,7 +6255,9 @@ impl Document {
 
         let mut p = CT_P::new();
         p.runs.push(run);
-        self.document.body.insert_paragraph(0, p);
+        candidate.document.body.insert_paragraph(0, p);
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
         match &mut self.document.body.content[0] {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
@@ -3396,10 +6276,14 @@ impl Document {
         height: Length,
         behind_text: bool,
     ) -> Paragraph<'_> {
-        self.invalidate_layout();
-        let rel_id = self.embed_image(image_data, image_filename);
+        let mut candidate = self.clone_for_staging();
+        let rel_id = candidate.embed_image(image_data, image_filename);
 
         let mut anchor = CT_Anchor::background(&rel_id, width.to_emu(), height.to_emu());
+        anchor.doc_pr_id = candidate
+            .identifiers
+            .reserve_drawing_id()
+            .expect("an in-memory document cannot exhaust every drawing identifier");
         anchor.behind_doc = behind_text;
 
         let drawing = CT_Drawing::anchor(anchor);
@@ -3413,7 +6297,9 @@ impl Document {
 
         let mut p = CT_P::new();
         p.runs.push(run);
-        self.document.body.insert_paragraph(0, p);
+        candidate.document.body.insert_paragraph(0, p);
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
         match &mut self.document.body.content[0] {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
@@ -3427,27 +6313,54 @@ impl Document {
     /// from a header or footer must be related to *that* part, not the
     /// document, so the caller decides where it is attached.
     fn store_image_part(&mut self, image_data: &[u8], filename: &str) -> String {
-        let format = oxml_media::resolve(image_data, filename);
-        let extension = format.extension();
-        let part_name = self.image_namer.next_part_name(extension);
+        let (part_name, format) = self
+            .reserve_image_part(image_data, filename)
+            .expect("an in-memory package cannot exhaust every media part suffix");
+        self.install_reserved_image_part(&part_name, image_data, format)
+    }
 
-        self.package.set_part(&part_name, image_data.to_vec());
+    fn reserve_image_part(
+        &mut self,
+        image_data: &[u8],
+        filename: &str,
+    ) -> Result<(String, oxml_media::ImageFormat)> {
+        let format = oxml_media::resolve(image_data, filename);
+        let part_name =
+            self.identifiers
+                .reserve_part_name("/word/media", "image", format.extension())?;
+        Ok((part_name, format))
+    }
+
+    fn install_reserved_image_part(
+        &mut self,
+        part_name: &str,
+        image_data: &[u8],
+        format: oxml_media::ImageFormat,
+    ) -> String {
+        let extension = format.extension();
+
+        self.package.set_part(part_name, image_data.to_vec());
         let content_type = format.content_type();
-        match self.package.content_types.content_type_for(&part_name) {
+        match self.package.content_types.content_type_for(part_name) {
             Some(existing) if existing == content_type => {}
             Some(_) => self
                 .package
                 .content_types
-                .add_override(&part_name, content_type),
-            None => self
-                .package
-                .content_types
-                .add_default(extension, content_type),
+                .add_override(part_name, content_type),
+            None => {
+                self.package
+                    .content_types
+                    .add_default(extension, content_type);
+                self.identifiers.register_content_type_default(extension);
+            }
+        }
+        if self.package.content_types.contains_override(part_name) {
+            self.identifiers.register_content_type_override(part_name);
         }
 
         part_name
             .strip_prefix("/word/")
-            .unwrap_or(&part_name)
+            .unwrap_or(part_name)
             .to_owned()
     }
 
@@ -3456,11 +6369,23 @@ impl Document {
     /// Public so callers can pre-embed an image and then pass the returned
     /// `rel_id` to [`crate::Cell::add_picture`] for inline cell images.
     pub fn embed_image(&mut self, image_data: &[u8], filename: &str) -> String {
-        self.invalidate_layout();
-        let rel_target = self.store_image_part(image_data, filename);
-        self.package
-            .get_or_create_part_rels(&self.doc_part_name)
-            .add(rel_types::IMAGE, &rel_target)
+        let mut candidate = self.clone_for_staging();
+        let (part_name, format) = candidate
+            .reserve_image_part(image_data, filename)
+            .expect("an in-memory package cannot exhaust every media part suffix");
+        let owner = candidate.doc_part_name.clone();
+        let relationship_id = candidate
+            .identifiers
+            .reserve_relationship_id_checked(&owner)
+            .expect("an in-memory package cannot exhaust every relationship identifier");
+        let rel_target = candidate.install_reserved_image_part(&part_name, image_data, format);
+        candidate
+            .package
+            .get_or_create_part_rels(&owner)
+            .add_with_id(&relationship_id, rel_types::IMAGE, &rel_target);
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        relationship_id
     }
 
     /// Whether the given numbering definition renders as bullets (true)
@@ -3548,21 +6473,28 @@ impl Document {
     /// the document is empty): adds the External relationship and wraps the
     /// new run in a hyperlink span.
     pub fn append_hyperlink(&mut self, text: &str, url: &str) {
-        let rel_id = self.add_hyperlink_relationship(url);
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        let owner = candidate.doc_part_name.clone();
+        let rel_id = candidate
+            .add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)
+            .expect("an in-memory document can install a hyperlink relationship");
 
         if !matches!(
-            self.document.body.content.last(),
+            candidate.document.body.content.last(),
             Some(BodyContent::Paragraph(_))
         ) {
-            self.document
+            candidate
+                .document
                 .body
                 .content
                 .push(BodyContent::Paragraph(CT_P::new()));
         }
-        let Some(BodyContent::Paragraph(p)) = self.document.body.content.last_mut() else {
+        let Some(BodyContent::Paragraph(p)) = candidate.document.body.content.last_mut() else {
             unreachable!();
         };
         crate::Paragraph { inner: p }.add_hyperlink(text, &rel_id);
+        self.commit_staged_mutation(candidate);
     }
 
     /// Add an external hyperlink relationship and return its relationship ID.
@@ -3571,10 +6503,14 @@ impl Document {
     /// paragraph is not the last body paragraph, such as a paragraph inside a
     /// table cell.
     pub fn add_hyperlink_relationship(&mut self, url: &str) -> String {
-        self.invalidate_layout();
-        self.package
-            .get_or_create_part_rels(&self.doc_part_name)
-            .add_external(rel_types::HYPERLINK, url)
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        let owner = candidate.doc_part_name.clone();
+        let id = candidate
+            .add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)
+            .expect("an in-memory document can install a hyperlink relationship");
+        self.commit_staged_mutation(candidate);
+        id
     }
 
     /// Get a builder for the last paragraph in the body, if any. Lets
@@ -3590,7 +6526,11 @@ impl Document {
     /// Fetch the raw bytes of an embedded image by its relationship ID.
     pub fn image_data(&self, rel_id: &str) -> Option<Vec<u8>> {
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
-        let rel = rels.items.iter().find(|r| r.id == rel_id)?;
+        let rel = rels.items.iter().find(|relationship| {
+            relationship.id == rel_id
+                && relationship.rel_type == rel_types::IMAGE
+                && relationship_is_internal(relationship)
+        })?;
         let target = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
         self.package.get_part(&target).map(|b| b.to_vec())
     }
@@ -3601,7 +6541,11 @@ impl Document {
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
         rels.items
             .iter()
-            .find(|r| r.id == rel_id && r.rel_type == rel_types::HYPERLINK)
+            .find(|relationship| {
+                relationship.id == rel_id
+                    && relationship.rel_type == rel_types::HYPERLINK
+                    && relationship.target_mode.as_deref() == Some("External")
+            })
             .map(|r| r.target.clone())
     }
 
@@ -3612,28 +6556,44 @@ impl Document {
     /// Creates a header part with the given text and references it from
     /// the section properties.
     pub fn set_header(&mut self, text: &str) {
-        self.invalidate_layout();
-        self.set_header_footer_part(text, true, HdrFtrType::Default);
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate
+            .set_header_footer_part(text, true, HdrFtrType::Default)
+            .expect("an in-memory document can install a header");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set the default footer text.
     pub fn set_footer(&mut self, text: &str) {
-        self.invalidate_layout();
-        self.set_header_footer_part(text, false, HdrFtrType::Default);
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate
+            .set_header_footer_part(text, false, HdrFtrType::Default)
+            .expect("an in-memory document can install a footer");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set the first-page header text.
     pub fn set_first_page_header(&mut self, text: &str) {
-        self.invalidate_layout();
-        self.set_different_first_page(true);
-        self.set_header_footer_part(text, true, HdrFtrType::First);
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate.set_different_first_page(true);
+        candidate
+            .set_header_footer_part(text, true, HdrFtrType::First)
+            .expect("an in-memory document can install a first-page header");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set the first-page footer text.
     pub fn set_first_page_footer(&mut self, text: &str) {
-        self.invalidate_layout();
-        self.set_different_first_page(true);
-        self.set_header_footer_part(text, false, HdrFtrType::First);
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate.set_different_first_page(true);
+        candidate
+            .set_header_footer_part(text, false, HdrFtrType::First)
+            .expect("an in-memory document can install a first-page footer");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Get the default header text, if set.
@@ -3666,28 +6626,37 @@ impl Document {
         width: Length,
         height: Length,
     ) {
-        self.invalidate_layout();
-        self.set_header_footer_image_part(
-            image_data,
-            image_filename,
-            width,
-            height,
-            true,
-            HdrFtrType::Default,
-        );
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate
+            .set_header_footer_image_part(
+                image_data,
+                image_filename,
+                width,
+                height,
+                true,
+                HdrFtrType::Default,
+            )
+            .expect("an in-memory document can install a header image");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set a Word-compatible text watermark in every active header variant.
     pub fn set_text_watermark(&mut self, text: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        candidate.apply_watermark(|_, _| VmlWatermark::Text {
-            text: text.to_owned(),
-            width_pt: 468.0,
-            height_pt: 117.0,
-            rotation_degrees: 315.0,
-            color: "D9D9D9".to_owned(),
-            font_family: Some("Calibri".to_owned()),
-            opacity: 0.5,
+        candidate.apply_watermark(|_, _, _| {
+            Ok((
+                VmlWatermark::Text {
+                    text: text.to_owned(),
+                    width_pt: 468.0,
+                    height_pt: 117.0,
+                    rotation_degrees: 315.0,
+                    color: "D9D9D9".to_owned(),
+                    font_family: Some("Calibri".to_owned()),
+                    opacity: 0.5,
+                },
+                None,
+            ))
         })?;
         self.commit_staged_mutation(candidate);
         Ok(())
@@ -3711,18 +6680,30 @@ impl Document {
         let image_target = candidate.store_image_part(image_data, image_filename);
         let image_part_name =
             OpcPackage::resolve_rel_target(&candidate.doc_part_name, &image_target);
-        candidate.apply_watermark(|package, part_name| {
+        candidate.apply_watermark(|package, identifiers, part_name| {
             let target = relative_target(part_name, &image_part_name);
-            let relationship_id = package
-                .get_or_create_part_rels(part_name)
-                .add(rel_types::IMAGE, &target);
-            VmlWatermark::Image {
-                relationship_id,
-                width_pt: width.to_pt(),
-                height_pt: height.to_pt(),
-                rotation_degrees: 0.0,
-                opacity: 0.5,
-            }
+            let relationship_id = identifiers
+                .reserve_relationship_id_checked(part_name)
+                .map_err(|error| {
+                    Error::Other(format!(
+                        "watermark relationship allocation failed for {part_name}: {error}"
+                    ))
+                })?;
+            package.get_or_create_part_rels(part_name).add_with_id(
+                &relationship_id,
+                rel_types::IMAGE,
+                &target,
+            );
+            Ok((
+                VmlWatermark::Image {
+                    relationship_id: relationship_id.clone(),
+                    width_pt: width.to_pt(),
+                    height_pt: height.to_pt(),
+                    rotation_degrees: 0.0,
+                    opacity: 0.5,
+                },
+                Some(relationship_id),
+            ))
         })?;
         self.commit_staged_mutation(candidate);
         Ok(())
@@ -3730,13 +6711,29 @@ impl Document {
 
     fn apply_watermark(
         &mut self,
-        mut watermark_for_part: impl FnMut(&mut OpcPackage, &str) -> VmlWatermark,
+        mut watermark_for_part: impl FnMut(
+            &mut OpcPackage,
+            &mut DocumentIdentifiers,
+            &str,
+        ) -> Result<(VmlWatermark, Option<String>)>,
     ) -> Result<()> {
         self.ensure_watermark_header_inheritance()?;
+        let relationships = self.package.get_part_rels(&self.doc_part_name);
         let header_ids = self
             .header_footer_rel_ids()
             .into_iter()
-            .filter_map(|(relationship_id, is_header)| is_header.then_some(relationship_id))
+            .filter_map(|(relationship_id, is_header)| {
+                (is_header
+                    && relationships.is_some_and(|relationships| {
+                        relationships
+                            .get_by_id(&relationship_id)
+                            .is_some_and(|relationship| {
+                                relationship.rel_type == rel_types::HEADER
+                                    && relationship_is_internal(relationship)
+                            })
+                    }))
+                .then_some(relationship_id)
+            })
             .collect::<Vec<_>>();
 
         for relationship_id in header_ids {
@@ -3744,6 +6741,7 @@ impl Document {
                 .package
                 .get_part_rels(&self.doc_part_name)
                 .and_then(|relationships| relationships.get_by_id(&relationship_id))
+                .filter(|relationship| relationship_is_internal(relationship))
                 .map(|relationship| relationship.target.clone())
                 .ok_or_else(|| {
                     Error::Other(format!(
@@ -3758,9 +6756,31 @@ impl Document {
                 .ok_or_else(|| {
                     Error::Other(format!("active header part {part_name} is missing"))
                 })?;
-            let watermark = watermark_for_part(&mut self.package, &part_name);
+            let fully_authored = self.identifiers.authored_story_parts.contains(&part_name);
+            let (watermark, authored_relationship) =
+                watermark_for_part(&mut self.package, &mut self.identifiers, &part_name)?;
             let updated = replace_authored_watermark(&xml, &watermark)?;
+            let referenced = xml_relationship_ids_in_order(&updated)?
+                .into_iter()
+                .collect::<HashSet<_>>();
+            self.prune_authored_story_relationships(&part_name, &referenced);
             self.package.set_part(&part_name, updated);
+            if !fully_authored {
+                let authored = self
+                    .identifiers
+                    .authored_story_relationship_ids
+                    .entry(relationship_owner_identity(&part_name))
+                    .or_default();
+                authored.retain(|id| referenced.contains(id));
+                if let Some(id) = authored_relationship {
+                    authored.insert(id);
+                }
+                if authored.is_empty() {
+                    self.identifiers
+                        .authored_story_relationship_ids
+                        .remove(&relationship_owner_identity(&part_name));
+                }
+            }
         }
         self.invalidate_layout();
         Ok(())
@@ -3769,12 +6789,29 @@ impl Document {
     fn ensure_watermark_header_inheritance(&mut self) -> Result<()> {
         self.section_properties_mut();
         let even_enabled = self.even_headers_enabled();
+        let internal_header_ids = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .map(|relationships| {
+                relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| {
+                        relationship.rel_type == rel_types::HEADER
+                            && relationship_is_internal(relationship)
+                    })
+                    .map(|relationship| relationship.id.clone())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
         let insertions = {
             let mut effective = [false; 3];
             let mut insertions = Vec::new();
             let mut inspect = |location: Option<usize>, section: &CT_SectPr| {
                 for reference in &section.header_refs {
-                    effective[header_type_index(reference.hdr_ftr_type)] = true;
+                    if internal_header_ids.contains(&reference.rel_id) {
+                        effective[header_type_index(reference.hdr_ftr_type)] = true;
+                    }
                 }
                 for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
                     let active = match hdr_type {
@@ -3839,30 +6876,42 @@ impl Document {
     }
 
     fn create_watermark_header_relationship(&mut self, hdr_type: HdrFtrType) -> Result<String> {
-        let label = match hdr_type {
-            HdrFtrType::Default => "Default",
-            HdrFtrType::First => "First",
-            HdrFtrType::Even => "Even",
-        };
-        let mut index = 1usize;
-        let part_name = loop {
-            let candidate = format!("/word/headerWatermark{label}{index}.xml");
-            if self.package.get_part(&candidate).is_none() {
-                break candidate;
-            }
-            index += 1;
-        };
+        let part_name = self.identifiers.reserve_part_name(
+            "/word",
+            &format!(
+                "headerWatermark{}",
+                match hdr_type {
+                    HdrFtrType::Default => "Default",
+                    HdrFtrType::First => "First",
+                    HdrFtrType::Even => "Even",
+                }
+            ),
+            "xml",
+        )?;
         let empty_header = CT_HdrFtr::new().to_xml_header()?;
         self.package.set_part(&part_name, empty_header);
         self.package.content_types.add_override(
             &part_name,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
         );
+        self.identifiers.register_content_type_override(&part_name);
+        self.identifiers
+            .authored_story_parts
+            .insert(part_name.clone());
         let target = relative_target(&self.doc_part_name, &part_name);
-        Ok(self
-            .package
-            .get_or_create_part_rels(&self.doc_part_name)
-            .add(rel_types::HEADER, &target))
+        let owner = self.doc_part_name.clone();
+        let id = self
+            .identifiers
+            .reserve_relationship_id_checked(&owner)
+            .map_err(|error| {
+                Error::Other(format!(
+                    "watermark header relationship allocation failed: {error}"
+                ))
+            })?;
+        self.package
+            .get_or_create_part_rels(&owner)
+            .add_with_id(&id, rel_types::HEADER, &target);
+        Ok(id)
     }
 
     /// Set the default footer to an inline image.
@@ -3873,15 +6922,19 @@ impl Document {
         width: Length,
         height: Length,
     ) {
-        self.invalidate_layout();
-        self.set_header_footer_image_part(
-            image_data,
-            image_filename,
-            width,
-            height,
-            false,
-            HdrFtrType::Default,
-        );
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate
+            .set_header_footer_image_part(
+                image_data,
+                image_filename,
+                width,
+                height,
+                false,
+                HdrFtrType::Default,
+            )
+            .expect("an in-memory document can install a footer image");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set a header from raw XML bytes with associated images.
@@ -3900,8 +6953,12 @@ impl Document {
         images: &[(&str, &[u8], &str)],
         hdr_type: HdrFtrType,
     ) {
-        self.invalidate_layout();
-        self.set_raw_hdr_ftr_with_images(header_xml, images, true, hdr_type);
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate
+            .set_raw_hdr_ftr_with_images(header_xml, images, true, hdr_type)
+            .expect("raw header package preflight failed");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set a footer from raw XML bytes with associated images.
@@ -3911,8 +6968,12 @@ impl Document {
         images: &[(&str, &[u8], &str)],
         hdr_type: HdrFtrType,
     ) {
-        self.invalidate_layout();
-        self.set_raw_hdr_ftr_with_images(footer_xml, images, false, hdr_type);
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate
+            .set_raw_hdr_ftr_with_images(footer_xml, images, false, hdr_type)
+            .expect("raw footer package preflight failed");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set the default header to an inline image with a colored background.
@@ -3928,16 +6989,20 @@ impl Document {
         height: Length,
         bg_color: &str,
     ) {
-        self.invalidate_layout();
-        self.set_header_footer_image_bg_part(
-            image_data,
-            image_filename,
-            width,
-            height,
-            Some(bg_color),
-            true,
-            HdrFtrType::Default,
-        );
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate
+            .set_header_footer_image_bg_part(
+                image_data,
+                image_filename,
+                width,
+                height,
+                Some(bg_color),
+                true,
+                HdrFtrType::Default,
+            )
+            .expect("an in-memory document can install a header background image");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Set the first-page header to an inline image.
@@ -3948,16 +7013,20 @@ impl Document {
         width: Length,
         height: Length,
     ) {
-        self.invalidate_layout();
-        self.set_different_first_page(true);
-        self.set_header_footer_image_part(
-            image_data,
-            image_filename,
-            width,
-            height,
-            true,
-            HdrFtrType::First,
-        );
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
+        candidate.set_different_first_page(true);
+        candidate
+            .set_header_footer_image_part(
+                image_data,
+                image_filename,
+                width,
+                height,
+                true,
+                HdrFtrType::First,
+            )
+            .expect("an in-memory document can install a first-page header image");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Where a header/footer of this kind lives, and how to declare it.
@@ -3969,7 +7038,7 @@ impl Document {
     /// Note the fixed `1` in the part name: rdocx manages one header and one
     /// footer per [`HdrFtrType`] for the document's single section. Setting a
     /// header of the same type again replaces the existing part.
-    fn hdr_ftr_slots(
+    fn hdr_ftr_slot_metadata(
         is_header: bool,
         hdr_type: HdrFtrType,
     ) -> (String, &'static str, &'static str) {
@@ -3997,31 +7066,97 @@ impl Document {
     /// relate it to the document, and point the section properties at it.
     ///
     /// Any previous reference of the same [`HdrFtrType`] is replaced.
+    fn reserve_hdr_ftr_part_name(
+        &mut self,
+        is_header: bool,
+        hdr_type: HdrFtrType,
+    ) -> Result<String> {
+        self.identifiers.observe_package_graph(&self.package)?;
+        let (preferred, expected_rel_type, _) = Self::hdr_ftr_slot_metadata(is_header, hdr_type);
+        let reference = self.document.body.sect_pr.as_ref().and_then(|section| {
+            let references = if is_header {
+                &section.header_refs
+            } else {
+                &section.footer_refs
+            };
+            references
+                .iter()
+                .find(|reference| reference.hdr_ftr_type == hdr_type)
+        });
+        if let Some(part_name) = reference
+            .and_then(|reference| {
+                self.package
+                    .get_part_rels(&self.doc_part_name)
+                    .and_then(|relationships| relationships.get_by_id(&reference.rel_id))
+            })
+            .filter(|relationship| {
+                relationship.rel_type == expected_rel_type && relationship_is_internal(relationship)
+            })
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+            })
+        {
+            return Ok(part_name);
+        }
+        self.identifiers.reserve_preferred_part_name(&preferred)
+    }
+
     fn install_hdr_ftr_part(
         &mut self,
+        part_name: String,
         xml: Vec<u8>,
         is_header: bool,
         hdr_type: HdrFtrType,
-    ) -> String {
-        let (part_name, rel_type, content_type) = Self::hdr_ftr_slots(is_header, hdr_type);
-
-        self.package.set_part(&part_name, xml);
-        self.package
-            .content_types
-            .add_override(&part_name, content_type);
+    ) -> Result<String> {
+        let (_, rel_type, content_type) = Self::hdr_ftr_slot_metadata(is_header, hdr_type);
 
         // Setting the same header twice must not leave the first relationship
         // behind pointing at the same part.
         let rel_target = relative_target(&self.doc_part_name, &part_name);
-        let rels = self.package.get_or_create_part_rels(&self.doc_part_name);
-        let rel_id = match rels
-            .items
-            .iter()
-            .find(|r| r.rel_type == rel_type && r.target == rel_target)
-        {
-            Some(existing) => existing.id.clone(),
-            None => rels.add(rel_type, &rel_target),
+        let existing = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .and_then(|rels| {
+                rels.items
+                    .iter()
+                    .find(|relationship| {
+                        relationship.rel_type == rel_type
+                            && relationship_is_internal(relationship)
+                            && OpcPackage::resolve_rel_target(
+                                &self.doc_part_name,
+                                &relationship.target,
+                            ) == part_name
+                    })
+                    .map(|relationship| relationship.id.clone())
+            });
+        let pending_relationship = match existing {
+            Some(existing) => (existing, false),
+            None => (
+                self.identifiers
+                    .reserve_relationship_id_checked(&self.doc_part_name)
+                    .map_err(|error| {
+                        Error::Other(format!(
+                            "header or footer relationship allocation failed: {error}"
+                        ))
+                    })?,
+                true,
+            ),
         };
+
+        self.package.set_part(&part_name, xml);
+        self.identifiers
+            .authored_story_parts
+            .insert(part_name.clone());
+        self.package
+            .content_types
+            .add_override(&part_name, content_type);
+        self.identifiers.register_content_type_override(&part_name);
+        let (rel_id, install_relationship) = pending_relationship;
+        if install_relationship {
+            self.package
+                .get_or_create_part_rels(&self.doc_part_name)
+                .add_with_id(&rel_id, rel_type, &rel_target);
+        }
 
         let sect = self.section_properties_mut();
         let refs = if is_header {
@@ -4035,7 +7170,86 @@ impl Document {
             rel_id,
         });
 
-        part_name
+        Ok(part_name)
+    }
+
+    fn clear_authored_story_relationships(&mut self, part_name: &str) {
+        self.prune_authored_story_relationships(part_name, &HashSet::new());
+    }
+
+    fn prune_authored_story_relationships(
+        &mut self,
+        part_name: &str,
+        referenced: &HashSet<String>,
+    ) {
+        let preserved = self
+            .identifiers
+            .preserved_relationship_ids
+            .get(&relationship_owner_identity(part_name))
+            .cloned()
+            .unwrap_or_default();
+        let Some(relationships) = self.package.get_part_rels_mut(part_name) else {
+            return;
+        };
+        let mut removed = Vec::new();
+        relationships.items.retain(|relationship| {
+            if preserved.contains(&relationship.id) || referenced.contains(&relationship.id) {
+                true
+            } else {
+                removed.push(relationship.clone());
+                false
+            }
+        });
+        let relationships_are_empty = relationships.items.is_empty();
+        if relationships_are_empty {
+            self.package.remove_part_rels(part_name);
+        }
+        self.identifiers.retire_authored_story_relationships(
+            part_name,
+            removed.iter().map(|relationship| relationship.id.clone()),
+        );
+        let mut image_parts = removed
+            .iter()
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::IMAGE && relationship_is_internal(relationship)
+            })
+            .map(|relationship| OpcPackage::resolve_rel_target(part_name, &relationship.target))
+            .collect::<HashSet<_>>();
+        image_parts.retain(|candidate| {
+            !self.package.part_rels.iter().any(|(owner, relationships)| {
+                relationships.items.iter().any(|relationship| {
+                    relationship_is_internal(relationship)
+                        && OpcPackage::resolve_rel_target(owner, &relationship.target) == *candidate
+                })
+            })
+        });
+        for image_part in image_parts {
+            if self.identifiers.part_is_preserved(&image_part) {
+                continue;
+            }
+            self.package.remove_part(&image_part);
+            self.package.remove_part_rels(&image_part);
+            self.package.content_types.remove_override(&image_part);
+            self.identifiers.retire_authored_part(&image_part);
+            let Some((_, extension)) = image_part.rsplit_once('.') else {
+                continue;
+            };
+            let default_is_used = self.package.parts.keys().any(|part_name| {
+                !self.package.content_types.contains_override(part_name)
+                    && part_name
+                        .rsplit_once('.')
+                        .is_some_and(|(_, candidate)| candidate == extension)
+            });
+            if !default_is_used
+                && self
+                    .identifiers
+                    .authored_content_type_defaults
+                    .remove(extension)
+            {
+                self.package.content_types.remove_default(extension);
+                self.identifiers.content_type_defaults.remove(extension);
+            }
+        }
     }
 
     /// Serialize a header/footer body, choosing the right root element.
@@ -4048,7 +7262,12 @@ impl Document {
         Ok(xml?)
     }
 
-    fn set_header_footer_part(&mut self, text: &str, is_header: bool, hdr_type: HdrFtrType) {
+    fn set_header_footer_part(
+        &mut self,
+        text: &str,
+        is_header: bool,
+        hdr_type: HdrFtrType,
+    ) -> Result<()> {
         let mut hdr_ftr = CT_HdrFtr::new();
         let mut p = CT_P::new();
         if !text.is_empty() {
@@ -4056,10 +7275,11 @@ impl Document {
         }
         hdr_ftr.paragraphs.push(p);
 
-        let Ok(xml) = Self::serialize_hdr_ftr(&hdr_ftr, is_header) else {
-            return;
-        };
-        self.install_hdr_ftr_part(xml, is_header, hdr_type);
+        let xml = Self::serialize_hdr_ftr(&hdr_ftr, is_header)?;
+        let part_name = self.reserve_hdr_ftr_part_name(is_header, hdr_type)?;
+        self.clear_authored_story_relationships(&part_name);
+        self.install_hdr_ftr_part(part_name, xml, is_header, hdr_type)?;
+        Ok(())
     }
 
     fn set_raw_hdr_ftr_with_images(
@@ -4068,17 +7288,44 @@ impl Document {
         images: &[(&str, &[u8], &str)],
         is_header: bool,
         hdr_type: HdrFtrType,
-    ) {
-        let part_name = self.install_hdr_ftr_part(xml, is_header, hdr_type);
+    ) -> Result<()> {
+        let part_name = self.reserve_hdr_ftr_part_name(is_header, hdr_type)?;
+        let mut requested = HashSet::new();
+        for &(rel_id, _, _) in images {
+            if !requested.insert(rel_id) {
+                return Err(Error::Other(format!(
+                    "duplicate supplied header or footer relationship id {rel_id}"
+                )));
+            }
+        }
+        self.clear_authored_story_relationships(&part_name);
+        let mut relationship_remap = HashMap::new();
+        for &(rel_id, _, _) in images {
+            let allocated = self
+                .identifiers
+                .reserve_requested_relationship_id_checked(&part_name, rel_id)
+                .map_err(|error| {
+                    Error::Other(format!(
+                        "header or footer image relationship allocation failed: {error}"
+                    ))
+                })?;
+            if allocated != rel_id {
+                relationship_remap.insert(rel_id.to_owned(), allocated);
+            }
+        }
+        let xml = remap_xml_relationship_ids(&xml, &relationship_remap)?;
+        let part_name = self.install_hdr_ftr_part(part_name, xml, is_header, hdr_type)?;
 
-        // The supplied markup already references these images by ID, so each
-        // relationship has to be created with that exact ID.
         for &(rel_id, image_data, image_filename) in images {
             let img_rel_target = self.store_image_part(image_data, image_filename);
+            let allocated = relationship_remap
+                .get(rel_id)
+                .map_or(rel_id, String::as_str);
             self.package
                 .get_or_create_part_rels(&part_name)
-                .add_with_id(rel_id, rel_types::IMAGE, &img_rel_target);
+                .add_with_id(allocated, rel_types::IMAGE, &img_rel_target);
         }
+        Ok(())
     }
 
     fn set_header_footer_image_part(
@@ -4089,7 +7336,7 @@ impl Document {
         height: Length,
         is_header: bool,
         hdr_type: HdrFtrType,
-    ) {
+    ) -> Result<()> {
         self.set_header_footer_image_bg_part(
             image_data,
             image_filename,
@@ -4098,7 +7345,7 @@ impl Document {
             None,
             is_header,
             hdr_type,
-        );
+        )
     }
 
     fn set_header_footer_image_bg_part(
@@ -4110,20 +7357,25 @@ impl Document {
         bg_color: Option<&str>,
         is_header: bool,
         hdr_type: HdrFtrType,
-    ) {
+    ) -> Result<()> {
         use rdocx_oxml::properties::CT_Shd;
 
-        let (part_name, _, _) = Self::hdr_ftr_slots(is_header, hdr_type);
+        let part_name = self.reserve_hdr_ftr_part_name(is_header, hdr_type)?;
+        self.clear_authored_story_relationships(&part_name);
 
         // The image relationship belongs to the header/footer part, not the
         // document, because that is where the drawing referencing it lives.
         let img_rel_target = self.store_image_part(image_data, image_filename);
         let img_rel_id = self
-            .package
-            .get_or_create_part_rels(&part_name)
-            .add(rel_types::IMAGE, &img_rel_target);
+            .add_internal_relationship_checked(&part_name, rel_types::IMAGE, &img_rel_target)
+            .map_err(|error| {
+                Error::Other(format!(
+                    "header or footer image relationship allocation failed: {error}"
+                ))
+            })?;
 
-        let inline = CT_Inline::new(&img_rel_id, width.to_emu(), height.to_emu());
+        let mut inline = CT_Inline::new(&img_rel_id, width.to_emu(), height.to_emu());
+        inline.doc_pr_id = self.identifiers.reserve_drawing_id()?;
         let run = CT_R {
             alt_drawings: Vec::new(),
             properties: None,
@@ -4148,10 +7400,9 @@ impl Document {
         let mut hdr_ftr = CT_HdrFtr::new();
         hdr_ftr.paragraphs.push(p);
 
-        let Ok(xml) = Self::serialize_hdr_ftr(&hdr_ftr, is_header) else {
-            return;
-        };
-        self.install_hdr_ftr_part(xml, is_header, hdr_type);
+        let xml = Self::serialize_hdr_ftr(&hdr_ftr, is_header)?;
+        self.install_hdr_ftr_part(part_name, xml, is_header, hdr_type)?;
+        Ok(())
     }
 
     fn get_header_footer_text(&self, is_header: bool, hdr_type: HdrFtrType) -> Option<String> {
@@ -4161,11 +7412,20 @@ impl Document {
         } else {
             &sect.footer_refs
         };
-        let hdr_ref = refs.iter().find(|r| r.hdr_ftr_type == hdr_type)?;
-
-        // Resolve the part
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
-        let rel = rels.get_by_id(&hdr_ref.rel_id)?;
+        let expected_type = if is_header {
+            rel_types::HEADER
+        } else {
+            rel_types::FOOTER
+        };
+        let rel = refs
+            .iter()
+            .filter(|reference| reference.hdr_ftr_type == hdr_type)
+            .find_map(|reference| {
+                rels.get_by_id(&reference.rel_id).filter(|relationship| {
+                    relationship.rel_type == expected_type && relationship_is_internal(relationship)
+                })
+            })?;
         let part_name = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
         let xml = self.package.get_part(&part_name)?;
         let hdr_ftr = CT_HdrFtr::from_xml(xml).ok()?;
@@ -4183,17 +7443,100 @@ impl Document {
         self.numbering.get_or_insert_with(CT_Numbering::new)
     }
 
+    fn reserve_numbering_bundle(&mut self) -> Result<()> {
+        self.identifiers.observe_package_graph(&self.package)?;
+        let part_name = match self.numbering_part_name.as_deref() {
+            Some(part_name) => part_name.to_owned(),
+            None => self
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_NUMBERING_PART)?,
+        };
+        let already_linked =
+            self.package
+                .get_part_rels(&self.doc_part_name)
+                .is_some_and(|relationships| {
+                    relationships.items.iter().any(|relationship| {
+                        relationship.rel_type == rel_types::NUMBERING
+                            && relationship_is_internal(relationship)
+                            && OpcPackage::resolve_rel_target(
+                                &self.doc_part_name,
+                                &relationship.target,
+                            ) == part_name
+                    })
+                });
+        let pending_id = if already_linked {
+            None
+        } else {
+            Some(
+                self.identifiers
+                    .reserve_bundle_relationship_id_checked(
+                        &self.doc_part_name,
+                        rel_types::NUMBERING,
+                    )
+                    .map_err(|error| {
+                        Error::Other(format!("numbering relationship allocation failed: {error}"))
+                    })?,
+            )
+        };
+        self.package
+            .content_types
+            .add_override(&part_name, NUMBERING_CONTENT_TYPE);
+        self.identifiers.register_content_type_override(&part_name);
+        if let Some(id) = pending_id {
+            let target = relative_target(&self.doc_part_name, &part_name);
+            self.package
+                .get_or_create_part_rels(&self.doc_part_name)
+                .add_with_id(&id, rel_types::NUMBERING, &target);
+        }
+        self.numbering_part_name = Some(part_name);
+        Ok(())
+    }
+
+    fn reserve_styles_bundle(&mut self) -> Result<()> {
+        let existing = self.styles_part_name.clone();
+        let part_name = self
+            .reserve_document_part_bundle(
+                existing.as_deref(),
+                DEFAULT_STYLES_PART,
+                rel_types::STYLES,
+                STYLES_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("styles relationship allocation failed: {error}"))
+            })?;
+        self.styles_part_name = Some(part_name);
+        Ok(())
+    }
+
+    fn reserve_footnotes_bundle(&mut self) -> Result<()> {
+        let existing = self.footnotes_part_name.clone();
+        let part_name = self
+            .reserve_document_part_bundle(
+                existing.as_deref(),
+                "/word/footnotes.xml",
+                rel_types::FOOTNOTES,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+            )
+            .map_err(|error| {
+                Error::Other(format!("footnotes relationship allocation failed: {error}"))
+            })?;
+        self.footnotes_part_name = Some(part_name);
+        Ok(())
+    }
+
     /// Add a bullet list item at the given indentation level (0-based).
     ///
     /// If no bullet list definition exists yet, one is created automatically.
     /// Returns a mutable `Paragraph` for further configuration.
     pub fn add_bullet_list_item(&mut self, text: &str, level: u32) -> Paragraph<'_> {
-        self.invalidate_layout();
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_numbering_bundle()
+            .expect("an in-memory document can allocate a numbering part");
+        candidate.invalidate_layout();
         // Find or create a bullet list numId
-        let num_id = {
-            let numbering = self.ensure_numbering();
-            // Look for an existing bullet list
-            let existing = numbering.nums.iter().find(|n| {
+        let existing = candidate.numbering.as_ref().and_then(|numbering| {
+            numbering.nums.iter().find(|n| {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
@@ -4201,12 +7544,20 @@ impl Document {
                             == Some(&rdocx_oxml::numbering::ST_NumberFormat::Bullet)
                     })
                     .unwrap_or(false)
-            });
-            if let Some(existing) = existing {
-                existing.num_id
-            } else {
-                numbering.add_bullet_list()
-            }
+            })
+        });
+        let num_id = if let Some(existing) = existing {
+            existing.num_id
+        } else {
+            let (abstract_id, num_id) = candidate
+                .identifiers
+                .reserve_numbering_ids()
+                .expect("an in-memory document cannot exhaust numbering identifiers");
+            candidate.ensure_numbering().add_list_with_ids(
+                &[(rdocx_oxml::numbering::ST_NumberFormat::Bullet, Some(1))],
+                abstract_id,
+                num_id,
+            )
         };
 
         let mut p = CT_P::new();
@@ -4220,7 +7571,12 @@ impl Document {
         };
         p.properties = Some(ppr);
 
-        self.document.body.content.push(BodyContent::Paragraph(p));
+        candidate
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(p));
+        self.commit_staged_mutation(candidate);
         match self.document.body.content.last_mut().unwrap() {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
@@ -4232,12 +7588,14 @@ impl Document {
     /// If no numbered list definition exists yet, one is created automatically.
     /// Returns a mutable `Paragraph` for further configuration.
     pub fn add_numbered_list_item(&mut self, text: &str, level: u32) -> Paragraph<'_> {
-        self.invalidate_layout();
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_numbering_bundle()
+            .expect("an in-memory document can allocate a numbering part");
+        candidate.invalidate_layout();
         // Find or create a numbered list numId
-        let num_id = {
-            let numbering = self.ensure_numbering();
-            // Look for an existing numbered list
-            let existing = numbering.nums.iter().find(|n| {
+        let existing = candidate.numbering.as_ref().and_then(|numbering| {
+            numbering.nums.iter().find(|n| {
                 numbering
                     .get_abstract_num_for(n.num_id)
                     .map(|a| {
@@ -4245,12 +7603,20 @@ impl Document {
                             == Some(&rdocx_oxml::numbering::ST_NumberFormat::Decimal)
                     })
                     .unwrap_or(false)
-            });
-            if let Some(existing) = existing {
-                existing.num_id
-            } else {
-                numbering.add_numbered_list()
-            }
+            })
+        });
+        let num_id = if let Some(existing) = existing {
+            existing.num_id
+        } else {
+            let (abstract_id, num_id) = candidate
+                .identifiers
+                .reserve_numbering_ids()
+                .expect("an in-memory document cannot exhaust numbering identifiers");
+            candidate.ensure_numbering().add_list_with_ids(
+                &[(rdocx_oxml::numbering::ST_NumberFormat::Decimal, Some(1))],
+                abstract_id,
+                num_id,
+            )
         };
 
         let mut p = CT_P::new();
@@ -4264,7 +7630,12 @@ impl Document {
         };
         p.properties = Some(ppr);
 
-        self.document.body.content.push(BodyContent::Paragraph(p));
+        candidate
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(p));
+        self.commit_staged_mutation(candidate);
         match self.document.body.content.last_mut().unwrap() {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
@@ -4298,13 +7669,25 @@ impl Document {
     /// doc.add_paragraph("third decimal").set_numbering(num_id, 1);
     /// ```
     pub fn add_list_definition(&mut self, levels: &[ListLevel]) -> u32 {
-        self.invalidate_layout();
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_numbering_bundle()
+            .expect("an in-memory document can allocate a numbering part");
+        candidate.invalidate_layout();
         let levels: Vec<(ST_NumberFormat, Option<u32>)> = levels
             .iter()
             .take(9)
             .map(|level| (level.format.to_st(), level.start))
             .collect();
-        self.ensure_numbering().add_list(&levels)
+        let (abstract_id, num_id) = candidate
+            .identifiers
+            .reserve_numbering_ids()
+            .expect("an in-memory document cannot exhaust numbering identifiers");
+        let num_id = candidate
+            .ensure_numbering()
+            .add_list_with_ids(&levels, abstract_id, num_id);
+        self.commit_staged_mutation(candidate);
+        num_id
     }
 
     /// Redefine one level (0–8) of an existing list definition, for callers
@@ -4312,11 +7695,16 @@ impl Document {
     ///
     /// Returns `false` when `num_id` is unknown or `level` is out of range.
     pub fn set_list_level(&mut self, num_id: u32, level: u32, spec: ListLevel) -> bool {
-        let updated = self.numbering.as_mut().is_some_and(|numbering| {
+        let mut candidate = self.clone_for_staging();
+        let updated = candidate.numbering.as_mut().is_some_and(|numbering| {
             numbering.set_list_level(num_id, level, spec.format.to_st(), spec.start)
         });
         if updated {
-            self.invalidate_layout();
+            candidate
+                .reserve_numbering_bundle()
+                .expect("an in-memory document can allocate a numbering part");
+            candidate.invalidate_layout();
+            self.commit_staged_mutation(candidate);
         }
         updated
     }
@@ -4341,8 +7729,13 @@ impl Document {
 
     /// Add a custom style to the document.
     pub fn add_style(&mut self, builder: StyleBuilder) {
-        self.invalidate_layout();
-        self.styles.styles.push(builder.build());
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_styles_bundle()
+            .expect("an in-memory document can allocate a styles part");
+        candidate.invalidate_layout();
+        candidate.styles.styles.push(builder.build());
+        self.commit_staged_mutation(candidate);
     }
 
     /// Resolve the effective paragraph properties for a given style ID,
@@ -4561,16 +7954,32 @@ impl Document {
 
     /// Enable or disable automatic document hyphenation.
     pub fn set_auto_hyphenation(&mut self, enabled: bool) -> Result<()> {
-        let part_name = match &self.settings_part_name {
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .identifiers
+            .observe_package_graph(&candidate.package)?;
+        let part_name = match &candidate.settings_part_name {
             Some(part_name) => part_name.clone(),
-            None => available_settings_part_name(&self.package)?,
+            None => candidate
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_SETTINGS_PART)?,
         };
-        self.settings
+        candidate
+            .settings
             .get_or_insert_with(CT_Settings::new)
             .set_automatic_hyphenation(enabled)?;
-        self.invalidate_layout();
-        self.settings_part_name = Some(part_name.clone());
-        self.ensure_part_relationship(&part_name, rel_types::SETTINGS, SETTINGS_CONTENT_TYPE);
+        candidate.invalidate_layout();
+        candidate.settings_part_name = Some(part_name.clone());
+        candidate
+            .ensure_part_relationship_checked(
+                &part_name,
+                rel_types::SETTINGS,
+                SETTINGS_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("settings relationship allocation failed: {error}"))
+            })?;
+        self.commit_staged_mutation(candidate);
         Ok(())
     }
 
@@ -4581,16 +7990,32 @@ impl Document {
 
     /// Set document-wide OfficeMath defaults in the relationship-resolved settings part.
     pub fn set_math_properties(&mut self, properties: MathProperties) -> Result<()> {
-        let part_name = match &self.settings_part_name {
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .identifiers
+            .observe_package_graph(&candidate.package)?;
+        let part_name = match &candidate.settings_part_name {
             Some(part_name) => part_name.clone(),
-            None => available_settings_part_name(&self.package)?,
+            None => candidate
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_SETTINGS_PART)?,
         };
-        self.settings
+        candidate
+            .settings
             .get_or_insert_with(CT_Settings::new)
             .set_math_properties(properties)?;
-        self.invalidate_layout();
-        self.settings_part_name = Some(part_name.clone());
-        self.ensure_part_relationship(&part_name, rel_types::SETTINGS, SETTINGS_CONTENT_TYPE);
+        candidate.invalidate_layout();
+        candidate.settings_part_name = Some(part_name.clone());
+        candidate
+            .ensure_part_relationship_checked(
+                &part_name,
+                rel_types::SETTINGS,
+                SETTINGS_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!("settings relationship allocation failed: {error}"))
+            })?;
+        self.commit_staged_mutation(candidate);
         Ok(())
     }
 
@@ -4603,8 +8028,13 @@ impl Document {
 
     /// Set the document title.
     pub fn set_title(&mut self, title: &str) {
-        self.invalidate_layout();
-        self.ensure_core_properties().title = Some(title.to_string());
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_core_properties_bundle()
+            .expect("an in-memory document can allocate a core-properties part");
+        candidate.invalidate_layout();
+        candidate.ensure_core_properties().title = Some(title.to_string());
+        self.commit_staged_mutation(candidate);
     }
 
     /// Get the document author/creator.
@@ -4614,8 +8044,13 @@ impl Document {
 
     /// Set the document author/creator.
     pub fn set_author(&mut self, author: &str) {
-        self.invalidate_layout();
-        self.ensure_core_properties().creator = Some(author.to_string());
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_core_properties_bundle()
+            .expect("an in-memory document can allocate a core-properties part");
+        candidate.invalidate_layout();
+        candidate.ensure_core_properties().creator = Some(author.to_string());
+        self.commit_staged_mutation(candidate);
     }
 
     /// Get the document subject.
@@ -4625,8 +8060,13 @@ impl Document {
 
     /// Set the document subject.
     pub fn set_subject(&mut self, subject: &str) {
-        self.invalidate_layout();
-        self.ensure_core_properties().subject = Some(subject.to_string());
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_core_properties_bundle()
+            .expect("an in-memory document can allocate a core-properties part");
+        candidate.invalidate_layout();
+        candidate.ensure_core_properties().subject = Some(subject.to_string());
+        self.commit_staged_mutation(candidate);
     }
 
     /// Get the document keywords.
@@ -4636,8 +8076,13 @@ impl Document {
 
     /// Set the document keywords.
     pub fn set_keywords(&mut self, keywords: &str) {
-        self.invalidate_layout();
-        self.ensure_core_properties().keywords = Some(keywords.to_string());
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_core_properties_bundle()
+            .expect("an in-memory document can allocate a core-properties part");
+        candidate.invalidate_layout();
+        candidate.ensure_core_properties().keywords = Some(keywords.to_string());
+        self.commit_staged_mutation(candidate);
     }
 
     fn ensure_core_properties(&mut self) -> &mut CoreProperties {
@@ -4652,20 +8097,17 @@ impl Document {
     /// Copies all body content (paragraphs and tables) from the other document.
     /// Handles style deduplication and numbering remapping.
     pub fn append(&mut self, other: &Document) {
-        self.invalidate_layout();
-        self.merge_styles(other);
-
-        let start_idx = self.document.body.content.len();
-        for content in &other.document.body.content {
-            self.document.body.content.push(content.clone());
-        }
-
-        self.remap_merged_numbering(other, start_idx);
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .append_document_content(other)
+            .expect("document append preflight failed");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Append the content of another document with a section break.
     pub fn append_with_break(&mut self, other: &Document, break_type: crate::SectionBreak) {
-        self.invalidate_layout();
+        let mut candidate = self.clone_for_staging();
+        candidate.invalidate_layout();
         // Insert a section break paragraph before the merged content
         let mut p = CT_P::new();
         let sect_pr = match break_type {
@@ -4690,27 +8132,105 @@ impl Document {
             sect_pr: Some(sect_pr),
             ..Default::default()
         });
-        self.document.body.content.push(BodyContent::Paragraph(p));
-
-        self.append(other);
+        candidate
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(p));
+        candidate
+            .append_document_content(other)
+            .expect("document append-with-break preflight failed");
+        self.commit_staged_mutation(candidate);
     }
 
     /// Insert the content of another document at a specified body index.
     ///
     /// An `index` past the end is clamped to the end rather than panicking.
     pub fn insert_document(&mut self, index: usize, other: &Document) {
-        self.invalidate_layout();
-        self.merge_styles(other);
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .reserve_merge_bundles(other)
+            .expect("document insertion preflight failed");
+        candidate.invalidate_layout();
+        candidate.merge_styles(other);
 
-        let insert_at = index.min(self.document.body.content.len());
+        let insert_at = index.min(candidate.document.body.content.len());
         for (i, content) in other.document.body.content.iter().enumerate() {
-            self.document
+            candidate
+                .document
                 .body
                 .content
                 .insert(insert_at + i, content.clone());
         }
 
-        self.remap_merged_numbering(other, insert_at);
+        candidate
+            .remap_merged_numbering(other, insert_at)
+            .expect("document insertion numbering remap failed");
+        self.commit_staged_mutation(candidate);
+    }
+
+    fn append_document_content(&mut self, other: &Document) -> Result<()> {
+        self.reserve_merge_bundles(other)?;
+        self.invalidate_layout();
+        self.merge_styles(other);
+        let start_idx = self.document.body.content.len();
+        self.document
+            .body
+            .content
+            .extend(other.document.body.content.iter().cloned());
+        self.remap_merged_numbering(other, start_idx)
+    }
+
+    fn reserve_merge_bundles(&mut self, other: &Document) -> Result<()> {
+        let needs_styles = other
+            .styles
+            .styles
+            .iter()
+            .any(|style| self.styles.get_by_id(&style.style_id).is_none());
+        let needs_numbering = other.numbering.is_some();
+        let additional_relationships = usize::from(
+            needs_styles
+                && self.document_bundle_relationship_is_missing(
+                    self.styles_part_name.as_deref(),
+                    rel_types::STYLES,
+                ),
+        ) + usize::from(
+            needs_numbering
+                && self.document_bundle_relationship_is_missing(
+                    self.numbering_part_name.as_deref(),
+                    rel_types::NUMBERING,
+                ),
+        );
+        self.identifiers
+            .ensure_relationship_capacity(&self.doc_part_name, additional_relationships)?;
+        if needs_styles {
+            self.reserve_styles_bundle()?;
+        }
+        if needs_numbering {
+            self.reserve_numbering_bundle()?;
+        }
+        Ok(())
+    }
+
+    fn document_bundle_relationship_is_missing(
+        &self,
+        part_name: Option<&str>,
+        rel_type: &str,
+    ) -> bool {
+        let Some(part_name) = part_name else {
+            return true;
+        };
+        !self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .is_some_and(|relationships| {
+                relationships.items.iter().any(|relationship| {
+                    relationship.rel_type == rel_type
+                        && relationship_is_internal(relationship)
+                        && OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+                            == part_name
+                })
+            })
     }
 
     /// Merge styles from another document, avoiding duplicates.
@@ -4724,10 +8244,27 @@ impl Document {
 
     /// Merge numbering from another document and remap IDs in the merged content.
     /// `start_idx` is the index where the other document's content starts in self.
-    fn remap_merged_numbering(&mut self, other: &Document, start_idx: usize) {
+    fn remap_merged_numbering(&mut self, other: &Document, start_idx: usize) -> Result<()> {
         let Some(other_numbering) = &other.numbering else {
-            return;
+            return Ok(());
         };
+        let mut abstract_remap = HashMap::new();
+        for abs_num in &other_numbering.abstract_nums {
+            let new_id = self.identifiers.reserve_abstract_numbering_id()?;
+            abstract_remap.insert(abs_num.abstract_num_id, new_id);
+        }
+        let mut num_remap = HashMap::new();
+        for num in &other_numbering.nums {
+            num_remap.insert(
+                num.num_id,
+                self.identifiers.reserve_numbering_instance_id()?,
+            );
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                abstract_remap.entry(num.abstract_num_id)
+            {
+                entry.insert(self.identifiers.reserve_abstract_numbering_id()?);
+            }
+        }
 
         let numbering = self
             .numbering
@@ -4737,81 +8274,32 @@ impl Document {
                 root_attributes: Vec::new(),
                 extra_xml: Vec::new(),
             });
-
-        // Find max existing IDs to avoid collision
-        let max_abstract_id = numbering
-            .abstract_nums
-            .iter()
-            .map(|a| a.abstract_num_id)
-            .max()
-            .unwrap_or(0);
-        let max_num_id = numbering.nums.iter().map(|n| n.num_id).max().unwrap_or(0);
-
-        let abstract_offset = max_abstract_id + 1;
-        let num_offset = max_num_id + 1;
-
-        // Copy abstract nums with remapped IDs
         for abs_num in &other_numbering.abstract_nums {
             let mut new_abs = abs_num.clone();
-            new_abs.abstract_num_id += abstract_offset;
+            new_abs.abstract_num_id = abstract_remap[&abs_num.abstract_num_id];
             numbering.abstract_nums.push(new_abs);
         }
-
-        // Copy num instances with remapped IDs
         for num in &other_numbering.nums {
             let mut new_num = num.clone();
-            new_num.num_id += num_offset;
-            new_num.abstract_num_id += abstract_offset;
+            new_num.num_id = num_remap[&num.num_id];
+            new_num.abstract_num_id = abstract_remap[&num.abstract_num_id];
             numbering.nums.push(new_num);
         }
-
-        // Remap numId references in the merged content
         let incoming_count = other.document.body.content.len();
-        for content in self.document.body.content[start_idx..start_idx + incoming_count].iter_mut()
-        {
-            Self::remap_num_ids(content, num_offset);
-        }
-    }
-
-    /// Remap numId references in body content by adding an offset.
-    fn remap_num_ids(content: &mut BodyContent, offset: u32) {
-        match content {
-            BodyContent::Paragraph(p) => {
-                Self::remap_paragraph_num_id(p, offset);
-            }
-            BodyContent::Table(tbl) => {
-                Self::remap_table_num_ids(tbl, offset);
-            }
-            BodyContent::ContentControl(_) => {}
-            BodyContent::RawXml(_) => {}
-        }
-    }
-
-    fn remap_paragraph_num_id(p: &mut CT_P, offset: u32) {
-        if let Some(ppr) = &mut p.properties
-            && let Some(num_id) = &mut ppr.num_id
-            && *num_id > 0
-        {
-            *num_id += offset;
-        }
-    }
-
-    fn remap_table_num_ids(tbl: &mut CT_Tbl, offset: u32) {
-        for row in &mut tbl.rows {
-            for cell in &mut row.cells {
-                for cc in &mut cell.content {
-                    match cc {
-                        rdocx_oxml::table::CellContent::Paragraph(p) => {
-                            Self::remap_paragraph_num_id(p, offset);
-                        }
-                        rdocx_oxml::table::CellContent::Table(nested) => {
-                            Self::remap_table_num_ids(nested, offset);
-                        }
-                        rdocx_oxml::table::CellContent::ContentControl(_) => {}
-                    }
+        visit_body_paragraphs_mut(
+            &mut self.document.body.content[start_idx..start_idx + incoming_count],
+            &mut |paragraph| {
+                if let Some(num_id) = paragraph
+                    .properties
+                    .as_mut()
+                    .and_then(|properties| properties.num_id.as_mut())
+                    && let Some(updated) = num_remap.get(num_id)
+                {
+                    *num_id = *updated;
                 }
-            }
-        }
+            },
+        );
+        Ok(())
     }
 
     // ---- Table of Contents ----
@@ -4849,19 +8337,24 @@ impl Document {
         // already there.
         let mut occupied_suffixes = self.toc_bookmark_suffixes();
         let mut toc_counter = occupied_suffixes.iter().copied().max().unwrap_or(0);
-        let mut occupied_ids = self
-            .document
-            .body
-            .content
-            .iter()
-            .filter_map(|content| match content {
-                BodyContent::Paragraph(paragraph) => Some(&paragraph.bookmark_markers),
-                _ => None,
-            })
-            .flatten()
-            .filter_map(|marker| marker.id())
-            .filter(|id| *id >= 0)
-            .collect::<HashSet<_>>();
+        let mut identifiers = self.identifiers.clone();
+        let mut duplicate_typed_id = false;
+        let mut typed_ids = HashSet::new();
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            for marker in &paragraph.bookmark_markers {
+                if marker.is_start()
+                    && let Some(id) = marker.id()
+                    && id >= 0
+                    && !typed_ids.insert(id)
+                {
+                    duplicate_typed_id = true;
+                }
+            }
+        });
+        if duplicate_typed_id {
+            return;
+        }
+        identifiers.bookmark_ids.extend(typed_ids);
 
         let mut headings = Vec::new();
 
@@ -4878,16 +8371,16 @@ impl Document {
                     };
                     toc_counter = suffix;
                     occupied_suffixes.insert(suffix);
-                    let preferred_id = suffix
+                    let Some(preferred_id) = suffix
                         .checked_add(99)
                         .and_then(|candidate| i32::try_from(candidate).ok())
-                        .filter(|candidate| !occupied_ids.contains(candidate));
-                    let Some(bookmark_id) = preferred_id.or_else(|| {
-                        (0..=i32::MAX).find(|candidate| !occupied_ids.contains(candidate))
-                    }) else {
+                    else {
                         return;
                     };
-                    occupied_ids.insert(bookmark_id);
+                    let Ok(bookmark_id) = identifiers.reserve_preferred_bookmark_id(preferred_id)
+                    else {
+                        return;
+                    };
                     headings.push(HeadingInfo {
                         content_index: idx,
                         level,
@@ -4989,15 +8482,13 @@ impl Document {
                 .content
                 .insert(insert_at + i, BodyContent::Paragraph(p));
         }
+        self.identifiers = identifiers;
     }
 
     /// Numeric `_TocN` bookmark suffixes already present in the body.
     fn toc_bookmark_suffixes(&self) -> HashSet<u64> {
         let mut suffixes = HashSet::new();
-        for content in &self.document.body.content {
-            let BodyContent::Paragraph(p) = content else {
-                continue;
-            };
+        visit_body_paragraphs(&self.document.body.content, &mut |p| {
             for marker in &p.bookmark_markers {
                 let Some(name) = marker.name() else {
                     continue;
@@ -5009,7 +8500,7 @@ impl Document {
                     suffixes.insert(suffix);
                 }
             }
-        }
+        });
         suffixes
     }
 
@@ -5050,8 +8541,12 @@ impl Document {
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
     pub fn replace_text(&mut self, placeholder: &str, replacement: &str) -> usize {
-        self.invalidate_layout();
-        self.replace_batch(&[(placeholder, replacement)])
+        let mut candidate = self.clone_for_staging();
+        let count = candidate
+            .replace_batch(&[(placeholder, replacement)])
+            .expect("text replacement package preflight failed");
+        self.commit_staged_mutation(candidate);
+        count
     }
 
     /// Replace multiple placeholders at once. Returns total replacements.
@@ -5060,9 +8555,13 @@ impl Document {
     /// serialised and re-parsed once for the whole batch rather than once per
     /// placeholder.
     pub fn replace_all(&mut self, replacements: &std::collections::HashMap<&str, &str>) -> usize {
-        self.invalidate_layout();
         let pairs: Vec<(&str, &str)> = replacements.iter().map(|(k, v)| (*k, *v)).collect();
-        self.replace_batch(&pairs)
+        let mut candidate = self.clone_for_staging();
+        let count = candidate
+            .replace_batch(&pairs)
+            .expect("text replacement package preflight failed");
+        self.commit_staged_mutation(candidate);
+        count
     }
 
     /// Render scalar and structural template tags from structured JSON data.
@@ -5099,13 +8598,13 @@ impl Document {
         self.flush_to_package()?;
         let mut sources = crate::template::body_sources(&self.document);
 
-        for (rel_id, _) in self.header_footer_rel_ids() {
-            if let Some(header_footer) = self.load_header_footer(&rel_id) {
+        for (rel_id, is_header) in self.header_footer_rel_ids() {
+            if let Some(header_footer) = self.load_header_footer(&rel_id, is_header) {
                 sources.extend(crate::template::header_footer_sources(&header_footer));
             }
         }
 
-        for part_name in self.raw_text_bearing_part_names() {
+        for (part_name, _) in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 sources.extend(crate::template::text_box_sources(xml)?);
             }
@@ -5120,20 +8619,19 @@ impl Document {
         Ok(sources)
     }
 
-    pub(crate) fn apply_template_pairs(&mut self, pairs: &[(&str, &str)]) -> usize {
+    pub(crate) fn apply_template_pairs(&mut self, pairs: &[(&str, &str)]) -> Result<usize> {
         self.replace_batch(pairs)
     }
 
-    pub(crate) fn commit_template(&mut self, candidate: Self) {
-        self.package = candidate.package;
-        self.document = candidate.document;
-        self.invalidate_layout();
+    pub(crate) fn commit_template(&mut self, mut candidate: Self) {
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
     }
 
     /// Apply a batch of literal replacements across the whole document.
-    fn replace_batch(&mut self, pairs: &[(&str, &str)]) -> usize {
+    fn replace_batch(&mut self, pairs: &[(&str, &str)]) -> Result<usize> {
         if pairs.is_empty() {
-            return 0;
+            return Ok(0);
         }
 
         let mut count = 0;
@@ -5142,15 +8640,14 @@ impl Document {
         for (placeholder, replacement) in pairs {
             count += self.replace_in_body(placeholder, replacement);
         }
-        count += self.replace_in_headers_footers(pairs);
+        count += self.replace_in_headers_footers(pairs)?;
 
         // Raw XML: text boxes, shapes and charts live in markup the typed model
         // does not cover, so flush first and work on the serialised parts.
-        if self.flush_to_package().is_ok() {
-            count += self.replace_in_xml_parts(pairs);
-        }
+        self.flush_to_package()?;
+        count += self.replace_in_xml_parts(pairs);
 
-        count
+        Ok(count)
     }
 
     /// Run the typed replacement over body paragraphs and tables.
@@ -5174,12 +8671,12 @@ impl Document {
     }
 
     /// Run the typed replacement over every referenced header and footer part.
-    fn replace_in_headers_footers(&mut self, pairs: &[(&str, &str)]) -> usize {
+    fn replace_in_headers_footers(&mut self, pairs: &[(&str, &str)]) -> Result<usize> {
         use rdocx_oxml::placeholder;
 
         let mut count = 0;
         for (rel_id, is_header) in self.header_footer_rel_ids() {
-            let Some(mut hf) = self.load_header_footer(&rel_id) else {
+            let Some(mut hf) = self.load_header_footer(&rel_id, is_header) else {
                 continue;
             };
             let mut part_count = 0;
@@ -5188,11 +8685,11 @@ impl Document {
                     placeholder::replace_in_header_footer(&mut hf, placeholder, replacement);
             }
             if part_count > 0 {
-                self.save_header_footer(&rel_id, &hf, is_header);
+                self.save_header_footer(&rel_id, &hf, is_header)?;
                 count += part_count;
             }
         }
-        count
+        Ok(count)
     }
 
     /// Relationship IDs of every section's headers and footers, with a flag
@@ -5200,23 +8697,7 @@ impl Document {
     fn header_footer_rel_ids(&self) -> Vec<(String, bool)> {
         let mut rel_ids = Vec::new();
         let mut seen = HashSet::new();
-        let sections = self
-            .document
-            .body
-            .content
-            .iter()
-            .filter_map(|content| match content {
-                BodyContent::Paragraph(paragraph) => paragraph
-                    .properties
-                    .as_ref()
-                    .and_then(|properties| properties.sect_pr.as_ref()),
-                BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {
-                    None
-                }
-            })
-            .chain(self.document.body.sect_pr.iter());
-
-        for section in sections {
+        let mut collect = |section: &CT_SectPr| {
             for reference in &section.header_refs {
                 let rel_id = (reference.rel_id.clone(), true);
                 if seen.insert(rel_id.clone()) {
@@ -5229,6 +8710,18 @@ impl Document {
                     rel_ids.push(rel_id);
                 }
             }
+        };
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            if let Some(section) = paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.sect_pr.as_ref())
+            {
+                collect(section);
+            }
+        });
+        if let Some(section) = &self.document.body.sect_pr {
+            collect(section);
         }
 
         rel_ids
@@ -5280,24 +8773,35 @@ impl Document {
     /// Searches body paragraphs, tables (including nested), headers, and footers.
     /// Returns the total number of replacements made, or an error if the regex is invalid.
     pub fn replace_regex(&mut self, pattern: &str, replacement: &str) -> Result<usize> {
-        self.invalidate_layout();
         let re =
             regex::Regex::new(pattern).map_err(|e| Error::Other(format!("invalid regex: {e}")))?;
-        Ok(self.replace_regex_compiled(&re, replacement))
+        let mut candidate = self.clone_for_staging();
+        let count = candidate.replace_regex_compiled(&re, replacement)?;
+        self.commit_staged_mutation(candidate);
+        Ok(count)
     }
 
     /// Replace multiple regex patterns at once. Returns total replacements.
     pub fn replace_all_regex(&mut self, patterns: &[(String, String)]) -> Result<usize> {
-        self.invalidate_layout();
+        let compiled = patterns
+            .iter()
+            .map(|(pattern, replacement)| {
+                regex::Regex::new(pattern)
+                    .map(|regex| (regex, replacement.as_str()))
+                    .map_err(|error| Error::Other(format!("invalid regex: {error}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut candidate = self.clone_for_staging();
         let mut count = 0;
-        for (pattern, replacement) in patterns {
-            count += self.replace_regex(pattern, replacement)?;
+        for (regex, replacement) in &compiled {
+            count += candidate.replace_regex_compiled(regex, replacement)?;
         }
+        self.commit_staged_mutation(candidate);
         Ok(count)
     }
 
     /// Internal: replace using a pre-compiled regex.
-    fn replace_regex_compiled(&mut self, re: &regex::Regex, replacement: &str) -> usize {
+    fn replace_regex_compiled(&mut self, re: &regex::Regex, replacement: &str) -> Result<usize> {
         use rdocx_oxml::placeholder;
 
         let mut count = 0;
@@ -5318,12 +8822,12 @@ impl Document {
 
         // Replace in headers and footers
         for (rel_id, is_header) in self.header_footer_rel_ids() {
-            let Some(mut hf) = self.load_header_footer(&rel_id) else {
+            let Some(mut hf) = self.load_header_footer(&rel_id, is_header) else {
                 continue;
             };
             let n = placeholder::replace_regex_in_header_footer(&mut hf, re, replacement);
             if n > 0 {
-                self.save_header_footer(&rel_id, &hf, is_header);
+                self.save_header_footer(&rel_id, &hf, is_header)?;
                 count += n;
             }
         }
@@ -5331,18 +8835,17 @@ impl Document {
         // Text boxes and shapes live in raw markup the typed model does not
         // reach. `replace_text` has always covered them; do the same here so
         // the two entry points search the same places.
-        if self.flush_to_package().is_ok() {
-            count += self.replace_regex_in_xml_parts(re, replacement);
-        }
+        self.flush_to_package()?;
+        count += self.replace_regex_in_xml_parts(re, replacement);
 
-        count
+        Ok(count)
     }
 
     /// Apply a regex replacement to the text-box content of the raw XML parts.
     fn replace_regex_in_xml_parts(&mut self, re: &regex::Regex, replacement: &str) -> usize {
         let mut count = 0;
 
-        for part_name in self.text_bearing_part_names() {
+        for (part_name, _) in self.text_bearing_part_names() {
             let Some(xml) = self.package.get_part(&part_name).map(<[u8]>::to_vec) else {
                 continue;
             };
@@ -5369,33 +8872,21 @@ impl Document {
 
     /// The main document part plus every header and footer part: everywhere
     /// text boxes and shapes with replaceable text can appear.
-    fn text_bearing_part_names(&self) -> Vec<String> {
-        let mut names = vec![self.doc_part_name.clone()];
-        if let Some(rels) = self.package.get_part_rels(&self.doc_part_name) {
-            for (rel_id, _) in self.header_footer_rel_ids() {
-                if let Some(rel) = rels.get_by_id(&rel_id) {
-                    names.push(OpcPackage::resolve_rel_target(
-                        &self.doc_part_name,
-                        &rel.target,
-                    ));
-                }
+    fn text_bearing_part_names(&self) -> Vec<(String, Option<bool>)> {
+        let mut names = vec![(self.doc_part_name.clone(), None)];
+        for (rel_id, is_header) in self.header_footer_rel_ids() {
+            if let Some(part_name) = self.header_footer_part_name(&rel_id, is_header) {
+                names.push((part_name, Some(is_header)));
             }
         }
         names
     }
 
-    fn raw_text_bearing_part_names(&self) -> Vec<String> {
-        let mut names = vec![self.doc_part_name.clone()];
-        if let Some(section) = self.document.body.sect_pr.as_ref()
-            && let Some(rels) = self.package.get_part_rels(&self.doc_part_name)
-        {
-            for reference in section.header_refs.iter().chain(&section.footer_refs) {
-                if let Some(relationship) = rels.get_by_id(&reference.rel_id) {
-                    names.push(OpcPackage::resolve_rel_target(
-                        &self.doc_part_name,
-                        &relationship.target,
-                    ));
-                }
+    fn raw_text_bearing_part_names(&self) -> Vec<(String, Option<bool>)> {
+        let mut names = vec![(self.doc_part_name.clone(), None)];
+        for (rel_id, is_header) in self.header_footer_rel_ids() {
+            if let Some(part_name) = self.header_footer_part_name(&rel_id, is_header) {
+                names.push((part_name, Some(is_header)));
             }
         }
         names
@@ -5408,6 +8899,7 @@ impl Document {
                 relationships
                     .get_all_by_type(rel_types::CHART)
                     .iter()
+                    .filter(|relationship| relationship_is_internal(relationship))
                     .map(|relationship| {
                         OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
                     })
@@ -5417,10 +8909,28 @@ impl Document {
     }
 
     /// Load a header/footer part by its relationship ID.
-    fn load_header_footer(&self, rel_id: &str) -> Option<CT_HdrFtr> {
-        let rels = self.package.get_part_rels(&self.doc_part_name)?;
-        let rel = rels.get_by_id(rel_id)?;
-        let part_name = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+    fn header_footer_part_name(&self, rel_id: &str, is_header: bool) -> Option<String> {
+        let expected_type = if is_header {
+            rel_types::HEADER
+        } else {
+            rel_types::FOOTER
+        };
+        let relationship = self
+            .package
+            .get_part_rels(&self.doc_part_name)?
+            .get_by_id(rel_id)
+            .filter(|relationship| {
+                relationship.rel_type == expected_type && relationship_is_internal(relationship)
+            })?;
+        Some(OpcPackage::resolve_rel_target(
+            &self.doc_part_name,
+            &relationship.target,
+        ))
+    }
+
+    /// Load a header/footer part by its relationship ID and section-reference kind.
+    fn load_header_footer(&self, rel_id: &str, is_header: bool) -> Option<CT_HdrFtr> {
+        let part_name = self.header_footer_part_name(rel_id, is_header)?;
         let xml = self.package.get_part(&part_name)?;
         CT_HdrFtr::from_xml(xml).ok()
     }
@@ -5434,7 +8944,7 @@ impl Document {
         let mut count = 0;
 
         // Collect part names for XML parts to process (text boxes/shapes)
-        for part_name in self.raw_text_bearing_part_names() {
+        for (part_name, _) in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 let xml = xml.to_vec();
                 if let Ok((new_xml, n)) = replace_many_in_xml_part(&xml, pairs)
@@ -5835,6 +9345,9 @@ impl Document {
             for rel in &rels.items {
                 match rel.rel_type.as_str() {
                     t if t == rel_types::IMAGE => {
+                        if !relationship_is_internal(rel) {
+                            continue;
+                        }
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(data) = self.package.get_part(&part_name) {
@@ -6074,7 +9587,9 @@ impl Document {
             for rel in &rels.items {
                 match rel.rel_type.as_str() {
                     t if t == rel_types::HEADER => {
-                        if !active_header_footer_ids.contains(&rel.id) {
+                        if !active_header_footer_ids.contains(&rel.id)
+                            || !relationship_is_internal(rel)
+                        {
                             continue;
                         }
                         let part_name =
@@ -6088,7 +9603,7 @@ impl Document {
                             for image_relationship in
                                 header_relationships.items.iter().filter(|item| {
                                     item.rel_type == rel_types::IMAGE
-                                        && item.target_mode.as_deref() != Some("External")
+                                        && relationship_is_internal(item)
                                 })
                             {
                                 let image_part = OpcPackage::resolve_rel_target(
@@ -6110,7 +9625,9 @@ impl Document {
                         }
                     }
                     t if t == rel_types::FOOTER => {
-                        if !active_header_footer_ids.contains(&rel.id) {
+                        if !active_header_footer_ids.contains(&rel.id)
+                            || !relationship_is_internal(rel)
+                        {
                             continue;
                         }
                         let part_name =
@@ -6122,6 +9639,9 @@ impl Document {
                         }
                     }
                     t if t == rel_types::IMAGE => {
+                        if !relationship_is_internal(rel) {
+                            continue;
+                        }
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(data) = self.package.get_part(&part_name) {
@@ -6138,8 +9658,8 @@ impl Document {
                         }
                     }
                     t if t == rel_types::CHART => {
-                        let chart = if rel.target_mode.as_deref() == Some("External") {
-                            Err(format!("external target {}", rel.target))
+                        let chart = if !relationship_is_internal(rel) {
+                            Err(format!("non-internal target {}", rel.target))
                         } else {
                             let part_name =
                                 OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
@@ -6155,7 +9675,7 @@ impl Document {
                         charts.insert(rel.id.clone(), chart);
                     }
                     t if t == rel_types::THEME => {
-                        if rel.target_mode.as_deref() != Some("External") {
+                        if relationship_is_internal(rel) {
                             theme_part_name = Some(OpcPackage::resolve_rel_target(
                                 &self.doc_part_name,
                                 &rel.target,
@@ -6168,6 +9688,9 @@ impl Document {
                         }
                     }
                     t if t == rel_types::FOOTNOTES => {
+                        if !relationship_is_internal(rel) {
+                            continue;
+                        }
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name) {
@@ -6175,6 +9698,9 @@ impl Document {
                         }
                     }
                     t if t == rel_types::ENDNOTES => {
+                        if !relationship_is_internal(rel) {
+                            continue;
+                        }
                         let part_name =
                             OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
                         if let Some(xml) = self.package.get_part(&part_name) {
@@ -6221,7 +9747,12 @@ impl Document {
                     .retain(|reference| reference.hdr_ftr_type != HdrFtrType::Even);
             }
         }
-        materialize_header_footer_inheritance(&mut document, even_headers_enabled);
+        materialize_header_footer_inheritance(
+            &mut document,
+            even_headers_enabled,
+            &headers.keys().cloned().collect(),
+            &footers.keys().cloned().collect(),
+        );
 
         LayoutInput {
             revision_view: rdocx_layout::RevisionView::Accepted,
@@ -6322,22 +9853,23 @@ impl Document {
     }
 
     /// Save a header/footer part back to the OPC package.
-    fn save_header_footer(&mut self, rel_id: &str, hf: &CT_HdrFtr, is_header: bool) {
-        let part_name = {
-            let rels = self.package.get_part_rels(&self.doc_part_name);
-            rels.and_then(|r| r.get_by_id(rel_id))
-                .map(|rel| OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target))
-        };
-        if let Some(part_name) = part_name {
-            let xml = if is_header {
-                hf.to_xml_header()
-            } else {
-                hf.to_xml_footer()
-            };
-            if let Ok(xml) = xml {
-                self.package.set_part(&part_name, xml);
-            }
+    fn save_header_footer(&mut self, rel_id: &str, hf: &CT_HdrFtr, is_header: bool) -> Result<()> {
+        #[cfg(test)]
+        if FAIL_NEXT_HEADER_FOOTER_SERIALIZATION.replace(false) {
+            return Err(Error::Other(
+                "injected header or footer serialization failure".to_owned(),
+            ));
         }
+        let part_name = self
+            .header_footer_part_name(rel_id, is_header)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "header or footer relationship {rel_id} is missing, non-internal, or has the wrong type"
+                ))
+            })?;
+        let xml = Self::serialize_hdr_ftr(hf, is_header)?;
+        self.package.set_part(&part_name, xml);
+        Ok(())
     }
 
     // ---- Document Intelligence API ----
@@ -6834,17 +10366,25 @@ fn header_type_index(hdr_type: HdrFtrType) -> usize {
     }
 }
 
-fn materialize_header_footer_inheritance(document: &mut CT_Document, even_headers_enabled: bool) {
+fn materialize_header_footer_inheritance(
+    document: &mut CT_Document,
+    even_headers_enabled: bool,
+    available_headers: &HashSet<String>,
+    available_footers: &HashSet<String>,
+) {
     let mut effective_headers: [Option<HdrFtrRef>; 3] = [None, None, None];
     let mut effective_footers: [Option<HdrFtrRef>; 3] = [None, None, None];
     let inherit = |references: &mut Vec<HdrFtrRef>,
                    effective: &mut [Option<HdrFtrRef>; 3],
+                   available: &HashSet<String>,
                    materialize_blank_even: bool| {
         for hdr_type in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
             let index = header_type_index(hdr_type);
             if let Some(reference) = references
                 .iter()
-                .find(|reference| reference.hdr_ftr_type == hdr_type)
+                .find(|reference| {
+                    reference.hdr_ftr_type == hdr_type && available.contains(&reference.rel_id)
+                })
                 .cloned()
             {
                 effective[index] = Some(reference);
@@ -6868,18 +10408,30 @@ fn materialize_header_footer_inheritance(document: &mut CT_Document, even_header
             inherit(
                 &mut section.header_refs,
                 &mut effective_headers,
+                available_headers,
                 even_headers_enabled,
             );
-            inherit(&mut section.footer_refs, &mut effective_footers, false);
+            inherit(
+                &mut section.footer_refs,
+                &mut effective_footers,
+                available_footers,
+                false,
+            );
         }
     }
     if let Some(section) = document.body.sect_pr.as_mut() {
         inherit(
             &mut section.header_refs,
             &mut effective_headers,
+            available_headers,
             even_headers_enabled,
         );
-        inherit(&mut section.footer_refs, &mut effective_footers, false);
+        inherit(
+            &mut section.footer_refs,
+            &mut effective_footers,
+            available_footers,
+            false,
+        );
     }
 }
 
@@ -6919,6 +10471,16 @@ fn relative_target(source_part: &str, target_part: &str) -> String {
         Some(rest) if !rest.contains('/') => rest.to_string(),
         _ => target_part.to_string(),
     }
+}
+
+fn relative_descendant_target(source_part: &str, target_part: &str) -> String {
+    let directory = source_part
+        .rfind('/')
+        .map_or("/", |position| &source_part[..=position]);
+    target_part
+        .strip_prefix(directory)
+        .unwrap_or(target_part)
+        .to_owned()
 }
 
 fn section_has_layout(properties: &CT_SectPr) -> bool {
@@ -7369,6 +10931,1687 @@ mod tests {
     const WORD_BUILD: &str = "16.104.25121423";
     const WORD_CHART_CANDIDATE_SHA256: &str =
         "79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b";
+
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    fn signature_fixture(name: &str) -> Vec<u8> {
+        use base64::Engine as _;
+
+        let source = include_str!("../../oxml-opc/src/signature.rs");
+        let prefix = format!("const {name}: &str = \"");
+        let encoded = source
+            .split_once(&prefix)
+            .and_then(|(_, remainder)| remainder.split_once("\";").map(|(value, _)| value))
+            .expect("signature fixture remains available");
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap()
+    }
+
+    #[test]
+    fn identifier_reservation_reports_relationship_overflow() {
+        let mut occupied = HashSet::from([format!("rId{}", u32::MAX)]);
+        let mut cursor = u32::MAX;
+        let error = reserve_relationship_from_cursor(&mut occupied, &mut cursor).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("relationship id range is exhausted")
+        );
+        assert_eq!(occupied.len(), 1, "a failed reservation must be atomic");
+    }
+
+    #[test]
+    fn provisional_relationships_reserve_numeric_capacity() {
+        let owner = "/word/document.xml";
+        let mut package = OpcPackage::new();
+        package.get_or_create_part_rels(owner).add_with_id(
+            &format!("rId{}", u32::MAX - 1),
+            "urn:producer",
+            "producer.bin",
+        );
+        let mut identifiers = DocumentIdentifiers::scan(&package).unwrap();
+        let first = identifiers
+            .reserve_bundle_relationship_id_checked(owner, rel_types::STYLES)
+            .unwrap();
+        assert!(first.starts_with("rdocxDeferredStyles"));
+        assert!(
+            identifiers
+                .reserve_bundle_relationship_id_checked(owner, rel_types::NUMBERING)
+                .unwrap_err()
+                .to_string()
+                .contains("relationship id range is exhausted")
+        );
+        assert!(identifiers.reserve_relationship_id_checked(owner).is_err());
+        assert_eq!(identifiers.provisional_relationship_ids[owner].len(), 1);
+    }
+
+    #[test]
+    fn encoded_identifier_aliases_collide_during_package_scan() {
+        let mut package =
+            OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:wp="{}"><w:body><wp:docPr id="1"/><wp:docPr id="&#49;"/></w:body></w:document>"#,
+                drawing_ns::WP,
+            )
+            .into_bytes(),
+        );
+        let error = DocumentIdentifiers::scan(&package).unwrap_err();
+        assert!(error.to_string().contains("duplicate drawing id 1"));
+    }
+
+    #[test]
+    fn merge_preflights_all_required_bundle_relationships() {
+        let owner = "/word/document.xml";
+        let mut source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package
+            .get_or_create_part_rels(owner)
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        package.get_or_create_part_rels(owner).add_with_id(
+            &format!("rId{}", u32::MAX - 1),
+            "urn:producer",
+            "producer.bin",
+        );
+        package.parts.remove(DEFAULT_STYLES_PART);
+        package.content_types.overrides.remove(DEFAULT_STYLES_PART);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut target = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        let mut other = Document::new();
+        other.add_style(StyleBuilder::paragraph("Merged", "Merged"));
+        other.add_list_definition(&[ListLevel::decimal()]);
+        let before = {
+            let mut bytes = Cursor::new(Vec::new());
+            target.package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        };
+        assert!(target.reserve_merge_bundles(&other).is_err());
+        let after = {
+            let mut bytes = Cursor::new(Vec::new());
+            target.package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        };
+        assert_eq!(after, before);
+        assert!(target.styles_part_name.is_none());
+        assert!(target.numbering_part_name.is_none());
+    }
+
+    #[test]
+    fn preferred_part_fallback_uses_the_greatest_positive_family_suffix() {
+        fn reserve(existing: &[&str], preferred: &str) -> String {
+            let mut package = OpcPackage::new();
+            for part_name in existing {
+                package.set_part(part_name, Vec::new());
+            }
+            DocumentIdentifiers::scan(&package)
+                .unwrap()
+                .reserve_preferred_part_name(preferred)
+                .unwrap()
+        }
+
+        assert_eq!(
+            reserve(&["/word/header1.xml"], "/word/header1.xml"),
+            "/word/header2.xml"
+        );
+        assert_eq!(
+            reserve(&["/WORD/HEADER1.XML"], "/word/header1.xml"),
+            "/word/header2.xml"
+        );
+        let mut relationship_only = OpcPackage::new();
+        relationship_only
+            .get_or_create_part_rels("/word/document.xml")
+            .add("urn:producer", "HEADER1.XML");
+        assert_eq!(
+            DocumentIdentifiers::scan(&relationship_only)
+                .unwrap()
+                .reserve_preferred_part_name("/word/header1.xml")
+                .unwrap(),
+            "/word/header2.xml"
+        );
+        assert_eq!(
+            reserve(
+                &[
+                    "/word/comments.xml",
+                    "/word/comments4.xml",
+                    "/word/comments0.xml",
+                    "/word/comments-9.xml",
+                    "/word/commentsx.xml",
+                ],
+                "/word/comments.xml",
+            ),
+            "/word/comments5.xml"
+        );
+        assert_eq!(
+            reserve(&["/word/footnotes.xml"], "/word/footnotes.xml"),
+            "/word/footnotes1.xml"
+        );
+
+        let mut identifiers = DocumentIdentifiers::scan(&OpcPackage::new()).unwrap();
+        for malformed in [
+            "comments.xml",
+            "/word/comments",
+            "/word/.xml",
+            "/word/1.xml",
+        ] {
+            assert!(identifiers.reserve_preferred_part_name(malformed).is_err());
+        }
+        assert!(identifiers.part_names.is_empty());
+    }
+
+    #[test]
+    fn relationship_only_targets_stay_reserved_when_facades_materialize_them() {
+        fn reopen(package: OpcPackage) -> Document {
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+
+        let mut settings_source = Document::new();
+        let mut settings_package =
+            OpcPackage::from_reader(Cursor::new(settings_source.to_bytes().unwrap())).unwrap();
+        settings_package.parts.remove(DEFAULT_SETTINGS_PART);
+        settings_package
+            .content_types
+            .overrides
+            .remove(DEFAULT_SETTINGS_PART);
+        let mut settings = reopen(settings_package);
+        settings.set_auto_hyphenation(true).unwrap();
+        assert_ne!(
+            settings
+                .identifiers
+                .reserve_fragment_part_name(DEFAULT_SETTINGS_PART)
+                .unwrap(),
+            DEFAULT_SETTINGS_PART
+        );
+
+        let mut comments_source = Document::new();
+        comments_source.add_paragraph("commented");
+        let mut comments_package =
+            OpcPackage::from_reader(Cursor::new(comments_source.to_bytes().unwrap())).unwrap();
+        comments_package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("producerComments", rel_types::COMMENTS, "comments7.xml");
+        comments_package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id(
+                "producerCommentsExtended",
+                crate::comments::COMMENTS_EXTENDED_REL_TYPE,
+                "commentsExtended7.xml",
+            );
+        let mut comments = reopen(comments_package);
+        comments
+            .add_comment(
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Reviewer",
+                None,
+                "note",
+            )
+            .unwrap();
+        for target in ["/word/comments7.xml", "/word/commentsExtended7.xml"] {
+            assert_ne!(
+                comments
+                    .identifiers
+                    .reserve_fragment_part_name(target)
+                    .unwrap(),
+                target
+            );
+        }
+
+        let mut header_source = Document::new();
+        header_source.set_header("producer");
+        let mut header_package =
+            OpcPackage::from_reader(Cursor::new(header_source.to_bytes().unwrap())).unwrap();
+        header_package.parts.remove("/word/header1.xml");
+        header_package
+            .content_types
+            .overrides
+            .remove("/word/header1.xml");
+        let mut header = reopen(header_package);
+        header.set_header("replacement");
+        assert_ne!(
+            header
+                .identifiers
+                .reserve_fragment_part_name("/word/header1.xml")
+                .unwrap(),
+            "/word/header1.xml"
+        );
+    }
+
+    #[test]
+    fn authored_bundles_preserve_unrelated_conventional_parts() {
+        let mut source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        let orphans = [
+            (DEFAULT_STYLES_PART, b"producer-styles".as_slice()),
+            (DEFAULT_NUMBERING_PART, b"producer-numbering".as_slice()),
+            (DEFAULT_CORE_PROPERTIES_PART, b"producer-core".as_slice()),
+        ];
+        for (part_name, bytes) in orphans {
+            package.set_part(part_name, bytes.to_vec());
+            package
+                .content_types
+                .add_override(part_name, "application/example+xml");
+        }
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+        document.add_list_definition(&[ListLevel::decimal()]);
+        document.set_title("Title");
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(Cursor::new(saved)).unwrap();
+
+        for (part_name, expected) in orphans {
+            assert_eq!(package.get_part(part_name), Some(expected));
+            assert_eq!(
+                package.content_types.content_type_for(part_name),
+                Some("application/example+xml")
+            );
+        }
+        let document_relationships = package.get_part_rels("/word/document.xml").unwrap();
+        for (rel_type, expected) in [
+            (rel_types::STYLES, "/word/styles1.xml"),
+            (rel_types::NUMBERING, "/word/numbering1.xml"),
+        ] {
+            let relationship = document_relationships.get_by_type(rel_type).unwrap();
+            assert_eq!(
+                OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target),
+                expected
+            );
+        }
+        let core_relationship = package
+            .package_rels
+            .get_by_type(CORE_PROPERTIES_REL_TYPE)
+            .unwrap();
+        assert_eq!(
+            OpcPackage::resolve_rel_target("/", &core_relationship.target),
+            "/docProps/core1.xml"
+        );
+    }
+
+    #[test]
+    fn identifier_content_type_registry_uses_ascii_case_insensitive_keys() {
+        let mut package = OpcPackage::new();
+        package.content_types.add_default("PNG", "image/png");
+        package
+            .content_types
+            .add_override("/WORD/DOCUMENT.XML", content_types::WORD_DOCUMENT);
+        let mut identifiers = DocumentIdentifiers::scan(&package).unwrap();
+        assert!(identifiers.content_type_defaults.contains("png"));
+        assert!(
+            identifiers
+                .content_type_overrides
+                .contains("/word/document.xml")
+        );
+
+        identifiers.register_content_type_default("JPG");
+        identifiers.register_content_type_override("/WORD/HEADER1.XML");
+        assert!(identifiers.content_type_defaults.contains("jpg"));
+        assert!(identifiers.authored_content_type_defaults.contains("jpg"));
+        assert!(
+            identifiers
+                .content_type_overrides
+                .contains("/word/header1.xml")
+        );
+        identifiers.retire_authored_part("/WORD/HEADER1.XML");
+        assert!(
+            !identifiers
+                .content_type_overrides
+                .contains("/word/header1.xml")
+        );
+    }
+
+    #[test]
+    fn read_only_save_canonicalizes_a_missing_styles_edge() {
+        let mut source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        let saved = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let styles = saved
+            .get_part_rels("/word/document.xml")
+            .and_then(|relationships| relationships.get_by_type(rel_types::STYLES))
+            .unwrap();
+        assert!(
+            styles
+                .id
+                .strip_prefix("rId")
+                .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
+        );
+        assert!(!styles.id.starts_with("rdocxDeferred"));
+    }
+
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    #[test]
+    fn signing_and_subsequent_save_share_canonical_package_preparation() {
+        let mut source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        source.add_paragraph("signed");
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        let report = document
+            .sign(
+                &signature_fixture("TEST_PRIVATE_KEY_PKCS8_BASE64"),
+                &signature_fixture("TEST_CERTIFICATE_DER_BASE64"),
+            )
+            .unwrap();
+        assert!(report.cryptographically_valid);
+        assert!(report.coverage_complete);
+        let styles = document
+            .package
+            .get_part_rels("/word/document.xml")
+            .and_then(|relationships| {
+                relationships.items.iter().find(|relationship| {
+                    relationship.rel_type == rel_types::STYLES
+                        && relationship_is_internal(relationship)
+                })
+            })
+            .unwrap();
+        assert!(
+            styles
+                .id
+                .strip_prefix("rId")
+                .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
+        );
+
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let reports = reopened.verify_signatures().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].cryptographically_valid);
+        assert!(reports[0].coverage_complete);
+    }
+
+    #[test]
+    fn staged_numbering_bundle_uses_a_collision_safe_nonsemantic_relationship_id() {
+        fn image_relationship_id(bytes: Vec<u8>) -> String {
+            OpcPackage::from_reader(Cursor::new(bytes))
+                .unwrap()
+                .get_part_rels("/word/document.xml")
+                .and_then(|relationships| relationships.get_by_type(rel_types::IMAGE))
+                .expect("image relationship")
+                .id
+                .clone()
+        }
+
+        let mut control =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        control.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+        control.add_list_definition(&[ListLevel::decimal()]);
+        let control_image_id = image_relationship_id(control.to_bytes().unwrap());
+
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        document.add_list_definition(&[ListLevel::decimal()]);
+        let provisional = document
+            .package
+            .get_part_rels("/word/document.xml")
+            .and_then(|relationships| relationships.get_by_type(rel_types::NUMBERING))
+            .expect("staged numbering relationship")
+            .id
+            .clone();
+        assert!(provisional.starts_with("rdocxDeferredNumbering"));
+        document.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+        assert_eq!(
+            image_relationship_id(document.to_bytes().unwrap()),
+            control_image_id
+        );
+
+        let mut staged = document.clone_for_staging();
+        staged.canonicalize_authored_identifiers().unwrap();
+        let numeric = staged
+            .package
+            .get_part_rels("/word/document.xml")
+            .and_then(|relationships| relationships.get_by_type(rel_types::NUMBERING))
+            .expect("canonical numbering relationship")
+            .id
+            .clone();
+        assert!(
+            numeric
+                .strip_prefix("rId")
+                .is_some_and(|value| value.parse::<u32>().is_ok())
+        );
+        let occupied = staged
+            .identifiers
+            .relationship_ids
+            .get("/word/document.xml")
+            .unwrap();
+        assert!(occupied.contains(&numeric));
+        assert!(!occupied.contains(&provisional));
+        let authored = staged
+            .identifiers
+            .authored_bundle_relationship_ids
+            .get("/word/document.xml")
+            .unwrap();
+        assert!(authored.contains(&numeric));
+        assert!(!authored.contains(&provisional));
+        staged.canonicalize_authored_identifiers().unwrap();
+        assert_eq!(
+            staged
+                .package
+                .get_part_rels("/word/document.xml")
+                .and_then(|relationships| relationships.get_by_type(rel_types::NUMBERING))
+                .unwrap()
+                .id,
+            numeric
+        );
+
+        let mut collision =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        collision
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rId99", "urn:producer", "producer.bin");
+        collision.identifiers = DocumentIdentifiers::scan(&collision.package).unwrap();
+        collision.add_list_definition(&[ListLevel::decimal()]);
+        let collision_bytes = collision.to_bytes().unwrap();
+        let collision_package = OpcPackage::from_reader(Cursor::new(collision_bytes)).unwrap();
+        let relationships = collision_package
+            .get_part_rels("/word/document.xml")
+            .unwrap();
+        assert_eq!(
+            relationships.get_by_id("rId99").unwrap().rel_type,
+            "urn:producer"
+        );
+        assert!(
+            relationships
+                .get_by_type(rel_types::NUMBERING)
+                .expect("numbering fallback relationship")
+                .id
+                .starts_with("rId")
+        );
+
+        let mut producer =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        producer
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rdocxDeferredNumbering", "urn:producer", "producer.bin");
+        producer.identifiers = DocumentIdentifiers::scan(&producer.package).unwrap();
+        producer.add_list_definition(&[ListLevel::decimal()]);
+        assert_eq!(
+            producer
+                .package
+                .get_part_rels("/word/document.xml")
+                .and_then(|relationships| relationships.get_by_type(rel_types::NUMBERING))
+                .unwrap()
+                .id,
+            "rdocxDeferredNumbering1"
+        );
+        let saved = OpcPackage::from_reader(Cursor::new(producer.to_bytes().unwrap())).unwrap();
+        let relationships = saved.get_part_rels("/word/document.xml").unwrap();
+        assert_eq!(
+            relationships
+                .get_by_id("rdocxDeferredNumbering")
+                .unwrap()
+                .rel_type,
+            "urn:producer"
+        );
+        let numbering = relationships.get_by_type(rel_types::NUMBERING).unwrap();
+        assert!(
+            numbering
+                .id
+                .strip_prefix("rId")
+                .is_some_and(|value| value.parse::<u32>().is_ok())
+        );
+        assert!(!relationships.items.iter().any(|relationship| {
+            relationship.id.starts_with("rdocxDeferredNumbering")
+                && relationship.rel_type == rel_types::NUMBERING
+        }));
+    }
+
+    #[test]
+    fn prepared_reopen_preserves_authored_bundle_provenance_and_final_order() {
+        fn build(image_before_reopen: bool) -> Vec<u8> {
+            let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            document.add_list_definition(&[ListLevel::decimal()]);
+            let provisional = document
+                .package
+                .get_part_rels("/word/document.xml")
+                .and_then(|relationships| relationships.get_by_type(rel_types::NUMBERING))
+                .unwrap()
+                .id
+                .clone();
+            assert!(provisional.starts_with("rdocxDeferredNumbering"));
+            if image_before_reopen {
+                document.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+            }
+
+            let mut document = document.prepare_and_reopen_staged().unwrap();
+            let numbering = document
+                .package
+                .get_part_rels("/word/document.xml")
+                .and_then(|relationships| relationships.get_by_type(rel_types::NUMBERING))
+                .unwrap()
+                .id
+                .clone();
+            assert!(
+                numbering
+                    .strip_prefix("rId")
+                    .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
+            );
+            assert!(
+                document.identifiers.authored_bundle_relationship_ids["/word/document.xml"]
+                    .contains(&numbering)
+            );
+            assert!(
+                !document.identifiers.preserved_relationship_ids["/word/document.xml"]
+                    .contains(&numbering)
+            );
+            if !image_before_reopen {
+                document.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+            }
+            document.to_bytes().unwrap()
+        }
+
+        assert_eq!(build(false), build(true));
+    }
+
+    #[test]
+    fn external_bundle_edges_do_not_shadow_or_satisfy_internal_parts() {
+        let mut source = Document::new();
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        for (id, mode) in [
+            ("producerExternalStyles", "External"),
+            ("producerLowercaseStyles", "internal"),
+            ("producerMalformedStyles", "ProducerMode"),
+        ] {
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .items
+                .insert(
+                    0,
+                    oxml_opc::relationship::Relationship {
+                        id: id.to_owned(),
+                        rel_type: rel_types::STYLES.to_owned(),
+                        target: format!("https://example.com/{id}.xml"),
+                        target_mode: Some(mode.to_owned()),
+                    },
+                );
+        }
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert_eq!(
+            document.styles_part_name.as_deref(),
+            Some(DEFAULT_STYLES_PART)
+        );
+
+        let mut external_only =
+            OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        external_only
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        external_only
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .push(oxml_opc::relationship::Relationship {
+                id: "rdocxStyles".to_owned(),
+                rel_type: rel_types::STYLES.to_owned(),
+                target: "https://example.com/styles.xml".to_owned(),
+                target_mode: Some("External".to_owned()),
+            });
+        external_only.parts.remove(DEFAULT_STYLES_PART);
+        external_only
+            .content_types
+            .overrides
+            .remove(DEFAULT_STYLES_PART);
+        let mut bytes = Cursor::new(Vec::new());
+        external_only.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+        let saved = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let relationships = saved.get_part_rels("/word/document.xml").unwrap();
+        assert!(relationships.items.iter().any(|relationship| {
+            relationship.id == "rdocxStyles"
+                && relationship.target_mode.as_deref() == Some("External")
+        }));
+        assert!(relationships.items.iter().any(|relationship| {
+            relationship.id.starts_with("rId")
+                && relationship.rel_type == rel_types::STYLES
+                && relationship_is_internal(relationship)
+        }));
+
+        let mut malformed_header = Document::new();
+        malformed_header.set_header("producer header");
+        let header_id = malformed_header
+            .document
+            .body
+            .sect_pr
+            .as_ref()
+            .unwrap()
+            .header_refs[0]
+            .rel_id
+            .clone();
+        malformed_header
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == header_id)
+            .unwrap()
+            .target_mode = Some("internal".to_owned());
+        assert_eq!(malformed_header.header_text(), None);
+        assert!(malformed_header.active_header_footer_parts().is_empty());
+        malformed_header.set_header("replacement header");
+        assert_eq!(
+            malformed_header.header_text().as_deref(),
+            Some("replacement header")
+        );
+        let active_relationship = malformed_header
+            .package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == rel_types::HEADER && relationship_is_internal(relationship)
+            })
+            .unwrap();
+        assert_ne!(active_relationship.id, header_id);
+    }
+
+    #[test]
+    fn malformed_header_modes_do_not_shadow_or_enter_raw_mutations() {
+        let mut document = Document::new();
+        document.set_header("valid secret");
+        let valid_id = document.section_properties().unwrap().header_refs[0]
+            .rel_id
+            .clone();
+        document.package.set_part(
+            "/word/producer-header.xml",
+            format!(
+                r#"<w:hdr xmlns:w="{}"><w:p><w:r><w:t>producer secret</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+        );
+        document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .insert(
+                0,
+                oxml_opc::relationship::Relationship {
+                    id: "producerHeader".to_owned(),
+                    rel_type: rel_types::HEADER.to_owned(),
+                    target: "producer-header.xml".to_owned(),
+                    target_mode: Some("internal".to_owned()),
+                },
+            );
+        document.section_properties_mut().header_refs.insert(
+            0,
+            HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: "producerHeader".to_owned(),
+            },
+        );
+
+        assert_eq!(document.replace_regex("secret", "changed").unwrap(), 1);
+        assert_eq!(document.header_text().as_deref(), Some("valid changed"));
+        assert!(
+            String::from_utf8_lossy(
+                document
+                    .package
+                    .get_part("/word/producer-header.xml")
+                    .unwrap()
+            )
+            .contains("producer secret")
+        );
+        assert!(document.load_header_footer(&valid_id, true).is_some());
+
+        let mut external_only = Document::new();
+        external_only.set_header("external secret");
+        let relationship = external_only
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.rel_type == rel_types::HEADER)
+            .unwrap();
+        relationship.target_mode = Some("External".to_owned());
+        assert_eq!(external_only.replace_regex("secret", "changed").unwrap(), 0);
+        assert!(external_only.header_text().is_none());
+
+        let mut watermark = Document::new();
+        watermark.set_header("producer header");
+        let producer_id = watermark.section_properties().unwrap().header_refs[0]
+            .rel_id
+            .clone();
+        watermark
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == producer_id)
+            .unwrap()
+            .target_mode = Some("ProducerDefined".to_owned());
+        watermark.set_text_watermark("DRAFT").unwrap();
+        assert!(
+            watermark
+                .package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items
+                .iter()
+                .any(|relationship| {
+                    relationship.rel_type == rel_types::HEADER
+                        && relationship.id != producer_id
+                        && relationship_is_internal(relationship)
+                })
+        );
+    }
+
+    #[test]
+    fn cross_type_header_footer_references_never_mutate_the_target_story() {
+        let mut document = Document::new();
+        document.set_header("header secret");
+        document.set_footer("footer secret");
+        let section = document.section_properties().unwrap();
+        let header_id = section.header_refs[0].rel_id.clone();
+        let footer_id = section.footer_refs[0].rel_id.clone();
+        let header_part = document.header_footer_part_name(&header_id, true).unwrap();
+        let footer_part = document.header_footer_part_name(&footer_id, false).unwrap();
+        let section = document.section_properties_mut();
+        section.header_refs[0].rel_id.clone_from(&footer_id);
+        section.footer_refs[0].rel_id.clone_from(&header_id);
+
+        assert_eq!(document.replace_regex("secret", "changed").unwrap(), 0);
+        assert!(
+            String::from_utf8_lossy(document.package.get_part(&header_part).unwrap())
+                .contains("header secret")
+        );
+        assert!(
+            String::from_utf8_lossy(document.package.get_part(&footer_part).unwrap())
+                .contains("footer secret")
+        );
+        assert!(document.load_header_footer(&footer_id, true).is_none());
+        assert!(document.load_header_footer(&header_id, false).is_none());
+
+        fn assert_setter_reserves_a_fresh_part(
+            is_header: bool,
+            hdr_type: HdrFtrType,
+            setter: impl FnOnce(&mut Document),
+        ) {
+            let producer_part = "/word/producer-cross-type.xml";
+            let producer_bytes = b"producer bytes that must not change";
+            let mut document = Document::new();
+            document
+                .package
+                .set_part(producer_part, producer_bytes.to_vec());
+            let cross_type = if is_header {
+                rel_types::FOOTER
+            } else {
+                rel_types::HEADER
+            };
+            document
+                .package
+                .get_or_create_part_rels("/word/document.xml")
+                .add_with_id("producerCrossType", cross_type, "producer-cross-type.xml");
+            let reference = HdrFtrRef {
+                hdr_ftr_type: hdr_type,
+                rel_id: "producerCrossType".to_owned(),
+            };
+            if is_header {
+                document
+                    .section_properties_mut()
+                    .header_refs
+                    .push(reference);
+            } else {
+                document
+                    .section_properties_mut()
+                    .footer_refs
+                    .push(reference);
+            }
+
+            setter(&mut document);
+
+            assert_eq!(
+                document.package.get_part(producer_part),
+                Some(producer_bytes.as_slice())
+            );
+            let section = document.section_properties().unwrap();
+            let installed = if is_header {
+                &section.header_refs
+            } else {
+                &section.footer_refs
+            }
+            .iter()
+            .find(|reference| reference.hdr_ftr_type == hdr_type)
+            .unwrap();
+            assert_ne!(installed.rel_id, "producerCrossType");
+            let installed_part = document
+                .header_footer_part_name(&installed.rel_id, is_header)
+                .unwrap();
+            assert_ne!(installed_part, producer_part);
+        }
+
+        let png = super::watermark_tests::PNG;
+        let size = Length::pt(12.0);
+        assert_setter_reserves_a_fresh_part(true, HdrFtrType::Default, |document| {
+            document.set_header("new header")
+        });
+        assert_setter_reserves_a_fresh_part(false, HdrFtrType::Default, |document| {
+            document.set_footer("new footer")
+        });
+        assert_setter_reserves_a_fresh_part(true, HdrFtrType::First, |document| {
+            document.set_first_page_header("new first header")
+        });
+        assert_setter_reserves_a_fresh_part(false, HdrFtrType::First, |document| {
+            document.set_first_page_footer("new first footer")
+        });
+        assert_setter_reserves_a_fresh_part(true, HdrFtrType::Default, |document| {
+            document.set_header_image(png, "image.png", size, size)
+        });
+        assert_setter_reserves_a_fresh_part(false, HdrFtrType::Default, |document| {
+            document.set_footer_image(png, "image.png", size, size)
+        });
+        assert_setter_reserves_a_fresh_part(true, HdrFtrType::Default, |document| {
+            document.set_raw_header_with_images(
+                format!(r#"<w:hdr xmlns:w="{}"/>"#, rdocx_oxml::namespace::W_NS).into_bytes(),
+                &[],
+                HdrFtrType::Default,
+            )
+        });
+        assert_setter_reserves_a_fresh_part(false, HdrFtrType::Default, |document| {
+            document.set_raw_footer_with_images(
+                format!(r#"<w:ftr xmlns:w="{}"/>"#, rdocx_oxml::namespace::W_NS).into_bytes(),
+                &[],
+                HdrFtrType::Default,
+            )
+        });
+        assert_setter_reserves_a_fresh_part(true, HdrFtrType::Default, |document| {
+            document.set_header_image_with_background(png, "image.png", size, size, "000000")
+        });
+        assert_setter_reserves_a_fresh_part(true, HdrFtrType::First, |document| {
+            document.set_first_page_header_image(png, "image.png", size, size)
+        });
+    }
+
+    #[test]
+    fn unrelated_header_shaped_target_does_not_shadow_or_enter_replacement() {
+        let mut document = Document::new();
+        document.set_header("valid secret");
+        document.package.set_part(
+            "/word/producer-shaped.xml",
+            format!(
+                r#"<w:hdr xmlns:w="{}"><w:p><w:r><w:t>producer secret</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .into_bytes(),
+        );
+        document
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("producerShaped", rel_types::IMAGE, "producer-shaped.xml");
+        document.section_properties_mut().header_refs.insert(
+            0,
+            HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: "producerShaped".to_owned(),
+            },
+        );
+
+        let replacements = HashMap::from([("secret", "changed")]);
+        assert_eq!(document.replace_all(&replacements), 1);
+        assert_eq!(document.header_text().as_deref(), Some("valid changed"));
+        assert!(
+            String::from_utf8_lossy(
+                document
+                    .package
+                    .get_part("/word/producer-shaped.xml")
+                    .unwrap()
+            )
+            .contains("producer secret")
+        );
+    }
+
+    #[test]
+    fn bundle_and_semantic_relationships_are_canonicalized_together() {
+        fn build(reverse: bool) -> Vec<u8> {
+            let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            document.add_paragraph("review");
+            document.add_paragraph("link: ");
+            document
+                .package
+                .get_or_create_part_rels("/word/document.xml")
+                .add_with_id("rId40", "urn:producer", "producer.bin");
+            document.identifiers = DocumentIdentifiers::scan(&document.package).unwrap();
+            if reverse {
+                document
+                    .add_comment(
+                        crate::comments::RunRange {
+                            start: crate::comments::RunPosition {
+                                body_index: 0,
+                                run_index: 0,
+                            },
+                            end: crate::comments::RunPosition {
+                                body_index: 0,
+                                run_index: 1,
+                            },
+                        },
+                        "Reviewer",
+                        None,
+                        "note",
+                    )
+                    .unwrap();
+                document.set_first_page_header("first");
+                document.set_header("default");
+                document.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+                let hyperlink = document.add_hyperlink_relationship("https://example.com");
+                document
+                    .paragraph_mut(1)
+                    .unwrap()
+                    .add_hyperlink("example", &hyperlink);
+                document.add_list_definition(&[ListLevel::decimal()]);
+                document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+                document.set_auto_hyphenation(true).unwrap();
+            } else {
+                document.set_auto_hyphenation(true).unwrap();
+                document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+                document.add_list_definition(&[ListLevel::decimal()]);
+                let hyperlink = document.add_hyperlink_relationship("https://example.com");
+                document
+                    .paragraph_mut(1)
+                    .unwrap()
+                    .add_hyperlink("example", &hyperlink);
+                document.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+                document.set_header("default");
+                document.set_first_page_header("first");
+                document
+                    .add_comment(
+                        crate::comments::RunRange {
+                            start: crate::comments::RunPosition {
+                                body_index: 0,
+                                run_index: 0,
+                            },
+                            end: crate::comments::RunPosition {
+                                body_index: 0,
+                                run_index: 1,
+                            },
+                        },
+                        "Reviewer",
+                        None,
+                        "note",
+                    )
+                    .unwrap();
+            }
+            document.to_bytes().unwrap()
+        }
+
+        assert_eq!(build(false), build(true));
+        let package = OpcPackage::from_reader(Cursor::new(build(false))).unwrap();
+        let relationships = package.get_part_rels("/word/document.xml").unwrap();
+        assert_eq!(
+            relationships.get_by_id("rId40").unwrap().rel_type,
+            "urn:producer"
+        );
+        assert!(
+            relationships
+                .get_by_type(rel_types::NUMBERING)
+                .unwrap()
+                .id
+                .starts_with("rId")
+        );
+        assert!(
+            relationships
+                .get_by_type(rel_types::IMAGE)
+                .unwrap()
+                .id
+                .starts_with("rId")
+        );
+    }
+
+    #[test]
+    fn deferred_bundle_facades_panic_before_live_mutation_on_exhaustion() {
+        fn document_relationship_exhausted(_base: &str) -> Document {
+            let mut source = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            let mut package =
+                OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .items
+                .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .add_with_id(
+                    &format!("rId{}", u32::MAX),
+                    "urn:exhaustion",
+                    "unchanged.bin",
+                );
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+
+        fn package_bytes(document: &Document) -> Vec<u8> {
+            let mut bytes = Cursor::new(Vec::new());
+            document.package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        }
+
+        for (base, mutation) in [
+            (
+                "rdocxNumbering",
+                (|document: &mut Document| {
+                    document.add_bullet_list_item("item", 0);
+                }) as fn(&mut Document),
+            ),
+            ("rdocxNumbering", |document| {
+                document.add_numbered_list_item("item", 0);
+            }),
+            ("rdocxNumbering", |document| {
+                document.add_list_definition(&[ListLevel::decimal()]);
+            }),
+            ("rdocxStyles", |document| {
+                document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+            }),
+            ("rdocxFootnotes", |document| {
+                document.add_footnote("note");
+            }),
+        ] {
+            let mut document = document_relationship_exhausted(base);
+            let before = package_bytes(&document);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mutation(&mut document);
+            }));
+            assert!(result.is_err());
+            assert_eq!(package_bytes(&document), before);
+            assert_eq!(document.paragraph_count(), 0);
+            assert!(document.numbering.is_none());
+            assert!(document.footnotes().is_empty());
+            assert!(document.style("Custom").is_none());
+        }
+
+        for mutation in [
+            (|document: &mut Document| document.set_title("Title")) as fn(&mut Document),
+            |document| document.set_author("Author"),
+            |document| document.set_subject("Subject"),
+            |document| document.set_keywords("Keywords"),
+        ] {
+            let mut document = document_relationship_exhausted("rdocxUnused");
+            document.package.package_rels.add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+            document.identifiers = DocumentIdentifiers::scan(&document.package).unwrap();
+            let before = package_bytes(&document);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mutation(&mut document);
+            }));
+            assert!(result.is_err());
+            assert_eq!(package_bytes(&document), before);
+            assert!(document.core_properties.is_none());
+        }
+    }
+
+    #[test]
+    fn failed_save_identifier_reservation_leaves_document_unchanged() {
+        let mut document = Document::new();
+        document.add_picture(
+            b"save-rollback",
+            "rollback.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        );
+        let before = document.to_bytes().unwrap();
+        let owner = document.doc_part_name.clone();
+        let exhausted = format!("rId{}", u32::MAX);
+        document
+            .identifiers
+            .preserved_relationship_ids
+            .entry(owner.clone())
+            .or_default()
+            .insert(exhausted.clone());
+
+        let error = document.to_bytes().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("relationship id range is exhausted")
+        );
+
+        document
+            .identifiers
+            .preserved_relationship_ids
+            .get_mut(&owner)
+            .unwrap()
+            .remove(&exhausted);
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn image_facades_fail_before_mutating_on_relationship_exhaustion() {
+        let mut source = Document::new();
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let source_bytes = output.into_inner();
+
+        let package_bytes = |document: &Document| {
+            let mut output = Cursor::new(Vec::new());
+            document.package.write_to(&mut output).unwrap();
+            output.into_inner()
+        };
+        let mut picture = Document::from_bytes(&source_bytes).unwrap();
+        let before = package_bytes(&picture);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            picture.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+        }));
+        assert!(result.is_err());
+        assert_eq!(package_bytes(&picture), before);
+        assert_eq!(picture.paragraph_count(), 0);
+
+        let mut embedded = Document::from_bytes(&source_bytes).unwrap();
+        let before = package_bytes(&embedded);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            embedded.embed_image(b"image", "image.png");
+        }));
+        assert!(result.is_err());
+        assert_eq!(package_bytes(&embedded), before);
+
+        let mut automatic = Document::from_bytes(&source_bytes).unwrap();
+        let before = package_bytes(&automatic);
+        assert!(
+            automatic
+                .add_picture_auto(super::watermark_tests::PNG, "image.png")
+                .is_err()
+        );
+        assert_eq!(package_bytes(&automatic), before);
+        assert_eq!(automatic.paragraph_count(), 0);
+
+        let mut background = Document::from_bytes(&source_bytes).unwrap();
+        let before = package_bytes(&background);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            background.add_background_image(b"image", "image.png");
+        }));
+        assert!(result.is_err());
+        assert_eq!(package_bytes(&background), before);
+        assert_eq!(background.paragraph_count(), 0);
+
+        let mut anchored = Document::from_bytes(&source_bytes).unwrap();
+        let before = package_bytes(&anchored);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            anchored.add_anchored_image(
+                b"image",
+                "image.png",
+                Length::pt(1.0),
+                Length::pt(1.0),
+                true,
+            );
+        }));
+        assert!(result.is_err());
+        assert_eq!(package_bytes(&anchored), before);
+        assert_eq!(anchored.paragraph_count(), 0);
+    }
+
+    #[test]
+    fn background_and_anchored_images_roll_back_drawing_id_exhaustion() {
+        fn assert_rollback(mutation: impl FnOnce(&mut Document)) {
+            let mut document = Document::new();
+            document.identifiers.drawing_ids.insert(u32::MAX);
+            let before = document.clone_for_staging();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mutation(&mut document);
+            }));
+            assert!(result.is_err());
+            assert_eq!(document.document, before.document);
+            assert_eq!(document.package.parts, before.package.parts);
+            assert_eq!(
+                document.package.part_rels.len(),
+                before.package.part_rels.len()
+            );
+        }
+
+        assert_rollback(|document| {
+            document.add_background_image(b"image", "image.png");
+        });
+        assert_rollback(|document| {
+            document.add_anchored_image(
+                b"image",
+                "image.png",
+                Length::pt(1.0),
+                Length::pt(1.0),
+                false,
+            );
+        });
+    }
+
+    #[test]
+    fn gapped_imported_bookmarks_keep_lowest_free_allocation() {
+        let mut source = Document::new();
+        source.add_paragraph("zero");
+        source.add_paragraph("two");
+        for (index, id) in [(0, 0), (1, 2)] {
+            let BodyContent::Paragraph(paragraph) = &mut source.document.body.content[index] else {
+                panic!("paragraph");
+            };
+            assert!(paragraph.insert_bookmark_start(0, id, &format!("b{id}")));
+            assert!(paragraph.insert_bookmark_end(1, id));
+        }
+        let mut reopened = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+        reopened.add_paragraph("one");
+        let id = reopened
+            .add_bookmark(
+                "b1",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(id, 1);
+    }
+
+    #[test]
+    fn toc_reservation_observes_nested_bookmark_ids() {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(1, 1);
+            let mut cell = table.cell(0, 0).unwrap();
+            cell.set_text("nested");
+        }
+        let BodyContent::Table(table) = &mut document.document.body.content[0] else {
+            panic!("table");
+        };
+        let CellContent::Paragraph(paragraph) = &mut table.rows[0].cells[0].content[0] else {
+            panic!("paragraph");
+        };
+        assert!(paragraph.insert_bookmark_start(0, 100, "nested"));
+        assert!(paragraph.insert_bookmark_end(1, 100));
+        document.add_paragraph("Chapter").style("Heading1");
+
+        document.insert_toc(0, 1);
+
+        let toc = document
+            .bookmarks()
+            .into_iter()
+            .find(|bookmark| bookmark.name() == Some("_Toc1"))
+            .unwrap();
+        assert_eq!(toc.id(), Some(0));
+    }
+
+    #[test]
+    fn cell_and_body_pictures_receive_distinct_document_order_ids() {
+        const IMAGE: &[u8] = b"not-a-real-png";
+        let mut document = Document::new();
+        document.add_picture(IMAGE, "body.png", Length::pt(1.0), Length::pt(1.0));
+        let relationship = document.embed_image(IMAGE, "cell.png");
+        document.add_table(1, 1).cell(0, 0).unwrap().add_picture(
+            &relationship,
+            Length::pt(1.0),
+            Length::pt(1.0),
+        );
+
+        let package = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert_eq!(xml.matches(r#"wp:docPr id="1""#).count(), 1, "{xml}");
+        assert_eq!(xml.matches(r#"wp:docPr id="2""#).count(), 1, "{xml}");
+    }
+
+    #[test]
+    fn hyperlink_and_drawing_relationships_follow_final_paragraph_order() {
+        fn build(reverse_allocation: bool) -> Vec<u8> {
+            let mut document = Document::new();
+            let (hyperlink, picture) = if reverse_allocation {
+                let picture = document.embed_image(b"image", "image.png");
+                let hyperlink = document.add_hyperlink_relationship("https://example.com");
+                (hyperlink, picture)
+            } else {
+                let hyperlink = document.add_hyperlink_relationship("https://example.com");
+                let picture = document.embed_image(b"image", "image.png");
+                (hyperlink, picture)
+            };
+            let mut paragraph = document.add_paragraph("");
+            paragraph.add_hyperlink("link", &hyperlink);
+            paragraph.add_picture(&picture, Length::pt(1.0), Length::pt(1.0));
+            document.to_bytes().unwrap()
+        }
+        assert_eq!(build(false), build(true));
+    }
+
+    #[test]
+    fn current_unpreserved_relationships_join_semantic_canonicalization() {
+        fn add_theme(document: &mut Document, id: &str) {
+            document.package.set_part(
+                DEFAULT_THEME_PART,
+                oxml_drawing::theme::OFFICE_DEFAULT_XML.as_bytes().to_vec(),
+            );
+            document
+                .package
+                .content_types
+                .add_override(DEFAULT_THEME_PART, content_types::THEME);
+            document
+                .package
+                .get_or_create_part_rels("/word/document.xml")
+                .add_with_id(id, rel_types::THEME, "theme/theme1.xml");
+        }
+
+        let mut authored =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        authored
+            .add_chart(
+                ChartKind::Bar,
+                Length::inches(2.0),
+                Length::inches(1.0),
+                &f158_chart_data(1),
+            )
+            .unwrap();
+        add_theme(&mut authored, "rId40");
+        let reopened = Document::from_bytes(&authored.to_bytes().unwrap()).unwrap();
+        let relationships = reopened
+            .package
+            .get_part_rels("/word/document.xml")
+            .unwrap();
+        assert_eq!(
+            relationships.get_by_type(rel_types::CHART).unwrap().id,
+            "rId1"
+        );
+        assert_eq!(
+            relationships.get_by_type(rel_types::THEME).unwrap().id,
+            "rId2"
+        );
+
+        let mut producer =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let mut producer = Document::from_bytes(&producer.to_bytes().unwrap()).unwrap();
+        add_theme(&mut producer, "rId9");
+        let mut producer_bytes = Cursor::new(Vec::new());
+        producer.package.write_to(&mut producer_bytes).unwrap();
+        let mut producer = Document::from_bytes(producer_bytes.get_ref()).unwrap();
+        producer
+            .add_chart(
+                ChartKind::Bar,
+                Length::inches(2.0),
+                Length::inches(1.0),
+                &f158_chart_data(1),
+            )
+            .unwrap();
+        let reopened = Document::from_bytes(&producer.to_bytes().unwrap()).unwrap();
+        let relationships = reopened
+            .package
+            .get_part_rels("/word/document.xml")
+            .unwrap();
+        assert_eq!(
+            relationships.get_by_type(rel_types::THEME).unwrap().id,
+            "rId9"
+        );
+        assert_eq!(
+            relationships.get_by_type(rel_types::CHART).unwrap().id,
+            "rId10"
+        );
+
+        let mut opaque =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let relationships = opaque.package.get_or_create_part_rels("/word/document.xml");
+        relationships.add_with_id("rId41", "urn:producer", "opaque.bin");
+        relationships
+            .items
+            .push(oxml_opc::relationship::Relationship {
+                id: "rId40".to_owned(),
+                rel_type: rel_types::HYPERLINK.to_owned(),
+                target: "https://example.com/opaque".to_owned(),
+                target_mode: Some("External".to_owned()),
+            });
+        let reopened = Document::from_bytes(&opaque.to_bytes().unwrap()).unwrap();
+        let relationships = reopened
+            .package
+            .get_part_rels("/word/document.xml")
+            .unwrap();
+        assert!(relationships.items.iter().any(|relationship| {
+            relationship.id == "rId1"
+                && relationship.rel_type == "urn:producer"
+                && relationship.target == "opaque.bin"
+                && relationship_is_internal(relationship)
+        }));
+        assert!(relationships.items.iter().any(|relationship| {
+            relationship.id == "rId2"
+                && relationship.rel_type == rel_types::HYPERLINK
+                && relationship.target == "https://example.com/opaque"
+                && relationship.target_mode.as_deref() == Some("External")
+        }));
+    }
+
+    #[test]
+    fn opaque_xml_relationship_ids_are_fixed_across_opposite_allocation_order() {
+        const RAW: &[u8] = br#"<producer:item xmlns:producer="urn:producer" r:embed="rId40"/>"#;
+
+        fn build(raw_relationship_first: bool) -> Vec<u8> {
+            let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            document
+                .body_namespace_bindings
+                .push(("xmlns:r".to_owned(), drawing_ns::R.to_owned()));
+            let add_raw_relationship = |document: &mut Document| {
+                document
+                    .package
+                    .set_part("/word/opaque.bin", b"opaque relationship target".to_vec());
+                document
+                    .package
+                    .content_types
+                    .add_default("bin", "application/octet-stream");
+                document
+                    .package
+                    .get_or_create_part_rels("/word/document.xml")
+                    .add_with_id("rId40", "urn:producer:opaque", "opaque.bin");
+            };
+            if raw_relationship_first {
+                add_raw_relationship(&mut document);
+            }
+            let hyperlink = document.add_hyperlink_relationship("https://example.com");
+            if !raw_relationship_first {
+                add_raw_relationship(&mut document);
+            }
+            document.add_paragraph("").add_hyperlink("link", &hyperlink);
+            document
+                .document
+                .body
+                .content
+                .push(BodyContent::RawXml(RAW.to_vec()));
+            document.to_bytes().unwrap()
+        }
+
+        let raw_first = build(true);
+        let modeled_first = build(false);
+        assert_eq!(raw_first, modeled_first);
+
+        let package = OpcPackage::from_reader(Cursor::new(raw_first)).unwrap();
+        let relationships = package
+            .get_part_rels("/word/document.xml")
+            .expect("document relationships");
+        assert!(relationships.items.iter().any(|relationship| {
+            relationship.id == "rId40"
+                && relationship.rel_type == "urn:producer:opaque"
+                && relationship.target == "opaque.bin"
+        }));
+        assert!(relationships.items.iter().any(|relationship| {
+            relationship.id == "rId1" && relationship.rel_type == rel_types::HYPERLINK
+        }));
+        assert!(
+            package
+                .get_part("/word/document.xml")
+                .is_some_and(|xml| xml.windows(RAW.len()).any(|window| window == RAW))
+        );
+    }
+
+    #[test]
+    fn paragraph_local_binding_covers_unsupported_run_child_relationship() {
+        const RAW: &[u8] = br#"<w:custom localRel:id="rId&#52;0"/>"#;
+        let xml = format!(
+            r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body><w:p xmlns:localRel="{}"><w:r><w:t>producer</w:t>{}</w:r></w:p><w:sectPr/></w:body></w:document>"#,
+            drawing_ns::R,
+            std::str::from_utf8(RAW).unwrap(),
+        );
+        let seed =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let mut package = seed.package;
+        package.set_part("/word/document.xml", xml.into_bytes());
+        package.set_part("/word/opaque.bin", b"opaque relationship target".to_vec());
+        package
+            .content_types
+            .add_default("bin", "application/octet-stream");
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rId40", "urn:producer:opaque", "opaque.bin");
+        let mut document = Document::from_package(package).unwrap();
+        let hyperlink = document.add_hyperlink_relationship("https://example.com/modeled");
+        document
+            .add_paragraph("")
+            .add_hyperlink("modeled", &hyperlink);
+
+        let saved = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let relationships = saved.get_part_rels("/word/document.xml").unwrap();
+        assert!(relationships.get_by_id("rId40").is_some());
+        assert_eq!(
+            relationships.get_by_type(rel_types::HYPERLINK).unwrap().id,
+            "rId41"
+        );
+        assert!(
+            saved
+                .get_part("/word/document.xml")
+                .is_some_and(|xml| xml.windows(RAW.len()).any(|window| window == RAW))
+        );
+    }
+
+    #[test]
+    fn word_main_part_and_relationship_owner_resolve_case_equivalent_spelling() {
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let document_xml = package.parts.remove("/word/document.xml").unwrap();
+        package
+            .parts
+            .insert("/WORD/DOCUMENT.XML".to_owned(), document_xml);
+        let relationships = package.part_rels.remove("/word/document.xml").unwrap();
+        package
+            .part_rels
+            .insert("/WORD/DOCUMENT.XML".to_owned(), relationships);
+        package.set_part("/word/occupied.bin", b"occupied".to_vec());
+        package
+            .content_types
+            .add_default("bin", "application/octet-stream");
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rId40", "urn:producer:occupied", "occupied.bin");
+
+        let mut reopened = Document::from_package(package).unwrap();
+        assert!(
+            reopened
+                .identifiers
+                .relationship_ids
+                .contains_key("/word/document.xml")
+        );
+        assert!(
+            !reopened
+                .identifiers
+                .relationship_ids
+                .contains_key("/WORD/DOCUMENT.XML")
+        );
+        let hyperlink = reopened.add_hyperlink_relationship("https://example.com/mixed-case");
+        assert_eq!(hyperlink, "rId41");
+        reopened
+            .add_paragraph("")
+            .add_hyperlink("mixed case", &hyperlink);
+        let saved = OpcPackage::from_reader(Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+        assert!(saved.parts.contains_key("/WORD/DOCUMENT.XML"));
+        assert!(saved.part_rels.contains_key("/WORD/DOCUMENT.XML"));
+        let relationships = saved.get_part_rels("/word/document.xml").unwrap();
+        assert!(relationships.get_by_id("rId40").is_some());
+        assert_eq!(
+            relationships.get_by_type(rel_types::HYPERLINK).unwrap().id,
+            "rId41"
+        );
+    }
+
+    #[test]
+    fn custom_xml_identity_decoys_do_not_block_open() {
+        let mut document = Document::new();
+        let bytes = document.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+        package.set_part(
+            "/customXml/item1.xml",
+            br#"<x:root xmlns:x="urn:custom" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:bookmarkStart w:id="0"/><w:bookmarkStart w:id="0"/><wp:docPr id="bad">"#.to_vec(),
+        );
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        Document::from_bytes(&output.into_inner()).expect("opaque custom XML is not a story");
+    }
+
+    #[test]
+    fn inserted_numbering_is_registered_before_later_authoring() {
+        let mut source = Document::new();
+        let source_id = source.add_list_definition(&[ListLevel::decimal()]);
+        source.add_paragraph("source").set_numbering(source_id, 0);
+        let mut destination = Document::new();
+        destination.insert_document(0, &source);
+        let inserted_id = destination
+            .numbering
+            .as_ref()
+            .unwrap()
+            .nums
+            .first()
+            .unwrap()
+            .num_id;
+        let authored_id = destination.add_list_definition(&[ListLevel::bullet()]);
+        assert_ne!(inserted_id, authored_id);
+    }
 
     #[test]
     fn unsupported_names_come_from_the_accepted_parser_event() {
@@ -11110,6 +16353,69 @@ mod tests {
     }
 
     #[test]
+    fn replacement_flush_failures_leave_the_live_document_unchanged() {
+        fn exhausted() -> Document {
+            let mut source = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            source.add_paragraph("before {{value}}");
+            let mut package =
+                OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            relationships
+                .items
+                .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+            relationships.add_with_id(&format!("rId{}", u32::MAX), "urn:producer", "producer.bin");
+            package.parts.remove(DEFAULT_STYLES_PART);
+            package.content_types.overrides.remove(DEFAULT_STYLES_PART);
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+
+        let mut literal = exhausted();
+        let before = literal.paragraphs()[0].text();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            literal.replace_text("{{value}}", "after");
+        }));
+        assert!(result.is_err());
+        assert_eq!(literal.paragraphs()[0].text(), before);
+
+        let mut regex = exhausted();
+        let before = regex.paragraphs()[0].text();
+        let error = regex.replace_regex(r"\{\{value\}\}", "after").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("styles relationship allocation failed")
+        );
+        assert_eq!(regex.paragraphs()[0].text(), before);
+    }
+
+    #[test]
+    fn header_footer_serialization_failures_abort_literal_and_regex_replacement() {
+        let mut literal = Document::new();
+        literal.set_header("before {{value}}");
+        FAIL_NEXT_HEADER_FOOTER_SERIALIZATION.set(true);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            literal.replace_text("{{value}}", "after");
+        }));
+        assert!(result.is_err());
+        assert_eq!(literal.header_text().as_deref(), Some("before {{value}}"));
+
+        let mut regex = Document::new();
+        regex.set_header("before {{value}}");
+        FAIL_NEXT_HEADER_FOOTER_SERIALIZATION.set(true);
+        let error = regex.replace_regex(r"\{\{value\}\}", "after").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("injected header or footer serialization failure")
+        );
+        assert_eq!(regex.header_text().as_deref(), Some("before {{value}}"));
+    }
+
+    #[test]
     fn template_workflow_round_trip() {
         let mut doc = Document::new();
         doc.add_paragraph("Company: {{company}}");
@@ -11123,6 +16429,61 @@ mod tests {
         let doc2 = Document::from_bytes(&bytes).unwrap();
         assert_eq!(doc2.paragraphs()[0].text(), "Company: Acme Corp");
         assert_eq!(doc2.paragraphs()[1].text(), "Date: 2026-02-22");
+    }
+
+    #[test]
+    fn template_commit_retains_the_complete_staged_bundle_state() {
+        let mut source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        source.add_paragraph("Hello {{name}}");
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        assert_eq!(
+            document
+                .render_template(&serde_json::json!({"name": "Ada"}))
+                .unwrap(),
+            1
+        );
+        let staged_target = document.styles_part_name.clone().unwrap();
+        let staged_relationships = document
+            .package
+            .get_part_rels("/word/document.xml")
+            .unwrap();
+        assert_eq!(
+            staged_relationships
+                .items
+                .iter()
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::STYLES
+                        && relationship_is_internal(relationship)
+                })
+                .count(),
+            1
+        );
+
+        let saved = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let styles = saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::STYLES && relationship_is_internal(relationship)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(styles.len(), 1);
+        assert_eq!(
+            OpcPackage::resolve_rel_target("/word/document.xml", &styles[0].target),
+            staged_target
+        );
+        assert_eq!(document.paragraphs()[0].text(), "Hello Ada");
     }
 
     #[test]
@@ -11293,6 +16654,47 @@ mod tests {
         let bytes = doc_a.to_bytes().expect("serialize");
         let reopened = Document::from_bytes(&bytes).expect("open");
         assert_eq!(reopened.content_count(), 5);
+    }
+
+    #[test]
+    fn append_variants_panic_before_mutation_when_bundle_preflight_fails() {
+        fn receiver() -> Document {
+            let mut source = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            source.add_paragraph("receiver");
+            let mut package =
+                OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            relationships
+                .items
+                .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+            relationships.add_with_id(&format!("rId{}", u32::MAX), "urn:producer", "producer.bin");
+            package.parts.remove(DEFAULT_STYLES_PART);
+            package.content_types.overrides.remove(DEFAULT_STYLES_PART);
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+
+        let mut other = Document::new();
+        other.add_style(StyleBuilder::paragraph("Merged", "Merged"));
+        other.add_paragraph("other").style("Merged");
+        for mutation in [
+            (|document: &mut Document, other: &Document| document.append(other))
+                as fn(&mut Document, &Document),
+            |document, other| document.append_with_break(other, crate::SectionBreak::NextPage),
+            |document, other| document.insert_document(0, other),
+        ] {
+            let mut document = receiver();
+            let before = document.paragraphs()[0].text();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mutation(&mut document, &other);
+            }));
+            assert!(result.is_err());
+            assert_eq!(document.content_count(), 1);
+            assert_eq!(document.paragraphs()[0].text(), before);
+        }
     }
 
     #[test]
@@ -11668,6 +17070,126 @@ mod tests {
             std::str::from_utf8(package.get_part(&settings_part).unwrap())
                 .unwrap()
                 .contains("<w:autoHyphenation/>")
+        );
+    }
+
+    #[test]
+    fn pending_settings_part_name_is_reserved_against_rich_fragment_imports() {
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        document.set_auto_hyphenation(true).unwrap();
+        let settings_part = document.settings_part_name.clone().unwrap();
+
+        let imported = document
+            .identifiers
+            .reserve_fragment_part_name(&settings_part)
+            .unwrap();
+
+        assert_ne!(imported, settings_part);
+        assert!(imported.contains("-merge-"));
+    }
+
+    #[test]
+    fn settings_mutations_roll_back_relationship_exhaustion() {
+        fn exhausted_document() -> Document {
+            let mut source = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            let bytes = source.to_bytes().unwrap();
+            let mut package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            relationships.add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+
+        let package_bytes = |document: &Document| {
+            let mut bytes = Cursor::new(Vec::new());
+            document.package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        };
+
+        let mut hyphenation = exhausted_document();
+        let before = package_bytes(&hyphenation);
+        let error = hyphenation.set_auto_hyphenation(true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("settings relationship allocation failed")
+        );
+        assert_eq!(package_bytes(&hyphenation), before);
+        assert!(hyphenation.settings_part_name.is_none());
+
+        let mut math = exhausted_document();
+        let before = package_bytes(&math);
+        let error = math
+            .set_math_properties(MathProperties::default())
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("settings relationship allocation failed")
+        );
+        assert_eq!(package_bytes(&math), before);
+        assert!(math.settings_part_name.is_none());
+    }
+
+    #[test]
+    fn serialization_reports_checked_styles_and_comments_relationship_exhaustion() {
+        let mut style_source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let source_bytes = style_source.to_bytes().unwrap();
+        let mut style_package = OpcPackage::from_reader(Cursor::new(source_bytes)).unwrap();
+        let relationships = style_package.get_or_create_part_rels("/word/document.xml");
+        relationships
+            .items
+            .retain(|relationship| relationship.rel_type != rel_types::STYLES);
+        relationships.add_with_id(
+            &format!("rId{}", u32::MAX),
+            "urn:exhaustion",
+            "unchanged.bin",
+        );
+        style_package.parts.remove(DEFAULT_STYLES_PART);
+        style_package
+            .content_types
+            .overrides
+            .remove(DEFAULT_STYLES_PART);
+        let mut bytes = Cursor::new(Vec::new());
+        style_package.write_to(&mut bytes).unwrap();
+        let mut style_less = Document::from_bytes(bytes.get_ref()).unwrap();
+        let error = style_less.to_bytes().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("styles relationship allocation failed")
+        );
+
+        let mut comments_source =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let source_bytes = comments_source.to_bytes().unwrap();
+        let mut comments_package = OpcPackage::from_reader(Cursor::new(source_bytes)).unwrap();
+        comments_package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+        let mut bytes = Cursor::new(Vec::new());
+        comments_package.write_to(&mut bytes).unwrap();
+        let mut comments = Document::from_bytes(bytes.get_ref()).unwrap();
+        comments.comments = Some(rdocx_oxml::comments::CT_Comments::new());
+        comments.comments_part_name = Some("/word/comments.xml".to_owned());
+        let error = comments.to_bytes().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("comments relationship allocation failed")
         );
     }
 
@@ -12105,8 +17627,9 @@ mod hyperlink_span_tests {
 #[cfg(test)]
 mod watermark_tests {
     use super::*;
+    use std::io::Cursor;
 
-    const PNG: &[u8] = &[
+    pub(super) const PNG: &[u8] = &[
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
         0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
@@ -12172,11 +17695,13 @@ mod watermark_tests {
         document.settings = Some(CT_Settings::from_xml(&xml).unwrap());
         document.settings_part_name = Some(part_name.to_owned());
         document.package.set_part(part_name, xml);
-        document.ensure_part_relationship(
-            part_name,
-            rel_types::SETTINGS,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
-        );
+        document
+            .ensure_part_relationship_checked(
+                part_name,
+                rel_types::SETTINGS,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+            )
+            .unwrap();
     }
 
     fn assert_watermark_mutation_preserves_reusable_engine(
@@ -12289,6 +17814,243 @@ mod watermark_tests {
     }
 
     #[test]
+    fn watermark_replacement_removes_stale_authored_images() {
+        let mut document = Document::new();
+        document.set_header("header");
+        document
+            .set_image_watermark(PNG, "first.png", Length::pt(72.0), Length::pt(36.0))
+            .unwrap();
+        let first_parts = document
+            .package
+            .parts
+            .iter()
+            .filter(|(_, bytes)| bytes.as_slice() == PNG)
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(first_parts.len(), 1);
+
+        let mut replacement = PNG.to_vec();
+        *replacement.last_mut().unwrap() ^= 1;
+        document
+            .set_image_watermark(
+                &replacement,
+                "second.png",
+                Length::pt(72.0),
+                Length::pt(36.0),
+            )
+            .unwrap();
+        assert!(
+            first_parts
+                .iter()
+                .all(|part| document.package.get_part(part).is_none())
+        );
+        assert_eq!(
+            document
+                .package
+                .get_part_rels("/word/header1.xml")
+                .unwrap()
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::IMAGE)
+                .count(),
+            1
+        );
+
+        document.set_text_watermark("FINAL").unwrap();
+        assert!(
+            document
+                .package
+                .parts
+                .iter()
+                .all(|(_, bytes)| bytes.as_slice() != replacement)
+        );
+        assert!(
+            document
+                .package
+                .get_part_rels("/word/header1.xml")
+                .is_none_or(|relationships| relationships
+                    .items
+                    .iter()
+                    .all(|relationship| relationship.rel_type != rel_types::IMAGE))
+        );
+    }
+
+    #[test]
+    fn imported_header_watermark_order_is_stable_and_preserves_producer_relationships() {
+        fn reopened_source() -> Document {
+            let mut source = Document::new();
+            source.set_header("producer header");
+            source
+                .package
+                .set_part("/word/producer.bin", b"keep".to_vec());
+            source
+                .package
+                .content_types
+                .add_override("/word/producer.bin", "application/octet-stream");
+            source
+                .package
+                .get_or_create_part_rels("/word/header1.xml")
+                .add_with_id("producerRel", "urn:producer", "producer.bin");
+            Document::from_bytes(&source.to_bytes().unwrap()).unwrap()
+        }
+
+        fn build(watermark_first: bool) -> Vec<u8> {
+            let mut document = reopened_source();
+            if watermark_first {
+                document
+                    .set_image_watermark(PNG, "watermark.png", Length::pt(72.0), Length::pt(36.0))
+                    .unwrap();
+                document.add_picture(PNG, "body.png", Length::pt(36.0), Length::pt(18.0));
+            } else {
+                document.add_picture(PNG, "body.png", Length::pt(36.0), Length::pt(18.0));
+                document
+                    .set_image_watermark(PNG, "watermark.png", Length::pt(72.0), Length::pt(36.0))
+                    .unwrap();
+            }
+            document.set_text_watermark("FINAL").unwrap();
+            let relationships = document.package.get_part_rels("/word/header1.xml").unwrap();
+            assert_eq!(
+                relationships.get_by_id("producerRel").unwrap().target,
+                "producer.bin"
+            );
+            document.to_bytes().unwrap()
+        }
+
+        assert_eq!(build(false), build(true));
+    }
+
+    #[test]
+    fn imported_header_watermark_preserves_producer_drawing_bytes_ids_and_relationship_order() {
+        let mut source = Document::new();
+        source.set_header_image(PNG, "producer.png", Length::pt(72.0), Length::pt(36.0));
+        let source_bytes = source.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(Cursor::new(source_bytes)).unwrap();
+        let mut header =
+            String::from_utf8(package.get_part("/word/header1.xml").unwrap().to_vec()).unwrap();
+        assert!(header.contains(r#"wp:docPr id="1""#));
+        header = header.replacen(r#"wp:docPr id="1""#, r#"wp:docPr id="77""#, 1);
+        let drawing_start = header.find("<w:drawing").unwrap();
+        let drawing_end = drawing_start
+            + header[drawing_start..].find("</w:drawing>").unwrap()
+            + "</w:drawing>".len();
+        let producer_drawing = header.as_bytes()[drawing_start..drawing_end].to_vec();
+        package.set_part("/word/header1.xml", header.into_bytes());
+        package.set_part("/word/z-producer.bin", b"z".to_vec());
+        package.set_part("/word/a-producer.bin", b"a".to_vec());
+        package
+            .content_types
+            .add_override("/word/z-producer.bin", "application/octet-stream");
+        package
+            .content_types
+            .add_override("/word/a-producer.bin", "application/octet-stream");
+        let relationships = package.get_or_create_part_rels("/word/header1.xml");
+        let image_id = relationships
+            .get_by_type(rel_types::IMAGE)
+            .unwrap()
+            .id
+            .clone();
+        relationships.items.insert(
+            0,
+            oxml_opc::relationship::Relationship {
+                id: "zProducer".to_owned(),
+                rel_type: "urn:producer:z".to_owned(),
+                target: "z-producer.bin".to_owned(),
+                target_mode: None,
+            },
+        );
+        relationships.add_with_id("aProducer", "urn:producer:a", "a-producer.bin");
+        let producer_order = ["zProducer".to_owned(), image_id, "aProducer".to_owned()];
+        let mut serialized = Cursor::new(Vec::new());
+        package.write_to(&mut serialized).unwrap();
+
+        let mut document = Document::from_bytes(serialized.get_ref()).unwrap();
+        document
+            .set_image_watermark(PNG, "watermark.png", Length::pt(36.0), Length::pt(18.0))
+            .unwrap();
+        let output = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let output_header = output.get_part("/word/header1.xml").unwrap();
+        assert!(
+            output_header
+                .windows(producer_drawing.len())
+                .any(|window| window == producer_drawing)
+        );
+        assert!(String::from_utf8_lossy(output_header).contains(r#"wp:docPr id="77""#));
+        let output_order = output
+            .get_part_rels("/word/header1.xml")
+            .unwrap()
+            .items
+            .iter()
+            .take(3)
+            .map(|relationship| relationship.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(output_order, producer_order);
+    }
+
+    #[test]
+    fn legacy_header_setters_and_watermark_roll_back_relationship_exhaustion() {
+        let package_bytes = |document: &Document| {
+            let mut output = Cursor::new(Vec::new());
+            document.package.write_to(&mut output).unwrap();
+            output.into_inner()
+        };
+
+        let mut text_seed = Document::new();
+        text_seed
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+        let mut seed_bytes = Cursor::new(Vec::new());
+        text_seed.package.write_to(&mut seed_bytes).unwrap();
+        let mut text = Document::from_bytes(seed_bytes.get_ref()).unwrap();
+        let before = package_bytes(&text);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                text.set_header("header");
+            }))
+            .is_err()
+        );
+        assert_eq!(package_bytes(&text), before);
+
+        let mut image_seed = Document::new();
+        image_seed.set_header("producer header");
+        let mut image_package =
+            OpcPackage::from_reader(Cursor::new(image_seed.to_bytes().unwrap())).unwrap();
+        image_package
+            .get_or_create_part_rels("/word/header1.xml")
+            .add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+        let mut seed_bytes = Cursor::new(Vec::new());
+        image_package.write_to(&mut seed_bytes).unwrap();
+        let source = seed_bytes.into_inner();
+
+        let mut image = Document::from_bytes(&source).unwrap();
+        let before = package_bytes(&image);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                image.set_header_image(PNG, "image.png", Length::pt(36.0), Length::pt(18.0));
+            }))
+            .is_err()
+        );
+        assert_eq!(package_bytes(&image), before);
+
+        let mut watermark = Document::from_bytes(&source).unwrap();
+        let before = package_bytes(&watermark);
+        assert!(
+            watermark
+                .set_image_watermark(PNG, "image.png", Length::pt(36.0), Length::pt(18.0))
+                .is_err()
+        );
+        assert_eq!(package_bytes(&watermark), before);
+    }
+
+    #[test]
     fn header_image_relationship_ids_are_scoped_per_part() {
         let mut document = Document::new();
         let image_watermark = |text: &str| {
@@ -12321,6 +18083,436 @@ mod watermark_tests {
         assert_eq!(scoped.len(), 2);
         assert!(scoped.contains(&PNG));
         assert!(scoped.contains(&alternate.as_slice()));
+    }
+
+    #[test]
+    fn header_image_setter_order_does_not_change_package_bytes() {
+        fn build(reverse: bool) -> Vec<u8> {
+            let mut document = Document::new();
+            let mut alternate = PNG.to_vec();
+            *alternate.last_mut().unwrap() ^= 1;
+            if reverse {
+                document.set_first_page_header_image(
+                    &alternate,
+                    "first.png",
+                    Length::pt(72.0),
+                    Length::pt(36.0),
+                );
+                document.set_header_image(PNG, "default.png", Length::pt(72.0), Length::pt(36.0));
+            } else {
+                document.set_header_image(PNG, "default.png", Length::pt(72.0), Length::pt(36.0));
+                document.set_first_page_header_image(
+                    &alternate,
+                    "first.png",
+                    Length::pt(72.0),
+                    Length::pt(36.0),
+                );
+            }
+            document.to_bytes().unwrap()
+        }
+        assert_eq!(build(false), build(true));
+    }
+
+    #[test]
+    fn replacing_authored_image_header_with_text_removes_orphan_media() {
+        let mut document = Document::new();
+        document.set_header_image(PNG, "old.png", Length::pt(72.0), Length::pt(36.0));
+        let relationship = document
+            .package
+            .get_part_rels("/word/header1.xml")
+            .and_then(|relationships| relationships.get_by_type(rel_types::IMAGE))
+            .cloned()
+            .unwrap();
+        let image_part = OpcPackage::resolve_rel_target("/word/header1.xml", &relationship.target);
+        assert!(document.package.get_part(&image_part).is_some());
+
+        document.set_header("replacement");
+
+        assert!(
+            document
+                .package
+                .get_part_rels("/word/header1.xml")
+                .is_none_or(|relationships| relationships.items.is_empty())
+        );
+        assert!(document.package.get_part(&image_part).is_none());
+        let package = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        assert!(package.get_part(&image_part).is_none());
+    }
+
+    #[test]
+    fn replacing_authored_images_with_text_restores_direct_package_bytes() {
+        let mut header_history = Document::new();
+        header_history.set_header_image(PNG, "old.png", Length::pt(72.0), Length::pt(36.0));
+        header_history.set_header("replacement");
+        let mut direct_header = Document::new();
+        direct_header.set_header("replacement");
+        assert_eq!(
+            header_history.to_bytes().unwrap(),
+            direct_header.to_bytes().unwrap()
+        );
+
+        let mut watermark_history = Document::new();
+        watermark_history
+            .set_image_watermark(PNG, "old.png", Length::pt(72.0), Length::pt(36.0))
+            .unwrap();
+        watermark_history.set_text_watermark("FINAL").unwrap();
+        let mut direct_watermark = Document::new();
+        direct_watermark.set_text_watermark("FINAL").unwrap();
+        let history_bytes = watermark_history.to_bytes().unwrap();
+        let direct_bytes = direct_watermark.to_bytes().unwrap();
+        let history_package = OpcPackage::from_reader(Cursor::new(&history_bytes)).unwrap();
+        let direct_package = OpcPackage::from_reader(Cursor::new(&direct_bytes)).unwrap();
+        assert_eq!(history_package.content_types, direct_package.content_types);
+        assert_eq!(
+            history_package.package_rels.to_xml().unwrap(),
+            direct_package.package_rels.to_xml().unwrap()
+        );
+        let relationship_xml = |package: &OpcPackage| {
+            let mut relationships = package
+                .part_rels
+                .iter()
+                .map(|(owner, relationships)| (owner.clone(), relationships.to_xml().unwrap()))
+                .collect::<Vec<_>>();
+            relationships.sort_by(|left, right| left.0.cmp(&right.0));
+            relationships
+        };
+        assert_eq!(
+            relationship_xml(&history_package),
+            relationship_xml(&direct_package)
+        );
+        let mut history_parts = history_package.parts.keys().cloned().collect::<Vec<_>>();
+        history_parts.sort();
+        let mut direct_parts = direct_package.parts.keys().cloned().collect::<Vec<_>>();
+        direct_parts.sort();
+        assert_eq!(history_parts, direct_parts);
+        for part_name in history_parts {
+            let history_part = history_package.get_part(&part_name);
+            let direct_part = direct_package.get_part(&part_name);
+            if history_part != direct_part {
+                panic!(
+                    "part {part_name} differs\nhistory: {}\ndirect: {}",
+                    String::from_utf8_lossy(history_part.unwrap()),
+                    String::from_utf8_lossy(direct_part.unwrap())
+                );
+            }
+        }
+        assert_eq!(history_bytes, direct_bytes);
+    }
+
+    #[test]
+    fn orphan_image_default_ignores_override_covered_producer_parts() {
+        fn source() -> Vec<u8> {
+            let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            let mut package =
+                OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+            package.set_part("/word/media/producer.png", b"producer".to_vec());
+            package
+                .content_types
+                .add_override("/word/media/producer.png", "application/x-producer-image");
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        }
+
+        let source = source();
+        let mut history = Document::from_bytes(&source).unwrap();
+        history.set_header_image(PNG, "old.png", Length::pt(72.0), Length::pt(36.0));
+        history.set_header("replacement");
+        let mut direct = Document::from_bytes(&source).unwrap();
+        direct.set_header("replacement");
+
+        let history_bytes = history.to_bytes().unwrap();
+        let direct_bytes = direct.to_bytes().unwrap();
+        let history_package = OpcPackage::from_reader(Cursor::new(&history_bytes)).unwrap();
+        let direct_package = OpcPackage::from_reader(Cursor::new(&direct_bytes)).unwrap();
+        assert!(!history_package.content_types.defaults.contains_key("png"));
+        assert_eq!(history_package.content_types, direct_package.content_types);
+        assert_eq!(history_bytes, direct_bytes);
+    }
+
+    #[test]
+    fn pruned_maximum_header_relationship_id_can_be_reused() {
+        let mut document = Document::new();
+        let maximum = format!("rId{}", u32::MAX);
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{}" xmlns:r="{}"><w:p><w:r><w:drawing><a:blip xmlns:a="{}" r:embed="{maximum}"/></w:drawing></w:r></w:p></w:hdr>"#,
+            rdocx_oxml::namespace::W_NS,
+            drawing_ns::R,
+            drawing_ns::A,
+        )
+        .into_bytes();
+        document.set_raw_header_with_images(
+            xml,
+            &[(maximum.as_str(), PNG, "old.png")],
+            HdrFtrType::Default,
+        );
+        assert!(
+            document
+                .package
+                .get_part_rels("/word/header1.xml")
+                .unwrap()
+                .get_by_id(&maximum)
+                .is_some()
+        );
+
+        document.set_header("replacement");
+        document.set_header_image(PNG, "new.png", Length::pt(72.0), Length::pt(36.0));
+        let relationship = document
+            .package
+            .get_part_rels("/word/header1.xml")
+            .and_then(|relationships| relationships.get_by_type(rel_types::IMAGE))
+            .unwrap();
+        assert_ne!(relationship.id, maximum);
+    }
+
+    #[test]
+    fn direct_raw_header_replacement_reuses_its_retired_maximum_relationship_id() {
+        fn raw_header(relationship_id: &str, text: &str) -> Vec<u8> {
+            format!(
+                r#"<w:hdr xmlns:w="{}" xmlns:r="{}"><w:p><w:r><w:drawing><a:blip xmlns:a="{}" r:embed="{relationship_id}"/></w:drawing><w:t>{text}</w:t></w:r></w:p></w:hdr>"#,
+                rdocx_oxml::namespace::W_NS,
+                drawing_ns::R,
+                drawing_ns::A,
+            )
+            .into_bytes()
+        }
+
+        let maximum = format!("rId{}", u32::MAX);
+        let mut final_image = PNG.to_vec();
+        *final_image.last_mut().unwrap() ^= 1;
+        let mut history = Document::new();
+        history.set_raw_header_with_images(
+            raw_header(&maximum, "old"),
+            &[(maximum.as_str(), PNG, "old.png")],
+            HdrFtrType::Default,
+        );
+        history.set_raw_header_with_images(
+            raw_header(&maximum, "final"),
+            &[(maximum.as_str(), &final_image, "final.png")],
+            HdrFtrType::Default,
+        );
+        let mut direct = Document::new();
+        direct.set_raw_header_with_images(
+            raw_header(&maximum, "final"),
+            &[(maximum.as_str(), &final_image, "final.png")],
+            HdrFtrType::Default,
+        );
+
+        assert_eq!(history.to_bytes().unwrap(), direct.to_bytes().unwrap());
+    }
+
+    #[test]
+    fn legacy_header_setters_preserve_imported_relationship_order() {
+        fn source() -> Vec<u8> {
+            let mut source = Document::new();
+            source.set_header("producer header");
+            let bytes = source.to_bytes().unwrap();
+            let mut package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+            let relationships = package.get_or_create_part_rels("/word/header1.xml");
+            relationships.add_with_id("rId9", "urn:producer:first", "first.bin");
+            relationships.add_with_id("rId2", "urn:producer:second", "second.bin");
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        }
+
+        for image in [false, true] {
+            let mut document = Document::from_bytes(&source()).unwrap();
+            if image {
+                document.set_header_image(PNG, "new.png", Length::pt(72.0), Length::pt(36.0));
+            } else {
+                document.set_header("replacement");
+            }
+            let package =
+                OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+            let producer_order = package
+                .get_part_rels("/word/header1.xml")
+                .unwrap()
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type.starts_with("urn:producer:"))
+                .map(|relationship| relationship.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(producer_order, ["rId9", "rId2"]);
+        }
+    }
+
+    #[test]
+    fn set_header_preserves_mixed_case_relationship_owner_spelling() {
+        const MIXED_HEADER: &str = "/WORD/HEADER1.XML";
+        let mut source = Document::new();
+        source.set_header("producer");
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/producer.bin", b"producer".to_vec());
+        package
+            .content_types
+            .add_default("bin", "application/octet-stream");
+        package
+            .get_or_create_part_rels("/word/header1.xml")
+            .add_with_id("rId9", "urn:producer", "producer.bin");
+        let header = package.remove_part("/word/header1.xml").unwrap();
+        package.parts.insert(MIXED_HEADER.to_owned(), header);
+        let relationships = package.remove_part_rels("/word/header1.xml").unwrap();
+        package
+            .part_rels
+            .insert(MIXED_HEADER.to_owned(), relationships);
+        package
+            .get_part_rels_mut("/word/document.xml")
+            .unwrap()
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.rel_type == rel_types::HEADER)
+            .unwrap()
+            .target = "HEADER1.XML".to_owned();
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        document.set_header("replacement");
+        let saved = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        assert!(saved.part_rels.contains_key(MIXED_HEADER));
+        assert!(!saved.part_rels.contains_key("/word/header1.xml"));
+        assert_eq!(
+            saved
+                .get_part_rels(MIXED_HEADER)
+                .unwrap()
+                .get_by_id("rId9")
+                .unwrap()
+                .rel_type,
+            "urn:producer"
+        );
+    }
+
+    #[test]
+    fn raw_header_relationship_collisions_are_remapped_without_replacing_preserved_state() {
+        let mut source = Document::new();
+        source.set_header("preserved");
+        source
+            .package
+            .get_or_create_part_rels("/word/header1.xml")
+            .add_with_id("rId1", "urn:preserved", "preserved.bin");
+        let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{}" xmlns:r="{}"><w:p><w:r><w:drawing><a:blip xmlns:a="{}" r:embed="rId&#49;"/></w:drawing></w:r></w:p></w:hdr>"#,
+            rdocx_oxml::namespace::W_NS,
+            drawing_ns::R,
+            drawing_ns::A,
+        )
+        .into_bytes();
+        document.set_raw_header_with_images(
+            xml,
+            &[("rId1", PNG, "replacement.png")],
+            HdrFtrType::Default,
+        );
+        let relationships = document.package.get_part_rels("/word/header1.xml").unwrap();
+        assert_eq!(
+            relationships.get_by_id("rId1").unwrap().rel_type,
+            "urn:preserved"
+        );
+        let image = relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == rel_types::IMAGE)
+            .unwrap();
+        assert_ne!(image.id, "rId1");
+        let image_id = image.id.clone();
+        let header =
+            std::str::from_utf8(document.package.get_part("/word/header1.xml").unwrap()).unwrap();
+        assert!(
+            header.contains(&format!(r#"r:embed="{image_id}""#)),
+            "{header}"
+        );
+        assert!(!header.contains("rId&#49;"), "{header}");
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let header_part = reopened.active_header_footer_parts().remove(0);
+        let header_xml = reopened.package.get_part(&header_part).unwrap();
+        let referenced = xml_relationship_ids_in_order(header_xml).unwrap();
+        assert!(referenced.contains(&image_id));
+        assert!(
+            reopened
+                .package
+                .get_part_rels(&header_part)
+                .unwrap()
+                .get_by_id(&image_id)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn authored_raw_header_identifier_rewrites_preserve_unrelated_bytes() {
+        let mut document = Document::new();
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{}" xmlns:r="{}" xmlns:wp="{}" xmlns:x="urn:producer"><w:p><w:r><w:drawing><wp:inline><wp:docPr id="99"/><a:blip xmlns:a="{}" r:embed="rId9"/></wp:inline></w:drawing><x:unknown x:a = 'v'><!-- keep  spacing --></x:unknown></w:r></w:p></w:hdr>"#,
+            rdocx_oxml::namespace::W_NS,
+            drawing_ns::R,
+            drawing_ns::WP,
+            drawing_ns::A,
+        );
+        document.set_raw_header_with_images(
+            xml.as_bytes().to_vec(),
+            &[("rId9", PNG, "raw.png")],
+            HdrFtrType::Default,
+        );
+
+        let package = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let actual = package.get_part("/word/header1.xml").unwrap();
+        let expected = xml
+            .replace(r#"id="99""#, r#"id="1""#)
+            .replace(r#"r:embed="rId9""#, r#"r:embed="rId0""#);
+        assert_eq!(actual, expected.as_bytes());
+    }
+
+    #[test]
+    fn rejected_raw_header_input_is_atomic() {
+        let mut document = Document::new();
+        document.set_header("unchanged");
+        let before = document.to_bytes().unwrap();
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{}" xmlns:r="{}"><w:p><w:r><w:drawing><a:blip xmlns:a="{}" r:embed="rId1"/></w:drawing></w:r></w:p></w:hdr>"#,
+            rdocx_oxml::namespace::W_NS,
+            drawing_ns::R,
+            drawing_ns::A,
+        )
+        .into_bytes();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            document.set_raw_header_with_images(
+                xml,
+                &[("rId1", PNG, "one.png"), ("rId1", PNG, "two.png")],
+                HdrFtrType::Default,
+            );
+        }));
+        assert!(result.is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn occupied_orphan_header_part_is_not_overwritten() {
+        let mut source = Document::new();
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        package.set_part("/word/header1.xml", b"preserved orphan".to_vec());
+        package.content_types.add_override(
+            "/word/header1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+
+        document.set_header("new header");
+
+        assert_eq!(
+            document.package.get_part("/word/header1.xml"),
+            Some(b"preserved orphan".as_slice())
+        );
+        let active = document
+            .active_header_footer_parts()
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_ne!(active, "/word/header1.xml");
     }
 
     #[test]
@@ -12372,6 +18564,15 @@ mod watermark_tests {
                 .iter()
                 .any(|reference| reference.hdr_ftr_type == HdrFtrType::First)
         );
+        let active_parts = document.active_header_footer_parts();
+        assert_eq!(active_parts.len(), 2);
+        assert!(
+            active_parts
+                .iter()
+                .all(|part| document.identifiers.authored_story_parts.contains(part))
+        );
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.active_header_footer_parts().len(), 2);
 
         let layout = document
             .layout_for_options(RenderOptions::default(), true)
@@ -12402,7 +18603,9 @@ mod watermark_tests {
                 .iter()
                 .find(|reference| reference.hdr_ftr_type == hdr_type)
                 .unwrap_or_else(|| panic!("missing saved {hdr_type:?} header"));
-            let header = reopened.load_header_footer(&reference.rel_id).unwrap();
+            let header = reopened
+                .load_header_footer(&reference.rel_id, true)
+                .unwrap();
             assert!(matches!(
                 header.watermarks(),
                 [rdocx_oxml::header_footer::VmlWatermark::Text { text, .. }]

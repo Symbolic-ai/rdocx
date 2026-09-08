@@ -17,9 +17,33 @@ Fully in memory. Every part is decompressed at open. Part names are normalised
 to a leading slash. This design is already format-neutral and is carried over
 essentially unchanged from `rdocx-opc`.
 
+Archive entry identity is checked after path normalization and before the
+entry map is populated. Two ZIP entries that resolve to one normalized,
+ASCII-case-insensitive part name are invalid. Duplicate default extensions and
+override part names in `[Content_Types].xml` are also invalid, so map construction never hides a
+package collision. Default extension and override part-name identities compare
+ASCII case-insensitively in parsing and API lookup. Package part get, set,
+contains, and remove operations, relationship-owner lookup, required Word and
+PowerPoint part resolution, and digital-signature discovery and coverage use
+the same identity. The first authored spelling remains the serialized key.
+Direct mutation of the public maps remains supported, with deterministic lookup
+if callers create an invalid case conflict. Serialization rejects that conflict
+before writing output. Every loaded package retains unchanged producer
+content-types bytes and element order regardless of enabled features.
+
+Relationship XML rejects duplicate `Id` values during parsing and before
+serialization. Package serialization validates content-type identity, part
+identity, relationship-owner identity, every relationship-id scope, and output
+ZIP entry identity before opening or truncating a destination path.
+
 **Saves are deterministic.** Both `part_rels` and `parts` are emitted in sorted
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.
+The Word facade preserves relationship identities captured when a package is
+opened. Relationships added to the current graph afterward are authored state,
+including internal theme and other typed edges that have no modeled `r:id`.
+They join deterministic semantic ordering by relationship type and normalized
+target. Unknown and external authored edges retain their target and mode.
 
 Modern presentation package identity is the main presentation part's exact
 content type. `oxml-opc` names the ordinary presentation, macro-enabled
@@ -210,6 +234,8 @@ document. The relationship must be internal, its normalized target must not
 escape the package root, the part must exist, and its override must use the
 Word glossary content type. Duplicate, external, traversal-shaped, missing,
 wrong-type, and malformed-root graphs fail before document mutation.
+Building-block replacement enters the canonical staged preparation and
+provenance-reconciling reopen path before publication.
 
 Both facades resolve core properties through the package-level
 `CORE_PROPERTIES` relationship and retain its normalized target. Immutable
@@ -334,6 +360,14 @@ its target is relative to that part even when a producer uses a custom header
 path. Settings values controlling even headers are namespace checked and XML
 decoded before selection.
 
+Header and footer text replacement retains the section-reference kind through
+enumeration, load, and save. A referenced relationship is eligible only when it
+is internal and has the exact header or footer type implied by that reference.
+Cross-type relationships and unrelated parts with header-shaped XML remain
+untouched and cannot shadow a later valid relationship. Text, raw XML, image,
+and background-image setters apply the same eligibility rule before reusing a
+referenced part. An ineligible slot receives a fresh collision-safe part name.
+
 An authored watermark owns only a VML shape whose expanded name is `v:shape`
 and whose unqualified id is `rdocx-watermark`. Replacement patches that exact
 byte range in the original header, leaves tables, controls, root attributes,
@@ -401,8 +435,20 @@ requested directory and stem, including `usize::MAX`, and ignores missing,
 signed, zero, nonnumeric and unrelated suffixes. Ordinary packages allocate
 `1 + max(existing suffix)`. At the finite boundary, checked increment wraps
 from `usize::MAX` to 1 and skips every occupied parsed suffix until a free
-positive number is found. Both facades use this allocator, so allocation never
-creates `image0` or overwrites an existing numbered image part.
+positive number is found. The presentation facade uses this format-neutral
+allocator. The Word facade applies the same suffix rule through its document
+identifier owner so media, charts, workbooks, comment parts, and content-type
+entries are reserved with their related identifiers as one candidate. Neither
+facade creates `image0` or overwrites an existing numbered image part.
+
+Word relationship identifiers are independent per source part. New owners
+retain the established `rId0` first allocation, while an occupied owner
+continues after its greatest numeric identifier and avoids nonnumeric producer
+identities. Bookmark and comment identifiers start at zero. Drawing and
+numbering-instance identifiers start at one, and abstract-numbering identifiers
+start at zero. Imported definitions are scanned by expanded XML name, including
+the unqualified `id` attribute on `wp:docPr`. Duplicate definitions, exhausted
+ranges, and pending collisions fail before a staged candidate is published.
 
 Canonical part layouts:
 

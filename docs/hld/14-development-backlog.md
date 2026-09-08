@@ -2311,13 +2311,17 @@ tables match Word in body text, TOC entries, cross-references, and restart
 behavior.
 
 ### F-249, Deterministic package identifier allocation (M)
-Centralize deterministic allocation for relationships, bookmarks, comments,
-drawings, numbering definitions, numbering instances, parts, and content types.
-Allocation follows document order and detects imported or preserved collisions
-before mutation.
+The Word facade owns deterministic allocation for relationships, bookmarks,
+comments, drawings, numbering definitions, numbering instances, parts, and
+content types. Category scopes remain independent, relationships are scoped by
+source part, and allocation follows final recursive document order. Package
+open rejects duplicate normalized part names, content-type identities,
+relationship identifiers, and typed or preserved XML definitions. Mutations
+and serialization publish only a complete staged candidate.
 **Depends on**: F-243.
 **Test gate**: regression. Equivalent construction orders produce the declared
-stable identifiers and repeated saves are byte-identical.
+stable identifiers, repeated saves are byte-identical, and collision or
+overflow failures are atomic.
 
 ### F-250, Ordered mutable section facade (L)
 Expose every section in document order with stable lookup, insertion, removal,

@@ -218,7 +218,7 @@ bytes remain in the ZIP package.
 | DOCX-011 | styles | paragraph, character, and table style graphs | P | Y | P | N | Y | package | Y | Y | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4082` | F-246 |
 | DOCX-012 | numbering | complete numbering levels and instances | P | P | P | N | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3945` | F-247 |
 | DOCX-013 | numbering | style-linked counters, restarts, TOC, and REF | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-248 | F-248 |
-| DOCX-014 | package | deterministic identifiers across owned parts | P | Y | P | NA | P | package | NA | NA | P | P | B | B | B | partial | boundary:F-249 | F-249 |
+| DOCX-014 | package | deterministic identifiers across owned parts | Y | Y | Y | NA | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-015 | sections | ordered section lookup, insertion, mutation, and removal | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4233` | F-250 |
 | DOCX-016 | sections | page geometry and ordinary section properties | P | Y | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4247` | F-251 |
 | DOCX-017 | stories | per-section default, first, and even headers and footers | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3369` | F-252 |

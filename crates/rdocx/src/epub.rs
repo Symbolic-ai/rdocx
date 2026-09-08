@@ -365,7 +365,7 @@ impl<'a> EpubWriter<'a> {
                 return Some(total);
             };
             if relationship.rel_type != rel_types::IMAGE
-                || relationship.target_mode.as_deref() == Some("External")
+                || !crate::document::relationship_is_internal(relationship)
             {
                 return Some(total);
             }
@@ -394,7 +394,7 @@ impl<'a> EpubWriter<'a> {
                 continue;
             };
             if relationship.rel_type != rel_types::IMAGE
-                || relationship.target_mode.as_deref() == Some("External")
+                || !crate::document::relationship_is_internal(relationship)
             {
                 continue;
             }
@@ -1335,7 +1335,7 @@ impl<'a> EpubWriter<'a> {
             return Some("unresolved image relationship was dropped during EPUB export");
         };
         if relationship.rel_type != rel_types::IMAGE
-            || relationship.target_mode.as_deref() == Some("External")
+            || !crate::document::relationship_is_internal(relationship)
         {
             return Some("non-package image relationship was dropped during EPUB export");
         }
@@ -2452,6 +2452,12 @@ fn render_drawing_projection(drawing: &CT_Drawing) -> CT_Drawing {
         };
     };
     CT_Drawing::inline(CT_Inline {
+        doc_pr_id: drawing
+            .inline
+            .as_ref()
+            .map(|inline| inline.doc_pr_id)
+            .or_else(|| drawing.anchor.as_ref().map(|anchor| anchor.doc_pr_id))
+            .unwrap_or(1),
         extent_cx,
         extent_cy,
         embed_id: embed_id.to_owned(),

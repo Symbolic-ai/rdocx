@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use oxml_opc::OpcPackage;
 use rdocx_oxml::comments::{CT_Comment, CT_Comments};
 use rdocx_oxml::comments_extended::{CT_CommentEx, CT_CommentsEx};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
@@ -271,17 +272,8 @@ impl Document {
         {
             return Err(Error::Other(format!("bookmark name {name} already exists")));
         }
-        let mut paragraphs = Vec::new();
-        collect_main_story_paragraphs(&self.document.body.content, &mut paragraphs);
-        let occupied = paragraphs
-            .into_iter()
-            .flat_map(|paragraph| &paragraph.bookmark_markers)
-            .filter_map(|marker| marker.id())
-            .filter(|id| *id >= 0)
-            .collect::<HashSet<_>>();
-        let id = (0..=i32::MAX)
-            .find(|candidate| !occupied.contains(candidate))
-            .ok_or_else(|| Error::Other("no nonnegative bookmark id is available".to_owned()))?;
+        let mut identifiers = self.identifiers.clone();
+        let id = identifiers.reserve_bookmark_id()?;
 
         if range.start.body_index == range.end.body_index {
             let mut paragraph = body_paragraph(&self.document.body.content, range.start.body_index)
@@ -315,6 +307,7 @@ impl Document {
             *body_paragraph_mut(&mut self.document.body.content, range.end.body_index)
                 .expect("bookmark range was validated") = end;
         }
+        self.identifiers = identifiers;
         self.invalidate_layout();
         Ok(id)
     }
@@ -360,10 +353,25 @@ impl Document {
         initials: Option<&str>,
         text: &str,
     ) -> Result<i32> {
+        let mut candidate = self.clone_for_staging();
+        let id = candidate.add_comment_staged(range, author, initials, text)?;
+        self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    fn add_comment_staged(
+        &mut self,
+        range: RunRange,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+    ) -> Result<i32> {
         self.validate_run_range(range)?;
-        let id = allocate_comment_id(self.comments.as_ref())?;
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        let mut identifiers = self.identifiers.clone();
+        let id = identifiers.reserve_comment_id()?;
         let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
-        self.ensure_comment_models();
 
         let mut paragraph = CT_P::new();
         paragraph.add_run(text);
@@ -409,12 +417,20 @@ impl Document {
             run_index: range.end.run_index,
             raw_before: raw_count_at(end, range.end.run_index),
         });
+        self.identifiers = identifiers;
         self.invalidate_layout();
         Ok(id)
     }
 
     /// Add a reply linked to the selected comment paragraph.
     pub fn reply_to(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
+        let mut candidate = self.clone_for_staging();
+        let id = candidate.reply_to_staged(parent_id, author, text)?;
+        self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    fn reply_to_staged(&mut self, parent_id: i32, author: &str, text: &str) -> Result<i32> {
         let parent_index = self
             .comments
             .as_ref()
@@ -425,7 +441,6 @@ impl Document {
                     .position(|item| item.id == parent_id)
             })
             .ok_or_else(|| Error::Other(format!("comment id {parent_id} does not exist")))?;
-        let id = allocate_comment_id(self.comments.as_ref())?;
         let existing_parent_para_id = first_para_id(
             &self
                 .comments
@@ -443,7 +458,9 @@ impl Document {
             self.comments_extended.as_ref(),
             Some(&parent_para_id),
         )?;
-        self.ensure_comment_models();
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        let id = self.identifiers.reserve_comment_id()?;
 
         let comments = self.comments.as_mut().expect("model was initialized");
         let parent = &mut comments.comments[parent_index];
@@ -495,6 +512,15 @@ impl Document {
 
     /// Set or clear the resolved state for a comment.
     pub fn resolve_comment(&mut self, id: i32, resolved: bool) -> Result<bool> {
+        let mut candidate = self.clone_for_staging();
+        let updated = candidate.resolve_comment_staged(id, resolved)?;
+        if updated {
+            self.commit_staged_mutation(candidate);
+        }
+        Ok(updated)
+    }
+
+    fn resolve_comment_staged(&mut self, id: i32, resolved: bool) -> Result<bool> {
         let Some(comment_index) = self
             .comments
             .as_ref()
@@ -514,7 +540,8 @@ impl Document {
             Some(para_id) => para_id,
             None => allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?,
         };
-        self.ensure_comment_models();
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
         let comment = &mut self
             .comments
             .as_mut()
@@ -552,6 +579,15 @@ impl Document {
 
     /// Remove a comment and every reply descended from it.
     pub fn remove_comment(&mut self, id: i32) -> Result<bool> {
+        let mut candidate = self.clone_for_staging();
+        let removed = candidate.remove_comment_staged(id)?;
+        if removed {
+            self.commit_staged_mutation(candidate);
+        }
+        Ok(removed)
+    }
+
+    fn remove_comment_staged(&mut self, id: i32) -> Result<bool> {
         let Some(comments) = self.comments.as_ref() else {
             return Ok(false);
         };
@@ -624,6 +660,8 @@ impl Document {
         for content in &mut self.document.body.content {
             remove_anchors_from_body_content(content, &removed_ids);
         }
+        self.identifiers
+            .retire_authored_comment_ids(removed_ids.iter().copied());
         self.remove_owned_empty_comment_parts();
         self.invalidate_layout();
         Ok(true)
@@ -654,27 +692,59 @@ impl Document {
         Ok(())
     }
 
-    fn ensure_comment_models(&mut self) {
+    fn ensure_comment_models(&mut self) -> Result<()> {
+        self.identifiers.observe_package_graph(&self.package)?;
         if self.comments.is_none() {
             self.comments = Some(CT_Comments::new());
         }
         if self.comments_part_name.is_none() {
-            self.comments_part_name = Some(allocate_part_name(
-                &self.package.parts,
-                DEFAULT_COMMENTS_PART,
-            ));
+            self.comments_part_name = Some(
+                self.identifiers
+                    .reserve_preferred_part_name(DEFAULT_COMMENTS_PART)?,
+            );
             self.comments_owned = true;
         }
         if self.comments_extended.is_none() {
             self.comments_extended = Some(CT_CommentsEx::new());
         }
         if self.comments_extended_part_name.is_none() {
-            self.comments_extended_part_name = Some(allocate_part_name(
-                &self.package.parts,
-                DEFAULT_COMMENTS_EXTENDED_PART,
-            ));
+            self.comments_extended_part_name = Some(
+                self.identifiers
+                    .reserve_preferred_part_name(DEFAULT_COMMENTS_EXTENDED_PART)?,
+            );
             self.comments_extended_owned = true;
         }
+        Ok(())
+    }
+
+    fn ensure_comment_relationships(&mut self) -> Result<()> {
+        let comments_part = self
+            .comments_part_name
+            .clone()
+            .ok_or_else(|| Error::Other("comments part name is missing".to_owned()))?;
+        let comments_extended_part = self
+            .comments_extended_part_name
+            .clone()
+            .ok_or_else(|| Error::Other("comments-extended part name is missing".to_owned()))?;
+        self.ensure_part_relationship_checked(
+            &comments_part,
+            oxml_opc::relationship::rel_types::COMMENTS,
+            COMMENTS_CONTENT_TYPE,
+        )
+        .map_err(|error| {
+            Error::Other(format!("comments relationship allocation failed: {error}"))
+        })?;
+        self.ensure_part_relationship_checked(
+            &comments_extended_part,
+            COMMENTS_EXTENDED_REL_TYPE,
+            COMMENTS_EXTENDED_CONTENT_TYPE,
+        )
+        .map_err(|error| {
+            Error::Other(format!(
+                "comments-extended relationship allocation failed: {error}"
+            ))
+        })?;
+        Ok(())
     }
 
     fn remove_owned_empty_comment_parts(&mut self) {
@@ -1055,21 +1125,6 @@ fn thread_root_para_id(extended: &CT_CommentsEx, para_id: &str) -> String {
     current
 }
 
-fn allocate_comment_id(comments: Option<&CT_Comments>) -> Result<i32> {
-    let occupied = comments
-        .into_iter()
-        .flat_map(|comments| comments.comments.iter().map(|comment| comment.id))
-        .collect::<HashSet<_>>();
-    if let Some(max) = occupied.iter().copied().max()
-        && max < i32::MAX
-    {
-        return Ok(max + 1);
-    }
-    (0..=i32::MAX)
-        .find(|candidate| !occupied.contains(candidate))
-        .ok_or_else(|| Error::Other("no available comment id remains".to_owned()))
-}
-
 fn allocate_para_id(
     comments: Option<&CT_Comments>,
     extended: Option<&CT_CommentsEx>,
@@ -1115,25 +1170,34 @@ fn parse_para_id(value: &str) -> Option<u32> {
         .flatten()
 }
 
-fn allocate_part_name(parts: &HashMap<String, Vec<u8>>, preferred: &str) -> String {
-    if !parts.contains_key(preferred) {
-        return preferred.to_owned();
-    }
-    let (stem, extension) = preferred.rsplit_once('.').unwrap_or((preferred, "xml"));
-    (2..)
-        .map(|index| format!("{stem}{index}.{extension}"))
-        .find(|candidate| !parts.contains_key(candidate))
-        .expect("the finite package cannot occupy every usize part suffix")
-}
-
 fn remove_owned_part(document: &mut Document, part: &str, relationship_type: &str) {
-    document.package.parts.remove(part);
-    document.package.content_types.overrides.remove(part);
-    if let Some(relationships) = document.package.part_rels.get_mut(&document.doc_part_name) {
-        relationships
-            .items
-            .retain(|relationship| relationship.rel_type != relationship_type);
+    document.package.remove_part(part);
+    document.package.remove_part_rels(part);
+    document.package.content_types.remove_override(part);
+    document.identifiers.retire_authored_part(part);
+    let owner = document.doc_part_name.clone();
+    let mut removed_relationship_ids = Vec::new();
+    if let Some(relationships) = document.package.get_part_rels_mut(&owner) {
+        relationships.items.retain(|relationship| {
+            let targets_part = relationship.rel_type == relationship_type
+                && crate::document::relationship_is_internal(relationship)
+                && OpcPackage::resolve_rel_target(&owner, &relationship.target) == part;
+            let remove = targets_part
+                && !document
+                    .identifiers
+                    .relationship_is_preserved(&owner, &relationship.id);
+            if remove {
+                removed_relationship_ids.push(relationship.id.clone());
+            }
+            !remove
+        });
+        if relationships.items.is_empty() {
+            document.package.remove_part_rels(&owner);
+        }
     }
+    document
+        .identifiers
+        .retire_authored_story_relationships(&owner, removed_relationship_ids);
 }
 
 fn remove_anchors_from_body_content(content: &mut BodyContent, ids: &HashSet<i32>) {
@@ -1300,6 +1364,261 @@ mod tests {
                 ..
             } if *marker_id == id
         )));
+    }
+
+    #[test]
+    fn adding_a_comment_reserves_both_relationships_before_publication() {
+        let mut source = Document::new_with_profile(crate::document::WordCreationProfile::Minimal(
+            crate::document::WordPackageClass::Document,
+        ));
+        source.add_paragraph("review");
+        let source_bytes = source.to_bytes().unwrap();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source_bytes)).unwrap();
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let package_bytes = |document: &Document| {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            document.package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        };
+        let before = package_bytes(&document);
+
+        let error = document
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "Review",
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("comments relationship allocation failed")
+        );
+        assert_eq!(package_bytes(&document), before);
+        assert!(document.comments.is_none());
+        assert!(document.comments_extended.is_none());
+        assert!(document.comments_part_name.is_none());
+        assert!(document.comments_extended_part_name.is_none());
+    }
+
+    #[test]
+    fn reply_and_resolve_roll_back_comments_extended_relationship_exhaustion() {
+        fn exhausted_document() -> Document {
+            let mut source =
+                Document::new_with_profile(crate::document::WordCreationProfile::Minimal(
+                    crate::document::WordPackageClass::Document,
+                ));
+            source.add_paragraph("review");
+            source
+                .add_comment(
+                    RunRange {
+                        start: RunPosition {
+                            body_index: 0,
+                            run_index: 0,
+                        },
+                        end: RunPosition {
+                            body_index: 0,
+                            run_index: 1,
+                        },
+                    },
+                    "Ada",
+                    None,
+                    "Review",
+                )
+                .unwrap();
+            let mut package =
+                OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap())).unwrap();
+            package.parts.remove(DEFAULT_COMMENTS_EXTENDED_PART);
+            package
+                .content_types
+                .overrides
+                .remove(DEFAULT_COMMENTS_EXTENDED_PART);
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            relationships
+                .items
+                .retain(|relationship| relationship.rel_type != COMMENTS_EXTENDED_REL_TYPE);
+            relationships.add_with_id(
+                &format!("rId{}", u32::MAX),
+                "urn:exhaustion",
+                "unchanged.bin",
+            );
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+
+        let package_bytes = |document: &Document| {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            document.package.write_to(&mut bytes).unwrap();
+            bytes.into_inner()
+        };
+
+        let mut reply = exhausted_document();
+        let root = reply.comments()[0].id();
+        let before = package_bytes(&reply);
+        let error = reply.reply_to(root, "Ben", "Done").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("comments-extended relationship allocation failed")
+        );
+        assert_eq!(package_bytes(&reply), before);
+        assert!(reply.comments_extended.is_none());
+        assert!(reply.comments_extended_part_name.is_none());
+        assert_eq!(reply.comments().len(), 1);
+
+        let mut resolved = exhausted_document();
+        let root = resolved.comments()[0].id();
+        let before = package_bytes(&resolved);
+        let error = resolved.resolve_comment(root, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("comments-extended relationship allocation failed")
+        );
+        assert_eq!(package_bytes(&resolved), before);
+        assert!(resolved.comments_extended.is_none());
+        assert!(resolved.comments_extended_part_name.is_none());
+        assert!(!resolved.comments()[0].resolved());
+    }
+
+    #[test]
+    fn successful_legacy_comment_upgrades_keep_reserved_relationships_and_parts() {
+        fn legacy_document() -> Document {
+            let mut source =
+                Document::new_with_profile(crate::document::WordCreationProfile::Minimal(
+                    crate::document::WordPackageClass::Document,
+                ));
+            source.add_paragraph("review");
+            source
+                .add_comment(
+                    RunRange {
+                        start: RunPosition {
+                            body_index: 0,
+                            run_index: 0,
+                        },
+                        end: RunPosition {
+                            body_index: 0,
+                            run_index: 1,
+                        },
+                    },
+                    "Ada",
+                    None,
+                    "Review",
+                )
+                .unwrap();
+            let mut package =
+                OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap())).unwrap();
+            package.parts.remove(DEFAULT_COMMENTS_EXTENDED_PART);
+            package
+                .content_types
+                .overrides
+                .remove(DEFAULT_COMMENTS_EXTENDED_PART);
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .items
+                .retain(|relationship| relationship.rel_type != COMMENTS_EXTENDED_REL_TYPE);
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+
+        for reply in [false, true] {
+            let mut document = legacy_document();
+            let root = document.comments()[0].id();
+            if reply {
+                document.reply_to(root, "Ben", "Done").unwrap();
+            } else {
+                assert!(document.resolve_comment(root, true).unwrap());
+            }
+            let extended_part = document.comments_extended_part_name.clone().unwrap();
+            let extended_relationship = document
+                .package
+                .get_part_rels("/word/document.xml")
+                .and_then(|relationships| relationships.get_by_type(COMMENTS_EXTENDED_REL_TYPE))
+                .unwrap()
+                .id
+                .clone();
+
+            let hyperlink = document.add_hyperlink_relationship("https://example.com");
+            let imported_part = document
+                .identifiers
+                .reserve_fragment_part_name(&extended_part)
+                .unwrap();
+
+            assert_ne!(hyperlink, extended_relationship);
+            assert_ne!(imported_part, extended_part);
+        }
+    }
+
+    #[test]
+    fn removing_the_last_owned_comment_retires_its_complete_identifier_bundle() {
+        fn final_document(with_history: bool) -> Document {
+            let mut document =
+                Document::new_with_profile(crate::document::WordCreationProfile::Minimal(
+                    crate::document::WordPackageClass::Document,
+                ));
+            document.add_paragraph("review");
+            let range = RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            };
+            if with_history {
+                let old = document.add_comment(range, "Ada", None, "Old").unwrap();
+                assert!(document.remove_comment(old).unwrap());
+                assert!(document.comments_part_name.is_none());
+                assert!(document.comments_extended_part_name.is_none());
+                assert!(document.package.get_part(DEFAULT_COMMENTS_PART).is_none());
+                assert!(
+                    document
+                        .package
+                        .get_part(DEFAULT_COMMENTS_EXTENDED_PART)
+                        .is_none()
+                );
+            }
+            let id = document.add_comment(range, "Ada", None, "Final").unwrap();
+            assert_eq!(id, 0);
+            document
+        }
+
+        let mut history = final_document(true);
+        let mut direct = final_document(false);
+        let history_bytes = history.to_bytes().unwrap();
+        let direct_bytes = direct.to_bytes().unwrap();
+        assert_eq!(history_bytes, direct_bytes);
+        let history_package = OpcPackage::from_reader(std::io::Cursor::new(history_bytes)).unwrap();
+        let direct_package = OpcPackage::from_reader(std::io::Cursor::new(direct_bytes)).unwrap();
+        assert_eq!(
+            history_package.get_part(DEFAULT_COMMENTS_PART),
+            direct_package.get_part(DEFAULT_COMMENTS_PART)
+        );
     }
 
     #[test]

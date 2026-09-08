@@ -93,7 +93,10 @@ what makes deep copy dangerous, because `r:id` attributes hide inside preserved
 blobs.
 
 *Mitigation*: `rewrite_rel_ids`, and `add_slide` synthesising rather than
-deep-copying so the common path never needs it.
+deep-copying so the common path never needs it. The Word facade scans
+relationship definitions by owner and identifier definitions by expanded XML
+name before it allocates. Authored DrawingML is remapped only on staged typed
+state, while imported raw owners and their identifiers remain unchanged.
 
 ### R7, scope
 
@@ -179,6 +182,11 @@ owner across F-243 through F-310 rather than several stories exposing
 uncoordinated XML fragments. Conformance tests inspect every owned part, reopen
 through `Document`, compare fresh layout, and require authored public-API
 content to report no unexplained unmodeled properties.
+
+The Word facade's private document identifier owner reserves related part,
+relationship, content-type, and XML identities together. Final-order
+canonicalization runs on a staged clone, so a collision or exhausted range
+cannot publish half of a package invariant.
 
 ## Assumptions that would invalidate the plan if wrong
 

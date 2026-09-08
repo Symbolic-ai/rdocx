@@ -7,7 +7,7 @@ use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
 use crate::namespace::{W_NS, matches_local_name};
-use crate::numbering::word_prefixes_at;
+use crate::numbering::{namespace_bindings, word_prefixes_at};
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::text::CT_P;
@@ -16,6 +16,9 @@ const VML_NS: &str = "urn:schemas-microsoft-com:vml";
 const OFFICE_NS: &str = "urn:schemas-microsoft-com:office:office";
 const RELATIONSHIPS_NS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const TEXT_WATERMARK_SHAPE_TYPE_ID: &str = "rdocx-watermark-type-text";
+const IMAGE_WATERMARK_SHAPE_TYPE_ID: &str = "rdocx-watermark-type-image";
+const WATERMARK_SHAPE_TYPE_PREFIX: &str = "rdocx-watermark-type-";
 
 /// A conservative layout projection of one VML watermark shape.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,8 +84,8 @@ impl VmlWatermark {
             compact_number(rotation)
         );
         let (shape_type_id, shape_type_number, text_path) = match self {
-            Self::Text { .. } => ("_x0000_t136", "136", true),
-            Self::Image { .. } => ("_x0000_t75", "75", false),
+            Self::Text { .. } => (TEXT_WATERMARK_SHAPE_TYPE_ID, "136", true),
+            Self::Image { .. } => (IMAGE_WATERMARK_SHAPE_TYPE_ID, "75", false),
         };
         let mut shape_type = BytesStart::new("v:shapetype");
         shape_type.push_attribute(("id", shape_type_id));
@@ -124,8 +127,8 @@ impl VmlWatermark {
         shape.push_attribute((
             "type",
             match self {
-                Self::Text { .. } => "#_x0000_t136",
-                Self::Image { .. } => "#_x0000_t75",
+                Self::Text { .. } => "#rdocx-watermark-type-text",
+                Self::Image { .. } => "#rdocx-watermark-type-image",
             },
         ));
         shape.push_attribute(("style", style.as_str()));
@@ -349,21 +352,24 @@ impl CT_HdrFtr {
 /// Replace the exact API-owned VML shape without reconstructing its header.
 #[doc(hidden)]
 pub fn replace_authored_watermark(xml: &[u8], watermark: &VmlWatermark) -> Result<Vec<u8>> {
-    let replacement_pict = watermark.to_pict_xml();
+    let mut replacement_pict = watermark.to_pict_xml();
+    let replacement_shape_type_id = match watermark {
+        VmlWatermark::Text { .. } => TEXT_WATERMARK_SHAPE_TYPE_ID,
+        VmlWatermark::Image { .. } => IMAGE_WATERMARK_SHAPE_TYPE_ID,
+    };
+    if contains_vml_shapetype(xml, replacement_shape_type_id)?
+        && let Some(range) = vml_shape_type_range(&replacement_pict, replacement_shape_type_id)?
+    {
+        replacement_pict.drain(range);
+    }
+    let normalized_xml =
+        prepare_owned_shape_type(xml, &replacement_pict, replacement_shape_type_id)?;
+    let xml = normalized_xml.as_deref().unwrap_or(xml);
     let replacement_range = api_owned_shape_ranges(&replacement_pict)?
         .into_iter()
         .next()
         .ok_or_else(|| OxmlError::MissingElement("generated watermark shape".to_owned()))?;
     let mut replacement_shape = replacement_pict[replacement_range].to_vec();
-    let shape_start_end = replacement_shape
-        .iter()
-        .position(|byte| *byte == b'>')
-        .ok_or_else(|| OxmlError::MissingElement("generated watermark shape start".to_owned()))?;
-    replacement_shape.splice(
-        shape_start_end..shape_start_end,
-        format!(" xmlns:v=\"{VML_NS}\" xmlns:o=\"{OFFICE_NS}\" xmlns:r=\"{RELATIONSHIPS_NS}\"")
-            .into_bytes(),
-    );
 
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
@@ -454,12 +460,8 @@ pub fn replace_authored_watermark(xml: &[u8], watermark: &VmlWatermark) -> Resul
     }
 
     if !owned_ranges.is_empty() {
-        let shape_type_id = match watermark {
-            VmlWatermark::Text { .. } => "_x0000_t136",
-            VmlWatermark::Image { .. } => "_x0000_t75",
-        };
-        if !contains_vml_shapetype(xml, shape_type_id)? {
-            let attribute = format!(" type=\"#{shape_type_id}\"");
+        if !contains_vml_shapetype(xml, replacement_shape_type_id)? {
+            let attribute = format!(" type=\"#{replacement_shape_type_id}\"");
             if let Some(position) = replacement_shape
                 .windows(attribute.len())
                 .position(|window| window == attribute.as_bytes())
@@ -467,6 +469,12 @@ pub fn replace_authored_watermark(xml: &[u8], watermark: &VmlWatermark) -> Resul
                 replacement_shape.drain(position..position + attribute.len());
             }
         }
+        replacement_shape = ensure_fixed_prefix_bindings(
+            replacement_shape,
+            xml,
+            owned_ranges[0].start,
+            matches!(watermark, VmlWatermark::Image { .. }),
+        )?;
         let mut output = Vec::with_capacity(xml.len() + replacement_shape.len());
         let mut copied = 0usize;
         for (index, range) in owned_ranges.into_iter().enumerate() {
@@ -599,6 +607,308 @@ fn contains_vml_shapetype(xml: &[u8], expected_id: &str) -> Result<bool> {
             }
             Event::Eof => return Ok(false),
             _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn prepare_owned_shape_type(
+    xml: &[u8],
+    replacement_pict: &[u8],
+    replacement_id: &str,
+) -> Result<Option<Vec<u8>>> {
+    let Some(owned_type) = api_owned_shape_type(xml)? else {
+        return Ok(None);
+    };
+    if owned_type.as_deref() == Some(replacement_id) && contains_vml_shapetype(xml, replacement_id)?
+    {
+        return Ok(None);
+    }
+    let replacement = if contains_vml_shapetype(xml, replacement_id)? {
+        None
+    } else {
+        let replacement_range = vml_shape_type_range(replacement_pict, replacement_id)?
+            .ok_or_else(|| OxmlError::MissingElement("generated watermark shapetype".to_owned()))?;
+        Some(replacement_pict[replacement_range].to_vec())
+    };
+    let old_definition_is_owned = owned_type
+        .as_deref()
+        .is_some_and(|owned_id| owned_id.starts_with(WATERMARK_SHAPE_TYPE_PREFIX));
+    let old_definition_is_shared = match owned_type.as_deref() {
+        Some(owned_id) => shape_type_is_used_by_producer_shape(xml, owned_id)?,
+        None => false,
+    };
+    if !old_definition_is_owned || old_definition_is_shared {
+        let Some(replacement) = replacement else {
+            return Ok(None);
+        };
+        let insertion = api_owned_shape_ranges(xml)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| OxmlError::MissingElement("owned watermark shape".to_owned()))?
+            .start;
+        let replacement = ensure_fixed_prefix_bindings(replacement, xml, insertion, false)?;
+        let mut output = Vec::with_capacity(xml.len() + replacement.len());
+        output.extend_from_slice(&xml[..insertion]);
+        output.extend_from_slice(&replacement);
+        output.extend_from_slice(&xml[insertion..]);
+        return Ok(Some(output));
+    }
+    let Some(source_range) = vml_shape_type_range(
+        xml,
+        owned_type.as_deref().expect("owned definition id exists"),
+    )?
+    else {
+        let Some(replacement) = replacement else {
+            return Ok(None);
+        };
+        let insertion = api_owned_shape_ranges(xml)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| OxmlError::MissingElement("owned watermark shape".to_owned()))?
+            .start;
+        let replacement = ensure_fixed_prefix_bindings(replacement, xml, insertion, false)?;
+        let mut output = Vec::with_capacity(xml.len() + replacement.len());
+        output.extend_from_slice(&xml[..insertion]);
+        output.extend_from_slice(&replacement);
+        output.extend_from_slice(&xml[insertion..]);
+        return Ok(Some(output));
+    };
+    let replacement = replacement
+        .map(|replacement| {
+            ensure_fixed_prefix_bindings(replacement, xml, source_range.start, false)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut output = Vec::with_capacity(xml.len() + replacement.len());
+    output.extend_from_slice(&xml[..source_range.start]);
+    output.extend_from_slice(&replacement);
+    output.extend_from_slice(&xml[source_range.end..]);
+    Ok(Some(output))
+}
+
+fn ensure_fixed_prefix_bindings(
+    mut fragment: Vec<u8>,
+    source: &[u8],
+    offset: usize,
+    needs_relationships: bool,
+) -> Result<Vec<u8>> {
+    let bindings = ancestor_namespace_bindings(source, offset)?;
+    let mut declarations = Vec::new();
+    for (prefix, namespace) in [("v", VML_NS), ("o", OFFICE_NS)] {
+        if !bindings.iter().any(|(bound_prefix, bound_namespace)| {
+            bound_prefix == prefix && bound_namespace == namespace
+        }) {
+            declarations.push((prefix, namespace));
+        }
+    }
+    if needs_relationships
+        && !bindings
+            .iter()
+            .any(|(prefix, namespace)| prefix == "r" && namespace == RELATIONSHIPS_NS)
+    {
+        declarations.push(("r", RELATIONSHIPS_NS));
+    }
+    if declarations.is_empty() {
+        return Ok(fragment);
+    }
+    let name_end = fragment
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace() || matches!(*byte, b'>' | b'/'))
+        .ok_or_else(|| OxmlError::InvalidValue("watermark XML fragment".to_owned()))?;
+    let mut attributes = Vec::new();
+    for (prefix, namespace) in declarations {
+        attributes.extend_from_slice(format!(" xmlns:{prefix}=\"{namespace}\"").as_bytes());
+    }
+    fragment.splice(name_end..name_end, attributes);
+    Ok(fragment)
+}
+
+fn ancestor_namespace_bindings(source: &[u8], offset: usize) -> Result<Vec<(String, String)>> {
+    let mut reader = Reader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![Vec::new()];
+    loop {
+        if reader.buffer_position() as usize == offset {
+            return Ok(namespace_bindings(
+                scopes.last().expect("namespace root scope exists"),
+            ));
+        }
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let inherited = scopes.last().expect("namespace root scope exists");
+                scopes.push(word_prefixes_at(&start, inherited)?);
+            }
+            Event::End(_) => {
+                scopes.pop().ok_or_else(|| {
+                    OxmlError::InvalidValue("unbalanced watermark XML namespace scope".to_owned())
+                })?;
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(
+                    "watermark XML splice point".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn api_owned_shape_type(xml: &[u8]) -> Result<Option<Option<String>>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut pict_depth = None;
+    loop {
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) => {
+                depth += 1;
+                if namespace_is(&namespace, W_NS) && local_name(element.name().as_ref()) == b"pict"
+                {
+                    pict_depth = Some(depth);
+                } else if pict_depth.is_some()
+                    && namespace_is(&namespace, VML_NS)
+                    && local_name(element.name().as_ref()) == b"shape"
+                    && raw_unqualified_attribute(element, b"id").as_deref()
+                        == Some("rdocx-watermark")
+                {
+                    return Ok(Some(
+                        raw_unqualified_attribute(element, b"type")
+                            .and_then(|value| value.strip_prefix('#').map(str::to_owned)),
+                    ));
+                }
+            }
+            Event::Empty(ref element)
+                if pict_depth.is_some()
+                    && namespace_is(&namespace, VML_NS)
+                    && local_name(element.name().as_ref()) == b"shape"
+                    && raw_unqualified_attribute(element, b"id").as_deref()
+                        == Some("rdocx-watermark") =>
+            {
+                return Ok(Some(
+                    raw_unqualified_attribute(element, b"type")
+                        .and_then(|value| value.strip_prefix('#').map(str::to_owned)),
+                ));
+            }
+            Event::End(ref element) => {
+                if pict_depth == Some(depth)
+                    && namespace_is(&namespace, W_NS)
+                    && local_name(element.name().as_ref()) == b"pict"
+                {
+                    pict_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn shape_type_is_used_by_producer_shape(xml: &[u8], expected_id: &str) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut pict_depth = None;
+    loop {
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) => {
+                depth += 1;
+                if namespace_is(&namespace, W_NS) && local_name(element.name().as_ref()) == b"pict"
+                {
+                    pict_depth = Some(depth);
+                } else if namespace_is(&namespace, VML_NS)
+                    && local_name(element.name().as_ref()) == b"shape"
+                    && raw_unqualified_attribute(element, b"type")
+                        .as_deref()
+                        .and_then(|value| value.strip_prefix('#'))
+                        == Some(expected_id)
+                    && !(pict_depth.is_some()
+                        && raw_unqualified_attribute(element, b"id").as_deref()
+                            == Some("rdocx-watermark"))
+                {
+                    return Ok(true);
+                }
+            }
+            Event::Empty(ref element)
+                if namespace_is(&namespace, VML_NS)
+                    && local_name(element.name().as_ref()) == b"shape"
+                    && raw_unqualified_attribute(element, b"type")
+                        .as_deref()
+                        .and_then(|value| value.strip_prefix('#'))
+                        == Some(expected_id)
+                    && !(pict_depth.is_some()
+                        && raw_unqualified_attribute(element, b"id").as_deref()
+                            == Some("rdocx-watermark")) =>
+            {
+                return Ok(true);
+            }
+            Event::End(ref element) => {
+                if pict_depth == Some(depth)
+                    && namespace_is(&namespace, W_NS)
+                    && local_name(element.name().as_ref()) == b"pict"
+                {
+                    pict_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn vml_shape_type_range(xml: &[u8], expected_id: &str) -> Result<Option<std::ops::Range<usize>>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut start = None;
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        let mut completed = None;
+        match event {
+            Event::Start(ref element) => {
+                depth += 1;
+                if namespace_is(&namespace, VML_NS)
+                    && local_name(element.name().as_ref()) == b"shapetype"
+                    && raw_unqualified_attribute(element, b"id").as_deref() == Some(expected_id)
+                {
+                    start = Some((depth, event_start));
+                }
+            }
+            Event::Empty(ref element)
+                if namespace_is(&namespace, VML_NS)
+                    && local_name(element.name().as_ref()) == b"shapetype"
+                    && raw_unqualified_attribute(element, b"id").as_deref()
+                        == Some(expected_id) =>
+            {
+                return Ok(Some(event_start..reader.buffer_position() as usize));
+            }
+            Event::End(ref element) => {
+                if start.is_some_and(|(start_depth, _)| start_depth == depth)
+                    && namespace_is(&namespace, VML_NS)
+                    && local_name(element.name().as_ref()) == b"shapetype"
+                    && let Some((_, range_start)) = start.take()
+                {
+                    completed = Some(range_start..reader.buffer_position() as usize);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        if let Some(range) = completed {
+            return Ok(Some(range));
         }
         buffer.clear();
     }
@@ -1004,12 +1314,12 @@ mod tests {
             .unwrap();
         assert!(shape_type < shape);
         assert!(
-            xml.windows(b"id=\"_x0000_t136\"".len())
-                .any(|window| { window == b"id=\"_x0000_t136\"" })
+            xml.windows(b"id=\"rdocx-watermark-type-text\"".len())
+                .any(|window| { window == b"id=\"rdocx-watermark-type-text\"" })
         );
         assert!(
-            xml.windows(b"type=\"#_x0000_t136\"".len())
-                .any(|window| { window == b"type=\"#_x0000_t136\"" })
+            xml.windows(b"type=\"#rdocx-watermark-type-text\"".len())
+                .any(|window| { window == b"type=\"#rdocx-watermark-type-text\"" })
         );
         assert!(xml.starts_with(
             br#"<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#
@@ -1035,13 +1345,13 @@ mod tests {
         assert!(fill < image_data);
         assert!(
             image_xml
-                .windows(b"id=\"_x0000_t75\"".len())
-                .any(|window| window == b"id=\"_x0000_t75\"")
+                .windows(b"id=\"rdocx-watermark-type-image\"".len())
+                .any(|window| window == b"id=\"rdocx-watermark-type-image\"")
         );
         assert!(
             image_xml
-                .windows(b"type=\"#_x0000_t75\"".len())
-                .any(|window| window == b"type=\"#_x0000_t75\"")
+                .windows(b"type=\"#rdocx-watermark-type-image\"".len())
+                .any(|window| window == b"type=\"#rdocx-watermark-type-image\"")
         );
         assert_eq!(VmlWatermark::from_pict_xml(&image_xml), Some(image));
 
@@ -1057,6 +1367,139 @@ mod tests {
         assert_eq!(
             CT_HdrFtr::from_xml(&replaced).unwrap().watermarks(),
             &[watermark]
+        );
+    }
+
+    #[test]
+    fn replacing_owned_watermark_keeps_a_producer_shared_shape_type() {
+        let producer = r##"<v:shape id="producer" type="#_x0000_t75"><v:path/></v:shape>"##;
+        let source = format!(
+            r##"<w:hdr xmlns:w="{W_NS}" xmlns:v="{VML_NS}" xmlns:o="{OFFICE_NS}"><w:p><w:r><w:pict><v:shapetype id="_x0000_t75"><v:path/></v:shapetype>{producer}<v:shape id="rdocx-watermark" type="#_x0000_t75"><v:imagedata/></v:shape></w:pict></w:r></w:p></w:hdr>"##
+        );
+        let text = VmlWatermark::Text {
+            text: "DRAFT".to_owned(),
+            width_pt: 468.0,
+            height_pt: 117.0,
+            rotation_degrees: 315.0,
+            color: "D9D9D9".to_owned(),
+            font_family: Some("Calibri".to_owned()),
+            opacity: 0.5,
+        };
+
+        let replaced = replace_authored_watermark(source.as_bytes(), &text).unwrap();
+        let replaced = String::from_utf8(replaced).unwrap();
+        assert!(replaced.contains(producer));
+        assert!(replaced.contains(r#"<v:shapetype id="_x0000_t75""#));
+        assert!(replaced.contains(r#"<v:shapetype id="rdocx-watermark-type-text""#));
+        assert!(replaced.contains(r##"type="#rdocx-watermark-type-text""##));
+    }
+
+    #[test]
+    fn replacing_owned_watermark_preserves_an_unused_producer_shape_type() {
+        let producer_type = r#"<v:shapetype id="_x0000_t75"><v:path/></v:shapetype>"#;
+        let source = format!(
+            r##"<w:hdr xmlns:w="{W_NS}" xmlns:v="{VML_NS}"><w:p><w:r><w:pict>{producer_type}<v:shape id="rdocx-watermark" type="#_x0000_t75"><v:imagedata/></v:shape></w:pict></w:r></w:p></w:hdr>"##
+        );
+        let text = VmlWatermark::Text {
+            text: "DRAFT".to_owned(),
+            width_pt: 468.0,
+            height_pt: 117.0,
+            rotation_degrees: 315.0,
+            color: "D9D9D9".to_owned(),
+            font_family: Some("Calibri".to_owned()),
+            opacity: 0.5,
+        };
+
+        let replaced =
+            String::from_utf8(replace_authored_watermark(source.as_bytes(), &text).unwrap())
+                .unwrap();
+        assert!(replaced.contains(producer_type));
+        assert_eq!(replaced.matches(r#"id="_x0000_t75""#).count(), 1);
+        assert_eq!(
+            replaced
+                .matches(r#"id="rdocx-watermark-type-text""#)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn first_watermark_insertion_reuses_an_existing_target_shape_type() {
+        let producer_standard_type = r#"<v:shapetype id="_x0000_t136"><v:path/></v:shapetype>"#;
+        let producer_target_type =
+            r#"<v:shapetype id="rdocx-watermark-type-text"><v:path/></v:shapetype>"#;
+        let source = format!(
+            r#"<w:hdr xmlns:w="{W_NS}" xmlns:v="{VML_NS}"><w:p><w:r><w:pict>{producer_standard_type}{producer_target_type}</w:pict></w:r></w:p></w:hdr>"#
+        );
+        let text = VmlWatermark::Text {
+            text: "DRAFT".to_owned(),
+            width_pt: 468.0,
+            height_pt: 117.0,
+            rotation_degrees: 315.0,
+            color: "D9D9D9".to_owned(),
+            font_family: Some("Calibri".to_owned()),
+            opacity: 0.5,
+        };
+
+        let updated =
+            String::from_utf8(replace_authored_watermark(source.as_bytes(), &text).unwrap())
+                .unwrap();
+        assert!(updated.contains(producer_standard_type));
+        assert!(updated.contains(producer_target_type));
+        assert_eq!(updated.matches(r#"id="_x0000_t136""#).count(), 1);
+        assert_eq!(
+            updated.matches(r#"id="rdocx-watermark-type-text""#).count(),
+            1
+        );
+        assert!(updated.contains(r##"type="#rdocx-watermark-type-text""##));
+    }
+
+    #[test]
+    fn watermark_replacement_binds_fixed_prefixes_at_an_alias_prefixed_splice() {
+        let source = format!(
+            r##"<w:hdr xmlns:w="{W_NS}" xmlns:x="{VML_NS}"><w:p><w:r><w:pict><x:shapetype id="producer"><x:path/></x:shapetype><x:shape id="rdocx-watermark" type="#producer"><x:imagedata/></x:shape></w:pict></w:r></w:p></w:hdr>"##
+        );
+        let image = VmlWatermark::Image {
+            relationship_id: "rId3".to_owned(),
+            width_pt: 72.0,
+            height_pt: 36.0,
+            rotation_degrees: 0.0,
+            opacity: 0.5,
+        };
+
+        let updated = replace_authored_watermark(source.as_bytes(), &image).unwrap();
+        let updated_text = String::from_utf8(updated.clone()).unwrap();
+        assert!(updated_text.contains(&format!(r#"xmlns:v="{VML_NS}""#)));
+        assert!(updated_text.contains(&format!(r#"xmlns:o="{OFFICE_NS}""#)));
+        assert!(updated_text.contains(&format!(r#"xmlns:r="{RELATIONSHIPS_NS}""#)));
+        assert_eq!(
+            CT_HdrFtr::from_xml(&updated).unwrap().watermarks(),
+            &[image],
+            "{updated_text}"
+        );
+    }
+
+    #[test]
+    fn watermark_replacement_does_not_inherit_bindings_from_removed_elements() {
+        let source = format!(
+            r##"<w:hdr xmlns:w="{W_NS}"><w:p><w:r><w:pict><v:shapetype xmlns:v="{VML_NS}" xmlns:o="{OFFICE_NS}" id="{TEXT_WATERMARK_SHAPE_TYPE_ID}" o:spt="136"><v:path/></v:shapetype><v:shape xmlns:v="{VML_NS}" xmlns:o="{OFFICE_NS}" xmlns:r="{RELATIONSHIPS_NS}" id="rdocx-watermark" o:spid="_x0000_s1025" type="#{TEXT_WATERMARK_SHAPE_TYPE_ID}" style="width:468pt;height:117pt"><v:textpath string="OLD"/></v:shape></w:pict></w:r></w:p></w:hdr>"##
+        );
+        let image = VmlWatermark::Image {
+            relationship_id: "rId3".to_owned(),
+            width_pt: 72.0,
+            height_pt: 36.0,
+            rotation_degrees: 0.0,
+            opacity: 0.5,
+        };
+
+        let updated = replace_authored_watermark(source.as_bytes(), &image).unwrap();
+        let updated_text = String::from_utf8(updated.clone()).unwrap();
+        assert!(updated_text.contains(&format!(r#"xmlns:v="{VML_NS}""#)));
+        assert!(updated_text.contains(&format!(r#"xmlns:o="{OFFICE_NS}""#)));
+        assert!(updated_text.contains(&format!(r#"xmlns:r="{RELATIONSHIPS_NS}""#)));
+        assert_eq!(
+            CT_HdrFtr::from_xml(&updated).unwrap().watermarks(),
+            &[image]
         );
     }
 
@@ -1133,6 +1576,80 @@ mod tests {
             CT_HdrFtr::from_xml(&replaced).unwrap().watermarks(),
             &[watermark]
         );
+    }
+
+    #[test]
+    fn converting_a_watermark_keeps_an_outgoing_type_shared_by_a_word_object() {
+        let carrier = format!(
+            r##"<w:object><v:shape id="rdocx-watermark" type="#{TEXT_WATERMARK_SHAPE_TYPE_ID}"><v:textpath string="PRODUCER"/></v:shape></w:object>"##
+        );
+        let source = format!(
+            r##"<w:hdr xmlns:w="{W_NS}" xmlns:v="{VML_NS}" xmlns:o="{OFFICE_NS}"><w:p><w:r><w:pict><v:shapetype id="{TEXT_WATERMARK_SHAPE_TYPE_ID}" o:spt="136"><v:path/></v:shapetype><v:shape id="rdocx-watermark" type="#{TEXT_WATERMARK_SHAPE_TYPE_ID}" style="width:468pt;height:117pt"><v:textpath string="API"/></v:shape></w:pict>{carrier}</w:r></w:p></w:hdr>"##
+        );
+        let image = VmlWatermark::Image {
+            relationship_id: "rId7".to_owned(),
+            width_pt: 72.0,
+            height_pt: 36.0,
+            rotation_degrees: 0.0,
+            opacity: 0.5,
+        };
+        let replaced = replace_authored_watermark(source.as_bytes(), &image).unwrap();
+        assert!(
+            replaced
+                .windows(carrier.len())
+                .any(|window| window == carrier.as_bytes())
+        );
+        let replaced = String::from_utf8(replaced).unwrap();
+        assert_eq!(replaced.matches(r#"id="rdocx-watermark""#).count(), 2);
+        assert_eq!(
+            replaced
+                .matches(&format!(r#"id="{TEXT_WATERMARK_SHAPE_TYPE_ID}""#))
+                .count(),
+            1
+        );
+        assert_eq!(
+            replaced
+                .matches(&format!(r#"id="{IMAGE_WATERMARK_SHAPE_TYPE_ID}""#))
+                .count(),
+            1
+        );
+        assert!(replaced.contains(&format!(r##"type="#{TEXT_WATERMARK_SHAPE_TYPE_ID}""##)));
+        assert!(replaced.contains(&format!(r##"type="#{IMAGE_WATERMARK_SHAPE_TYPE_ID}""##)));
+    }
+
+    #[test]
+    fn owned_watermarks_with_missing_or_malformed_types_gain_the_generated_type() {
+        let watermark = VmlWatermark::Text {
+            text: "FINAL".to_owned(),
+            width_pt: 468.0,
+            height_pt: 117.0,
+            rotation_degrees: 315.0,
+            color: "D9D9D9".to_owned(),
+            font_family: Some("Calibri".to_owned()),
+            opacity: 0.5,
+        };
+        for type_attribute in ["", r#" type="malformed""#] {
+            let source = format!(
+                r#"<w:hdr xmlns:w="{W_NS}" xmlns:v="{VML_NS}"><w:p><w:r><w:pict><v:shape id="rdocx-watermark"{type_attribute} style="width:1pt;height:1pt"><v:textpath string="OLD"/></v:shape></w:pict></w:r></w:p></w:hdr>"#
+            );
+            let replaced = replace_authored_watermark(source.as_bytes(), &watermark).unwrap();
+            let xml = String::from_utf8(replaced.clone()).unwrap();
+            assert_eq!(
+                xml.matches(&format!(r#"id="{TEXT_WATERMARK_SHAPE_TYPE_ID}""#))
+                    .count(),
+                1,
+                "{xml}"
+            );
+            assert!(xml.contains(&format!(r##"type="#{TEXT_WATERMARK_SHAPE_TYPE_ID}""##)));
+            assert_eq!(
+                CT_HdrFtr::from_xml(&replaced).unwrap().watermarks(),
+                std::slice::from_ref(&watermark)
+            );
+            assert_eq!(
+                replace_authored_watermark(&replaced, &watermark).unwrap(),
+                replaced
+            );
+        }
     }
 
     #[test]

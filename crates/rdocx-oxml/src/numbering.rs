@@ -3303,7 +3303,17 @@ impl CT_Numbering {
     pub fn add_list(&mut self, levels: &[(ST_NumberFormat, Option<u32>)]) -> u32 {
         let abs_id = self.next_abstract_num_id();
         let num_id = self.next_num_id();
+        self.add_list_with_ids(levels, abs_id, num_id)
+    }
 
+    /// Add a definition using identifiers reserved by a package facade.
+    #[doc(hidden)]
+    pub fn add_list_with_ids(
+        &mut self,
+        levels: &[(ST_NumberFormat, Option<u32>)],
+        abs_id: u32,
+        num_id: u32,
+    ) -> u32 {
         let mut abs = CT_AbstractNum::new(abs_id);
         abs.multi_level_type = Some("hybridMultilevel".to_string());
 

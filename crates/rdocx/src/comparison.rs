@@ -242,9 +242,9 @@ impl Document {
         validate_revision_timestamp(timestamp)?;
         validate_comparison_options(options)?;
         let mut original = self.clone_for_staging();
-        original.flush_to_package()?;
+        original.prepare_staged_package()?;
         let mut edited = edited.clone_for_staging();
-        edited.flush_to_package()?;
+        edited.prepare_staged_package()?;
         let original_stories = story_parts_with_options(&original, options)?;
         let edited_stories = story_parts_with_options(&edited, options)?;
         if original_stories != edited_stories {
@@ -449,13 +449,9 @@ fn story_parts_with_options(
                     rel_types::FOOTER
                 };
                 if relationship.rel_type != expected_type
-                    || relationship.target_mode.as_deref() == Some("External")
+                    || !crate::document::relationship_is_internal(relationship)
                 {
-                    return Err(Error::Other(format!(
-                        "{} reference {} has an invalid relationship target",
-                        kind.label(),
-                        reference.rel_id
-                    )));
+                    continue;
                 }
                 let part_name =
                     OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target);
@@ -486,11 +482,8 @@ fn story_parts_with_options(
                 if relationship.rel_type != relationship_type {
                     continue;
                 }
-                if relationship.target_mode.as_deref() == Some("External") {
-                    return Err(Error::Other(format!(
-                        "{} story has an external relationship target",
-                        kind.label()
-                    )));
+                if !crate::document::relationship_is_internal(relationship) {
+                    continue;
                 }
                 let part_name =
                     OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target);
@@ -1439,9 +1432,7 @@ fn normal_note_owner(xml: &str) -> Result<bool> {
 }
 
 pub(crate) fn reopen_staged(candidate: Document) -> Result<Document> {
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    candidate.package.write_to(&mut bytes)?;
-    Document::from_bytes(bytes.get_ref())
+    candidate.reopen_prepared_staged()
 }
 
 type NormalizedPackage = (Vec<String>, Vec<(ComparisonStoryKind, String, Vec<String>)>);

@@ -1,9 +1,17 @@
 //! Parsing and writing of `.rels` relationship files.
 
+use std::collections::HashSet;
+
+use quick_xml::encoding::Decoder;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::name::ResolveResult;
+use quick_xml::reader::NsReader;
+use quick_xml::{Writer, XmlVersion};
 
 use crate::error::{OpcError, Result};
+
+const RELATIONSHIPS_NAMESPACE: &[u8] =
+    b"http://schemas.openxmlformats.org/package/2006/relationships";
 
 /// Well-known OOXML relationship types.
 pub mod rel_types {
@@ -144,60 +152,40 @@ impl Relationships {
 
     /// Parse from XML bytes.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
+        let mut reader = NsReader::from_reader(xml);
         reader.config_mut().trim_text(true);
 
         let mut items = Vec::new();
+        let mut ids = HashSet::new();
         let mut max_id: u32 = 0;
         let mut buf = Vec::new();
 
         loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref e)) if e.name().as_ref() == b"Relationship" => {
-                    let mut id = None;
-                    let mut rel_type = None;
-                    let mut target = None;
-                    let mut target_mode = None;
-
-                    for attr in e.attributes() {
-                        let attr = attr?;
-                        match attr.key.as_ref() {
-                            b"Id" => {
-                                let val = std::str::from_utf8(&attr.value)?.to_string();
-                                // Extract numeric suffix for next_id tracking
-                                if let Some(num_str) = val.strip_prefix("rId")
-                                    && let Ok(n) = num_str.parse::<u32>()
-                                {
-                                    max_id = max_id.max(n);
-                                }
-                                id = Some(val);
-                            }
-                            b"Type" => {
-                                rel_type = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            b"Target" => {
-                                target = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            b"TargetMode" => {
-                                target_mode = Some(std::str::from_utf8(&attr.value)?.to_string());
-                            }
-                            _ => {}
-                        }
+            match reader.read_resolved_event_into(&mut buf) {
+                Ok((namespace, Event::Empty(ref e)))
+                    if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == RELATIONSHIPS_NAMESPACE)
+                        && e.local_name().as_ref() == b"Relationship" =>
+                {
+                    let relationship = parse_relationship(e, reader.decoder())?;
+                    if !ids.insert(relationship.id.clone()) {
+                        return Err(OpcError::InvalidRelationship);
                     }
-
-                    match (id, rel_type, target) {
-                        (Some(id), Some(rel_type), Some(target)) => {
-                            items.push(Relationship {
-                                id,
-                                rel_type,
-                                target,
-                                target_mode,
-                            });
-                        }
-                        _ => return Err(OpcError::InvalidRelationship),
-                    }
+                    update_max_relationship_id(&relationship.id, &mut max_id);
+                    items.push(relationship);
                 }
-                Ok(Event::Eof) => break,
+                Ok((namespace, Event::Start(ref e)))
+                    if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == RELATIONSHIPS_NAMESPACE)
+                        && e.local_name().as_ref() == b"Relationship" =>
+                {
+                    let relationship = parse_relationship(e, reader.decoder())?;
+                    if !ids.insert(relationship.id.clone()) {
+                        return Err(OpcError::InvalidRelationship);
+                    }
+                    update_max_relationship_id(&relationship.id, &mut max_id);
+                    items.push(relationship);
+                    reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                }
+                Ok((_, Event::Eof)) => break,
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
@@ -212,6 +200,7 @@ impl Relationships {
 
     /// Serialize to XML bytes.
     pub fn to_xml(&self) -> Result<Vec<u8>> {
+        self.validate_ids()?;
         let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
 
         writer.write_event(Event::Decl(BytesDecl::new(
@@ -326,6 +315,54 @@ impl Relationships {
             }
         }
         unreachable!("the generated relationship id space is unbounded")
+    }
+
+    pub(crate) fn validate_ids(&self) -> Result<()> {
+        let mut ids = HashSet::with_capacity(self.items.len());
+        if self
+            .items
+            .iter()
+            .all(|relationship| ids.insert(relationship.id.as_str()))
+        {
+            Ok(())
+        } else {
+            Err(OpcError::InvalidRelationship)
+        }
+    }
+}
+
+fn parse_relationship(element: &BytesStart<'_>, decoder: Decoder) -> Result<Relationship> {
+    let mut id = None;
+    let mut rel_type = None;
+    let mut target = None;
+    let mut target_mode = None;
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)?
+            .into_owned();
+        match attribute.key.as_ref() {
+            b"Id" => id = Some(value),
+            b"Type" => rel_type = Some(value),
+            b"Target" => target = Some(value),
+            b"TargetMode" => target_mode = Some(value),
+            _ => {}
+        }
+    }
+    match (id, rel_type, target) {
+        (Some(id), Some(rel_type), Some(target)) => Ok(Relationship {
+            id,
+            rel_type,
+            target,
+            target_mode,
+        }),
+        _ => Err(OpcError::InvalidRelationship),
+    }
+}
+
+fn update_max_relationship_id(id: &str, maximum: &mut u32) {
+    if let Some(number) = id.strip_prefix("rId").and_then(|value| value.parse().ok()) {
+        *maximum = (*maximum).max(number);
     }
 }
 
@@ -522,5 +559,63 @@ mod tests {
         assert_eq!(relationships.add("type-two", "two.xml"), "rId2");
         relationships.add_with_id("rId4294967295", "type-max", "replacement.xml");
         assert_eq!(relationships.add("type-three", "three.xml"), "rId3");
+    }
+
+    #[test]
+    fn aliased_and_expanded_relationship_entries_parse_but_foreign_decoys_do_not() {
+        let xml = br#"<pr:Relationships xmlns:pr="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:x="urn:foreign"><x:Relationship Id="rId9" Type="urn:wrong" Target="wrong.xml"/><pr:Relationship Id="rId2" Type="urn:first" Target="first.xml"></pr:Relationship><pr:Relationship Id="rId3" Type="urn:second" Target="second.xml"/></pr:Relationships>"#;
+        let parsed = Relationships::from_xml(xml).expect("canonical relationships parse");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(parsed.items[0].id, "rId2");
+        assert_eq!(parsed.items[1].id, "rId3");
+    }
+
+    #[test]
+    fn duplicate_relationship_ids_are_rejected_on_parse_and_serialize() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="urn:first" Target="first.xml"/><Relationship Id="rId1" Type="urn:second" Target="second.xml"/></Relationships>"#;
+        assert!(matches!(
+            Relationships::from_xml(xml),
+            Err(OpcError::InvalidRelationship)
+        ));
+
+        let mut relationships = Relationships::new();
+        relationships.items.push(Relationship {
+            id: "producer".to_owned(),
+            rel_type: "urn:first".to_owned(),
+            target: "first.xml".to_owned(),
+            target_mode: None,
+        });
+        relationships.items.push(Relationship {
+            id: "producer".to_owned(),
+            rel_type: "urn:second".to_owned(),
+            target: "second.xml".to_owned(),
+            target_mode: None,
+        });
+        assert!(matches!(
+            relationships.to_xml(),
+            Err(OpcError::InvalidRelationship)
+        ));
+    }
+
+    #[test]
+    fn encoded_relationship_values_are_decoded_before_validation_and_escape_once() {
+        let duplicate = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="urn:first" Target="first.xml"/><Relationship Id="rId&#49;" Type="urn:second" Target="second.xml"/></Relationships>"#;
+        assert!(matches!(
+            Relationships::from_xml(duplicate),
+            Err(OpcError::InvalidRelationship)
+        ));
+
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId&#49;" Type="urn:test?a=1&amp;b=2" Target="folder/a&amp;b.xml"/></Relationships>"#;
+        let parsed = Relationships::from_xml(xml).unwrap();
+        assert_eq!(parsed.items[0].id, "rId1");
+        assert_eq!(parsed.items[0].rel_type, "urn:test?a=1&b=2");
+        assert_eq!(parsed.items[0].target, "folder/a&b.xml");
+        let saved = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(saved.contains("folder/a&amp;b.xml"));
+        assert!(!saved.contains("&amp;amp;"));
+        assert_eq!(
+            Relationships::from_xml(saved.as_bytes()).unwrap().items,
+            parsed.items
+        );
     }
 }

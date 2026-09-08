@@ -143,8 +143,8 @@ mod fresh_word_package_profile_tests {
             assert_eq!(parts, required_parts);
             assert_eq!(package.content_types.overrides.len(), required_parts.len());
             assert_eq!(
-                package.content_types.overrides["/word/document.xml"],
-                main_content_type(class)
+                package.content_types.override_for("/word/document.xml"),
+                Some(main_content_type(class))
             );
             for (part_name, expected) in [
                 ("/word/styles.xml", STYLES_CONTENT_TYPE),
@@ -154,7 +154,10 @@ mod fresh_word_package_profile_tests {
                 ("/docProps/core.xml", content_types::CORE_PROPERTIES),
                 ("/docProps/app.xml", content_types::EXTENDED_PROPERTIES),
             ] {
-                assert_eq!(package.content_types.overrides[part_name], expected);
+                assert_eq!(
+                    package.content_types.override_for(part_name),
+                    Some(expected)
+                );
             }
             assert_eq!(
                 relationship_types(&package, "/"),
@@ -235,6 +238,81 @@ mod fresh_word_package_profile_tests {
             );
         }
     }
+}
+
+#[test]
+fn identifier_scopes_do_not_alias_or_overreach() {
+    let mut document = Document::new();
+    document.add_paragraph("scope");
+    let range = RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: 1,
+        },
+    };
+    assert_eq!(document.add_bookmark("Scope", range).unwrap(), 0);
+    assert_eq!(
+        document
+            .add_comment(range, "Author", None, "Scoped comment")
+            .unwrap(),
+        0
+    );
+    assert_eq!(document.add_list_definition(&[ListLevel::decimal()]), 1);
+    document.add_picture(
+        b"scope-image",
+        "scope.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+    let bytes = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let image_relationship = document_relationships
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::IMAGE)
+        .unwrap()
+        .id
+        .clone();
+    package.set_part("/word/header-scope.xml", b"<scope/>".to_vec());
+    package
+        .content_types
+        .add_override("/word/header-scope.xml", "application/xml");
+    package
+        .get_or_create_part_rels("/word/header-scope.xml")
+        .add_with_id(&image_relationship, "urn:scope", "scope-target.xml");
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let mut reopened = Document::from_bytes(&output.into_inner()).unwrap();
+    let saved = reopened.to_bytes().unwrap();
+    let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+
+    assert!(
+        saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .get_by_id(&image_relationship)
+            .is_some()
+    );
+    assert!(
+        saved
+            .get_part_rels("/word/header-scope.xml")
+            .unwrap()
+            .get_by_id(&image_relationship)
+            .is_some()
+    );
+    let document_xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    let comments_xml = std::str::from_utf8(saved.get_part("/word/comments.xml").unwrap()).unwrap();
+    let numbering_xml =
+        std::str::from_utf8(saved.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(document_xml.contains(r#"w:bookmarkStart w:id="0""#));
+    assert!(comments_xml.contains(r#"w:id="0""#));
+    assert!(document_xml.contains(r#"wp:docPr id="1""#));
+    assert!(numbering_xml.contains(r#"w:num w:numId="1""#));
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -495,6 +573,30 @@ mod flat_opc_package_class_tests {
                 .get_part("/custom/preserved.xml")
         );
         assert_eq!(reopened.get_part("/custom/empty.bin"), Some(&[][..]));
+    }
+
+    #[test]
+    fn flat_opc_accepts_sole_mixed_case_special_names_and_relationship_owner() {
+        let document =
+            Document::from_bytes(&package_bytes(&source_package(WordPackageClass::Document)))
+                .unwrap();
+        let flat = String::from_utf8(document.to_flat_opc_bytes().unwrap()).unwrap();
+        let mixed = flat
+            .replace("pkg:name=\"/_rels/.rels\"", "pkg:name=\"/_RELS/.RELS\"")
+            .replace(
+                "pkg:name=\"/word/_rels/document.xml.rels\"",
+                "pkg:name=\"/WORD/_RELS/DOCUMENT.XML.RELS\"",
+            )
+            .replace(
+                "pkg:name=\"/word/document.xml\"",
+                "pkg:name=\"/WORD/DOCUMENT.XML\"",
+            );
+
+        let mut imported = Document::from_flat_opc_bytes(mixed.as_bytes()).unwrap();
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(imported.to_bytes().unwrap())).unwrap();
+        assert!(package.parts.contains_key("/WORD/DOCUMENT.XML"));
+        assert!(package.part_rels.contains_key("/WORD/DOCUMENT.XML"));
     }
 
     #[test]
@@ -841,8 +943,8 @@ mod flat_opc_package_class_tests {
             let converted = document.to_bytes_as(class).unwrap();
             let package = OpcPackage::from_reader(std::io::Cursor::new(converted)).unwrap();
             assert_eq!(
-                package.content_types.overrides["/word/document.xml"],
-                content_type(class)
+                package.content_types.override_for("/word/document.xml"),
+                Some(content_type(class))
             );
             assert_eq!(package.parts, baseline.parts);
             assert_eq!(
@@ -967,6 +1069,7 @@ mod flat_opc_package_class_tests {
                 .unwrap(),
             &valid[first_part_end..]
         );
+        let case_variant_duplicate = duplicate.replacen("/_rels/.rels", "/_RELS/.RELS", 1);
         let mismatched_data = valid
             .replacen("<pkg:xmlData>", "<pkg:binaryData>", 1)
             .replacen("</pkg:xmlData>", "</pkg:binaryData>", 1);
@@ -1004,6 +1107,7 @@ mod flat_opc_package_class_tests {
             mismatched_data,
             extra_data,
             duplicate,
+            case_variant_duplicate,
             malformed_relationship,
             nested_relationship_filename,
             valid.replacen(
@@ -1149,6 +1253,105 @@ end timeout"#,
         }
         std::fs::remove_dir_all(directory).unwrap();
     }
+}
+
+#[test]
+fn encoded_drawing_relationship_ids_reopen_extract_and_render() {
+    let image = mhtml_pixel_png();
+    let mut source = Document::new();
+    source.add_picture(
+        &image,
+        "encoded.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+    source
+        .add_chart(
+            oxml_chart::ChartKind::Bar,
+            Length::inches(3.0),
+            Length::inches(2.0),
+            &oxml_chart::ChartData {
+                categories: vec!["North".to_owned(), "South".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![12.0, 18.0])],
+                number_format: Some("0".to_owned()),
+            },
+        )
+        .unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+        .expect("authored drawing package");
+    let relationships = package
+        .get_part_rels("/word/document.xml")
+        .expect("document relationships");
+    let image_id = relationships
+        .get_by_type(rel_types::IMAGE)
+        .expect("image relationship")
+        .id
+        .clone();
+    let chart_id = relationships
+        .get_by_type(rel_types::CHART)
+        .expect("chart relationship")
+        .id
+        .clone();
+    let document_xml = String::from_utf8(
+        package
+            .get_part("/word/document.xml")
+            .expect("document part")
+            .to_vec(),
+    )
+    .unwrap()
+    .replace(
+        &format!(r#"r:embed="{image_id}""#),
+        &format!(r#"r:embed="{}""#, image_id.replacen('I', "&#73;", 1)),
+    )
+    .replace(
+        &format!(r#"r:id="{chart_id}""#),
+        &format!(r#"r:id="{}""#, chart_id.replacen('I', "&#x49;", 1)),
+    );
+    assert!(document_xml.contains("r&#73;d"));
+    assert!(document_xml.contains("r&#x49;d"));
+    package.set_part("/word/document.xml", document_xml.into_bytes());
+
+    let mut producer_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut producer_bytes).unwrap();
+    let mut document =
+        Document::from_bytes(producer_bytes.get_ref()).expect("encoded drawing package reopens");
+    assert_eq!(document.images()[0].embed_id, image_id);
+    assert_eq!(document.image_data(&image_id), Some(image.clone()));
+
+    let page = document
+        .layout_page(0)
+        .unwrap()
+        .expect("encoded drawings produce a page");
+    fn has_group(elements: &[oxml_layout::PositionedElement]) -> bool {
+        elements.iter().any(|element| match element {
+            oxml_layout::PositionedElement::Group(_) => true,
+            oxml_layout::PositionedElement::MarkedContent { children, .. } => has_group(children),
+            _ => false,
+        })
+    }
+    let mut images = 0;
+    let mut paths = 0;
+    oxml_layout::walk(&page.elements, &mut |element, _| match element {
+        oxml_layout::PositionedElement::Image { .. } => images += 1,
+        oxml_layout::PositionedElement::Path(_) => paths += 1,
+        _ => {}
+    });
+    assert_eq!(images, 1);
+    assert!(
+        has_group(&page.elements),
+        "the decoded chart relationship should render a group"
+    );
+    assert!(paths > 0, "the decoded chart should render vector geometry");
+    let rendered = document
+        .render_page_to_png_deterministic(0, 72.0)
+        .unwrap()
+        .expect("encoded drawing page renders");
+    assert!(rendered.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).expect("saved drawing package reopens");
+    assert_eq!(reopened.images()[0].embed_id, image_id);
+    assert_eq!(reopened.image_data(&image_id), Some(image));
 }
 
 fn normalized_mhtml_record(
@@ -5531,7 +5734,7 @@ fn core_properties_at_relationship_target_round_trip_in_place() {
     let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     let core_xml = package.parts.remove("/docProps/core.xml").unwrap();
     package.set_part("/custom/metadata.xml", core_xml);
-    package.content_types.overrides.remove("/docProps/core.xml");
+    package.content_types.remove_override("/docProps/core.xml");
     package.content_types.add_override(
         "/custom/metadata.xml",
         "application/vnd.openxmlformats-package.core-properties+xml",
@@ -5607,6 +5810,63 @@ fn three_comments_and_cross_paragraph_anchors_round_trip_byte_identically() {
         saved_package.get_part("/word/document.xml"),
         Some(document_xml.as_bytes())
     );
+}
+
+#[test]
+fn encoded_comment_ids_reopen_as_one_complete_comment_anchor() {
+    let mut source = Document::new();
+    source.add_paragraph("commented");
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+        .expect("source package");
+    package.set_part(
+        "/word/document.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:commentRangeStart w:id="&#55;"/><w:r><w:t>commented</w:t></w:r><w:commentRangeEnd w:id="&#x37;"/><w:r><w:commentReference w:id="&#55;"/></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>"#.to_vec(),
+    );
+    package.set_part(
+        "/word/comments.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:author="Ada" w:id="7"><w:p><w:r><w:t>encoded anchor</w:t></w:r></w:p></w:comment></w:comments>"#.to_vec(),
+    );
+    package.content_types.add_override(
+        "/word/comments.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::COMMENTS, "comments.xml");
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).expect("encoded comment package");
+    assert_eq!(document.comments()[0].id(), 7);
+    let paragraph = document.paragraph(0).expect("comment paragraph");
+    let range_ids = paragraph
+        .items()
+        .filter_map(|item| match item {
+            rdocx::paragraph::ParagraphItemRef::CommentRangeStart(id) => Some((true, id)),
+            rdocx::paragraph::ParagraphItemRef::CommentRangeEnd(id) => Some((false, id)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(range_ids, [(true, 7), (false, 7)]);
+    let reference_ids = paragraph
+        .runs()
+        .filter_map(|run| {
+            run.items().find_map(|item| match item {
+                rdocx::run::RunItemRef::CommentReference(id) => Some(id),
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reference_ids, [7]);
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).expect("saved comment package reopens");
+    assert_eq!(reopened.comments()[0].id(), 7);
+    let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains(r#"<w:commentRangeStart w:id="7"/>"#));
+    assert!(xml.contains(r#"<w:commentRangeEnd w:id="7"/>"#));
+    assert!(xml.contains(r#"<w:commentReference w:id="7"/>"#));
 }
 
 #[test]
@@ -7707,8 +7967,8 @@ mod header_footer_pdf {
             PRODUCER_PART
         );
         assert_eq!(
-            package.content_types.overrides.get("/custom/producer.bin"),
-            Some(&"application/x-producer-private".to_owned())
+            package.content_types.override_for("/custom/producer.bin"),
+            Some("application/x-producer-private")
         );
         let relationship = package
             .get_part_rels("/word/document.xml")
@@ -8086,8 +8346,37 @@ mod legacy_forms_and_building_blocks {
                 .into_bytes(),
             );
             let document = Document::from_bytes(&package_bytes(package)).unwrap();
-            assert!(document.legacy_form_fields().is_err(), "{case}");
+            if case == "traversal" {
+                assert!(document.legacy_form_fields().is_err(), "{case}");
+            } else {
+                assert!(document.legacy_form_fields().unwrap().is_empty(), "{case}");
+            }
         }
+
+        let mut package = base_package();
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        let malformed = relationships.add(rel_types::HEADER, "ignored.xml");
+        relationships
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == malformed)
+            .unwrap()
+            .target_mode = Some("internal".into());
+        relationships.add(rel_types::HEADER, "valid.xml");
+        package.set_part(
+            "/word/valid.xml",
+            format!(
+                r#"<w:hdr xmlns:w="{WORD_NS}">{}</w:hdr>"#,
+                text_form("valid", "value")
+            )
+            .into_bytes(),
+        );
+        package.content_types.add_override(
+            "/word/valid.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        let document = Document::from_bytes(&package_bytes(package)).unwrap();
+        assert_eq!(document.legacy_form_fields().unwrap().len(), 1);
     }
 
     #[test]
@@ -8191,7 +8480,6 @@ mod legacy_forms_and_building_blocks {
         );
         for case in [
             "duplicate",
-            "external",
             "traversal",
             "missing",
             "wrong-type",
@@ -8204,17 +8492,9 @@ mod legacy_forms_and_building_blocks {
             } else {
                 "glossary/document.xml"
             };
-            let id = relationships.add(rel_types::GLOSSARY_DOCUMENT, target);
+            relationships.add(rel_types::GLOSSARY_DOCUMENT, target);
             if case == "duplicate" {
                 relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/other.xml");
-            }
-            if case == "external" {
-                relationships
-                    .items
-                    .iter_mut()
-                    .find(|relationship| relationship.id == id)
-                    .unwrap()
-                    .target_mode = Some("External".into());
             }
             let part_name = "/word/glossary/document.xml";
             if case != "missing" && case != "traversal" {
@@ -8240,6 +8520,40 @@ mod legacy_forms_and_building_blocks {
                 "{case} glossary graph must fail closed"
             );
         }
+
+        for mode in ["External", "internal", "ProducerDefined"] {
+            let mut package = base_package();
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            let ignored = relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/ignored.xml");
+            relationships
+                .items
+                .iter_mut()
+                .find(|relationship| relationship.id == ignored)
+                .unwrap()
+                .target_mode = Some(mode.into());
+            let document = Document::from_bytes(&package_bytes(package)).unwrap();
+            assert!(document.building_blocks().unwrap().is_empty(), "{mode}");
+        }
+
+        let mut package = base_package();
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        let ignored = relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/ignored.xml");
+        relationships
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == ignored)
+            .unwrap()
+            .target_mode = Some("internal".into());
+        relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/document.xml");
+        package.set_part(
+            "/word/glossary/document.xml",
+            format!(r#"<w:glossaryDocument xmlns:w="{WORD_NS}"><w:docParts><w:docPart><w:docPartPr><w:name w:val="valid"/></w:docPartPr><w:docPartBody><w:p/></w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#).into_bytes(),
+        );
+        package
+            .content_types
+            .add_override("/word/glossary/document.xml", GLOSSARY_CONTENT_TYPE);
+        let document = Document::from_bytes(&package_bytes(package)).unwrap();
+        assert_eq!(document.building_blocks().unwrap().len(), 1);
     }
 
     #[test]
@@ -8861,19 +9175,12 @@ mod legacy_forms_and_building_blocks {
                 .into_bytes(),
             );
         }
-        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
-        let before = document.to_bytes().unwrap();
-        assert!(document.legacy_form_fields().is_err());
-        assert!(
-            document
-                .set_legacy_form_field_value(
-                    "/word/header-id-one.xml",
-                    0,
-                    LegacyFormFieldValue::Text("changed".to_owned()),
-                )
-                .is_err()
-        );
-        assert_eq!(document.to_bytes().unwrap(), before);
+        let mut output = std::io::Cursor::new(Vec::new());
+        assert!(matches!(
+            package.write_to(&mut output),
+            Err(oxml_opc::OpcError::InvalidRelationship)
+        ));
+        assert!(output.into_inner().is_empty());
     }
 
     #[test]

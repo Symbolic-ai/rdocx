@@ -245,6 +245,16 @@ profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
 
+Native Word mutations share one private document identifier owner. Existing
+method signatures stay unchanged, but fallible operations can report imported,
+preserved, overflow, and pending-collision errors before publication. Save and
+byte serialization use a staged clone and assign authored relationship,
+bookmark, comment, drawing, numbering, part, and content-type identities in
+final recursive document order. `CT_Inline` and `CT_Anchor` expose their parsed
+`doc_pr_id` on the pre-1.0 Rust model so callers no longer receive an invented
+constant for a drawing. Python, WASM, and CLI gain the deterministic behavior
+through the native facade without adding binding methods.
+
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
 bundled-font page targets and returns `TocRebuildReport` with entry, newly

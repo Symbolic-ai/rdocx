@@ -1,6 +1,6 @@
 //! OPC Package reader and writer for ZIP-based OOXML packages.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -29,6 +29,19 @@ pub struct PackagePart {
     pub name: String,
     /// Raw bytes of the part content
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ContentTypesSource {
+    xml: Vec<u8>,
+    content_types: ContentTypes,
+}
+
+struct SerializedPackage<'a> {
+    content_types: Vec<u8>,
+    package_relationships: Vec<u8>,
+    part_relationships: Vec<(String, Vec<u8>)>,
+    parts: Vec<(&'a str, &'a [u8])>,
 }
 
 /// Resource limits applied while expanding an OPC ZIP archive.
@@ -60,8 +73,7 @@ pub struct OpcPackage {
     pub part_rels: HashMap<String, Relationships>,
     /// All parts keyed by their URI (e.g. "/word/document.xml").
     pub parts: HashMap<String, Vec<u8>>,
-    #[cfg(feature = "digital-signatures")]
-    pub(crate) signature_source: Option<crate::signature::SignatureSource>,
+    content_types_source: Option<ContentTypesSource>,
 }
 
 impl OpcPackage {
@@ -116,6 +128,7 @@ impl OpcPackage {
             });
         }
         let mut raw_parts: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut raw_part_identities = HashSet::new();
         let mut total_uncompressed_bytes = 0_u64;
 
         // Read all entries from the ZIP
@@ -141,6 +154,9 @@ impl OpcPackage {
             }
             let name = normalize_part_name(entry.name());
             let name = name.strip_prefix('/').unwrap_or(&name).to_string();
+            if !raw_part_identities.insert(name.to_ascii_lowercase()) {
+                return Err(OpcError::DuplicatePartName(name));
+            }
             let mut data = Vec::new();
             let read_limit = limits
                 .max_part_uncompressed_bytes
@@ -167,13 +183,15 @@ impl OpcPackage {
         }
 
         // Parse [Content_Types].xml
-        let ct_xml = raw_parts
-            .get("[Content_Types].xml")
+        let ct_xml = deterministic_part_key(&raw_parts, "/[Content_Types].xml")
+            .and_then(|name| raw_parts.get(name))
             .ok_or_else(|| OpcError::PartNotFound("[Content_Types].xml".into()))?;
         let content_types = ContentTypes::from_xml(ct_xml)?;
 
         // Parse package-level relationships: _rels/.rels
-        let package_rels = if let Some(rels_xml) = raw_parts.get("_rels/.rels") {
+        let package_rels = if let Some(rels_xml) =
+            deterministic_part_key(&raw_parts, "/_rels/.rels").and_then(|name| raw_parts.get(name))
+        {
             Relationships::from_xml(rels_xml)?
         } else {
             Relationships::new()
@@ -183,7 +201,10 @@ impl OpcPackage {
         let mut part_rels = HashMap::new();
         let rels_entries: Vec<String> = raw_parts
             .keys()
-            .filter(|k| k.ends_with(".rels") && *k != "_rels/.rels")
+            .filter(|name| {
+                name.to_ascii_lowercase().ends_with(".rels")
+                    && part_identity(name) != part_identity("/_rels/.rels")
+            })
             .cloned()
             .collect();
 
@@ -200,7 +221,10 @@ impl OpcPackage {
         // Build parts map with leading "/" normalized
         let mut parts = HashMap::new();
         for (name, data) in &raw_parts {
-            if name == "[Content_Types].xml" || name == "_rels/.rels" || name.ends_with(".rels") {
+            if part_identity(name) == part_identity("/[Content_Types].xml")
+                || part_identity(name) == part_identity("/_rels/.rels")
+                || name.to_ascii_lowercase().ends_with(".rels")
+            {
                 continue;
             }
             let normalized = if name.starts_with('/') {
@@ -216,9 +240,8 @@ impl OpcPackage {
             package_rels,
             part_rels,
             parts,
-            #[cfg(feature = "digital-signatures")]
-            signature_source: Some(crate::signature::SignatureSource {
-                content_types_xml: ct_xml.clone(),
+            content_types_source: Some(ContentTypesSource {
+                xml: ct_xml.clone(),
                 content_types: ContentTypes::from_xml(ct_xml)?,
             }),
         })
@@ -226,50 +249,46 @@ impl OpcPackage {
 
     /// Save the OPC package to a file path.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let serialized = self.serialize()?;
         let file = std::fs::File::create(path)?;
-        self.write_to(file)
+        Self::write_serialized(file, serialized)
     }
 
     /// Write the OPC package to any writer.
     pub fn write_to<W: Write + Seek>(&self, writer: W) -> Result<()> {
+        Self::write_serialized(writer, self.serialize()?)
+    }
+
+    fn write_serialized<W: Write + Seek>(
+        writer: W,
+        serialized: SerializedPackage<'_>,
+    ) -> Result<()> {
         let mut zip = ZipWriter::new(writer);
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         // Write [Content_Types].xml
-        #[cfg(feature = "digital-signatures")]
-        let ct_xml = crate::signature::content_types_bytes(self)?;
-        #[cfg(not(feature = "digital-signatures"))]
-        let ct_xml = self.content_types.to_xml()?;
         zip.start_file("[Content_Types].xml", options)?;
-        zip.write_all(&ct_xml)?;
+        zip.write_all(&serialized.content_types)?;
 
         // Write _rels/.rels
-        let pkg_rels_xml = self.package_rels.to_xml()?;
         zip.start_file("_rels/.rels", options)?;
-        zip.write_all(&pkg_rels_xml)?;
+        zip.write_all(&serialized.package_relationships)?;
 
         // Write part-level .rels files. Both loops iterate in sorted order so
         // that saving the same package twice produces byte-identical output;
         // a HashMap's order would vary between runs.
-        let mut rels_names: Vec<&String> = self.part_rels.keys().collect();
-        rels_names.sort_unstable();
-        for part_name in rels_names {
-            let rels = &self.part_rels[part_name];
-            let rels_path = part_name_to_rels_path(part_name);
-            let rels_xml = rels.to_xml()?;
+        for (rels_path, rels_xml) in serialized.part_relationships {
             zip.start_file(&rels_path, options)?;
             zip.write_all(&rels_xml)?;
         }
 
         // Write all parts
-        let mut part_names: Vec<&String> = self.parts.keys().collect();
-        part_names.sort_unstable();
-        for name in part_names {
+        for (name, data) in serialized.parts {
             // Strip leading "/" for ZIP entry name
             let zip_name = name.strip_prefix('/').unwrap_or(name);
             zip.start_file(zip_name, options)?;
-            zip.write_all(&self.parts[name])?;
+            zip.write_all(data)?;
         }
 
         zip.finish()?;
@@ -289,12 +308,42 @@ impl OpcPackage {
 
     /// Get raw bytes of a part by its URI.
     pub fn get_part(&self, part_name: &str) -> Option<&[u8]> {
-        self.parts.get(part_name).map(|v| v.as_slice())
+        let key = deterministic_part_key(&self.parts, part_name)?;
+        self.parts.get(key).map(Vec::as_slice)
+    }
+
+    /// Return whether a case-equivalent normalized part name exists.
+    pub fn contains_part(&self, part_name: &str) -> bool {
+        deterministic_part_key(&self.parts, part_name).is_some()
+    }
+
+    #[cfg(feature = "digital-signatures")]
+    pub(crate) fn stored_part_name(&self, part_name: &str) -> Option<&str> {
+        deterministic_part_key(&self.parts, part_name).map(String::as_str)
     }
 
     /// Set (or replace) a part's raw bytes.
     pub fn set_part(&mut self, part_name: &str, data: Vec<u8>) {
-        self.parts.insert(part_name.to_string(), data);
+        let key = deterministic_part_key(&self.parts, part_name)
+            .cloned()
+            .unwrap_or_else(|| part_name.to_owned());
+        self.parts.insert(key, data);
+    }
+
+    /// Remove and return a case-equivalent normalized part.
+    pub fn remove_part(&mut self, part_name: &str) -> Option<Vec<u8>> {
+        let key = deterministic_part_key(&self.parts, part_name)?.clone();
+        self.parts.remove(&key)
+    }
+
+    pub(crate) fn content_types_bytes(&self) -> Result<Vec<u8>> {
+        self.content_types.validate_identities()?;
+        if let Some(source) = &self.content_types_source
+            && source.content_types == self.content_types
+        {
+            return Ok(source.xml.clone());
+        }
+        self.content_types.to_xml()
     }
 
     /// Verify every digital signature discovered through the OPC relationship graph.
@@ -331,12 +380,42 @@ impl OpcPackage {
 
     /// Get the relationships for a specific part.
     pub fn get_part_rels(&self, part_name: &str) -> Option<&Relationships> {
-        self.part_rels.get(part_name)
+        let key = deterministic_part_key(&self.part_rels, part_name)?;
+        self.part_rels.get(key)
+    }
+
+    /// Get mutable relationships for a case-equivalent normalized owner.
+    pub fn get_part_rels_mut(&mut self, part_name: &str) -> Option<&mut Relationships> {
+        let key = deterministic_part_key(&self.part_rels, part_name)?.clone();
+        self.part_rels.get_mut(&key)
+    }
+
+    #[cfg(feature = "digital-signatures")]
+    pub(crate) fn stored_part_rels_owner(&self, part_name: &str) -> Option<&str> {
+        deterministic_part_key(&self.part_rels, part_name).map(String::as_str)
     }
 
     /// Get or create the relationships for a specific part.
     pub fn get_or_create_part_rels(&mut self, part_name: &str) -> &mut Relationships {
-        self.part_rels.entry(part_name.to_string()).or_default()
+        let key = deterministic_part_key(&self.part_rels, part_name)
+            .cloned()
+            .unwrap_or_else(|| part_name.to_owned());
+        self.part_rels.entry(key).or_default()
+    }
+
+    /// Replaces the relationships for a part while preserving the package's
+    /// existing spelling for a case-equivalent relationship owner.
+    pub fn set_part_rels(&mut self, part_name: &str, relationships: Relationships) {
+        let key = deterministic_part_key(&self.part_rels, part_name)
+            .cloned()
+            .unwrap_or_else(|| part_name.to_owned());
+        self.part_rels.insert(key, relationships);
+    }
+
+    /// Remove and return relationships for a case-equivalent normalized owner.
+    pub fn remove_part_rels(&mut self, part_name: &str) -> Option<Relationships> {
+        let key = deterministic_part_key(&self.part_rels, part_name)?.clone();
+        self.part_rels.remove(&key)
     }
 
     /// Resolve the target URI of a relationship relative to its source part.
@@ -379,8 +458,7 @@ impl OpcPackage {
             package_rels: Relationships::new(),
             part_rels: HashMap::new(),
             parts: HashMap::new(),
-            #[cfg(feature = "digital-signatures")]
-            signature_source: None,
+            content_types_source: None,
         }
     }
 
@@ -394,6 +472,92 @@ impl OpcPackage {
             .add_override(&format!("/{part_name}"), content_type);
         package
     }
+
+    fn serialize(&self) -> Result<SerializedPackage<'_>> {
+        self.validate_graph()?;
+
+        let content_types = self.content_types_bytes()?;
+        let package_relationships = self.package_rels.to_xml()?;
+        let mut part_relationships = Vec::with_capacity(self.part_rels.len());
+        let mut relationship_owners = self.part_rels.iter().collect::<Vec<_>>();
+        relationship_owners.sort_by_key(|(owner, _)| owner.as_str());
+        for (owner, relationships) in relationship_owners {
+            part_relationships.push((part_name_to_rels_path(owner), relationships.to_xml()?));
+        }
+
+        let mut parts = self
+            .parts
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.as_slice()))
+            .collect::<Vec<_>>();
+        parts.sort_by_key(|(name, _)| *name);
+        validate_zip_entry_identities(&part_relationships, &parts)?;
+        Ok(SerializedPackage {
+            content_types,
+            package_relationships,
+            part_relationships,
+            parts,
+        })
+    }
+
+    pub(crate) fn validate_graph(&self) -> Result<()> {
+        validate_part_map_identities(&self.parts)?;
+        validate_part_map_identities(&self.part_rels)?;
+        self.content_types.validate_identities()?;
+        self.package_rels.validate_ids()?;
+        for relationships in self.part_rels.values() {
+            relationships.validate_ids()?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn part_identity(part_name: &str) -> String {
+    normalize_part_name(part_name).to_ascii_lowercase()
+}
+
+fn deterministic_part_key<'a, T>(
+    values: &'a HashMap<String, T>,
+    part_name: &str,
+) -> Option<&'a String> {
+    let identity = part_identity(part_name);
+    values
+        .keys()
+        .filter(|candidate| part_identity(candidate) == identity)
+        .min()
+}
+
+fn validate_part_map_identities<T>(values: &HashMap<String, T>) -> Result<()> {
+    let mut identities = HashSet::with_capacity(values.len());
+    let mut names = values.keys().collect::<Vec<_>>();
+    names.sort_unstable();
+    for name in names {
+        if !identities.insert(part_identity(name)) {
+            return Err(OpcError::DuplicatePartName(name.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn validate_zip_entry_identities(
+    part_relationships: &[(String, Vec<u8>)],
+    parts: &[(&str, &[u8])],
+) -> Result<()> {
+    let mut identities = HashSet::from([
+        part_identity("/[Content_Types].xml"),
+        part_identity("/_rels/.rels"),
+    ]);
+    for (name, _) in part_relationships {
+        if !identities.insert(part_identity(name)) {
+            return Err(OpcError::DuplicatePartName(name.clone()));
+        }
+    }
+    for (name, _) in parts {
+        if !identities.insert(part_identity(name)) {
+            return Err(OpcError::DuplicatePartName((*name).to_owned()));
+        }
+    }
+    Ok(())
 }
 
 fn pre_index_entry_count<R: Read + Seek>(reader: &mut R) -> Result<u64> {
@@ -562,10 +726,6 @@ fn docx_package() -> OpcPackage {
 /// A `..` that would escape the package root is dropped, matching how OPC
 /// consumers treat over-long parent traversals.
 fn normalize_part_name(path: &str) -> String {
-    if !path.contains("./") && !path.ends_with("/.") && !path.ends_with("/..") {
-        return path.to_string();
-    }
-
     let mut segments: Vec<&str> = Vec::new();
     for segment in path.split('/') {
         match segment {
@@ -591,8 +751,14 @@ fn rels_path_to_part_name(rels_path: &str) -> String {
     // Strip the ".rels" suffix once (`trim_end_matches` would strip repeats,
     // turning "a.rels.rels" into "a") and drop only the "_rels" path segment
     // that directly precedes the file name.
-    let without_suffix = rels_path.strip_suffix(".rels").unwrap_or(rels_path);
-    let path = match without_suffix.rfind("_rels/") {
+    let lowercase = rels_path.to_ascii_lowercase();
+    let without_suffix = if lowercase.ends_with(".rels") {
+        &rels_path[..rels_path.len() - ".rels".len()]
+    } else {
+        rels_path
+    };
+    let lowercase = without_suffix.to_ascii_lowercase();
+    let path = match lowercase.rfind("_rels/") {
         Some(pos) => format!(
             "{}{}",
             &without_suffix[..pos],
@@ -661,6 +827,141 @@ mod tests {
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="xml" ContentType="application/xml"/>
 </Types>"#;
+
+    #[test]
+    fn unchanged_case_variant_content_types_preserve_producer_bytes_and_order() {
+        const PRODUCER_CONTENT_TYPES: &[u8] = br#"<?xml version="1.0"?><ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override ContentType="application/example+xml" PartName="/WORD/DOCUMENT.XML"/><ct:Default ContentType="image/png" Extension="PNG"/><ct:Default ContentType="application/xml" Extension="XML"/></ct:Types>"#;
+        let package = OpcPackage::from_reader(package_zip(&[
+            ("[Content_Types].xml", PRODUCER_CONTENT_TYPES),
+            ("word/document.xml", b"<document/>"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            package.content_types.content_type_for("/word/document.xml"),
+            Some("application/example+xml")
+        );
+        assert_eq!(
+            package.content_types.content_type_for("/word/image.png"),
+            Some("image/png")
+        );
+
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        output.set_position(0);
+        let mut archive = ZipArchive::new(output).unwrap();
+        let mut saved = Vec::new();
+        archive
+            .by_name("[Content_Types].xml")
+            .unwrap()
+            .read_to_end(&mut saved)
+            .unwrap();
+        assert_eq!(saved, PRODUCER_CONTENT_TYPES);
+    }
+
+    #[test]
+    fn package_write_rejects_direct_content_type_case_conflicts() {
+        let mut package = OpcPackage::new();
+        package
+            .content_types
+            .defaults
+            .insert("PNG".to_string(), "image/first".to_string());
+        package
+            .content_types
+            .defaults
+            .insert("png".to_string(), "image/second".to_string());
+        let mut output = std::io::Cursor::new(Vec::new());
+
+        assert!(matches!(
+            package.write_to(&mut output),
+            Err(OpcError::InvalidContentTypes)
+        ));
+        assert!(output.into_inner().is_empty());
+    }
+
+    #[test]
+    fn part_access_is_case_insensitive_and_preserves_first_spelling() {
+        let mut package = OpcPackage::new();
+        package.set_part("/WORD/DOCUMENT.XML", b"first".to_vec());
+        package.set_part("word/document.xml", b"second".to_vec());
+        assert_eq!(package.parts.len(), 1);
+        assert!(package.parts.contains_key("/WORD/DOCUMENT.XML"));
+        assert!(package.contains_part("/word/./document.xml"));
+        assert_eq!(package.get_part("word/document.xml"), Some(&b"second"[..]));
+
+        package
+            .get_or_create_part_rels("/WORD/DOCUMENT.XML")
+            .add("urn:test", "target.xml");
+        assert_eq!(package.part_rels.len(), 1);
+        assert!(
+            package
+                .get_part_rels("word/document.xml")
+                .is_some_and(|relationships| relationships.items.len() == 1)
+        );
+        assert!(package.remove_part_rels("/word/document.xml").is_some());
+        assert_eq!(
+            package.remove_part("/word/document.xml"),
+            Some(b"second".to_vec())
+        );
+    }
+
+    #[test]
+    fn direct_case_conflicts_and_duplicate_relationship_ids_fail_before_output() {
+        let mut package = OpcPackage::new();
+        package
+            .parts
+            .insert("/WORD/DOCUMENT.XML".to_owned(), b"first".to_vec());
+        package
+            .parts
+            .insert("/word/document.xml".to_owned(), b"second".to_vec());
+        let mut output = std::io::Cursor::new(Vec::new());
+        assert!(matches!(
+            package.write_to(&mut output),
+            Err(OpcError::DuplicatePartName(_))
+        ));
+        assert!(output.into_inner().is_empty());
+
+        let mut package = OpcPackage::new();
+        for target in ["first.xml", "second.xml"] {
+            package.package_rels.items.push(crate::Relationship {
+                id: "producer-id".to_owned(),
+                rel_type: "urn:test".to_owned(),
+                target: target.to_owned(),
+                target_mode: None,
+            });
+        }
+        let mut output = std::io::Cursor::new(Vec::new());
+        assert!(matches!(
+            package.write_to(&mut output),
+            Err(OpcError::InvalidRelationship)
+        ));
+        assert!(output.into_inner().is_empty());
+    }
+
+    #[test]
+    fn save_validates_before_truncating_destination() {
+        let destination = std::env::temp_dir().join(format!(
+            "rdocx-opc-save-sentinel-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&destination, b"sentinel").unwrap();
+
+        let mut package = OpcPackage::new();
+        for target in ["first.xml", "second.xml"] {
+            package.package_rels.items.push(crate::Relationship {
+                id: "duplicate".to_owned(),
+                rel_type: "urn:test".to_owned(),
+                target: target.to_owned(),
+                target_mode: None,
+            });
+        }
+        assert!(matches!(
+            package.save(&destination),
+            Err(OpcError::InvalidRelationship)
+        ));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"sentinel");
+        std::fs::remove_file(destination).unwrap();
+    }
 
     #[test]
     fn bounded_reader_rejects_too_many_entries() {
@@ -1114,6 +1415,66 @@ mod tests {
             Some(b"not a real password file".as_slice())
         );
         assert!(package.parts.keys().all(|name| !name.contains("..")));
+    }
+
+    #[test]
+    fn duplicate_normalized_part_names_are_rejected() {
+        for alias in [
+            "word/./document.xml",
+            "word//document.xml",
+            "WORD/DOCUMENT.XML",
+        ] {
+            let archive = package_zip(&[
+                ("[Content_Types].xml", MINIMAL_CONTENT_TYPES),
+                ("word/document.xml", b"first"),
+                (alias, b"second"),
+            ]);
+
+            let error = OpcPackage::from_reader(archive).unwrap_err();
+            assert!(matches!(
+                error,
+                OpcError::DuplicatePartName(name) if name.eq_ignore_ascii_case("word/document.xml")
+            ));
+        }
+    }
+
+    #[test]
+    fn loader_resolves_case_equivalent_special_parts_and_relationship_owners() {
+        let content_types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/WORD/DOCUMENT.XML" ContentType="application/xml"/></Types>"#;
+        let package_relationships = format!(
+            r#"<Relationships xmlns="{}"><Relationship Id="rId1" Type="{}" Target="WORD/DOCUMENT.XML"/></Relationships>"#,
+            "http://schemas.openxmlformats.org/package/2006/relationships",
+            rel_types::DOCUMENT
+        );
+        let part_relationships = format!(
+            r#"<Relationships xmlns="{}"><Relationship Id="rId1" Type="urn:test" Target="TARGET.XML"/></Relationships>"#,
+            "http://schemas.openxmlformats.org/package/2006/relationships"
+        );
+        let package = OpcPackage::from_reader(package_zip(&[
+            ("[CONTENT_TYPES].XML", content_types),
+            ("_RELS/.RELS", package_relationships.as_bytes()),
+            ("WORD/DOCUMENT.XML", b"<document/>"),
+            (
+                "WORD/_RELS/DOCUMENT.XML.RELS",
+                part_relationships.as_bytes(),
+            ),
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            package.get_part("/word/document.xml"),
+            Some(&b"<document/>"[..])
+        );
+        assert_eq!(package.package_rels.items.len(), 1);
+        assert_eq!(
+            package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+        assert!(package.parts.contains_key("/WORD/DOCUMENT.XML"));
     }
 
     #[test]

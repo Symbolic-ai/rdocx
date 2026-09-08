@@ -147,7 +147,7 @@ impl Document {
         scope: RevisionScope<'_>,
     ) -> Result<usize> {
         let mut candidate = self.clone_for_staging();
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         let source = candidate.document.to_xml()?;
         let mut tree = XmlTree::parse(&source)?;
         if let Some(packaged_xml) = candidate.package.get_part(&candidate.doc_part_name) {

@@ -3,7 +3,7 @@
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::Result;
 use crate::namespace::matches_local_name;
@@ -225,6 +225,8 @@ impl AnchorAlignV {
 /// `CT_Anchor` — An anchored (floating) drawing element.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Anchor {
+    /// Non-visual drawing properties identifier (`wp:docPr/@id`).
+    pub doc_pr_id: u32,
     /// Whether the drawing is behind document text.
     pub behind_doc: bool,
     /// Horizontal position offset in EMUs.
@@ -293,7 +295,7 @@ pub struct CT_Shape {
 ///
 /// The caller keeps the raw bytes for write back, so whatever comes out of
 /// here must not be serialised again or the element ends up duplicated.
-pub fn parse_alternate_content(raw: &[u8]) -> Option<CT_Drawing> {
+pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Option<CT_Drawing> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
@@ -307,7 +309,9 @@ pub fn parse_alternate_content(raw: &[u8]) -> Option<CT_Drawing> {
                 if matches_local_name(local, b"Choice") {
                     in_choice = true;
                 } else if in_choice && matches_local_name(local, b"drawing") {
-                    return CT_Drawing::from_xml(&mut reader).ok();
+                    let prefixes =
+                        crate::numbering::word_prefixes_at(e, inherited_prefixes).ok()?;
+                    return CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes).ok();
                 }
             }
             Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"Choice") => {
@@ -412,6 +416,7 @@ impl CT_Anchor {
     /// Create an anchor for a full-page background image.
     pub fn background(embed_id: &str, page_width_emu: i64, page_height_emu: i64) -> Self {
         CT_Anchor {
+            doc_pr_id: 1,
             behind_doc: true,
             pos_h_offset: Emu(0),
             pos_h_relative_from: ST_RelativeFromH::Page,
@@ -447,7 +452,7 @@ impl CT_Anchor {
         anchor
     }
 
-    pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart) -> Result<Self> {
+    pub fn from_xml(reader: &mut NsReader<&[u8]>, start: &BytesStart) -> Result<Self> {
         let mut behind_doc = false;
         let mut relative_height = 0u32;
         let mut dist_t = Emu(0);
@@ -487,6 +492,7 @@ impl CT_Anchor {
         let mut shape: Option<CT_Shape> = None;
         let mut description = None;
         let mut name = None;
+        let mut doc_pr_id = None;
         let mut buf = Vec::new();
 
         loop {
@@ -497,22 +503,30 @@ impl CT_Anchor {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                e.decoder(),
+                            )?;
                             if key == b"cx" {
                                 extent_cx = Emu(val.parse()?);
                             } else if key == b"cy" {
                                 extent_cy = Emu(val.parse()?);
                             }
                         }
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
+                    } else if canonical_wp_element(reader, e, b"docPr") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                e.decoder(),
+                            )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
+                            } else if key == b"id" {
+                                doc_pr_id = Some(val.parse()?);
                             }
                         }
                     } else if matches_local_name(ename.as_ref(), b"simplePos") {
@@ -613,7 +627,7 @@ impl CT_Anchor {
                         // Capture the shape properties and read geometry and
                         // fill out of them separately, so the fill colour is
                         // not confused with the outline colour.
-                        let raw = capture_element(reader, e)?;
+                        let raw = capture_ns_element(reader, e)?;
                         let (preset, solid_fill) = parse_shape_props(&raw);
                         let s = shape.get_or_insert_with(CT_Shape::default);
                         s.preset = preset;
@@ -627,7 +641,29 @@ impl CT_Anchor {
                                 Ok(Event::Start(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"p") =>
                                 {
-                                    paragraphs.push(crate::text::CT_P::from_xml(reader)?);
+                                    let raw = capture_ns_element(reader, ie)?;
+                                    let mut paragraph_reader = Reader::from_reader(raw.as_slice());
+                                    let mut paragraph_buffer = Vec::new();
+                                    loop {
+                                        match paragraph_reader
+                                            .read_event_into(&mut paragraph_buffer)?
+                                        {
+                                            Event::Start(ref paragraph_start)
+                                                if matches_local_name(
+                                                    paragraph_start.name().as_ref(),
+                                                    b"p",
+                                                ) =>
+                                            {
+                                                paragraphs.push(crate::text::CT_P::from_xml(
+                                                    &mut paragraph_reader,
+                                                )?);
+                                                break;
+                                            }
+                                            Event::Eof => break,
+                                            _ => {}
+                                        }
+                                        paragraph_buffer.clear();
+                                    }
                                 }
                                 Ok(Event::End(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"txbxContent") =>
@@ -643,15 +679,20 @@ impl CT_Anchor {
                         shape.get_or_insert_with(CT_Shape::default).text = paragraphs;
                     } else if matches_local_name(ename.as_ref(), b"blip") {
                         reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
+                    } else if canonical_wp_element(reader, e, b"docPr") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                e.decoder(),
+                            )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
+                            } else if key == b"id" {
+                                doc_pr_id = Some(val.parse()?);
                             }
                         }
                         reader.read_to_end_into(ename, &mut Vec::new())?;
@@ -670,6 +711,8 @@ impl CT_Anchor {
         }
 
         Ok(CT_Anchor {
+            doc_pr_id: doc_pr_id
+                .ok_or_else(|| crate::OxmlError::MissingElement("wp:docPr/@id".to_owned()))?,
             behind_doc,
             pos_h_offset,
             pos_h_relative_from,
@@ -698,6 +741,7 @@ impl CT_Anchor {
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         // If we have raw XML from parsing, use it for perfect round-trip
         if let Some(ref raw) = self.raw_xml {
+            writer.write_indent()?;
             writer.get_mut().write_all(raw)?;
             return Ok(());
         }
@@ -785,7 +829,7 @@ impl CT_Anchor {
 
         // wp:docPr
         let mut doc_pr = BytesStart::new("wp:docPr");
-        doc_pr.push_attribute(("id", "1"));
+        doc_pr.push_attribute(("id", buf.format(self.doc_pr_id)));
         doc_pr.push_attribute(("name", self.name.as_deref().unwrap_or("Picture")));
         if let Some(ref desc) = self.description {
             doc_pr.push_attribute(("descr", desc.as_str()));
@@ -808,6 +852,8 @@ impl CT_Anchor {
 /// `CT_Inline` — An inline drawing (image) element.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CT_Inline {
+    /// Non-visual drawing properties identifier (`wp:docPr/@id`).
+    pub doc_pr_id: u32,
     /// Width in EMUs
     pub extent_cx: Emu,
     /// Height in EMUs
@@ -830,6 +876,7 @@ pub struct CT_Inline {
 impl CT_Inline {
     pub fn new(embed_id: &str, width_emu: i64, height_emu: i64) -> Self {
         CT_Inline {
+            doc_pr_id: 1,
             extent_cx: Emu(width_emu),
             extent_cy: Emu(height_emu),
             embed_id: embed_id.to_string(),
@@ -844,6 +891,7 @@ impl CT_Inline {
     /// Create an inline drawing whose payload is a native Word chart.
     pub fn new_chart(chart_rel_id: &str, width_emu: i64, height_emu: i64) -> Self {
         CT_Inline {
+            doc_pr_id: 1,
             extent_cx: Emu(width_emu),
             extent_cy: Emu(height_emu),
             embed_id: String::new(),
@@ -855,11 +903,12 @@ impl CT_Inline {
         }
     }
 
-    pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+    pub fn from_xml(reader: &mut NsReader<&[u8]>) -> Result<Self> {
         let mut cx = Emu(0);
         let mut cy = Emu(0);
         let mut description = None;
         let mut name = None;
+        let mut doc_pr_id = None;
         let mut buf = Vec::new();
 
         loop {
@@ -870,22 +919,30 @@ impl CT_Inline {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                e.decoder(),
+                            )?;
                             if key == b"cx" {
                                 cx = Emu(val.parse()?);
                             } else if key == b"cy" {
                                 cy = Emu(val.parse()?);
                             }
                         }
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
+                    } else if canonical_wp_element(reader, e, b"docPr") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                e.decoder(),
+                            )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
+                            } else if key == b"id" {
+                                doc_pr_id = Some(val.parse()?);
                             }
                         }
                     }
@@ -894,15 +951,20 @@ impl CT_Inline {
                     let ename = e.name();
                     if matches_local_name(ename.as_ref(), b"blip") {
                         reader.read_to_end_into(ename, &mut Vec::new())?;
-                    } else if matches_local_name(ename.as_ref(), b"docPr") {
+                    } else if canonical_wp_element(reader, e, b"docPr") {
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = attr.key.as_ref();
-                            let val = std::str::from_utf8(&attr.value)?;
+                            let val = attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                e.decoder(),
+                            )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
+                            } else if key == b"id" {
+                                doc_pr_id = Some(val.parse()?);
                             }
                         }
                         reader.read_to_end_into(ename, &mut Vec::new())?;
@@ -921,6 +983,8 @@ impl CT_Inline {
         }
 
         Ok(CT_Inline {
+            doc_pr_id: doc_pr_id
+                .ok_or_else(|| crate::OxmlError::MissingElement("wp:docPr/@id".to_owned()))?,
             extent_cx: cx,
             extent_cy: cy,
             embed_id: String::new(),
@@ -935,6 +999,7 @@ impl CT_Inline {
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         // If we have raw XML from parsing, use it for perfect round-trip
         if let Some(ref raw) = self.raw_xml {
+            writer.write_indent()?;
             writer.get_mut().write_all(raw)?;
             return Ok(());
         }
@@ -958,7 +1023,7 @@ impl CT_Inline {
 
         // wp:docPr
         let mut doc_pr = BytesStart::new("wp:docPr");
-        doc_pr.push_attribute(("id", "1"));
+        doc_pr.push_attribute(("id", buf.format(self.doc_pr_id)));
         doc_pr.push_attribute(("name", self.name.as_deref().unwrap_or("Picture")));
         if let Some(ref desc) = self.description {
             doc_pr.push_attribute(("descr", desc.as_str()));
@@ -1178,7 +1243,9 @@ fn blip_relationship_ids(
         if !namespace_matches(&namespace, drawing_ns::R, b"r") {
             continue;
         }
-        let value = std::str::from_utf8(&attribute.value)?.to_owned();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+            .into_owned();
         let duplicate = match local.as_ref() {
             b"embed" => embed_id.replace(value).is_some(),
             b"link" => link_id.replace(value).is_some(),
@@ -1219,7 +1286,11 @@ fn chart_element_relationship_id(
         let attribute = attribute?;
         let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
         if namespace_matches(&namespace, drawing_ns::R, b"r") && local.as_ref() == b"id" {
-            return Ok(Some(std::str::from_utf8(&attribute.value)?.to_owned()));
+            return Ok(Some(
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())?
+                    .into_owned(),
+            ));
         }
     }
     Ok(None)
@@ -1231,6 +1302,70 @@ fn namespace_matches(namespace: &ResolveResult<'_>, expected: &str, _conventiona
         ResolveResult::Unknown(_) => false,
         ResolveResult::Unbound => false,
     }
+}
+
+fn canonical_wp_element(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+    expected_local: &[u8],
+) -> bool {
+    let (namespace, local) = reader.resolver().resolve_element(element.name());
+    namespace_matches(&namespace, drawing_ns::WP, b"wp") && local.as_ref() == expected_local
+}
+
+fn capture_ns_element(reader: &mut NsReader<&[u8]>, start: &BytesStart<'_>) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(Event::Start(start.to_owned()))?;
+    let tag_name = start.name().as_ref().to_vec();
+    let mut depth = 1u32;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) => {
+                if element.name().as_ref() == tag_name {
+                    depth += 1;
+                }
+                writer.write_event(Event::Start(element.to_owned()))?;
+            }
+            Event::End(ref element) => {
+                if element.name().as_ref() == tag_name {
+                    depth -= 1;
+                }
+                writer.write_event(Event::End(element.to_owned()))?;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Event::Empty(ref element) => {
+                writer.write_event(Event::Empty(element.to_owned()))?;
+            }
+            Event::Text(ref text) => {
+                writer.write_event(Event::Text(text.to_owned().into_owned()))?;
+            }
+            Event::CData(ref text) => {
+                writer.write_event(Event::CData(text.to_owned().into_owned()))?;
+            }
+            Event::Comment(ref text) => {
+                writer.write_event(Event::Comment(text.to_owned().into_owned()))?;
+            }
+            Event::PI(ref text) => {
+                writer.write_event(Event::PI(text.to_owned().into_owned()))?;
+            }
+            Event::Decl(ref declaration) => {
+                writer.write_event(Event::Decl(declaration.to_owned().into_owned()))?;
+            }
+            Event::DocType(ref declaration) => {
+                writer.write_event(Event::DocType(declaration.to_owned().into_owned()))?;
+            }
+            Event::GeneralRef(ref reference) => {
+                writer.write_event(Event::GeneralRef(reference.to_owned().into_owned()))?;
+            }
+            Event::Eof => break,
+        }
+        buffer.clear();
+    }
+    Ok(writer.into_inner())
 }
 
 /// Write the `a:graphic` payload shared by inline and anchored drawings.
@@ -1365,7 +1500,7 @@ impl CT_Drawing {
                             &raw,
                             &namespace_bindings(prefixes),
                         )?;
-                        let mut re_reader = Reader::from_reader(scoped_raw.as_slice());
+                        let mut re_reader = NsReader::from_reader(scoped_raw.as_slice());
                         re_reader.config_mut().trim_text(true);
                         // Skip to the <wp:inline> start
                         let mut rbuf = Vec::new();
@@ -1375,6 +1510,7 @@ impl CT_Drawing {
                                     if matches_local_name(ie.name().as_ref(), b"inline") =>
                                 {
                                     let mut inl = CT_Inline::from_xml(&mut re_reader)?;
+                                    inl.doc_pr_id = non_visual_drawing_id(&scoped_raw)?;
                                     (inl.embed_id, inl.link_id) =
                                         image_relationship_ids(&scoped_raw)?;
                                     inl.chart_rel_id = chart_relationship_id(&scoped_raw)?;
@@ -1395,7 +1531,7 @@ impl CT_Drawing {
                             &raw,
                             &namespace_bindings(prefixes),
                         )?;
-                        let mut re_reader = Reader::from_reader(scoped_raw.as_slice());
+                        let mut re_reader = NsReader::from_reader(scoped_raw.as_slice());
                         re_reader.config_mut().trim_text(true);
                         let mut rbuf = Vec::new();
                         loop {
@@ -1404,6 +1540,7 @@ impl CT_Drawing {
                                     if matches_local_name(ie.name().as_ref(), b"anchor") =>
                                 {
                                     let mut anc = CT_Anchor::from_xml(&mut re_reader, ie)?;
+                                    anc.doc_pr_id = non_visual_drawing_id(&scoped_raw)?;
                                     (anc.embed_id, anc.link_id) =
                                         image_relationship_ids(&scoped_raw)?;
                                     anc.chart_rel_id = chart_relationship_id(&scoped_raw)?;
@@ -1450,12 +1587,60 @@ impl CT_Drawing {
     }
 }
 
+fn non_visual_drawing_id(xml: &[u8]) -> Result<u32> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element)
+                if namespace_matches(&namespace, drawing_ns::WP, b"wp")
+                    && element.local_name().as_ref() == b"docPr" =>
+            {
+                for attribute in element.attributes() {
+                    let attribute = attribute?;
+                    let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                    if matches!(namespace, ResolveResult::Unbound) && local.as_ref() == b"id" {
+                        return Ok(attribute
+                            .decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                element.decoder(),
+                            )?
+                            .parse()?);
+                    }
+                }
+                return Err(crate::OxmlError::InvalidValue(
+                    "wp:docPr requires an unqualified id attribute".to_owned(),
+                ));
+            }
+            Event::Eof => {
+                return Err(crate::OxmlError::MissingElement("wp:docPr".to_owned()));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse_drawing(xml: &str) -> CT_Drawing {
-        let mut reader = Reader::from_str(xml);
+        let mut valid_xml = xml.to_owned();
+        if !valid_xml.contains("<wp:docPr") {
+            let owner = ["<wp:inline", "<wp:anchor"]
+                .into_iter()
+                .find_map(|start| valid_xml.find(start));
+            if let Some(owner) = owner {
+                let insertion = valid_xml[owner..].find('>').unwrap() + owner + 1;
+                valid_xml.insert_str(
+                    insertion,
+                    &format!(r#"<wp:docPr xmlns:wp="{}" id="1"/>"#, drawing_ns::WP),
+                );
+            }
+        }
+        let mut reader = Reader::from_str(&valid_xml);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
         let prefixes = loop {
@@ -1471,7 +1656,7 @@ mod tests {
     }
 
     fn parse_inline_direct(xml: &str) -> CT_Inline {
-        let mut reader = Reader::from_str(xml);
+        let mut reader = NsReader::from_str(xml);
         let mut buffer = Vec::new();
         loop {
             match reader.read_event_into(&mut buffer).unwrap() {
@@ -1488,7 +1673,7 @@ mod tests {
     }
 
     fn parse_anchor_direct(xml: &str) -> CT_Anchor {
-        let mut reader = Reader::from_str(xml);
+        let mut reader = NsReader::from_str(xml);
         let mut buffer = Vec::new();
         loop {
             match reader.read_event_into(&mut buffer).unwrap() {
@@ -1507,6 +1692,7 @@ mod tests {
     #[test]
     fn round_trip_inline_drawing() {
         let inline = CT_Inline {
+            doc_pr_id: 1,
             extent_cx: Emu(914400), // 1 inch
             extent_cy: Emu(457200), // 0.5 inch
             embed_id: "rId5".to_string(),
@@ -1524,7 +1710,11 @@ mod tests {
         drawing.to_xml(&mut writer).unwrap();
         let xml = String::from_utf8(output).unwrap().replacen(
             "<w:drawing",
-            &format!(r#"<w:drawing xmlns:r="{}""#, drawing_ns::R),
+            &format!(
+                r#"<w:drawing xmlns:r="{}" xmlns:wp="{}""#,
+                drawing_ns::R,
+                drawing_ns::WP
+            ),
             1,
         );
 
@@ -1582,16 +1772,80 @@ mod tests {
     #[test]
     fn public_nested_drawing_parsers_do_not_type_unresolved_relationship_attributes() {
         let inline = parse_inline_direct(
-            r#"<wp:inline xmlns:wp="urn:wp"><a:blip xmlns:a="urn:a" xmlns:ext="urn:producer" ext:embed="rIdBad" ext:link="rIdBad"/></wp:inline>"#,
+            r#"<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:docPr id="9"/><a:blip xmlns:a="urn:a" xmlns:ext="urn:producer" ext:embed="rIdBad" ext:link="rIdBad"/></wp:inline>"#,
         );
+        assert_eq!(inline.doc_pr_id, 9);
         assert!(inline.embed_id.is_empty());
         assert!(inline.link_id.is_none());
 
         let anchor = parse_anchor_direct(
-            r#"<wp:anchor xmlns:wp="urn:wp"><a:blip xmlns:a="urn:a" xmlns:ext="urn:producer" ext:embed="rIdBad" ext:link="rIdBad"/></wp:anchor>"#,
+            r#"<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:docPr id="10"/><a:blip xmlns:a="urn:a" xmlns:ext="urn:producer" ext:embed="rIdBad" ext:link="rIdBad"/></wp:anchor>"#,
         );
+        assert_eq!(anchor.doc_pr_id, 10);
         assert!(anchor.embed_id.is_empty());
         assert!(anchor.link_id.is_none());
+    }
+
+    #[test]
+    fn public_nested_drawing_parsers_ignore_foreign_doc_pr_decoys() {
+        let inline = parse_inline_direct(concat!(
+            r#"<root xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:x="urn:producer">"#,
+            r#"<wp:inline><x:docPr id="99"/><wp:docPr id="9"/></wp:inline></root>"#,
+        ));
+        assert_eq!(inline.doc_pr_id, 9);
+
+        let anchor = parse_anchor_direct(concat!(
+            r#"<root xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:x="urn:producer">"#,
+            r#"<wp:anchor><x:docPr id="99"/><wp:docPr id="10"/></wp:anchor></root>"#,
+        ));
+        assert_eq!(anchor.doc_pr_id, 10);
+    }
+
+    #[test]
+    fn numeric_character_references_decode_in_every_doc_pr_parser() {
+        let inline = parse_inline_direct(
+            r#"<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:docPr id="&#57;"/></wp:inline>"#,
+        );
+        assert_eq!(inline.doc_pr_id, 9);
+
+        let anchor = parse_anchor_direct(
+            r#"<wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:docPr id="&#49;0"/></wp:anchor>"#,
+        );
+        assert_eq!(anchor.doc_pr_id, 10);
+
+        let wrapped = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">"#,
+            r#"<wp:inline><wp:docPr id="1&#49;"/></wp:inline></w:drawing>"#,
+        ));
+        assert_eq!(wrapped.inline.unwrap().doc_pr_id, 11);
+    }
+
+    #[test]
+    fn relationship_character_references_decode_for_picture_and_chart_payloads() {
+        let picture = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:inline><wp:docPr id="1"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="r&#73;d7" r:link="rId&#56;"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
+        ));
+        let picture = picture.inline.expect("inline picture");
+        assert_eq!(picture.embed_id, "rId7");
+        assert_eq!(picture.link_id.as_deref(), Some("rId8"));
+
+        let chart = parse_drawing(concat!(
+            r#"<w:drawing xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+            r#"xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<wp:inline><wp:docPr id="2"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId&#57;"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
+        ));
+        let chart = chart.inline.expect("inline chart");
+        assert!(chart.embed_id.is_empty());
+        assert_eq!(chart.chart_rel_id.as_deref(), Some("rId9"));
     }
 
     #[test]
@@ -1633,8 +1887,8 @@ mod tests {
             }
             buffer.clear();
         }
-        let drawing = CT_Drawing::from_xml(&mut reader).expect("public parser stays total");
-        assert!(drawing.inline.expect("inline drawing").embed_id.is_empty());
+        let error = CT_Drawing::from_xml(&mut reader).unwrap_err();
+        assert!(matches!(error, crate::OxmlError::MissingElement(_)));
     }
 
     #[test]
@@ -1727,7 +1981,11 @@ mod tests {
         drawing.to_xml(&mut writer).unwrap();
         let xml = String::from_utf8(output).unwrap().replacen(
             "<w:drawing",
-            &format!(r#"<w:drawing xmlns:r="{}""#, drawing_ns::R),
+            &format!(
+                r#"<w:drawing xmlns:r="{}" xmlns:wp="{}""#,
+                drawing_ns::R,
+                drawing_ns::WP
+            ),
             1,
         );
 

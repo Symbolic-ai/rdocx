@@ -1041,7 +1041,9 @@ impl CT_R {
                         // so layout can see the shape. alt_drawings is never
                         // serialised, the raw copy below is what gets written.
                         let raw = capture_element(reader, e)?;
-                        if let Some(drawing) = crate::drawing::parse_alternate_content(&raw) {
+                        if let Some(drawing) =
+                            crate::drawing::parse_alternate_content(&raw, &prefixes)
+                        {
                             alt_drawings.push(drawing);
                         }
                         extra_xml.push(raw);
@@ -3508,6 +3510,42 @@ impl CT_P {
             self.extra_xml.pop();
         }
         projected
+    }
+
+    /// Remap facade-authored bookmark marker ids without reserializing any
+    /// unrelated preserved child XML.
+    #[doc(hidden)]
+    pub fn remap_authored_bookmark_ids(
+        &mut self,
+        remap: &std::collections::HashMap<i32, i32>,
+    ) -> bool {
+        for (_, raw) in &mut self.extra_xml {
+            let Ok(text) = std::str::from_utf8(raw) else {
+                continue;
+            };
+            if !(text.starts_with("<w:bookmarkStart ") || text.starts_with("<w:bookmarkEnd ")) {
+                continue;
+            }
+            let Some(attribute) = text.find("w:id=\"") else {
+                continue;
+            };
+            let value_start = attribute + "w:id=\"".len();
+            let Some(value_end) = text[value_start..].find('"').map(|end| value_start + end) else {
+                continue;
+            };
+            let Ok(old) = text[value_start..value_end].parse::<i32>() else {
+                continue;
+            };
+            let Some(updated) = remap.get(&old) else {
+                continue;
+            };
+            let mut replaced = Vec::with_capacity(raw.len());
+            replaced.extend_from_slice(&raw[..value_start]);
+            replaced.extend_from_slice(updated.to_string().as_bytes());
+            replaced.extend_from_slice(&raw[value_end..]);
+            *raw = replaced;
+        }
+        self.refresh_bookmark_projection()
     }
 
     fn refresh_bookmark_projection(&mut self) -> bool {
@@ -6899,7 +6937,9 @@ fn required_word_i32_attribute(
                 .iter()
                 .any(|prefix| prefix.as_bytes() == &key[..separator])
         {
-            return Ok(std::str::from_utf8(&attribute.value)?.parse()?);
+            return Ok(attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?
+                .parse()?);
         }
     }
     Err(OxmlError::MissingElement(format!(
@@ -7437,11 +7477,12 @@ mod tests {
         // fallback. The block has to come back out verbatim, exactly once,
         // while still being visible to layout.
         let src = concat!(
-            r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps">"#,
+            r#"<w:r xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><mc:AlternateContent><mc:Choice Requires="wps">"#,
             r#"<w:drawing><wp:anchor behindDoc="0">"#,
             r#"<wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>"#,
             r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>"#,
             r#"<wp:extent cx="914400" cy="457200"/>"#,
+            r#"<wp:docPr id="1" name="Shape"/>"#,
             r#"<a:graphic><a:graphicData><wps:wsp><wps:spPr>"#,
             r#"<a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="729FCF"/></a:solidFill>"#,
             r#"<a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>"#,
@@ -9282,6 +9323,28 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains(
             r#"<ext:marker xmlns:ext="urn:producer"/><w:commentRangeStart w:id="7"/><w:r><w:t>inside</w:t></w:r><w:commentRangeEnd w:id="7"/><w:r><ext:runBefore xmlns:ext="urn:producer"/><w:commentReference w:id="7"/><ext:runAfter xmlns:ext="urn:producer"/></w:r><ext:tail xmlns:ext="urn:producer"/>"#
+        ));
+    }
+
+    #[test]
+    fn encoded_comment_ids_decode_for_ranges_and_references() {
+        let paragraph = parse_paragraph(concat!(
+            r#"<w:commentRangeStart w:id="&#55;"/>"#,
+            r#"<w:r><w:t>commented</w:t></w:r>"#,
+            r#"<w:commentRangeEnd w:id="&#x37;"/>"#,
+            r#"<w:r><w:commentReference w:id="&#x37;"/></w:r>"#,
+        ));
+
+        assert!(matches!(
+            paragraph.comment_ranges.as_slice(),
+            [
+                CommentRangeMarker::Start { id: 7, .. },
+                CommentRangeMarker::End { id: 7, .. }
+            ]
+        ));
+        assert!(matches!(
+            paragraph.runs[1].content.as_slice(),
+            [RunContent::CommentReference { id: 7, .. }]
         ));
     }
 
