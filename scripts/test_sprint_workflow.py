@@ -8190,7 +8190,7 @@ Pedro Assumpcao and the rdocx maintainers.
         expected_owners = {
             f"F-{number:03d}"
             for number in range(244, 311)
-            if number not in {244, 249}
+            if number not in {244, 245, 249}
         }
         self.assertEqual(
             {row["Owner"] for row in rows if row["Owner"] != "-"},
@@ -8396,6 +8396,7 @@ Pedro Assumpcao and the rdocx maintainers.
             "document": "sections",
             "drawing": "drawing",
             "footnotes": "stories",
+            "font_table": "theme-font",
             "glossary": "stories",
             "header_footer": "stories",
             "math": "run",
@@ -8433,6 +8434,7 @@ Pedro Assumpcao and the rdocx maintainers.
             "odt": "operations",
             "oxml_chart": "drawing",
             "oxml_core": "operations",
+            "oxml_drawing": "theme-font",
             "oxml_opc": "package",
             "oxml_pdf": "operations",
             "paragraph": "paragraph",

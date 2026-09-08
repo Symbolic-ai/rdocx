@@ -240,6 +240,672 @@ mod fresh_word_package_profile_tests {
     }
 }
 
+mod theme_and_embedded_font_tests {
+    use super::*;
+    use oxml_drawing::color::ColorChoice;
+    use quick_xml::events::BytesStart;
+    use rdocx::{
+        CT_OfficeStyleSheet, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
+        ThemeFontLanguage,
+    };
+
+    const FONT_KEY: &str = "{00112233-4455-6677-8899-AABBCCDDEEFF}";
+    const FONT_REL_TYPE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font";
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    const WORD_THEME_COLOR_ORACLE: [&str; 12] = [
+        "030330", "FFFFFF", "030330", "FFFFFF", "D9DBFF", "FF0054", "9482FF", "4A458C", "E0DED9",
+        "030330", "9482FF", "FF0054",
+    ];
+    const CARLITO: &[u8] = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+    const CALADEA: &[u8] = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+
+    fn license(authorized: bool, identity: &str) -> FontEmbeddingLicense {
+        FontEmbeddingLicense::new(authorized, identity)
+    }
+
+    fn corpus_font() -> FontDefinition {
+        FontDefinition::new("Corpus Sans")
+            .with_alternate_name("Carlito")
+            .with_family("swiss")
+            .with_pitch("variable")
+    }
+
+    fn embedded_font() -> EmbeddedFont {
+        EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(true, "Apache-2.0: Carlito"),
+        )
+    }
+
+    fn srgb_color(value: &str) -> ColorChoice {
+        let mut element = BytesStart::new("a:srgbClr");
+        element.push_attribute(("val", value));
+        ColorChoice::from_empty_xml(&element).unwrap()
+    }
+
+    fn apply_word_color_projection(theme: &mut CT_OfficeStyleSheet) {
+        let colors = &mut theme.theme_elements.color_scheme;
+        colors.dark1 = srgb_color(WORD_THEME_COLOR_ORACLE[0]);
+        colors.light1 = srgb_color(WORD_THEME_COLOR_ORACLE[1]);
+        colors.dark2 = srgb_color(WORD_THEME_COLOR_ORACLE[2]);
+        colors.light2 = srgb_color(WORD_THEME_COLOR_ORACLE[3]);
+        colors.accent1 = srgb_color(WORD_THEME_COLOR_ORACLE[4]);
+        colors.accent2 = srgb_color(WORD_THEME_COLOR_ORACLE[5]);
+        colors.accent3 = srgb_color(WORD_THEME_COLOR_ORACLE[6]);
+        colors.accent4 = srgb_color(WORD_THEME_COLOR_ORACLE[7]);
+        colors.accent5 = srgb_color(WORD_THEME_COLOR_ORACLE[8]);
+        colors.accent6 = srgb_color(WORD_THEME_COLOR_ORACLE[9]);
+        colors.hyperlink = srgb_color(WORD_THEME_COLOR_ORACLE[10]);
+        colors.followed_hyperlink = srgb_color(WORD_THEME_COLOR_ORACLE[11]);
+    }
+
+    fn theme_color_projection(theme: &CT_OfficeStyleSheet) -> Vec<String> {
+        theme
+            .theme_elements
+            .color_scheme
+            .iter()
+            .map(|(_, color)| match color {
+                ColorChoice::Srgb { value, .. } => value.to_string(),
+                ColorChoice::System {
+                    last_color: Some(value),
+                    ..
+                } => value.to_string(),
+                other => panic!("unexpected theme color in Word projection: {other:?}"),
+            })
+            .collect()
+    }
+
+    fn package_bytes(package: &OpcPackage) -> Vec<u8> {
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        output.into_inner()
+    }
+
+    fn authored_document() -> Document {
+        let mut document = Document::new();
+        let mut theme = CT_OfficeStyleSheet::office_default();
+        theme.name = Some("Corpus Theme".to_owned());
+        apply_word_color_projection(&mut theme);
+        theme.theme_elements.font_scheme.major_font.latin.typeface = "Corpus Sans".to_owned();
+        theme.theme_elements.font_scheme.minor_font.latin.typeface = "Corpus Sans".to_owned();
+        document.set_theme(theme).unwrap();
+        document
+            .set_language_defaults(ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("zh-CN".to_owned()),
+                bidi: Some("ar-SA".to_owned()),
+            })
+            .unwrap();
+        document.set_font(corpus_font()).unwrap();
+        document.embed_font("Corpus Sans", embedded_font()).unwrap();
+        document
+    }
+
+    #[test]
+    fn authored_theme_font_table_and_embedded_fonts_survive_reopen() {
+        let mut document = authored_document();
+        let expected_theme = document.theme().unwrap().clone();
+        let expected_languages = document.theme_font_language().unwrap().clone();
+        let expected_fonts = document.fonts();
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+
+        assert_eq!(reopened.theme(), Some(&expected_theme));
+        assert_eq!(reopened.theme_font_language(), Some(&expected_languages));
+        assert_eq!(reopened.fonts(), expected_fonts);
+        let corpus = reopened
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap();
+        assert_eq!(corpus.embedded_fonts[0].data, CARLITO);
+
+        assert_eq!(
+            reopened
+                .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+                .unwrap(),
+            Some(embedded_font())
+        );
+        assert!(
+            reopened
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "Corpus Sans")
+                .unwrap()
+                .embedded_fonts
+                .is_empty()
+        );
+        reopened.embed_font("Corpus Sans", embedded_font()).unwrap();
+        assert!(reopened.remove_font("Corpus Sans").unwrap().is_some());
+        assert!(
+            reopened
+                .fonts()
+                .into_iter()
+                .all(|font| font.name != "Corpus Sans")
+        );
+    }
+
+    #[test]
+    fn font_embedding_requires_explicit_authorization_and_license_identity() {
+        let mut document = Document::new();
+        document.set_font(corpus_font()).unwrap();
+        let before = document.to_bytes().unwrap();
+
+        let denied = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(false, "Apache-2.0: Carlito"),
+        );
+        assert!(document.embed_font("Corpus Sans", denied).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let unidentified = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(true, ""),
+        );
+        assert!(document.embed_font("Corpus Sans", unidentified).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let invalid_key = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            "00112233-4455-6677-8899-AABBCCDDEEFF",
+            license(true, "Apache-2.0: Carlito"),
+        );
+        assert!(document.embed_font("Corpus Sans", invalid_key).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let mut invalid_family = corpus_font();
+        invalid_family.family = Some("unknown".to_owned());
+        assert!(document.set_font(invalid_family).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let mut invalid_pitch = corpus_font();
+        invalid_pitch.pitch = Some("wide".to_owned());
+        assert!(document.set_font(invalid_pitch).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let normalized_identity = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(true, "Apache-2.0\nCarlito"),
+        );
+        assert!(
+            document
+                .embed_font("Corpus Sans", normalized_identity)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let exact_identity = "Apache-2.0 & \"Carlito\"";
+        document
+            .embed_font(
+                "Corpus Sans",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    CARLITO.to_vec(),
+                    FONT_KEY,
+                    license(true, exact_identity),
+                ),
+            )
+            .unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "Corpus Sans")
+                .unwrap()
+                .embedded_fonts[0]
+                .license
+                .identity,
+            exact_identity
+        );
+    }
+
+    #[test]
+    fn font_table_preserves_unknown_children_and_relationship_attributes() {
+        let mut document = Document::new();
+        let bytes = document.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><q:fonts xmlns:q="{WORD_NS}" xmlns:r="{REL_NS}" xmlns:x="urn:producer" xmlns:mc="{MC_NS}" xmlns:w15="urn:producer:w15" mc:Ignorable="w15"><!--root-before--><?root kept?> <x:before x:keep="exact"/><q:font q:name="Corpus Sans"><!--font-before--><?font kept?> <x:fontBefore x:keep="exact"/><q:altName q:val="Original" x:property="kept &amp; &quot;quoted&quot;"> <!--property-note--><?producer kept?></q:altName><q:panose1 q:val="020B0604020202020204"/><x:middle x:keep="exact"/><q:family q:val="swiss" x:property="family-kept"/><q:pitch q:val="variable" x:property="pitch-kept"/><q:embedRegular r:id="producerFont" q:fontKey="{FONT_KEY}" x:keep="relationship-attribute"><!--relationship-note--></q:embedRegular><x:after x:keep="exact"/></q:font><x:between x:keep="exact"/><q:font q:name="Keep Sans"><q:family q:val="swiss"/></q:font><x:tail x:keep="exact"/></q:fonts>"#
+        );
+        package.set_part("/word/fontTable.xml", xml.into_bytes());
+        package.set_part("/word/fonts/producer.odttf", vec![7; 64]);
+        package.content_types.add_override(
+            "/word/fonts/producer.odttf",
+            "application/vnd.openxmlformats-officedocument.obfuscatedFont",
+        );
+        package
+            .get_or_create_part_rels("/word/fontTable.xml")
+            .add_with_id("producerFont", FONT_REL_TYPE, "fonts/producer.odttf");
+
+        let mut document = Document::from_bytes(&package_bytes(&package)).unwrap();
+        let parsed = document.fonts();
+        let corpus = parsed
+            .iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap();
+        assert_eq!(corpus.alternate_name.as_deref(), Some("Original"));
+        assert_eq!(corpus.embedded_fonts.len(), 1);
+        document
+            .set_font(corpus_font().with_alternate_name("Updated"))
+            .unwrap();
+        let saved =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let output = std::str::from_utf8(saved.get_part("/word/fontTable.xml").unwrap()).unwrap();
+
+        for fragment in [
+            r#"<x:before x:keep="exact"/>"#,
+            r#"<!--root-before--><?root kept?> "#,
+            r#"<!--font-before--><?font kept?> "#,
+            r#"<x:fontBefore x:keep="exact"/>"#,
+            r#"<x:middle x:keep="exact"/>"#,
+            r#"x:property="kept &amp; &quot;quoted&quot;""#,
+            r#"x:property="family-kept""#,
+            r#"x:property="pitch-kept""#,
+            r#"x:keep="relationship-attribute""#,
+            r#"<q:panose1 q:val="020B0604020202020204"/>"#,
+            r#"<!--property-note-->"#,
+            r#"<?producer kept?>"#,
+            r#"<!--relationship-note-->"#,
+            r#"<x:after x:keep="exact"/>"#,
+            r#"<x:between x:keep="exact"/>"#,
+            r#"<x:tail x:keep="exact"/>"#,
+        ] {
+            assert!(output.contains(fragment), "missing {fragment} in {output}");
+        }
+        assert!(output.contains(&format!(r#"xmlns:q="{WORD_NS}""#)));
+        assert!(output.contains(&format!(r#"xmlns:mc="{MC_NS}""#)));
+        assert!(output.contains(r#"mc:Ignorable="w15 rdocx""#));
+        assert!(output.contains(
+            r#"<w:altName w:val="Updated" x:property="kept &amp; &quot;quoted&quot;"> <!--property-note--><?producer kept?></w:altName>"#
+        ));
+        assert!(output.find("fontBefore").unwrap() < output.find("altName").unwrap());
+        assert!(output.find("altName").unwrap() < output.find("embedRegular").unwrap());
+
+        let mut reopened = Document::from_bytes(&package_bytes(&saved)).unwrap();
+        assert!(reopened.remove_font("Corpus Sans").unwrap().is_some());
+        let removed =
+            OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+        let output = std::str::from_utf8(removed.get_part("/word/fontTable.xml").unwrap()).unwrap();
+        assert!(output.contains(r#"<x:before x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:between x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:tail x:keep="exact"/>"#));
+        assert!(output.find("before").unwrap() < output.find("between").unwrap());
+        assert!(output.find("between").unwrap() < output.find("Keep Sans").unwrap());
+        assert!(output.find("Keep Sans").unwrap() < output.find("tail").unwrap());
+
+        let conflicting_xml = format!(
+            r#"<q:fonts xmlns:q="{WORD_NS}" xmlns:w="urn:producer"><q:font q:name="Unsafe"/></q:fonts>"#
+        );
+        let mut conflicting_package =
+            OpcPackage::from_reader(std::io::Cursor::new(Document::new().to_bytes().unwrap()))
+                .unwrap();
+        conflicting_package.set_part("/word/fontTable.xml", conflicting_xml.into_bytes());
+        let mut conflicting = Document::from_bytes(&package_bytes(&conflicting_package)).unwrap();
+        let before = conflicting.to_bytes().unwrap();
+        assert!(conflicting.set_font(corpus_font()).is_err());
+        assert_eq!(conflicting.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn public_authored_theme_and_fonts_match_pinned_word_resolution() {
+        const WORD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+        const LIBREOFFICE_ORACLE: &str =
+            "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+        const WORD_FONT_TABLE_ORACLE: &str = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            r#"<w:font w:name="Arial"><w:panose1 w:val="020B0604020202020204"/>"#,
+            r#"<w:charset w:val="00"/><w:family w:val="swiss"/>"#,
+            r#"<w:pitch w:val="variable"/><w:sig w:usb0="E0002EFF" "#,
+            r#"w:usb1="C000785B" w:usb2="00000009" w:usb3="00000000" "#,
+            r#"w:csb0="000001FF" w:csb1="00000000"/></w:font></w:fonts>"#,
+        );
+        assert_eq!(WORD_ORACLE, MHTML_ORACLE_VERSION);
+        assert_eq!(LIBREOFFICE_ORACLE, ODT_ORACLE_VERSION);
+
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            LIBREOFFICE_ORACLE
+        );
+
+        let mut authored = authored_document();
+        authored
+            .add_paragraph("")
+            .add_run("Pinned theme and font resolution")
+            .font("Corpus Sans")
+            .size(18.0);
+
+        let theme = authored.theme().unwrap();
+        let font = authored
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap();
+        assert_eq!(
+            theme.theme_elements.font_scheme.major_font.latin.typeface,
+            "Corpus Sans"
+        );
+        assert_eq!(
+            theme.theme_elements.font_scheme.minor_font.latin.typeface,
+            "Corpus Sans"
+        );
+        assert_eq!(
+            theme_color_projection(theme),
+            WORD_THEME_COLOR_ORACLE.map(str::to_owned)
+        );
+        let reopened_theme = Document::from_bytes(&authored.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            theme_color_projection(reopened_theme.theme().unwrap()),
+            WORD_THEME_COLOR_ORACLE.map(str::to_owned)
+        );
+        let mut word_package =
+            OpcPackage::from_reader(std::io::Cursor::new(Document::new().to_bytes().unwrap()))
+                .unwrap();
+        word_package.set_part(
+            "/word/fontTable.xml",
+            WORD_FONT_TABLE_ORACLE.as_bytes().to_vec(),
+        );
+        let word_oracle = Document::from_bytes(&package_bytes(&word_package)).unwrap();
+        let word_font = word_oracle
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Arial")
+            .unwrap();
+        assert_eq!(word_font.family.as_deref(), Some("swiss"));
+        assert_eq!(word_font.pitch.as_deref(), Some("variable"));
+        assert_eq!(font.family, word_font.family);
+        assert_eq!(font.pitch, word_font.pitch);
+
+        let mut oracle = Document::new();
+        oracle
+            .add_paragraph("")
+            .add_run("Pinned theme and font resolution")
+            .font("Carlito")
+            .size(18.0);
+
+        let authored_render = authored.render_page_to_png_deterministic(0, 150.0).unwrap();
+        assert_eq!(
+            authored_render,
+            oracle.render_page_to_png_deterministic(0, 150.0).unwrap()
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-theme-font-oracle-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        let source = root.join("source.docx");
+        std::fs::write(&source, authored.to_bytes().unwrap()).unwrap();
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("docx")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("LibreOffice conversion starts");
+        assert!(status.success());
+        let normalized = Document::open(output.join("source.docx")).unwrap();
+        assert_eq!(
+            authored_render,
+            normalized
+                .render_page_to_png_deterministic(0, 150.0)
+                .unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn embedded_font_parts_are_packaged_deterministically() {
+        let mut first = authored_document();
+        let mut second = authored_document();
+        let first_bytes = first.to_bytes().unwrap();
+
+        assert_eq!(first_bytes, first.to_bytes().unwrap());
+        assert_eq!(first_bytes, second.to_bytes().unwrap());
+
+        let package = OpcPackage::from_reader(std::io::Cursor::new(first_bytes)).unwrap();
+        let font_parts: Vec<_> = package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/word/fonts/"))
+            .collect();
+        assert_eq!(font_parts.len(), 1);
+        let relationships = package.get_part_rels("/word/fontTable.xml").unwrap();
+        assert_eq!(
+            relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == FONT_REL_TYPE)
+                .count(),
+            1
+        );
+
+        let original_relationship = relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == FONT_REL_TYPE)
+            .unwrap();
+        let original_id = original_relationship.id.clone();
+        let original_target = original_relationship.target.clone();
+        let mut package = package;
+        package
+            .get_or_create_part_rels("/word/fontTable.xml")
+            .add_with_id("producerShared", FONT_REL_TYPE, &original_target);
+        let font_table = std::str::from_utf8(package.get_part("/word/fontTable.xml").unwrap())
+            .unwrap()
+            .replace(
+                "</w:fonts>",
+                &format!(
+                    r#"<w:font w:name="Shared Same Id"><w:embedRegular r:id="{original_id}" w:fontKey="{FONT_KEY}"/></w:font><w:font w:name="Shared Same Part"><w:embedRegular r:id="producerShared" w:fontKey="{FONT_KEY}"/></w:font></w:fonts>"#
+                ),
+            );
+        package.set_part("/word/fontTable.xml", font_table.into_bytes());
+
+        let mut shared = Document::from_bytes(&package_bytes(&package)).unwrap();
+        shared
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        assert_eq!(
+            shared
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "Shared Same Id")
+                .unwrap()
+                .embedded_fonts[0]
+                .data,
+            CARLITO
+        );
+        shared
+            .embed_font(
+                "Shared Same Id",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    CALADEA.to_vec(),
+                    FONT_KEY,
+                    license(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        let fonts = shared.fonts();
+        assert_eq!(
+            fonts
+                .iter()
+                .find(|font| font.name == "Shared Same Id")
+                .unwrap()
+                .embedded_fonts[0]
+                .data,
+            CALADEA
+        );
+        assert_eq!(
+            fonts
+                .iter()
+                .find(|font| font.name == "Shared Same Part")
+                .unwrap()
+                .embedded_fonts[0]
+                .data,
+            CARLITO
+        );
+        let shared_package =
+            OpcPackage::from_reader(std::io::Cursor::new(shared.to_bytes().unwrap())).unwrap();
+        assert_eq!(
+            shared_package
+                .get_part_rels("/word/fontTable.xml")
+                .unwrap()
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == FONT_REL_TYPE)
+                .count(),
+            2
+        );
+        assert_eq!(
+            shared_package
+                .parts
+                .keys()
+                .filter(|part| part.starts_with("/word/fonts/"))
+                .count(),
+            2
+        );
+
+        let mut wrong_type_package = OpcPackage::from_reader(std::io::Cursor::new(
+            authored_document().to_bytes().unwrap(),
+        ))
+        .unwrap();
+        let wrong_type_relationship = wrong_type_package
+            .get_part_rels_mut("/word/fontTable.xml")
+            .unwrap()
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.rel_type == FONT_REL_TYPE)
+            .unwrap();
+        let wrong_type_id = wrong_type_relationship.id.clone();
+        wrong_type_relationship.rel_type = rel_types::IMAGE.to_owned();
+        let mut wrong_type = Document::from_bytes(&package_bytes(&wrong_type_package)).unwrap();
+        wrong_type
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        let wrong_type_saved =
+            OpcPackage::from_reader(std::io::Cursor::new(wrong_type.to_bytes().unwrap())).unwrap();
+        assert_eq!(
+            wrong_type_saved
+                .get_part_rels("/word/fontTable.xml")
+                .unwrap()
+                .get_by_id(&wrong_type_id)
+                .unwrap()
+                .rel_type,
+            rel_types::IMAGE
+        );
+
+        let mut cross_owner_package = OpcPackage::from_reader(std::io::Cursor::new(
+            authored_document().to_bytes().unwrap(),
+        ))
+        .unwrap();
+        let font_target = cross_owner_package
+            .get_part_rels("/word/fontTable.xml")
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == FONT_REL_TYPE)
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target("/word/fontTable.xml", &relationship.target)
+            })
+            .unwrap();
+        cross_owner_package.package_rels.add_with_id(
+            "producerFontReference",
+            "urn:producer:font-reference",
+            font_target.trim_start_matches('/'),
+        );
+        let mut cross_owner = Document::from_bytes(&package_bytes(&cross_owner_package)).unwrap();
+        cross_owner
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        let cross_owner_saved =
+            OpcPackage::from_reader(std::io::Cursor::new(cross_owner.to_bytes().unwrap())).unwrap();
+        assert!(cross_owner_saved.get_part(&font_target).is_some());
+        assert!(
+            cross_owner_saved
+                .package_rels
+                .get_by_id("producerFontReference")
+                .is_some()
+        );
+
+        let mut cross_owner_replace =
+            Document::from_bytes(&package_bytes(&cross_owner_package)).unwrap();
+        cross_owner_replace
+            .embed_font(
+                "Corpus Sans",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    CALADEA.to_vec(),
+                    FONT_KEY,
+                    license(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        let cross_owner_replace_saved = OpcPackage::from_reader(std::io::Cursor::new(
+            cross_owner_replace.to_bytes().unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            cross_owner_replace_saved.get_part(&font_target),
+            cross_owner_package.get_part(&font_target)
+        );
+
+        let raw_reference =
+            format!(r#"<rdocx:fontRef r:id="{original_id}" rdocx:keep="exact"/></w:fonts>"#);
+        let raw_reference_table =
+            std::str::from_utf8(cross_owner_package.get_part("/word/fontTable.xml").unwrap())
+                .unwrap()
+                .replace("</w:fonts>", &raw_reference);
+        let mut raw_reference_package = cross_owner_package;
+        raw_reference_package.set_part("/word/fontTable.xml", raw_reference_table.into_bytes());
+        let mut raw_reference_document =
+            Document::from_bytes(&package_bytes(&raw_reference_package)).unwrap();
+        raw_reference_document
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        let raw_reference_saved = OpcPackage::from_reader(std::io::Cursor::new(
+            raw_reference_document.to_bytes().unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            raw_reference_saved
+                .get_part_rels("/word/fontTable.xml")
+                .unwrap()
+                .get_by_id(&original_id)
+                .is_some()
+        );
+    }
+}
+
 mod settings_and_properties_tests {
     use super::*;
     use rdocx::{

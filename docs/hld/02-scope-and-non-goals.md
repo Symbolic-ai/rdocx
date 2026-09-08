@@ -213,8 +213,8 @@ bytes remain in the ZIP package.
 | DOCX-006 | properties | application and custom properties | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-007 | properties | document variables, compatibility facts, and defaults | Y | Y | Y | Y | Y | package | P | P | Y | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs` | F-270 |
 | DOCX-008 | conformance | public and private authoring conformance gate | Y | Y | NA | NA | Y | all | Y | Y | Y | Y | B | B | Y | complete | implementation:`scripts/docx_authoring_conformance.py:388` | - |
-| DOCX-009 | theme-font | themes and theme selection | N | Y | N | N | PV | package | Y | Y | P | P | B | B | B | partial | boundary:F-245 | F-245 |
-| DOCX-010 | theme-font | font table and licensed embedded fonts | N | P | N | N | PV | package | P | P | N | P | B | B | B | partial | boundary:F-245 | F-245 |
+| DOCX-009 | theme-font | themes and theme selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
+| DOCX-010 | theme-font | font table and licensed embedded fonts | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-011 | styles | paragraph, character, and table style graphs | P | Y | P | N | Y | package | Y | Y | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4082` | F-246 |
 | DOCX-012 | numbering | complete numbering levels and instances | P | P | P | N | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3945` | F-247 |
 | DOCX-013 | numbering | style-linked counters, restarts, TOC, and REF | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-248 | F-248 |

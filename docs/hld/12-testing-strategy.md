@@ -1425,6 +1425,20 @@ foreign subtree bytes after mutation and assert the schema order of default tab
 stop, character spacing control, compatibility settings, document variables,
 and theme font language.
 
+The theme and font feature gate authors a shared DrawingML theme, language
+defaults, descriptive font records, and an explicitly licensed caller font
+through public `rdocx` APIs. Save and reopen must return the same typed values,
+font key, license identity, relationships, and original font bytes. Rejected
+authorization, missing license identity, and XML-normalized identity whitespace
+must leave package bytes unchanged. XML syntax in an accepted identity returns
+unchanged after reopen. An aliased-prefix producer font table keeps foreign
+children and relationship attributes in schema order after a modeled edit,
+including merged MCE ignorable tokens. Equivalent construction and repeated
+saves are byte-identical. The differential check pins Microsoft Word
+16.104 build 16.104.25121423 and LibreOffice 26.2.5.2 build
+cd7284b4cbbfeb507e630c1aac019f4157393acb, then compares deterministic pixels
+for the publicly authored embedded face against the bundled oracle face.
+
 The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
 package relationship before reopen and repeat-save. The part bytes and
 relationship identity must survive exactly. The optional repair gate is pinned

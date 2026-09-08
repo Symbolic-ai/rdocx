@@ -1,6 +1,6 @@
 # F-245, Corpus themes, font tables, and embedded fonts
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-243, F-249
@@ -116,15 +116,16 @@ inputs are opt-in and deterministic.
 
 ## Implementation checklist
 
-- [ ] Add the approved focused font-table module and public facade types.
-- [ ] Add theme serialization without changing legacy tint and shade behavior.
-- [ ] Add licensed caller-authorized embedded-font ownership.
-- [ ] Resolve authored theme, aliases, and embedded bytes into deterministic
+- [x] Add the approved focused font-table module and public facade types.
+- [x] Add theme serialization without changing legacy tint and shade behavior.
+- [x] Add licensed caller-authorized embedded-font ownership.
+- [x] Resolve authored theme, aliases, and embedded bytes into deterministic
   layout.
-- [ ] Add round-trip, preservation, licensing, determinism, and differential
+- [x] Add round-trip, preservation, licensing, determinism, and differential
   coverage.
-- [ ] Run the full gate, package inventory, and oracle riders.
-- [ ] Update exactly the listed HLD files.
+- [x] Run the full gate, package inventory, and F-245-specific public oracle
+  riders.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

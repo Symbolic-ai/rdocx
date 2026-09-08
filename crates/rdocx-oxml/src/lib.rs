@@ -9,6 +9,7 @@ pub mod comments_extended;
 pub mod content_control;
 pub mod document;
 pub mod drawing;
+pub mod font_table;
 pub mod footnotes;
 pub mod glossary;
 pub mod header_footer;

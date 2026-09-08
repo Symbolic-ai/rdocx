@@ -51,9 +51,10 @@ pub use comparison::{
 };
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
-    ListLevel, ListLevelSuffix, ListNumberFormat, NumberingFormat, NumberingLevel, OutlineNode,
-    RenderOptions, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, EmbeddedFont, EmbeddedFontKind,
+    FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
+    ListLevelSuffix, ListNumberFormat, NumberingFormat, NumberingLevel, OutlineNode, RenderOptions,
+    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
@@ -80,6 +81,7 @@ pub use oxml_core::app_properties::AppProperties;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::custom_properties::{CustomProperty, CustomPropertyValue};
 pub use oxml_core::{Length, Twips};
+pub use oxml_drawing::theme::CT_OfficeStyleSheet;
 pub use oxml_opc::PackageReadLimits;
 #[cfg(feature = "digital-signatures")]
 pub use oxml_opc::{

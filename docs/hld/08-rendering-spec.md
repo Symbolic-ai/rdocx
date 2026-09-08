@@ -744,7 +744,17 @@ fields, hyperlinks, relationships, media, generated markers, content controls,
 preserved producer XML, and other traversal-sensitive input
 bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting earlier numbering input
-cannot leave a later generated marker stale. A direct footnote or endnote
+cannot leave a later generated marker stale.
+
+Relationship-resolved embedded font faces enter `LayoutInput.fonts` under the
+font-table record name. Their OOXML font key deobfuscates the package bytes
+before shaping. This explicit document input has priority over bundled fallback
+and needs no system-font discovery. Authored major and minor theme typefaces
+therefore resolve to the embedded face in deterministic layout. Theme or font
+mutation invalidates completed normal and deterministic layouts while reusable
+engines compare the changed theme and font bytes in their full context.
+
+A direct footnote or endnote
 reference in an otherwise safe body paragraph remains cacheable. Its explicit
 note ID is part of the complete typed paragraph key. Retained paragraph reads
 compare the base context separately from the exact footnote and endnote parts.

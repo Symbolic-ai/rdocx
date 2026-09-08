@@ -52,6 +52,8 @@ pub mod rel_types {
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings";
     pub const FONT_TABLE: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable";
+    pub const FONT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font";
     pub const THEME: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
     pub const HYPERLINK: &str =
@@ -391,6 +393,7 @@ mod tests {
             rel_types::IMAGE,
             rel_types::SETTINGS,
             rel_types::FONT_TABLE,
+            rel_types::FONT,
             rel_types::THEME,
             rel_types::HYPERLINK,
             rel_types::FOOTNOTES,

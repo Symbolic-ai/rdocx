@@ -971,6 +971,14 @@ or DOTM while retaining an explicit compact package option. The compatible
 profile owns its main document, styles, settings, theme, font table, core
 properties, and application properties without loading a template.
 
+`Document` keeps relationship-resolved typed theme and font-table state beside
+their resolved part names and dirty flags. The native facade re-exports the
+shared concrete DrawingML theme and owns concrete font-definition, embedded
+face, face-kind, and license-authorization values. Theme, font-table, embedded
+part, relationship, content-type, and layout-input changes publish from one
+staged clone. Caller font bytes and exact license identity are explicit input.
+The facade never searches the host for bytes to embed.
+
 Core, application, and custom property models are relationship-resolved
 package state owned by `Document`. The native facade exposes their existing
 concrete `oxml-core` types. Property creation, replacement, selective custom

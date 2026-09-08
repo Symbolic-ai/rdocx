@@ -23,6 +23,7 @@ use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Columns, CT_Document, CT_SectPr};
 use rdocx_oxml::drawing::{CT_Anchor, CT_Drawing, CT_Inline, drawing_ns};
+use rdocx_oxml::font_table::{EmbeddedFontReference, FontFaceKind, FontTable};
 use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
 };
@@ -77,6 +78,122 @@ pub enum WordCreationProfile {
     Minimal(WordPackageClass),
     /// A Word-compatible blank package with the standard owned support parts.
     WordCompatible(WordPackageClass),
+}
+
+/// One font-table record authored through the native facade.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FontDefinition {
+    pub name: String,
+    pub alternate_name: Option<String>,
+    pub family: Option<String>,
+    pub pitch: Option<String>,
+    pub embedded_fonts: Vec<EmbeddedFont>,
+}
+
+impl FontDefinition {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            alternate_name: None,
+            family: None,
+            pitch: None,
+            embedded_fonts: Vec::new(),
+        }
+    }
+
+    pub fn with_alternate_name(mut self, name: impl Into<String>) -> Self {
+        self.alternate_name = Some(name.into());
+        self
+    }
+
+    pub fn with_family(mut self, family: impl Into<String>) -> Self {
+        self.family = Some(family.into());
+        self
+    }
+
+    pub fn with_pitch(mut self, pitch: impl Into<String>) -> Self {
+        self.pitch = Some(pitch.into());
+        self
+    }
+}
+
+/// The font-table slot occupied by an embedded font face.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmbeddedFontKind {
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
+/// The caller's explicit authorization and exact license identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+
+impl FontEmbeddingLicense {
+    pub fn new(authorized: bool, identity: impl Into<String>) -> Self {
+        Self {
+            authorized,
+            identity: identity.into(),
+        }
+    }
+}
+
+/// Caller-owned bytes and metadata for one embedded font face.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedFont {
+    pub kind: EmbeddedFontKind,
+    pub data: Vec<u8>,
+    pub font_key: String,
+    pub subsetted: bool,
+    pub license: FontEmbeddingLicense,
+}
+
+impl EmbeddedFont {
+    pub fn new(
+        kind: EmbeddedFontKind,
+        data: Vec<u8>,
+        font_key: impl Into<String>,
+        license: FontEmbeddingLicense,
+    ) -> Self {
+        Self {
+            kind,
+            data,
+            font_key: font_key.into(),
+            subsetted: false,
+            license,
+        }
+    }
+
+    pub fn with_subsetted(mut self, subsetted: bool) -> Self {
+        self.subsetted = subsetted;
+        self
+    }
+}
+
+impl From<EmbeddedFontKind> for FontFaceKind {
+    fn from(value: EmbeddedFontKind) -> Self {
+        match value {
+            EmbeddedFontKind::Regular => Self::Regular,
+            EmbeddedFontKind::Bold => Self::Bold,
+            EmbeddedFontKind::Italic => Self::Italic,
+            EmbeddedFontKind::BoldItalic => Self::BoldItalic,
+        }
+    }
+}
+
+impl From<FontFaceKind> for EmbeddedFontKind {
+    fn from(value: FontFaceKind) -> Self {
+        match value {
+            FontFaceKind::Regular => Self::Regular,
+            FontFaceKind::Bold => Self::Bold,
+            FontFaceKind::Italic => Self::Italic,
+            FontFaceKind::BoldItalic => Self::BoldItalic,
+        }
+    }
 }
 
 impl WordPackageClass {
@@ -2644,6 +2761,18 @@ pub struct Document {
     settings_part_name: Option<String>,
     /// Whether this facade instance created an optional settings graph.
     settings_owned: bool,
+    /// Typed shared DrawingML theme loaded through the main-document relationship.
+    theme: Option<oxml_drawing::theme::CT_OfficeStyleSheet>,
+    /// Existing theme relationship target.
+    theme_part_name: Option<String>,
+    /// Whether the theme model must be serialized into the package.
+    theme_dirty: bool,
+    /// Typed font table loaded through the main-document relationship.
+    font_table: Option<FontTable>,
+    /// Existing font-table relationship target.
+    font_table_part_name: Option<String>,
+    /// Whether the font-table model must be serialized into the package.
+    font_table_dirty: bool,
     /// Shared package and WordprocessingML identifier allocation state.
     pub(crate) identifiers: DocumentIdentifiers,
     /// Typed footnotes loaded through the main document relationship.
@@ -2714,6 +2843,8 @@ const SETTINGS_CONTENT_TYPE: &str =
 const DEFAULT_SETTINGS_PART: &str = "/word/settings.xml";
 const FONT_TABLE_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
+const EMBEDDED_FONT_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.obfuscatedFont";
 const DEFAULT_FONT_TABLE_XML: &str = concat!(
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
     r#"<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
@@ -3842,6 +3973,15 @@ impl Document {
             settings,
             settings_part_name: compatible.then(|| DEFAULT_SETTINGS_PART.to_owned()),
             settings_owned: false,
+            theme: compatible.then(oxml_drawing::theme::CT_OfficeStyleSheet::office_default),
+            theme_part_name: compatible.then(|| DEFAULT_THEME_PART.to_owned()),
+            theme_dirty: false,
+            font_table: compatible.then(|| {
+                FontTable::from_xml(DEFAULT_FONT_TABLE_XML.as_bytes())
+                    .expect("fresh Word font table must parse")
+            }),
+            font_table_part_name: compatible.then(|| DEFAULT_FONT_TABLE_PART.to_owned()),
+            font_table_dirty: false,
             identifiers,
             footnotes: rdocx_oxml::footnotes::CT_Footnotes::new(),
             footnotes_part_name: None,
@@ -3887,6 +4027,12 @@ impl Document {
             settings: self.settings.clone(),
             settings_part_name: self.settings_part_name.clone(),
             settings_owned: self.settings_owned,
+            theme: self.theme.clone(),
+            theme_part_name: self.theme_part_name.clone(),
+            theme_dirty: self.theme_dirty,
+            font_table: self.font_table.clone(),
+            font_table_part_name: self.font_table_part_name.clone(),
+            font_table_dirty: self.font_table_dirty,
             identifiers: self.identifiers.clone(),
             footnotes: self.footnotes.clone(),
             footnotes_part_name: self.footnotes_part_name.clone(),
@@ -5005,6 +5151,24 @@ impl Document {
             None => None,
         };
 
+        let theme_part_name = resolve_part(rel_types::THEME);
+        let theme = match theme_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(xml).ok(),
+            None => None,
+        };
+
+        let font_table_part_name = resolve_part(rel_types::FONT_TABLE);
+        let font_table = match font_table_part_name
+            .as_deref()
+            .and_then(|part| package.get_part(part))
+        {
+            Some(xml) => FontTable::from_xml(xml).ok(),
+            None => None,
+        };
+
         // Core properties are a package-level relationship, not a document part.
         let core_properties_part_name = package
             .package_rels
@@ -5101,6 +5265,12 @@ impl Document {
             settings,
             settings_part_name,
             settings_owned: false,
+            theme,
+            theme_part_name,
+            theme_dirty: false,
+            font_table,
+            font_table_part_name,
+            font_table_dirty: false,
             identifiers,
             footnotes,
             footnotes_part_name,
@@ -5454,6 +5624,35 @@ impl Document {
         // the relationship-resolved part they came from.
         if let (Some(settings), Some(part_name)) = (&self.settings, &self.settings_part_name) {
             self.package.set_part(part_name, settings.to_xml()?);
+        }
+
+        if self.theme_dirty {
+            let theme = self
+                .theme
+                .as_ref()
+                .ok_or_else(|| Error::Other("dirty theme model is missing".to_owned()))?;
+            let part_name = self
+                .theme_part_name
+                .as_ref()
+                .ok_or_else(|| Error::Other("dirty theme part name is missing".to_owned()))?;
+            self.package.set_part(
+                part_name,
+                theme.to_xml().map_err(|error| {
+                    Error::Other(format!("theme serialization failed: {error}"))
+                })?,
+            );
+        }
+
+        if self.font_table_dirty {
+            let table = self
+                .font_table
+                .as_ref()
+                .ok_or_else(|| Error::Other("dirty font-table model is missing".to_owned()))?;
+            let part_name = self
+                .font_table_part_name
+                .as_ref()
+                .ok_or_else(|| Error::Other("dirty font-table part name is missing".to_owned()))?;
+            self.package.set_part(part_name, table.to_xml()?);
         }
 
         // Preserve parsed footnote bytes until a facade mutation makes the typed view dirty.
@@ -8310,6 +8509,458 @@ impl Document {
         Ok(removed)
     }
 
+    /// Return the relationship-resolved DrawingML theme.
+    pub fn theme(&self) -> Option<&oxml_drawing::theme::CT_OfficeStyleSheet> {
+        self.theme.as_ref()
+    }
+
+    /// Replace or create the relationship-resolved DrawingML theme atomically.
+    pub fn set_theme(&mut self, theme: oxml_drawing::theme::CT_OfficeStyleSheet) -> Result<()> {
+        theme
+            .to_xml()
+            .map_err(|error| Error::Other(format!("theme serialization failed: {error}")))?;
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .identifiers
+            .observe_package_graph(&candidate.package)?;
+        let part_name = match &candidate.theme_part_name {
+            Some(part_name) => part_name.clone(),
+            None => candidate
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_THEME_PART)?,
+        };
+        candidate
+            .ensure_part_relationship_checked(&part_name, rel_types::THEME, content_types::THEME)
+            .map_err(|error| {
+                Error::Other(format!("theme relationship allocation failed: {error}"))
+            })?;
+        candidate.theme = Some(theme);
+        candidate.theme_part_name = Some(part_name);
+        candidate.theme_dirty = true;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Set the document-wide Latin, East Asian, and bidirectional languages.
+    pub fn set_language_defaults(&mut self, value: ThemeFontLanguage) -> Result<()> {
+        self.set_theme_font_language(value)
+    }
+
+    /// Return font-table records with related embedded bytes deobfuscated.
+    pub fn fonts(&self) -> Vec<FontDefinition> {
+        let Some(table) = &self.font_table else {
+            return Vec::new();
+        };
+        let relationships = self
+            .font_table_part_name
+            .as_deref()
+            .and_then(|part_name| self.package.get_part_rels(part_name));
+        table
+            .fonts()
+            .iter()
+            .map(|font| {
+                let embedded_fonts = font
+                    .embedded_fonts
+                    .iter()
+                    .map(|embedded| {
+                        let data = relationships
+                            .and_then(|relationships| {
+                                relationships.items.iter().find(|relationship| {
+                                    relationship.id == embedded.relationship_id
+                                        && relationship.rel_type == rel_types::FONT
+                                        && relationship_is_internal(relationship)
+                                })
+                            })
+                            .and_then(|relationship| {
+                                let owner = self.font_table_part_name.as_deref()?;
+                                let target =
+                                    OpcPackage::resolve_rel_target(owner, &relationship.target);
+                                self.package.get_part(&target)
+                            })
+                            .and_then(|bytes| deobfuscate_odttf_with_key(bytes, &embedded.font_key))
+                            .unwrap_or_default();
+                        EmbeddedFont {
+                            kind: embedded.kind.into(),
+                            data,
+                            font_key: embedded.font_key.clone(),
+                            subsetted: embedded.subsetted.unwrap_or(false),
+                            license: FontEmbeddingLicense {
+                                authorized: embedded.authorized.unwrap_or(false),
+                                identity: embedded.license_identity.clone().unwrap_or_default(),
+                            },
+                        }
+                    })
+                    .collect();
+                FontDefinition {
+                    name: font.name.clone(),
+                    alternate_name: font.alternate_name.clone(),
+                    family: font.family.clone(),
+                    pitch: font.pitch.clone(),
+                    embedded_fonts,
+                }
+            })
+            .collect()
+    }
+
+    /// Add or replace one descriptive font-table record.
+    pub fn set_font(&mut self, font: FontDefinition) -> Result<()> {
+        if font.name.trim().is_empty() {
+            return Err(Error::Other("font name must not be empty".to_owned()));
+        }
+        if font.family.as_deref().is_some_and(|family| {
+            !matches!(
+                family,
+                "decorative" | "modern" | "roman" | "script" | "swiss" | "auto"
+            )
+        }) {
+            return Err(Error::Other(
+                "font family must be a valid OOXML family enumeration".to_owned(),
+            ));
+        }
+        if font
+            .pitch
+            .as_deref()
+            .is_some_and(|pitch| !matches!(pitch, "default" | "fixed" | "variable"))
+        {
+            return Err(Error::Other(
+                "font pitch must be a valid OOXML pitch enumeration".to_owned(),
+            ));
+        }
+        if !font.embedded_fonts.is_empty() {
+            return Err(Error::Other(
+                "set_font does not accept embedded bytes, use embed_font".to_owned(),
+            ));
+        }
+        let mut candidate = self.font_table_mutation_candidate()?;
+        candidate
+            .font_table
+            .as_mut()
+            .expect("font-table mutation candidate has a model")
+            .set_font(font.name, font.alternate_name, font.family, font.pitch);
+        candidate
+            .font_table
+            .as_ref()
+            .expect("font-table mutation candidate has a model")
+            .to_xml()?;
+        candidate.font_table_dirty = true;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove one font-table record and every embedded face it owns.
+    pub fn remove_font(&mut self, name: &str) -> Result<Option<FontDefinition>> {
+        let Some(removed) = self.fonts().into_iter().find(|font| font.name == name) else {
+            return Ok(None);
+        };
+        let mut candidate = self.font_table_mutation_candidate()?;
+        let references = candidate
+            .font_table
+            .as_mut()
+            .expect("font-table mutation candidate has a model")
+            .remove_font(name)
+            .expect("font record existed before staging")
+            .embedded_fonts;
+        for reference in references {
+            candidate.remove_embedded_font_part(&reference)?;
+        }
+        candidate.font_table_dirty = true;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(Some(removed))
+    }
+
+    /// Embed caller-provided font bytes after explicit license authorization.
+    pub fn embed_font(&mut self, font_name: &str, embedded: EmbeddedFont) -> Result<()> {
+        if !embedded.license.authorized {
+            return Err(Error::Other(
+                "font embedding requires explicit caller authorization".to_owned(),
+            ));
+        }
+        if embedded.license.identity.trim().is_empty() {
+            return Err(Error::Other(
+                "font embedding requires an exact license identity".to_owned(),
+            ));
+        }
+        if embedded.license.identity.len() > 4096 {
+            return Err(Error::Other(
+                "font embedding license identity exceeds 4096 bytes".to_owned(),
+            ));
+        }
+        if embedded
+            .license
+            .identity
+            .bytes()
+            .any(|byte| matches!(byte, b'\t' | b'\n' | b'\r'))
+        {
+            return Err(Error::Other(
+                "font embedding license identity contains XML-normalized whitespace".to_owned(),
+            ));
+        }
+        if !looks_like_sfnt(&embedded.data) {
+            return Err(Error::Other(
+                "embedded font bytes are not a supported sfnt font".to_owned(),
+            ));
+        }
+        let guid = font_key_bytes(&embedded.font_key).ok_or_else(|| {
+            Error::Other("embedded font key must be a 16-byte OOXML GUID".to_owned())
+        })?;
+
+        let mut candidate = self.font_table_mutation_candidate()?;
+        let table = candidate
+            .font_table
+            .as_ref()
+            .expect("font-table mutation candidate has a model");
+        let font = table
+            .fonts()
+            .iter()
+            .find(|font| font.name == font_name)
+            .ok_or_else(|| Error::Other(format!("font-table record {font_name} does not exist")))?;
+        let kind = FontFaceKind::from(embedded.kind);
+        let existing = font
+            .embedded_fonts
+            .iter()
+            .find(|value| value.kind == kind)
+            .cloned();
+        let font_table_part = candidate
+            .font_table_part_name
+            .clone()
+            .expect("font-table mutation candidate has a part name");
+
+        let existing_target = if let Some(existing) = &existing {
+            let relationship = candidate
+                .package
+                .get_part_rels(&font_table_part)
+                .and_then(|relationships| relationships.get_by_id(&existing.relationship_id))
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::FONT
+                        && relationship_is_internal(relationship)
+                })
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "embedded font relationship {} is missing",
+                        existing.relationship_id
+                    ))
+                })?;
+            Some(OpcPackage::resolve_rel_target(
+                &font_table_part,
+                &relationship.target,
+            ))
+        } else {
+            None
+        };
+        let can_reuse_existing = existing.as_ref().is_some_and(|existing| {
+            let relationship_reference_count =
+                table.embedded_relationship_reference_count(&existing.relationship_id);
+            let target = existing_target
+                .as_ref()
+                .expect("existing embedded font has a resolved target");
+            let target_relationship_count = std::iter::once(("/", &candidate.package.package_rels))
+                .chain(
+                    candidate
+                        .package
+                        .part_rels
+                        .iter()
+                        .map(|(source, relationships)| (source.as_str(), relationships)),
+                )
+                .flat_map(|(source, relationships)| {
+                    relationships
+                        .items
+                        .iter()
+                        .map(move |relationship| (source, relationship))
+                })
+                .filter(|(source, relationship)| {
+                    relationship_is_internal(relationship)
+                        && OpcPackage::resolve_rel_target(source, &relationship.target) == *target
+                })
+                .count();
+            relationship_reference_count == 1
+                && target_relationship_count == 1
+                && !table.retained_raw_mentions_relationship(&existing.relationship_id)
+        });
+
+        let (relationship_id, part_name) = if can_reuse_existing {
+            (
+                existing
+                    .as_ref()
+                    .expect("reusable embedded font exists")
+                    .relationship_id
+                    .clone(),
+                existing_target.expect("reusable embedded font has a target"),
+            )
+        } else {
+            let part_name = candidate
+                .identifiers
+                .reserve_preferred_part_name("/word/fonts/font1.odttf")?;
+            let relationship_id = candidate
+                .identifiers
+                .reserve_relationship_id_checked(&font_table_part)?;
+            let target = relative_target(&font_table_part, &part_name);
+            candidate
+                .package
+                .get_or_create_part_rels(&font_table_part)
+                .add_with_id(&relationship_id, rel_types::FONT, &target);
+            (relationship_id, part_name)
+        };
+
+        candidate
+            .package
+            .set_part(&part_name, obfuscate_odttf_with_key(&embedded.data, &guid));
+        candidate
+            .package
+            .content_types
+            .add_override(&part_name, EMBEDDED_FONT_CONTENT_TYPE);
+        candidate
+            .identifiers
+            .register_content_type_override(&part_name);
+        let reference = EmbeddedFontReference::new(
+            kind,
+            relationship_id,
+            embedded.font_key,
+            Some(embedded.subsetted),
+            Some(true),
+            Some(embedded.license.identity),
+        );
+        let inserted = candidate
+            .font_table
+            .as_mut()
+            .expect("font-table mutation candidate has a model")
+            .set_embedded_font(font_name, reference);
+        debug_assert!(inserted);
+        if !can_reuse_existing && let Some(existing) = &existing {
+            candidate.remove_embedded_font_part(existing)?;
+        }
+        candidate
+            .font_table
+            .as_ref()
+            .expect("font-table mutation candidate has a model")
+            .to_xml()?;
+        candidate.font_table_dirty = true;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove one embedded face without removing its font-table record.
+    pub fn remove_embedded_font(
+        &mut self,
+        font_name: &str,
+        kind: EmbeddedFontKind,
+    ) -> Result<Option<EmbeddedFont>> {
+        let Some(removed) = self
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == font_name)
+            .and_then(|font| {
+                font.embedded_fonts
+                    .into_iter()
+                    .find(|embedded| embedded.kind == kind)
+            })
+        else {
+            return Ok(None);
+        };
+        let mut candidate = self.font_table_mutation_candidate()?;
+        let reference = candidate
+            .font_table
+            .as_mut()
+            .expect("font-table mutation candidate has a model")
+            .remove_embedded_font(font_name, kind.into())
+            .expect("embedded font existed before staging");
+        candidate.remove_embedded_font_part(&reference)?;
+        candidate.font_table_dirty = true;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(Some(removed))
+    }
+
+    fn font_table_mutation_candidate(&self) -> Result<Self> {
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .identifiers
+            .observe_package_graph(&candidate.package)?;
+        let part_name = match &candidate.font_table_part_name {
+            Some(part_name) => {
+                if candidate.font_table.is_none() {
+                    return Err(Error::Other(format!(
+                        "cannot mutate unmodeled font table at {part_name}"
+                    )));
+                }
+                part_name.clone()
+            }
+            None => candidate
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_FONT_TABLE_PART)?,
+        };
+        candidate
+            .ensure_part_relationship_checked(
+                &part_name,
+                rel_types::FONT_TABLE,
+                FONT_TABLE_CONTENT_TYPE,
+            )
+            .map_err(|error| {
+                Error::Other(format!(
+                    "font-table relationship allocation failed: {error}"
+                ))
+            })?;
+        candidate.font_table.get_or_insert_with(FontTable::new);
+        candidate.font_table_part_name = Some(part_name);
+        Ok(candidate)
+    }
+
+    fn remove_embedded_font_part(&mut self, reference: &EmbeddedFontReference) -> Result<()> {
+        let owner = self
+            .font_table_part_name
+            .clone()
+            .ok_or_else(|| Error::Other("font-table part name is missing".to_owned()))?;
+        if self.font_table.as_ref().is_some_and(|table| {
+            table.embedded_relationship_reference_count(&reference.relationship_id) > 0
+                || table.retained_raw_mentions_relationship(&reference.relationship_id)
+        }) {
+            return Ok(());
+        }
+        let target = self
+            .package
+            .get_part_rels(&owner)
+            .and_then(|relationships| relationships.get_by_id(&reference.relationship_id))
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::FONT && relationship_is_internal(relationship)
+            })
+            .map(|relationship| OpcPackage::resolve_rel_target(&owner, &relationship.target));
+        let Some(target) = target else {
+            return Ok(());
+        };
+        if let Some(relationships) = self.package.get_part_rels_mut(&owner) {
+            relationships.items.retain(|relationship| {
+                relationship.id != reference.relationship_id
+                    || relationship.rel_type != rel_types::FONT
+                    || !relationship_is_internal(relationship)
+            });
+        }
+        self.identifiers
+            .retire_authored_story_relationships(&owner, vec![reference.relationship_id.clone()]);
+        let still_referenced = std::iter::once(("/", &self.package.package_rels))
+            .chain(
+                self.package
+                    .part_rels
+                    .iter()
+                    .map(|(source, relationships)| (source.as_str(), relationships)),
+            )
+            .any(|(source, relationships)| {
+                relationships.items.iter().any(|relationship| {
+                    relationship_is_internal(relationship)
+                        && OpcPackage::resolve_rel_target(source, &relationship.target) == target
+                })
+            });
+        if !still_referenced {
+            self.package.remove_part(&target);
+            self.package.remove_part_rels(&target);
+            self.package.content_types.remove_override(&target);
+            self.identifiers.retire_authored_part(&target);
+        }
+        Ok(())
+    }
+
     fn settings_mutation_candidate(&self) -> Result<Self> {
         let mut candidate = self.clone_for_staging();
         let created = candidate.settings_part_name.is_none();
@@ -10105,7 +10756,6 @@ impl Document {
         let mut hyperlink_urls: HashMap<String, String> = HashMap::new();
         let mut footnotes = None;
         let mut endnotes = None;
-        let mut theme_part_name = None;
         let active_header_footer_ids = self.header_footer_rel_ids_for_layout();
         let even_headers_enabled = self.even_headers_enabled();
 
@@ -10203,14 +10853,6 @@ impl Document {
                         };
                         charts.insert(rel.id.clone(), chart);
                     }
-                    t if t == rel_types::THEME => {
-                        if relationship_is_internal(rel) {
-                            theme_part_name = Some(OpcPackage::resolve_rel_target(
-                                &self.doc_part_name,
-                                &rel.target,
-                            ));
-                        }
-                    }
                     t if t == rel_types::HYPERLINK => {
                         if rel.target_mode.as_ref().is_some_and(|m| m == "External") {
                             hyperlink_urls.insert(rel.id.clone(), rel.target.clone());
@@ -10241,14 +10883,27 @@ impl Document {
             }
         }
 
-        // Parse theme if available
-        let theme_xml = theme_part_name
-            .as_deref()
-            .and_then(|part_name| self.package.get_part(part_name));
-        let chart_theme = theme_xml
-            .and_then(|data| oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(data).ok())
-            .unwrap_or_else(oxml_drawing::theme::CT_OfficeStyleSheet::office_default);
-        let theme = theme_xml.and_then(|data| rdocx_oxml::theme::Theme::from_xml(data).ok());
+        let chart_theme = if self.theme_dirty {
+            self.theme.clone()
+        } else {
+            self.package
+                .get_part_rels(&self.doc_part_name)
+                .and_then(|relationships| {
+                    relationships.items.iter().rev().find(|relationship| {
+                        relationship.rel_type == rel_types::THEME
+                            && relationship_is_internal(relationship)
+                    })
+                })
+                .map(|relationship| {
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+                })
+                .as_deref()
+                .and_then(|part_name| self.package.get_part(part_name))
+                .and_then(|xml| oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(xml).ok())
+                .or_else(|| self.theme.clone())
+        }
+        .unwrap_or_else(oxml_drawing::theme::CT_OfficeStyleSheet::office_default);
+        let theme = Some(rdocx_oxml::theme::Theme::from(&chart_theme));
 
         let mut document = self.document.clone();
         if !even_headers_enabled {
@@ -10318,6 +10973,30 @@ impl Document {
     /// files in the `word/fonts/` directory. ODTTF files have the first 32 bytes
     /// XOR'd with a 16-byte GUID derived from the font's relationship ID.
     fn extract_embedded_fonts(&self) -> Vec<rdocx_layout::FontFile> {
+        if let (Some(table), Some(owner)) = (&self.font_table, &self.font_table_part_name) {
+            let relationships = self.package.get_part_rels(owner);
+            return table
+                .fonts()
+                .iter()
+                .flat_map(|font| {
+                    font.embedded_fonts.iter().filter_map(|embedded| {
+                        let relationship = relationships?.items.iter().find(|relationship| {
+                            relationship.id == embedded.relationship_id
+                                && relationship.rel_type == rel_types::FONT
+                                && relationship_is_internal(relationship)
+                        })?;
+                        let part_name = OpcPackage::resolve_rel_target(owner, &relationship.target);
+                        let data = self.package.get_part(&part_name)?;
+                        let data = deobfuscate_odttf_with_key(data, &embedded.font_key)?;
+                        Some(rdocx_layout::FontFile {
+                            family: font.name.clone(),
+                            data,
+                        })
+                    })
+                })
+                .collect();
+        }
+
         let mut fonts = Vec::new();
 
         // Look for font parts in word/fonts/ directory
@@ -11323,17 +12002,64 @@ fn deobfuscate_odttf(data: &[u8], file_name: &str) -> Option<Vec<u8>> {
         .unwrap_or("")
         .trim_start_matches('{')
         .trim_end_matches('}');
-
-    // Remove hyphens and parse as hex bytes
-    let hex: String = name.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if hex.len() != 32 {
+    let hex = name
+        .chars()
+        .filter(|character| *character != '-')
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if hex.len() != 32 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
+    let key = format!(
+        "{{{}-{}-{}-{}-{}}}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    );
+    deobfuscate_odttf_with_key(data, &key)
+}
 
-    let mut guid = [0u8; 16];
-    for (i, byte) in guid.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+fn font_key_bytes(value: &str) -> Option<[u8; 16]> {
+    let value_bytes = value.as_bytes();
+    if value_bytes.len() != 38
+        || value_bytes.first() != Some(&b'{')
+        || value_bytes.last() != Some(&b'}')
+        || ![9, 14, 19, 24]
+            .into_iter()
+            .all(|index| value_bytes.get(index) == Some(&b'-'))
+        || !value_bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 0 | 9 | 14 | 19 | 24 | 37) || matches!(byte, b'0'..=b'9' | b'A'..=b'F')
+        })
+    {
+        return None;
     }
+    let hex: String = value[1..37]
+        .chars()
+        .filter(|character| *character != '-')
+        .collect();
+    let mut guid = [0u8; 16];
+    for (index, byte) in guid.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(guid)
+}
+
+fn obfuscate_odttf_with_key(data: &[u8], guid: &[u8; 16]) -> Vec<u8> {
+    let key = odttf_key_candidates(guid)[0];
+    let mut result = data.to_vec();
+    for (index, byte) in result.iter_mut().take(32).enumerate() {
+        *byte ^= key[index % 16];
+    }
+    result
+}
+
+fn deobfuscate_odttf_with_key(data: &[u8], font_key: &str) -> Option<Vec<u8>> {
+    if data.len() < 32 {
+        return None;
+    }
+    let guid = font_key_bytes(font_key)?;
 
     let candidates = odttf_key_candidates(&guid);
     let decoded: Vec<Vec<u8>> = candidates

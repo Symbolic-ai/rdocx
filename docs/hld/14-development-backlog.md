@@ -2276,9 +2276,11 @@ package parts with selective custom-property and whole-part removal.
 removal deletes only its owned package content.
 
 ### F-245, Corpus themes, font tables, and embedded fonts (L)
-Create and select the theme, font table, language defaults, font relationships,
-and licensed embedded-font parts required by the private documents. Font
-embedding remains caller-authorized and preserves exact licensing metadata.
+The native facade creates and selects the shared DrawingML theme, language
+defaults, font-table records, font relationships, and licensed embedded-font
+parts required by the private documents. Font embedding accepts caller bytes
+only after explicit authorization, preserves the exact license identity, and
+uses the caller's OOXML font key for deterministic obfuscation and layout.
 **Depends on**: F-243, F-249.
 **Test gate**: differential. Public-authored theme and font resolution matches
 the pinned Word references in deterministic layout without system-font input.

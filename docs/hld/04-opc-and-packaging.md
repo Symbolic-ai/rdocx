@@ -69,6 +69,16 @@ declare macro-capable main-part identity without inventing a VBA project. Empty
 core properties omit created and modified timestamps, so equivalent fresh
 constructions remain byte-identical.
 
+Theme and font authoring retain the relationship-resolved targets already in a
+package. A missing theme or font table receives one collision-safe part,
+content-type override, and internal main-document relationship on the staged
+candidate. Embedded faces are obfuscated with the caller-provided OOXML font
+key and live below a font-table-owned internal `font` relationship. Replacing a
+face reuses its relationship and part only when both are exclusively
+referenced. Shared producer relationships or parts remain intact while the
+replacement receives a new package edge. Removing a face removes its owned
+part only when no remaining internal package relationship targets it.
+
 Flat OPC is a private Word facade codec over `OpcPackage`. Import first applies
 the shared strict XML 1.0 lexical gate, then resolves expanded package names,
 unique canonical absolute part names, exact data-kind selection, strict base64,
@@ -365,6 +375,14 @@ aliases. Each mutation replaces only its modeled child or repeated child set,
 uses fixed `w:` prefixes for new XML, and inserts at the schema position.
 Unmodeled children inside `w:compat` and `w:docVars`, plus every unrelated
 top-level settings child, retain their bytes and namespace context.
+
+The font-table reader accepts any in-scope Word and relationship namespace
+prefixes. It models font names, alternate names, family, pitch, and the four
+embedded-face slots. New XML uses fixed `w:`, `r:`, `rdocx:`, and `mc:`
+prefixes in schema order. The root merges producer MCE tokens and declares
+`rdocx` ignorable. Producer attributes and unmodeled children remain in their
+original relative slots. The `rdocx:` attributes retain the caller's explicit
+authorization fact and exact license identity across save and reopen.
 
 Watermark authoring follows the document-to-header graph rather than assuming
 conventional header names. The facade materializes a missing default, first, or

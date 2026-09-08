@@ -245,6 +245,15 @@ profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
 
+Native Rust re-exports `CT_OfficeStyleSheet` and adds the concrete
+`FontDefinition`, `EmbeddedFont`, `EmbeddedFontKind`, and
+`FontEmbeddingLicense` values. `Document::set_theme`, `theme`,
+`set_language_defaults`, `fonts`, `set_font`, `remove_font`, `embed_font`, and
+`remove_embedded_font` form the additive pre-1.0 authoring surface. Embedding
+requires caller bytes, an explicit authorization value, a nonempty exact
+license identity without XML-normalized whitespace, and a valid OOXML font
+key. Python, WASM, and CLI gain no new binding in this story.
+
 Native Rust re-exports `CoreProperties`, `AppProperties`, `CustomProperty`,
 `CustomPropertyValue`, `Twips`, and the bounded settings value types. `Document`
 provides borrowed readers, staged setters, selective removals, and whole-part
