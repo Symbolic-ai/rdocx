@@ -1708,6 +1708,13 @@ fn remap_fragment_style_collisions(
         {
             style.next_style = Some(replacement.clone());
         }
+        if let Some(replacement) = style
+            .linked_style
+            .as_ref()
+            .and_then(|style_id| replacements.get(style_id))
+        {
+            style.linked_style = Some(replacement.clone());
+        }
         for (_, raw) in &mut style.extra_xml {
             for (old, new) in &replacements {
                 patch_word_value(raw, b"link", old, new)?;
@@ -11828,7 +11835,9 @@ mod tests {
     #[test]
     fn styleref_searches_the_approved_direction_and_scope() {
         let mut document = Document::new();
-        document.add_style(style::StyleBuilder::paragraph("Heading1", "Heading 1"));
+        document
+            .set_style(style::StyleBuilder::paragraph("Heading1", "Heading 1"))
+            .unwrap();
         let mut source = CT_P::new();
         source.properties = Some(CT_PPr {
             style_id: Some("Heading1".to_owned()),

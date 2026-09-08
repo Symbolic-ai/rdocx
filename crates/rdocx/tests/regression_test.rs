@@ -13051,9 +13051,13 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
         <w:sectPr/>
     "#;
     let mut document = document_with_content_controls(&wrap_word_body(body));
-    document.add_style(StyleBuilder::paragraph("Collision", "Destination style"));
+    document
+        .add_style(StyleBuilder::paragraph("Collision", "Destination style"))
+        .unwrap();
     let mut fragment = Document::new();
-    fragment.add_style(StyleBuilder::paragraph("Collision", "Fragment style"));
+    fragment
+        .add_style(StyleBuilder::paragraph("Collision", "Fragment style"))
+        .unwrap();
     fragment.add_paragraph("fragment text").style("Collision");
     let fragment_num_id = fragment.add_list_definition(&[ListLevel::decimal()]);
     fragment
@@ -13267,15 +13271,31 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     assert!(output.style("Collision").is_some());
     assert!(output.style("CollisionMerge1").is_some());
     assert!(output.style("CollisionMerge2").is_some());
+    assert_eq!(
+        output.style("CollisionMerge1").unwrap().linked_style(),
+        Some("CollisionMerge1")
+    );
+    assert_eq!(
+        output.style("CollisionMerge2").unwrap().linked_style(),
+        Some("CollisionMerge2")
+    );
     let styles_xml =
         String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
     assert_eq!(
-        styles_xml.matches("s:val='CollisionMerge1'").count(),
+        styles_xml
+            .matches(&format!(
+                r#"<s:link xmlns:s="{W_NS}" s:val="CollisionMerge1"/>"#
+            ))
+            .count(),
         1,
         "{styles_xml}"
     );
     assert_eq!(
-        styles_xml.matches("s:val='CollisionMerge2'").count(),
+        styles_xml
+            .matches(&format!(
+                r#"<s:link xmlns:s="{W_NS}" s:val="CollisionMerge2"/>"#
+            ))
+            .count(),
         1,
         "{styles_xml}"
     );

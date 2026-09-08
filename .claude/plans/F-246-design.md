@@ -1,6 +1,6 @@
 # F-246, Corpus style authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-243, F-245
@@ -98,13 +98,13 @@ opt-in and existing resolution must remain byte and render stable.
 
 ## Implementation checklist
 
-- [ ] Extend existing style CT and facade types with story-owned properties.
-- [ ] Add create, update, default, remove, and validation operations.
-- [ ] Validate the complete graph before publishing any mutation.
-- [ ] Extend effective paragraph, run, and table resolution.
-- [ ] Add atomic-failure, round-trip, preservation, and differential tests.
-- [ ] Run the full gate and all routed checks.
-- [ ] Update exactly the listed HLD files.
+- [x] Extend existing style CT and facade types with story-owned properties.
+- [x] Add create, update, default, remove, and validation operations.
+- [x] Validate the complete graph before publishing any mutation.
+- [x] Extend effective paragraph, run, and table resolution.
+- [x] Add atomic-failure, round-trip, preservation, and differential tests.
+- [x] Run the full gate and all routed checks.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

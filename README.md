@@ -37,7 +37,7 @@ mean that every property in that family is publicly creatable.
 | Major category | Current public boundary | Classification | Matrix |
 |---|---|---|---|
 | DOCX package I/O | Open, save, and byte serialization | complete | [DOCX-001](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
-| Styles | Paragraph, character, and table style graphs have a bounded public surface | partial | [DOCX-011](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
+| Styles | Paragraph, character, and table style graphs have a bounded public surface | complete | [DOCX-011](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
 | Numbering | Lists expose a useful subset of levels and instances | partial | [DOCX-012](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
 | Headers and footers | Per-section default, first, and even stories have a bounded surface | partial | [DOCX-017](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |
 | Tables | Grids, widths, borders, and layout mode are partly public | partial | [DOCX-022](docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix) |

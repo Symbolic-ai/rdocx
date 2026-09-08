@@ -988,6 +988,13 @@ An empty custom-properties part is pruned only when the current facade created
 it. Settings mutations use the same staged boundary and keep the existing
 relationship-resolved target.
 
+`Document` also owns one relationship-resolved `CT_Styles` graph. Public style
+creation, update, default selection, and removal build a complete candidate,
+validate identifiers, reference types, defaults, links, next styles, and
+inheritance cycles, then publish the staged graph and invalidate layout once.
+The facade reuses the existing paragraph, run, table, and conditional property
+types. It does not introduce a second style model.
+
 The `rdocx` facade also provides direct immutable paragraph lookup. Mutable
 and read-only paragraph handles each provide total run count and lookup, while
 only the mutable handle provides mutable run lookup. These accessors let the

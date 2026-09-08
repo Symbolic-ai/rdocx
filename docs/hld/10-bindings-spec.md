@@ -245,6 +245,16 @@ profiles select package identity without manufacturing executable content.
 Python, WASM, and CLI construction continues through `Document::new()` and
 therefore receives the compatible DOCX default without a new selector surface.
 
+Native Rust re-exports `StyleType`. `StyleBuilder` authors paragraph,
+character, and table styles with inheritance, reciprocal links, next styles,
+UI flags, base properties, and conditional table regions. `add_style` is
+fallible in the pre-1.0 API. `set_style`, `remove_style`,
+`set_default_style`, and `validate_style_graph` use the same `Result` boundary.
+Builder clear operations remove optional links, UI metadata, base properties,
+and conditional regions during a staged update.
+Python, WASM, and CLI retain style package and render behavior without new
+style mutation entry points.
+
 Native Rust re-exports `CT_OfficeStyleSheet` and adds the concrete
 `FontDefinition`, `EmbeddedFont`, `EmbeddedFontKind`, and
 `FontEmbeddingLicense` values. `Document::set_theme`, `theme`,

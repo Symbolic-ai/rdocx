@@ -1422,6 +1422,14 @@ fn render_styles(styles: &CT_Styles) -> Result<CT_Styles> {
             name: None,
             based_on: None,
             next_style: None,
+            linked_style: None,
+            auto_redefine: None,
+            hidden: None,
+            ui_priority: None,
+            semi_hidden: None,
+            unhide_when_used: None,
+            quick_format: None,
+            locked: None,
             is_default: style.is_default,
             ppr,
             rpr: None,
@@ -1429,6 +1437,8 @@ fn render_styles(styles: &CT_Styles) -> Result<CT_Styles> {
             table_properties_original: None,
             table_properties_xml: None,
             conditional_table_styles: Vec::new(),
+            extra_attributes: Vec::new(),
+            modeled_xml: Vec::new(),
             extra_xml: Vec::new(),
         });
     }
@@ -4377,19 +4387,23 @@ mod tests {
     #[test]
     fn epub_reports_named_style_and_deep_heading_losses() {
         let mut document = Document::new();
-        document.add_style(
-            StyleBuilder::paragraph("Spaced", "Spaced").paragraph_properties(CT_PPr {
-                space_before: Some(Twips(240)),
-                ..Default::default()
-            }),
-        );
+        document
+            .add_style(
+                StyleBuilder::paragraph("Spaced", "Spaced").paragraph_properties(CT_PPr {
+                    space_before: Some(Twips(240)),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         document.add_paragraph("styled").set_style("Spaced");
-        document.add_style(
-            StyleBuilder::paragraph("DeepStyle", "Deep style").paragraph_properties(CT_PPr {
-                outline_lvl: Some(6),
-                ..Default::default()
-            }),
-        );
+        document
+            .add_style(
+                StyleBuilder::paragraph("DeepStyle", "Deep style").paragraph_properties(CT_PPr {
+                    outline_lvl: Some(6),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         document.add_paragraph("deep").set_style("Heading7");
         let direct = document.add_paragraph("direct deep");
         direct.inner.properties.get_or_insert_default().outline_lvl = Some(8);
@@ -5681,12 +5695,14 @@ mod tests {
             .body
             .content
             .push(BodyContent::Table(table));
-        document.add_style(
-            StyleBuilder::paragraph("OracleDeep", "Oracle deep").paragraph_properties(CT_PPr {
-                outline_lvl: Some(6),
-                ..Default::default()
-            }),
-        );
+        document
+            .add_style(
+                StyleBuilder::paragraph("OracleDeep", "Oracle deep").paragraph_properties(CT_PPr {
+                    outline_lvl: Some(6),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         document
             .add_paragraph("style-derived deep heading")
             .set_style("OracleDeep");

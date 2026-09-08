@@ -110,21 +110,19 @@ pub fn resolve_paragraph_properties_in_table(
         effective.merge_from(properties);
     }
 
-    // 2. Walk the basedOn chain
-    if let Some(sid) = style_id {
+    // 2. Walk the selected style's basedOn chain
+    let selected_style_id = style_id.or_else(|| {
+        styles
+            .get_default(StyleType::Paragraph)
+            .map(|style| style.style_id.as_str())
+    });
+    if let Some(sid) = selected_style_id {
         let chain = collect_style_chain(sid, styles);
         // Apply from most-base to most-derived
         for style in chain.iter().rev() {
             if let Some(ref ppr) = style.ppr {
                 effective.merge_from(ppr);
             }
-        }
-    } else {
-        // Apply the default paragraph style
-        if let Some(default_style) = styles.get_default(StyleType::Paragraph)
-            && let Some(ref ppr) = default_style.ppr
-        {
-            effective.merge_from(ppr);
         }
     }
 
@@ -162,7 +160,7 @@ pub fn resolve_run_properties(
     }
 
     // 3. character style's rpr (following basedOn chain)
-    if let Some(sid) = run_style_id {
+    if let Some(sid) = run_style_id.and_then(|style_id| character_style_id(style_id, styles)) {
         let chain = collect_style_chain(sid, styles);
         for style in chain.iter().rev() {
             if let Some(ref rpr) = style.rpr {
@@ -172,6 +170,19 @@ pub fn resolve_run_properties(
     }
 
     effective
+}
+
+fn character_style_id<'a>(style_id: &'a str, styles: &'a CT_Styles) -> Option<&'a str> {
+    let style = styles.get_by_id(style_id)?;
+    match style.style_type {
+        StyleType::Character => Some(style.style_id.as_str()),
+        StyleType::Paragraph => style.linked_style.as_deref().filter(|linked_id| {
+            styles
+                .get_by_id(linked_id)
+                .is_some_and(|linked| linked.style_type == StyleType::Character)
+        }),
+        StyleType::Table | StyleType::Numbering => None,
+    }
 }
 
 /// The paragraph properties a numbering level carries, mainly its indentation.
@@ -348,6 +359,14 @@ mod tests {
             name: Some("heading 2".to_string()),
             based_on: Some("Heading1".to_string()),
             next_style: Some("Normal".to_string()),
+            linked_style: None,
+            auto_redefine: None,
+            hidden: None,
+            ui_priority: None,
+            semi_hidden: None,
+            unhide_when_used: None,
+            quick_format: None,
+            locked: None,
             is_default: false,
             ppr: Some(CT_PPr {
                 space_before: Some(Twips(40)),
@@ -362,6 +381,8 @@ mod tests {
             table_properties_original: None,
             table_properties_xml: None,
             conditional_table_styles: Vec::new(),
+            extra_attributes: Vec::new(),
+            modeled_xml: Vec::new(),
             extra_xml: Vec::new(),
         });
         styles
@@ -399,6 +420,18 @@ mod tests {
         assert_eq!(rpr.sz, Some(HalfPoint(26)));
         assert_eq!(rpr.bold, Some(true));
         assert_eq!(rpr.color, Some("2E74B5".to_string()));
+    }
+
+    #[test]
+    fn default_paragraph_style_resolves_its_based_on_chain() {
+        let mut styles = test_styles();
+        for style in &mut styles.styles {
+            style.is_default = style.style_id == "Heading2";
+        }
+        let ppr = resolve_paragraph_properties(None, &styles);
+        assert_eq!(ppr.keep_next, Some(true));
+        assert_eq!(ppr.space_before, Some(Twips(40)));
+        assert_eq!(ppr.space_after, Some(Twips(0)));
     }
 
     #[test]

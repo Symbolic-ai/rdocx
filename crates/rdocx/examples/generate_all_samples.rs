@@ -628,7 +628,8 @@ fn generate_feature_showcase(_samples_dir: &Path) -> Document {
                 color: Some("C45911".to_string()),
                 ..Default::default()
             }),
-    );
+    )
+    .unwrap();
     doc.add_paragraph("This paragraph uses a custom style: bold orange text on yellow background.")
         .style("CustomHighlight");
 
@@ -785,7 +786,8 @@ fn generate_proposal(_samples_dir: &Path) -> Document {
                 color: Some("1B2A4A".to_string()),
                 ..Default::default()
             }),
-    );
+    )
+    .unwrap();
 
     // ── Cover Page ──
     for _ in 0..4 {

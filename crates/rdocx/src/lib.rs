@@ -104,6 +104,7 @@ pub use rdocx_oxml::settings::{
     CharacterSpacingControl, CompatibilitySetting, CryptAlgorithmClass, CryptAlgorithmType,
     CryptProviderType, DocumentProtection, ProtectionMode, ThemeFontLanguage,
 };
+pub use rdocx_oxml::styles::StyleType;
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};

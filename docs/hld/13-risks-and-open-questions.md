@@ -76,7 +76,11 @@ it. Wrong here means subtly wrong fonts, positions and colours on real
 templates, which users notice and cannot describe.
 
 *Mitigation*: M9 is a standalone milestone with visual differential tests and a
-table of sampled theme-colour resolutions asserted to exact RGB.
+table of sampled theme-colour resolutions asserted to exact RGB. Word style
+graphs are validated for type-compatible inheritance, cycle freedom,
+reciprocal links, legal next styles, and one default per style type before a
+mutation publishes. Paragraph, character, and table default resolution has
+focused deterministic render coverage.
 
 ### R5, schema child ordering
 
@@ -187,6 +191,11 @@ The Word facade's private document identifier owner reserves related part,
 relationship, content-type, and XML identities together. Final-order
 canonicalization runs on a staged clone, so a collision or exhausted range
 cannot publish half of a package invariant.
+
+Style graph mutations use the same rule. Adding or updating one side of a
+legal paragraph and character link updates the reciprocal edge in the staged
+candidate. Missing targets, incompatible types, duplicate defaults, cycles,
+and live references abort before the document changes.
 
 ## Assumptions that would invalidate the plan if wrong
 

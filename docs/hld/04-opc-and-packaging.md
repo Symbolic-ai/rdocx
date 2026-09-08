@@ -755,6 +755,13 @@ children remain at their schema positions. Unchanged projections reuse the
 preserved subtree. A typed mutation writes one canonical modeled child in
 `CT_Style` sequence order and reinserts unmodelled direct children once.
 
+The style projection also owns `link`, automatic redefinition, visibility,
+gallery priority, quick-format, and locking values. Readers accept any prefix
+bound to the WordprocessingML namespace. Writers emit the fixed `w` prefix and
+place these children between `next` and property groups in schema order. A
+facade update retains unmodelled style, paragraph, run, table, and conditional
+region XML while applying modeled changes.
+
 The default-off `oxml-opc/agile-encryption` feature reads and writes
 password-protected OOXML packages. Readers parse the CFB `EncryptionInfo` and
 `EncryptedPackage` streams, accept namespace aliases, and reject elements that

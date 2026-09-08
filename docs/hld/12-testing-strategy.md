@@ -1439,6 +1439,17 @@ saves are byte-identical. The differential check pins Microsoft Word
 cd7284b4cbbfeb507e630c1aac019f4157393acb, then compares deterministic pixels
 for the publicly authored embedded face against the bundled oracle face.
 
+The style feature gate authors paragraph, character, and table defaults,
+based-on inheritance, reciprocal links, next styles, UI flags, and conditional
+table regions through the public facade. Atomic regressions reject missing and
+wrong-type targets, duplicate defaults, and inheritance cycles with unchanged
+document bytes. Update and removal cases retain producer XML exactly. The
+differential pins Microsoft Word 16.104 build 16.104.25121423 and LibreOffice
+26.2.5.2 build cd7284b4cbbfeb507e630c1aac019f4157393acb. The sanitized Word record
+must match normalized effective properties and deterministic 150 DPI bytes
+with a zero-byte difference threshold. The pinned LibreOffice build must save,
+reopen, and retain the valid graph, reciprocal links, and effective formatting.
+
 The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
 package relationship before reopen and repeat-save. The part bytes and
 relationship identity must survive exactly. The optional repair gate is pinned

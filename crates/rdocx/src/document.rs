@@ -3538,6 +3538,415 @@ fn visit_sdt_mut(control: &mut CT_Sdt, visitor: &mut impl FnMut(&mut CT_P)) {
     }
 }
 
+fn update_reciprocal_style_link(
+    styles: &mut CT_Styles,
+    style_id: &str,
+    old_link: Option<&str>,
+    new_link: Option<&str>,
+) {
+    if old_link != new_link
+        && let Some(old_target) = old_link
+            .and_then(|target_id| styles.styles.iter_mut().find(|s| s.style_id == target_id))
+        && old_target.linked_style.as_deref() == Some(style_id)
+    {
+        old_target.linked_style = None;
+    }
+    if let Some(new_target) =
+        new_link.and_then(|target_id| styles.styles.iter_mut().find(|s| s.style_id == target_id))
+        && new_target
+            .linked_style
+            .as_deref()
+            .is_none_or(|linked| linked == style_id)
+    {
+        new_target.linked_style = Some(style_id.to_owned());
+    }
+}
+
+fn merge_style_update(
+    existing: &rdocx_oxml::styles::CT_Style,
+    authored: &mut rdocx_oxml::styles::CT_Style,
+    cleared: u16,
+) {
+    authored.is_default = existing.is_default;
+    if authored.based_on.is_none() && cleared & style::CLEAR_BASED_ON == 0 {
+        authored.based_on = existing.based_on.clone();
+    }
+    if authored.next_style.is_none() && cleared & style::CLEAR_NEXT_STYLE == 0 {
+        authored.next_style = existing.next_style.clone();
+    }
+    if authored.linked_style.is_none() && cleared & style::CLEAR_LINKED_STYLE == 0 {
+        authored.linked_style = existing.linked_style.clone();
+    }
+    if authored.auto_redefine.is_none() && cleared & style::CLEAR_AUTO_REDEFINE == 0 {
+        authored.auto_redefine = existing.auto_redefine;
+    }
+    if authored.hidden.is_none() && cleared & style::CLEAR_HIDDEN == 0 {
+        authored.hidden = existing.hidden;
+    }
+    if authored.ui_priority.is_none() && cleared & style::CLEAR_PRIORITY == 0 {
+        authored.ui_priority = existing.ui_priority;
+    }
+    if authored.semi_hidden.is_none() && cleared & style::CLEAR_SEMI_HIDDEN == 0 {
+        authored.semi_hidden = existing.semi_hidden;
+    }
+    if authored.unhide_when_used.is_none() && cleared & style::CLEAR_UNHIDE_WHEN_USED == 0 {
+        authored.unhide_when_used = existing.unhide_when_used;
+    }
+    if authored.quick_format.is_none() && cleared & style::CLEAR_QUICK_FORMAT == 0 {
+        authored.quick_format = existing.quick_format;
+    }
+    if authored.locked.is_none() && cleared & style::CLEAR_LOCKED == 0 {
+        authored.locked = existing.locked;
+    }
+    if let Some(properties) = &authored.ppr {
+        let mut updated = existing.ppr.clone().unwrap_or_default();
+        updated.merge_from(properties);
+        authored.ppr = Some(updated);
+    } else if cleared & style::CLEAR_PARAGRAPH_PROPERTIES == 0 {
+        authored.ppr = existing.ppr.clone();
+    }
+    if let Some(properties) = &authored.rpr {
+        let mut updated = existing.rpr.clone().unwrap_or_default();
+        updated.merge_from(properties);
+        authored.rpr = Some(updated);
+    } else if cleared & style::CLEAR_RUN_PROPERTIES == 0 {
+        authored.rpr = existing.rpr.clone();
+    }
+    authored.extra_xml = existing.extra_xml.clone();
+    authored.extra_attributes = existing.extra_attributes.clone();
+    authored.modeled_xml = existing.modeled_xml.clone();
+    if let Some(properties) = &authored.table_properties {
+        authored.table_properties = Some(merge_table_style_properties(
+            existing.table_properties.as_ref(),
+            properties,
+        ));
+    } else if cleared & style::CLEAR_TABLE_PROPERTIES == 0 {
+        authored.table_properties = existing.table_properties.clone();
+    }
+    authored.table_properties_original = existing.table_properties_original.clone();
+    authored.table_properties_xml = existing.table_properties_xml.clone();
+    let authored_regions = std::mem::take(&mut authored.conditional_table_styles);
+    let mut merged_regions = if cleared & style::CLEAR_CONDITIONAL_TABLE_STYLES == 0 {
+        existing.conditional_table_styles.clone()
+    } else {
+        Vec::new()
+    };
+    let mut authored_region_names = std::collections::HashSet::new();
+    for authored_region in authored_regions {
+        if !authored_region_names.insert(authored_region.region.clone()) {
+            merged_regions.push(authored_region);
+            continue;
+        }
+        if let Some(index) = merged_regions
+            .iter()
+            .position(|current| current.region == authored_region.region)
+        {
+            merged_regions[index] =
+                merge_conditional_table_style(&merged_regions[index], &authored_region);
+        } else {
+            merged_regions.push(authored_region);
+        }
+    }
+    authored.conditional_table_styles = merged_regions;
+}
+
+fn merge_conditional_table_style(
+    existing: &rdocx_oxml::styles::CT_TblStylePr,
+    authored: &rdocx_oxml::styles::CT_TblStylePr,
+) -> rdocx_oxml::styles::CT_TblStylePr {
+    let mut updated = existing.clone();
+    if let Some(properties) = &authored.paragraph_properties {
+        let target = updated.paragraph_properties.get_or_insert_default();
+        target.merge_from(properties);
+    }
+    if let Some(properties) = &authored.table_properties {
+        updated.table_properties = Some(merge_table_style_properties(
+            updated.table_properties.as_ref(),
+            properties,
+        ));
+    }
+    if let Some(properties) = &authored.cell_properties {
+        updated.cell_properties = Some(merge_table_cell_style_properties(
+            updated.cell_properties.as_ref(),
+            properties,
+        ));
+    }
+    updated
+}
+
+fn merge_table_borders(
+    existing: Option<&rdocx_oxml::table::CT_TblBorders>,
+    authored: &rdocx_oxml::table::CT_TblBorders,
+) -> rdocx_oxml::table::CT_TblBorders {
+    let mut updated = existing.cloned().unwrap_or_default();
+    if authored.top.is_some() {
+        updated.top.clone_from(&authored.top);
+    }
+    if authored.bottom.is_some() {
+        updated.bottom.clone_from(&authored.bottom);
+    }
+    if authored.left.is_some() {
+        updated.left.clone_from(&authored.left);
+    }
+    if authored.right.is_some() {
+        updated.right.clone_from(&authored.right);
+    }
+    if authored.inside_h.is_some() {
+        updated.inside_h.clone_from(&authored.inside_h);
+    }
+    if authored.inside_v.is_some() {
+        updated.inside_v.clone_from(&authored.inside_v);
+    }
+    for raw in &authored.extra_xml {
+        if !updated.extra_xml.contains(raw) {
+            updated.extra_xml.push(raw.clone());
+        }
+    }
+    updated
+}
+
+fn merge_table_cell_style_properties(
+    existing: Option<&rdocx_oxml::table::CT_TcPr>,
+    authored: &rdocx_oxml::table::CT_TcPr,
+) -> rdocx_oxml::table::CT_TcPr {
+    let mut updated = existing.cloned().unwrap_or_default();
+    if authored.width.is_some() {
+        updated.width.clone_from(&authored.width);
+    }
+    if authored.grid_span.is_some() {
+        updated.grid_span = authored.grid_span;
+    }
+    if authored.h_merge.is_some() {
+        updated.h_merge.clone_from(&authored.h_merge);
+    }
+    if authored.v_merge.is_some() {
+        updated.v_merge = authored.v_merge;
+    }
+    if let Some(borders) = &authored.borders {
+        updated.borders = Some(merge_table_borders(updated.borders.as_ref(), borders));
+    }
+    if authored.shading.is_some() {
+        updated.shading.clone_from(&authored.shading);
+    }
+    if authored.v_align.is_some() {
+        updated.v_align = authored.v_align;
+    }
+    if authored.no_wrap.is_some() {
+        updated.no_wrap = authored.no_wrap;
+    }
+    if authored.text_direction.is_some() {
+        updated.text_direction.clone_from(&authored.text_direction);
+    }
+    if authored.cnf_style.is_some() {
+        updated.cnf_style.clone_from(&authored.cnf_style);
+    }
+    for raw in &authored.extra_xml {
+        if !updated.extra_xml.contains(raw) {
+            updated.extra_xml.push(raw.clone());
+        }
+    }
+    updated
+}
+
+fn merge_table_style_properties(
+    existing: Option<&rdocx_oxml::table::CT_TblPr>,
+    authored: &rdocx_oxml::table::CT_TblPr,
+) -> rdocx_oxml::table::CT_TblPr {
+    let mut updated = existing.cloned().unwrap_or_default();
+    if authored.style_id.is_some() {
+        updated.style_id.clone_from(&authored.style_id);
+    }
+    if authored.width.is_some() {
+        updated.width.clone_from(&authored.width);
+    }
+    if authored.jc.is_some() {
+        updated.jc = authored.jc;
+    }
+    if let Some(borders) = &authored.borders {
+        updated.borders = Some(merge_table_borders(updated.borders.as_ref(), borders));
+    }
+    if let Some(margins) = &authored.cell_margin {
+        let target = updated.cell_margin.get_or_insert_default();
+        if margins.top.is_some() {
+            target.top = margins.top;
+        }
+        if margins.bottom.is_some() {
+            target.bottom = margins.bottom;
+        }
+        if margins.left.is_some() {
+            target.left = margins.left;
+        }
+        if margins.right.is_some() {
+            target.right = margins.right;
+        }
+    }
+    if authored.layout.is_some() {
+        updated.layout.clone_from(&authored.layout);
+    }
+    if authored.indent.is_some() {
+        updated.indent.clone_from(&authored.indent);
+    }
+    if authored.shading.is_some() {
+        updated.shading.clone_from(&authored.shading);
+    }
+    if let Some(look) = &authored.look {
+        let target = updated.look.get_or_insert_default();
+        if look.val.is_some() {
+            target.val.clone_from(&look.val);
+        }
+        if look.first_row.is_some() {
+            target.first_row = look.first_row;
+        }
+        if look.last_row.is_some() {
+            target.last_row = look.last_row;
+        }
+        if look.first_column.is_some() {
+            target.first_column = look.first_column;
+        }
+        if look.last_column.is_some() {
+            target.last_column = look.last_column;
+        }
+        if look.no_h_band.is_some() {
+            target.no_h_band = look.no_h_band;
+        }
+        if look.no_v_band.is_some() {
+            target.no_v_band = look.no_v_band;
+        }
+    }
+    if authored.change.is_some() {
+        updated.change.clone_from(&authored.change);
+    }
+    for raw in &authored.revision_xml {
+        if !updated.revision_xml.contains(raw) {
+            updated.revision_xml.push(raw.clone());
+        }
+    }
+    for raw in &authored.extra_xml {
+        if !updated.extra_xml.contains(raw) {
+            updated.extra_xml.push(raw.clone());
+        }
+    }
+    updated
+}
+
+fn body_references_style(content: &[BodyContent], style_id: &str) -> bool {
+    content.iter().any(|item| match item {
+        BodyContent::Paragraph(paragraph) => paragraph_references_style(paragraph, style_id),
+        BodyContent::Table(table) => table_references_style(table, style_id),
+        BodyContent::ContentControl(control) => control_references_style(control, style_id),
+        BodyContent::RawXml(_) => false,
+    })
+}
+
+fn paragraph_references_style(paragraph: &CT_P, style_id: &str) -> bool {
+    paragraph
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.style_id.as_deref())
+        == Some(style_id)
+        || paragraph.runs.iter().any(|run| {
+            run.properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                == Some(style_id)
+        })
+        || paragraph
+            .content_controls
+            .iter()
+            .any(|(_, _, _, control)| control_references_style(control, style_id))
+}
+
+fn table_references_style(table: &CT_Tbl, style_id: &str) -> bool {
+    table
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.style_id.as_deref())
+        == Some(style_id)
+        || table.rows.iter().any(|row| {
+            row.cells.iter().any(|cell| {
+                cell.content.iter().any(|item| match item {
+                    CellContent::Paragraph(paragraph) => {
+                        paragraph_references_style(paragraph, style_id)
+                    }
+                    CellContent::Table(table) => table_references_style(table, style_id),
+                    CellContent::ContentControl(control) => {
+                        control_references_style(control, style_id)
+                    }
+                })
+            })
+        })
+        || table
+            .content_controls
+            .iter()
+            .any(|(_, _, control)| control_references_style(control, style_id))
+}
+
+fn control_references_style(control: &CT_Sdt, style_id: &str) -> bool {
+    control.content.iter().any(|item| match item {
+        SdtContent::Paragraph(paragraph) => paragraph_references_style(paragraph, style_id),
+        SdtContent::Table(table) => table_references_style(table, style_id),
+        SdtContent::Row(row) => row.cells.iter().any(|cell| {
+            cell.content.iter().any(|item| match item {
+                CellContent::Paragraph(paragraph) => {
+                    paragraph_references_style(paragraph, style_id)
+                }
+                CellContent::Table(table) => table_references_style(table, style_id),
+                CellContent::ContentControl(control) => control_references_style(control, style_id),
+            })
+        }),
+        SdtContent::Cell(cell) => cell.content.iter().any(|item| match item {
+            CellContent::Paragraph(paragraph) => paragraph_references_style(paragraph, style_id),
+            CellContent::Table(table) => table_references_style(table, style_id),
+            CellContent::ContentControl(control) => control_references_style(control, style_id),
+        }),
+        SdtContent::Run(run) => {
+            run.properties
+                .as_ref()
+                .and_then(|properties| properties.style_id.as_deref())
+                == Some(style_id)
+        }
+        SdtContent::ContentControl(nested) => control_references_style(nested, style_id),
+        SdtContent::RawXml(_) => false,
+    })
+}
+
+fn xml_references_style(xml: &[u8], style_id: &str) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element)
+                if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes())
+                    && matches!(
+                        element.local_name().as_ref(),
+                        b"pStyle" | b"rStyle" | b"tblStyle"
+                    ) =>
+            {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+                    let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                    if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == WORD_NAMESPACE.as_bytes())
+                        && local.as_ref() == b"val"
+                        && attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                            .map_err(|error| Error::Other(error.to_string()))?
+                            .as_ref()
+                            == style_id
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 fn collect_relationship_ids(content: &[BodyContent], output: &mut Vec<String>) {
     for item in content {
         match item {
@@ -8040,15 +8449,187 @@ impl Document {
 
     // ---- Style manipulation ----
 
-    /// Add a custom style to the document.
-    pub fn add_style(&mut self, builder: StyleBuilder) {
+    /// Add a custom style after validating the complete style graph.
+    pub fn add_style(&mut self, builder: StyleBuilder) -> Result<()> {
         let mut candidate = self.clone_for_staging();
-        candidate
-            .reserve_styles_bundle()
-            .expect("an in-memory document can allocate a styles part");
+        candidate.reserve_styles_bundle()?;
+        let (authored, _) = builder.build();
+        if candidate.styles.get_by_id(&authored.style_id).is_some() {
+            return Err(Error::Other(format!(
+                "style '{}' already exists",
+                authored.style_id
+            )));
+        }
+        let linked_style = authored.linked_style.clone();
+        let style_id = authored.style_id.clone();
+        candidate.styles.styles.push(authored);
+        update_reciprocal_style_link(
+            &mut candidate.styles,
+            &style_id,
+            None,
+            linked_style.as_deref(),
+        );
+        style::validate_style_graph(&candidate.styles)?;
         candidate.invalidate_layout();
-        candidate.styles.styles.push(builder.build());
         self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Replace an existing style after validating the complete style graph.
+    pub fn set_style(&mut self, builder: StyleBuilder) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        let (mut authored, cleared) = builder.build();
+        let index = candidate
+            .styles
+            .styles
+            .iter()
+            .position(|style| style.style_id == authored.style_id)
+            .ok_or_else(|| Error::Other(format!("style '{}' does not exist", authored.style_id)))?;
+        let existing = &candidate.styles.styles[index];
+        if existing.style_type != authored.style_type {
+            return Err(Error::Other(format!(
+                "style '{}' has type '{}', not '{}'",
+                authored.style_id,
+                existing.style_type.to_str(),
+                authored.style_type.to_str()
+            )));
+        }
+        let old_link = existing.linked_style.clone();
+        merge_style_update(existing, &mut authored, cleared);
+        let style_id = authored.style_id.clone();
+        let new_link = authored.linked_style.clone();
+        candidate.styles.styles[index] = authored;
+        update_reciprocal_style_link(
+            &mut candidate.styles,
+            &style_id,
+            old_link.as_deref(),
+            new_link.as_deref(),
+        );
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Select the sole default style for one style type.
+    pub fn set_default_style(&mut self, style_type: StyleType, style_id: &str) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        let target = candidate
+            .styles
+            .get_by_id(style_id)
+            .ok_or_else(|| Error::Other(format!("style '{style_id}' does not exist")))?;
+        if target.style_type != style_type {
+            return Err(Error::Other(format!(
+                "style '{style_id}' has type '{}', not '{}'",
+                target.style_type.to_str(),
+                style_type.to_str()
+            )));
+        }
+        for style in &mut candidate.styles.styles {
+            if style.style_type == style_type {
+                style.is_default = style.style_id == style_id;
+            }
+        }
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove an unreferenced style, returning whether it existed.
+    pub fn remove_style(&mut self, style_id: &str) -> Result<bool> {
+        let Some(index) = self
+            .styles
+            .styles
+            .iter()
+            .position(|style| style.style_id == style_id)
+        else {
+            return Ok(false);
+        };
+        if let Some(owner) = self.styles.styles.iter().find(|style| {
+            style.style_id != style_id
+                && (style.based_on.as_deref() == Some(style_id)
+                    || style.next_style.as_deref() == Some(style_id)
+                    || style.linked_style.as_deref() == Some(style_id))
+        }) {
+            return Err(Error::Other(format!(
+                "style '{style_id}' is referenced by style '{}'",
+                owner.style_id
+            )));
+        }
+        if self.document_references_style(style_id)? {
+            return Err(Error::Other(format!(
+                "style '{style_id}' is referenced by document content"
+            )));
+        }
+
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        candidate.styles.styles.remove(index);
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(true)
+    }
+
+    /// Validate all style IDs, defaults, links, next styles, and inheritance chains.
+    pub fn validate_style_graph(&self) -> Result<()> {
+        style::validate_style_graph(&self.styles)
+    }
+
+    fn document_references_style(&self, style_id: &str) -> Result<bool> {
+        if body_references_style(&self.document.body.content, style_id)
+            || xml_references_style(&self.document.to_xml()?, style_id)?
+            || self
+                .footnotes
+                .footnotes
+                .iter()
+                .flat_map(|note| &note.paragraphs)
+                .any(|paragraph| paragraph_references_style(paragraph, style_id))
+            || self.comments.as_ref().is_some_and(|comments| {
+                comments
+                    .comments
+                    .iter()
+                    .flat_map(|comment| &comment.paragraphs)
+                    .any(|paragraph| paragraph_references_style(paragraph, style_id))
+            })
+            || self.glossary.as_ref().is_some_and(|glossary| {
+                glossary
+                    .doc_parts
+                    .iter()
+                    .any(|part| body_references_style(&part.body.content, style_id))
+            })
+        {
+            return Ok(true);
+        }
+
+        let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) else {
+            return Ok(false);
+        };
+        for relationship in &relationships.items {
+            if relationship_is_internal(relationship)
+                && matches!(
+                    relationship.rel_type.as_str(),
+                    rel_types::HEADER
+                        | rel_types::FOOTER
+                        | rel_types::FOOTNOTES
+                        | rel_types::ENDNOTES
+                        | rel_types::COMMENTS
+                        | rel_types::GLOSSARY_DOCUMENT
+                )
+            {
+                let part_name =
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                if let Some(xml) = self.package.get_part(&part_name)
+                    && xml_references_style(xml, style_id)?
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Resolve the effective paragraph properties for a given style ID,
@@ -12274,7 +12855,9 @@ mod tests {
         let mut target = Document::from_bytes(bytes.get_ref()).unwrap();
 
         let mut other = Document::new();
-        other.add_style(StyleBuilder::paragraph("Merged", "Merged"));
+        other
+            .add_style(StyleBuilder::paragraph("Merged", "Merged"))
+            .unwrap();
         other.add_list_definition(&[ListLevel::decimal()]);
         let before = {
             let mut bytes = Cursor::new(Vec::new());
@@ -12466,7 +13049,9 @@ mod tests {
         package.write_to(&mut bytes).unwrap();
         let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
 
-        document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+        document
+            .add_style(StyleBuilder::paragraph("Custom", "Custom"))
+            .unwrap();
         document.add_list_definition(&[ListLevel::decimal()]);
         document.set_title("Title");
         let saved = document.to_bytes().unwrap();
@@ -12847,7 +13432,9 @@ mod tests {
         let mut bytes = Cursor::new(Vec::new());
         external_only.write_to(&mut bytes).unwrap();
         let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
-        document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+        document
+            .add_style(StyleBuilder::paragraph("Custom", "Custom"))
+            .unwrap();
         let saved = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
         let relationships = saved.get_part_rels("/word/document.xml").unwrap();
         assert!(relationships.items.iter().any(|relationship| {
@@ -13194,11 +13781,15 @@ mod tests {
                     .unwrap()
                     .add_hyperlink("example", &hyperlink);
                 document.add_list_definition(&[ListLevel::decimal()]);
-                document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+                document
+                    .add_style(StyleBuilder::paragraph("Custom", "Custom"))
+                    .unwrap();
                 document.set_auto_hyphenation(true).unwrap();
             } else {
                 document.set_auto_hyphenation(true).unwrap();
-                document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+                document
+                    .add_style(StyleBuilder::paragraph("Custom", "Custom"))
+                    .unwrap();
                 document.add_list_definition(&[ListLevel::decimal()]);
                 let hyperlink = document.add_hyperlink_relationship("https://example.com");
                 document
@@ -13296,7 +13887,9 @@ mod tests {
                 document.add_list_definition(&[ListLevel::decimal()]);
             }),
             ("rdocxStyles", |document| {
-                document.add_style(StyleBuilder::paragraph("Custom", "Custom"));
+                document
+                    .add_style(StyleBuilder::paragraph("Custom", "Custom"))
+                    .unwrap();
             }),
             ("rdocxFootnotes", |document| {
                 document.add_footnote("note");
@@ -16420,7 +17013,8 @@ mod tests {
     #[test]
     fn add_custom_style() {
         let mut doc = Document::new();
-        doc.add_style(StyleBuilder::paragraph("MyCustom", "My Custom Style").based_on("Normal"));
+        doc.add_style(StyleBuilder::paragraph("MyCustom", "My Custom Style").based_on("Normal"))
+            .unwrap();
         assert!(doc.style("MyCustom").is_some());
         let s = doc.style("MyCustom").unwrap();
         assert_eq!(s.name(), Some("My Custom Style"));
@@ -17929,7 +18523,9 @@ mod tests {
         }
 
         let mut other = Document::new();
-        other.add_style(StyleBuilder::paragraph("Merged", "Merged"));
+        other
+            .add_style(StyleBuilder::paragraph("Merged", "Merged"))
+            .unwrap();
         other.add_paragraph("other").style("Merged");
         for mutation in [
             (|document: &mut Document, other: &Document| document.append(other))
@@ -17988,9 +18584,11 @@ mod tests {
 
         let mut doc_b = Document::new();
         doc_b.add_paragraph("B").style("Heading1");
-        doc_b.add_style(
-            crate::style::StyleBuilder::paragraph("CustomB", "Custom B").based_on("Normal"),
-        );
+        doc_b
+            .add_style(
+                crate::style::StyleBuilder::paragraph("CustomB", "Custom B").based_on("Normal"),
+            )
+            .unwrap();
         doc_b.add_paragraph("C").style("CustomB");
 
         let styles_before = doc_a.styles.styles.len();
@@ -18665,8 +19263,10 @@ mod tests {
                     italic: Some(true),
                     ..Default::default()
                 }),
-        );
-        doc.add_style(StyleBuilder::paragraph("ListChild", "List Child").based_on("ListBase"));
+        )
+        .unwrap();
+        doc.add_style(StyleBuilder::paragraph("ListChild", "List Child").based_on("ListBase"))
+            .unwrap();
         doc.add_paragraph("text").style("ListChild");
 
         let BodyContent::Paragraph(paragraph) = &mut doc.document.body.content[0] else {
@@ -18724,7 +19324,8 @@ mod tests {
                     ..Default::default()
                 },
             ),
-        );
+        )
+        .unwrap();
 
         doc.add_paragraph("direct").numbering(direct_num_id, 0);
         doc.add_paragraph("override")

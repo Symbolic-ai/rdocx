@@ -11,6 +11,10 @@ use rdocx::{
     RunRange, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
 use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
+use rdocx_oxml::CT_BorderEdge;
+use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
+use rdocx_oxml::shared::ST_Border;
+use rdocx_oxml::table::{CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TcPr};
 
 const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
@@ -5969,9 +5973,11 @@ fn custom_style_round_trip() {
         StyleBuilder::paragraph("CustomHeading", "Custom Heading")
             .based_on("Heading1")
             .next_style("Normal"),
-    );
+    )
+    .unwrap();
 
-    doc.add_style(StyleBuilder::character("Emphasis", "Emphasis Style"));
+    doc.add_style(StyleBuilder::character("Emphasis", "Emphasis Style"))
+        .unwrap();
 
     doc.add_paragraph("Custom styled").style("CustomHeading");
 
@@ -5986,6 +5992,589 @@ fn custom_style_round_trip() {
 
     let paras = doc2.paragraphs();
     assert_eq!(paras[0].style_id(), Some("CustomHeading"));
+}
+
+#[test]
+fn source_built_style_graph_matches_pinned_word_effective_formatting() {
+    const WORD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+    const LIBREOFFICE_ORACLE: &str =
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+    const MAX_DIFFERING_RENDER_BYTES: usize = 0;
+    const WORD_STYLES_ORACLE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Times New Roman"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="character" w:styleId="CorpusBodyChar"><w:name w:val="Corpus Body Char"/><w:link w:val="CorpusBody"/><w:rPr><w:b/><w:i/><w:color w:val="2E5A88"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="CorpusBody" w:default="1"><w:name w:val="Corpus Body"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:link w:val="CorpusBodyChar"/><w:autoRedefine w:val="0"/><w:hidden w:val="0"/><w:uiPriority w:val="17"/><w:semiHidden/><w:unhideWhenUsed/><w:qFormat/><w:locked w:val="0"/><w:pPr><w:spacing w:after="0"/></w:pPr><w:rPr><w:sz w:val="28"/></w:rPr></w:style>
+  <w:style w:type="table" w:styleId="CorpusTable" w:default="1"><w:name w:val="Corpus Table"/><w:tblPr><w:shd w:val="clear" w:fill="F2F2F2"/></w:tblPr><w:tblStylePr w:type="band1Horz"><w:tcPr><w:shd w:val="clear" w:fill="D9EAF7"/></w:tcPr></w:tblStylePr></w:style>
+</w:styles>"#;
+    assert_eq!(WORD_ORACLE, MHTML_ORACLE_VERSION);
+    assert_eq!(LIBREOFFICE_ORACLE, ODT_ORACLE_VERSION);
+
+    let mut authored = corpus_style_document();
+    let authored_paragraph = authored.resolve_paragraph_properties(None);
+    let authored_run = authored.resolve_run_properties(Some("CorpusBody"), Some("CorpusBody"));
+    assert_eq!(authored_paragraph.space_after, Some(rdocx::Twips(0)));
+    assert_eq!(authored_run.bold, Some(true));
+    assert_eq!(authored_run.italic, Some(true));
+    assert_eq!(authored_run.color.as_deref(), Some("2E5A88"));
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(authored.to_bytes().unwrap())).unwrap();
+    package.set_part("/word/styles.xml", WORD_STYLES_ORACLE.as_bytes().to_vec());
+    let mut oracle_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut oracle_bytes).unwrap();
+    let oracle = Document::from_bytes(oracle_bytes.get_ref()).unwrap();
+    oracle.validate_style_graph().unwrap();
+    assert_eq!(
+        oracle.resolve_paragraph_properties(None),
+        authored_paragraph
+    );
+    assert_eq!(
+        oracle.resolve_run_properties(Some("CorpusBody"), Some("CorpusBody")),
+        authored_run
+    );
+    let authored_render = authored
+        .render_page_to_png_deterministic(0, 150.0)
+        .unwrap()
+        .unwrap();
+    let oracle_render = oracle
+        .render_page_to_png_deterministic(0, 150.0)
+        .unwrap()
+        .unwrap();
+    let differing = authored_render
+        .iter()
+        .zip(&oracle_render)
+        .filter(|(left, right)| left != right)
+        .count()
+        + authored_render.len().abs_diff(oracle_render.len());
+    assert_eq!(differing, MAX_DIFFERING_RENDER_BYTES);
+
+    if std::env::var_os("RDOCX_RUN_PINNED_STYLE_ORACLE").is_some() {
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            LIBREOFFICE_ORACLE
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-style-oracle-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        let source = root.join("source.docx");
+        std::fs::write(&source, authored.to_bytes().unwrap()).unwrap();
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("docx")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("pinned LibreOffice style normalization starts");
+        assert!(status.success());
+        let normalized = Document::open(output.join("source.docx")).unwrap();
+        normalized.validate_style_graph().unwrap();
+        let normalized_paragraph = normalized.resolve_paragraph_properties(None);
+        assert_eq!(
+            normalized_paragraph.space_after,
+            authored_paragraph.space_after
+        );
+        let normalized_run =
+            normalized.resolve_run_properties(Some("CorpusBody"), Some("CorpusBody"));
+        assert_eq!(normalized_run.bold, authored_run.bold);
+        assert_eq!(normalized_run.italic, authored_run.italic);
+        assert_eq!(normalized_run.color, authored_run.color);
+        assert_eq!(
+            normalized.style("CorpusBody").unwrap().linked_style(),
+            Some("CorpusBodyChar")
+        );
+        assert_eq!(
+            normalized.style("CorpusBodyChar").unwrap().linked_style(),
+            Some("CorpusBody")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[test]
+fn invalid_style_graph_never_publishes_a_partial_mutation() {
+    let mut document = Document::new();
+    let before = document.to_bytes().unwrap();
+
+    let error = document
+        .add_style(StyleBuilder::paragraph("Broken", "Broken").based_on("MissingStyle"))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("MissingStyle"));
+    assert!(document.style("Broken").is_none());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document
+        .add_style(StyleBuilder::paragraph("CycleA", "Cycle A").based_on("Normal"))
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("CycleB", "Cycle B").based_on("CycleA"))
+        .unwrap();
+    let before_cycle = document.to_bytes().unwrap();
+    assert!(
+        document
+            .set_style(StyleBuilder::paragraph("CycleA", "Cycle A").based_on("CycleB"))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_cycle);
+
+    document
+        .add_style(StyleBuilder::character("WrongLink", "Wrong Link"))
+        .unwrap();
+    let before_link = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_style(
+                StyleBuilder::character("WrongTarget", "Wrong Target").linked_style("WrongLink")
+            )
+            .is_err()
+    );
+    assert!(document.style("WrongTarget").is_none());
+    assert_eq!(document.to_bytes().unwrap(), before_link);
+
+    document
+        .add_style(StyleBuilder::table("DuplicateRegion", "Duplicate Region"))
+        .unwrap();
+    let before_regions = document.to_bytes().unwrap();
+    assert!(
+        document
+            .set_style(
+                StyleBuilder::table("DuplicateRegion", "Duplicate Region")
+                    .conditional_table_style("firstRow", None, None, None)
+                    .conditional_table_style("firstRow", None, None, None),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_regions);
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let duplicate_defaults = styles.replace(
+        r#"<w:style w:type="paragraph" w:styleId="Heading1">"#,
+        r#"<w:style w:type="paragraph" w:styleId="Heading1" w:default="1">"#,
+    );
+    package.set_part("/word/styles.xml", duplicate_defaults.into_bytes());
+    let mut invalid_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut invalid_bytes).unwrap();
+    let mut invalid = Document::from_bytes(invalid_bytes.get_ref()).unwrap();
+    assert!(invalid.validate_style_graph().is_err());
+    let invalid_before = invalid.to_bytes().unwrap();
+    assert!(
+        invalid
+            .add_style(StyleBuilder::paragraph("Rejected", "Rejected"))
+            .is_err()
+    );
+    assert_eq!(invalid.to_bytes().unwrap(), invalid_before);
+}
+
+#[test]
+fn authored_style_graph_survives_save_and_reopen() {
+    let mut document = corpus_style_document();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    reopened.validate_style_graph().unwrap();
+    let paragraph = reopened.style("CorpusBody").unwrap();
+    assert!(paragraph.is_default());
+    assert_eq!(paragraph.based_on(), Some("Normal"));
+    assert_eq!(paragraph.next_style(), Some("Normal"));
+    assert_eq!(paragraph.linked_style(), Some("CorpusBodyChar"));
+    assert_eq!(paragraph.priority(), Some(17));
+    assert_eq!(paragraph.auto_redefine(), Some(false));
+    assert_eq!(paragraph.hidden(), Some(false));
+    assert_eq!(paragraph.semi_hidden(), Some(true));
+    assert_eq!(paragraph.unhide_when_used(), Some(true));
+    assert_eq!(paragraph.quick_format(), Some(true));
+    assert_eq!(paragraph.locked(), Some(false));
+    assert_eq!(
+        paragraph
+            .paragraph_properties()
+            .and_then(|properties| properties.space_after),
+        Some(rdocx::Twips(0))
+    );
+    assert_eq!(
+        reopened.style("CorpusBodyChar").unwrap().linked_style(),
+        Some("CorpusBody")
+    );
+    let table = reopened.style("CorpusTable").unwrap();
+    assert!(table.is_default());
+    assert_eq!(table.conditional_table_styles().len(), 1);
+    assert_eq!(table.conditional_table_styles()[0].region, "band1Horz");
+    assert_eq!(
+        table.conditional_table_styles()[0]
+            .cell_properties
+            .as_ref()
+            .and_then(|properties| properties.shading.as_ref())
+            .and_then(|shading| shading.fill.as_deref()),
+        Some("D9EAF7")
+    );
+
+    let mut updated = reopened;
+    updated
+        .set_style(
+            StyleBuilder::paragraph("CorpusBody", "Corpus Body")
+                .clear_based_on()
+                .clear_next_style()
+                .clear_linked_style()
+                .clear_priority()
+                .clear_auto_redefine()
+                .clear_hidden()
+                .clear_semi_hidden()
+                .clear_unhide_when_used()
+                .clear_quick_format()
+                .clear_locked()
+                .clear_paragraph_properties()
+                .clear_run_properties(),
+        )
+        .unwrap();
+    let paragraph = updated.style("CorpusBody").unwrap();
+    assert_eq!(paragraph.based_on(), None);
+    assert_eq!(paragraph.next_style(), None);
+    assert_eq!(paragraph.linked_style(), None);
+    assert_eq!(paragraph.priority(), None);
+    assert_eq!(paragraph.paragraph_properties(), None);
+    assert_eq!(paragraph.run_properties(), None);
+    assert_eq!(
+        updated.style("CorpusBodyChar").unwrap().linked_style(),
+        None
+    );
+    updated
+        .set_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .clear_table_properties()
+                .clear_conditional_table_styles(),
+        )
+        .unwrap();
+    assert_eq!(
+        updated.style("CorpusTable").unwrap().table_properties(),
+        None
+    );
+    assert!(
+        updated
+            .style("CorpusTable")
+            .unwrap()
+            .conditional_table_styles()
+            .is_empty()
+    );
+}
+
+#[test]
+fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
+    let mut document = corpus_style_document();
+    document
+        .set_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .conditional_table_style(
+                    "band1Horz",
+                    Some(CT_PPr {
+                        space_after: Some(rdocx::Twips(60)),
+                        ..CT_PPr::default()
+                    }),
+                    None,
+                    None,
+                )
+                .conditional_table_style(
+                    "firstRow",
+                    None,
+                    None,
+                    Some(CT_TcPr {
+                        shading: Some(CT_Shd {
+                            val: "clear".to_owned(),
+                            color: None,
+                            fill: Some("112233".to_owned()),
+                        }),
+                        ..CT_TcPr::default()
+                    }),
+                ),
+        )
+        .unwrap();
+
+    let table = document.style("CorpusTable").unwrap();
+    assert_eq!(table.conditional_table_styles().len(), 2);
+    let band = table
+        .conditional_table_styles()
+        .iter()
+        .find(|region| region.region == "band1Horz")
+        .unwrap();
+    assert_eq!(
+        band.paragraph_properties
+            .as_ref()
+            .and_then(|properties| properties.space_after),
+        Some(rdocx::Twips(60))
+    );
+    assert_eq!(
+        band.cell_properties
+            .as_ref()
+            .and_then(|properties| properties.shading.as_ref())
+            .and_then(|shading| shading.fill.as_deref()),
+        Some("D9EAF7")
+    );
+
+    document
+        .set_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .clear_conditional_table_styles()
+                .conditional_table_style("lastRow", None, None, None),
+        )
+        .unwrap();
+    let table = document.style("CorpusTable").unwrap();
+    let regions = table.conditional_table_styles();
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].region, "lastRow");
+}
+
+#[test]
+fn table_style_updates_merge_nested_borders_and_margins() {
+    let mut document = Document::new();
+    document
+        .add_style(StyleBuilder::table("LayeredTable", "Layered Table"))
+        .unwrap();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let styles = styles.replace(
+        r#"<w:name w:val="Layered Table"/>"#,
+        r#"<w:name w:val="Layered Table"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="111111"/><w:bottom w:val="double" w:sz="12" w:color="222222"/><x:diagonal xmlns:x="urn:producer" x:keep="exact"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="140" w:type="dxa"/></w:tblCellMar></w:tblPr>"#,
+    );
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    document
+        .set_style(
+            StyleBuilder::table("LayeredTable", "Layered Table").table_properties(CT_TblPr {
+                borders: Some(CT_TblBorders {
+                    top: Some(CT_BorderEdge {
+                        val: ST_Border::Thick,
+                        sz: Some(16),
+                        space: None,
+                        color: Some("AABBCC".to_owned()),
+                    }),
+                    ..CT_TblBorders::default()
+                }),
+                cell_margin: Some(CT_TblCellMar {
+                    top: Some(rdocx::Twips(240)),
+                    ..CT_TblCellMar::default()
+                }),
+                ..CT_TblPr::default()
+            }),
+        )
+        .unwrap();
+
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let output = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert!(output.contains(r#"<w:top w:val="thick" w:sz="16" w:color="AABBCC"/>"#));
+    assert!(output.contains(r#"<w:bottom w:val="double" w:sz="12" w:color="222222"/>"#));
+    assert_eq!(output.matches(r#"x:diagonal"#).count(), 1);
+    assert!(output.contains(r#"<w:top w:w="240" w:type="dxa"/>"#));
+    assert!(output.contains(r#"<w:left w:w="140" w:type="dxa"/>"#));
+}
+
+#[test]
+fn style_removal_rejects_live_references_and_preserves_unknown_xml() {
+    let mut document = Document::new();
+    document
+        .add_style(StyleBuilder::paragraph("Disposable", "Disposable"))
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("Unused", "Unused"))
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("Keeper", "Keeper"))
+        .unwrap();
+    document
+        .add_paragraph("live style reference")
+        .style("Disposable");
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let extension = r#"<x:producer xmlns:x="urn:producer" x:exact="&amp; &quot;kept&quot;"/>"#;
+    let paragraph_extension = r#"<x:pKeep xmlns:x="urn:producer" x:exact="paragraph"/>"#;
+    let run_extension = r#"<x:rKeep xmlns:x="urn:producer" x:exact="run"/>"#;
+    let styles = styles.replace(
+        r#"<w:name w:val="Keeper"/>"#,
+        &format!(
+            r#"<w:name w:val="Keeper"/><w:pPr>{paragraph_extension}<w:spacing w:after="100"/></w:pPr><w:rPr>{run_extension}<w:b/></w:rPr>{extension}"#
+        ),
+    );
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    assert!(document.remove_style("Disposable").is_err());
+    assert!(document.style("Disposable").is_some());
+    document
+        .set_style(
+            StyleBuilder::paragraph("Keeper", "Updated Keeper")
+                .priority(9)
+                .paragraph_properties(CT_PPr {
+                    space_before: Some(rdocx::Twips(40)),
+                    ..CT_PPr::default()
+                })
+                .run_properties(CT_RPr {
+                    color: Some("335577".to_owned()),
+                    ..CT_RPr::default()
+                }),
+        )
+        .unwrap();
+    assert!(document.remove_style("Unused").unwrap());
+    document.paragraph_mut(0).unwrap().set_style("Normal");
+    assert!(document.remove_style("Disposable").unwrap());
+
+    let saved =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let output = std::str::from_utf8(saved.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert_eq!(output.matches(extension).count(), 1);
+    assert_eq!(output.matches(paragraph_extension).count(), 1);
+    assert_eq!(output.matches(run_extension).count(), 1);
+    let keeper = document.style("Keeper").unwrap();
+    assert_eq!(
+        keeper
+            .paragraph_properties()
+            .and_then(|properties| properties.space_after),
+        Some(rdocx::Twips(100))
+    );
+    assert_eq!(
+        keeper
+            .paragraph_properties()
+            .and_then(|properties| properties.space_before),
+        Some(rdocx::Twips(40))
+    );
+    assert_eq!(
+        keeper
+            .run_properties()
+            .and_then(|properties| properties.bold),
+        Some(true)
+    );
+    assert_eq!(
+        keeper
+            .run_properties()
+            .and_then(|properties| properties.color.as_deref()),
+        Some("335577")
+    );
+    assert!(document.style("Unused").is_none());
+    assert!(document.style("Disposable").is_none());
+
+    document
+        .add_style(StyleBuilder::paragraph("NoteStyle", "Note Style"))
+        .unwrap();
+    document.add_footnote("styled note");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let notes = String::from_utf8(package.get_part("/word/footnotes.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<w:p>",
+            r#"<w:p><x:producer xmlns:x="urn:producer"><w:pStyle w:val="NoteStyle"/></x:producer>"#,
+            1,
+        );
+    package.set_part("/word/footnotes.xml", notes.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut with_note_style = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert!(with_note_style.remove_style("NoteStyle").is_err());
+    assert!(with_note_style.style("NoteStyle").is_some());
+}
+
+fn corpus_style_document() -> Document {
+    let mut document = Document::new();
+    document
+        .add_style(
+            StyleBuilder::character("CorpusBodyChar", "Corpus Body Char").run_properties(CT_RPr {
+                bold: Some(true),
+                italic: Some(true),
+                color: Some("2E5A88".to_owned()),
+                ..CT_RPr::default()
+            }),
+        )
+        .unwrap();
+    document
+        .add_style(
+            StyleBuilder::paragraph("CorpusBody", "Corpus Body")
+                .based_on("Normal")
+                .next_style("Normal")
+                .linked_style("CorpusBodyChar")
+                .priority(17)
+                .auto_redefine(false)
+                .hidden(false)
+                .semi_hidden(true)
+                .unhide_when_used(true)
+                .quick_format(true)
+                .locked(false)
+                .paragraph_properties(CT_PPr {
+                    space_after: Some(rdocx::Twips(0)),
+                    ..CT_PPr::default()
+                })
+                .run_properties(CT_RPr {
+                    sz: Some(rdocx_oxml::HalfPoint(28)),
+                    ..CT_RPr::default()
+                }),
+        )
+        .unwrap();
+    document
+        .add_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .table_properties(CT_TblPr {
+                    shading: Some(CT_Shd {
+                        val: "clear".to_owned(),
+                        color: None,
+                        fill: Some("F2F2F2".to_owned()),
+                    }),
+                    ..CT_TblPr::default()
+                })
+                .conditional_table_style(
+                    "band1Horz",
+                    None,
+                    None,
+                    Some(CT_TcPr {
+                        shading: Some(CT_Shd {
+                            val: "clear".to_owned(),
+                            color: None,
+                            fill: Some("D9EAF7".to_owned()),
+                        }),
+                        ..CT_TcPr::default()
+                    }),
+                ),
+        )
+        .unwrap();
+    document
+        .set_default_style(rdocx::StyleType::Paragraph, "CorpusBody")
+        .unwrap();
+    document
+        .set_default_style(rdocx::StyleType::Table, "CorpusTable")
+        .unwrap();
+    document
+        .add_paragraph("")
+        .style("CorpusBody")
+        .add_run("Corpus style graph")
+        .style("CorpusBody");
+    let mut table = document.add_table(2, 1);
+    table.row(0).unwrap().cell(0).unwrap().set_text("Band one");
+    table.row(1).unwrap().cell(0).unwrap().set_text("Band two");
+    document
 }
 
 #[test]
@@ -6071,7 +6660,8 @@ fn comprehensive_document_round_trip() {
     let mut doc = Document::new();
 
     // Custom style
-    doc.add_style(StyleBuilder::paragraph("BlockQuote", "Block Quote").based_on("Normal"));
+    doc.add_style(StyleBuilder::paragraph("BlockQuote", "Block Quote").based_on("Normal"))
+        .unwrap();
 
     // Page setup
     doc.set_margins(

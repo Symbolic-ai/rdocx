@@ -2290,6 +2290,10 @@ Create, update, remove, and resolve the paragraph, character, and table styles
 used by the private corpus, including defaults, inheritance, linked and next
 styles, and conditional table regions. Style references are validated before a
 transaction publishes.
+The native facade uses fallible create, update, default-selection, removal, and
+validation operations over one staged style graph. Parser and serializer
+support includes the style UI and locking flags in schema order while retaining
+unmodelled XML.
 **Depends on**: F-243, F-245.
 **Test gate**: differential. The source-built style graph resolves to the same
 effective formatting and visible output as the sanitized Word oracle.

@@ -615,6 +615,15 @@ styles. Direct table and cell properties remain the final overlay. An explicit
 cell `nil` or `none` border yields to a visible table border only on the exact
 outer edge. The same value remains suppressive on an interior edge.
 
+A table without an explicit style uses the authored default table style.
+Its modeled base width, alignment, indent, borders, shading, look, and cell
+margins resolve base-first before direct table and cell overlays. Existing
+direct width and alignment behavior remains unchanged.
+Paragraphs without an explicit style use the authored default paragraph style.
+When a run names a paragraph style with a reciprocal character-style link, the
+linked character inheritance chain supplies its run properties. All three
+paths consume the validated style graph before direct formatting overlays.
+
 Anchors whose horizontal frame is `column` or `character` resolve within the
 cell content box. Page and margin frames remain page-relative. Paragraph and
 line vertical frames use the cell paragraph position. Foreground anchors paint
