@@ -406,6 +406,7 @@ defended.
 | F-X086 | S70 | L | 4 | 1 | 2026-09-07 | Reused safe sourced prefix checkpoints across body-length changes while rebuilding shifted tails for exact provenance |
 | F-243 | S71 | L | 4 | 1 | 2026-09-07 | Added deterministic Word-compatible DOCX, DOCM, DOTX, and DOTM creation profiles with complete owned package graphs and an explicit compact profile |
 | F-249 | S71 | M | 2 | 1 | 2026-09-07 | Centralized deterministic Word package identifiers with collision-safe staged allocation and case-insensitive OPC identity validation |
+| F-245 | S71 | L | 4 | 2 | 2026-09-08 | Added public theme and font-table authoring, licensed embedded-font ownership, and deterministic authored-font layout resolution |
 
 ## Velocity
 

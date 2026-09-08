@@ -12429,3 +12429,50 @@ Every other entry remained unchanged, 47 of 49.
 **Notes for future sessions.** Keep package identity normalization and retained
 producer spelling paired. All new Word facade mutations that allocate more than
 one identifier must reserve and validate the complete bundle before publication.
+
+### F-245, Corpus themes, font tables, and embedded fonts
+
+**Sprint.** S71
+**Completed.** 2026-09-08
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The public Word facade now authors DrawingML themes,
+language defaults, typed font-table records, and caller-supplied embedded font
+parts. Embedded font mutations require explicit authorization and exact license
+identity, own the complete relationship and content-type graph, and feed
+authored theme aliases and deobfuscated font bytes into deterministic layout
+before bundled fallback.
+
+**Non-obvious choices.** The implementation reuses the shared concrete theme
+type and gives font-table XML one focused schema owner. It accepts strict OOXML
+font keys while normalizing compact and hyphenated legacy filenames before
+deobfuscation. Caller fonts remain document-owned and never enter the bundled
+font inventory or system-font discovery path. The public API change is additive
+for the pre-1.0 crates.
+
+**Deviations from the design plan.** None. Seven microscope passes closed
+atomicity, preservation, namespace, compatibility, and oracle gaps. Pass 7
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `authored_theme_font_table_and_embedded_fonts_survive_reopen`,
+`font_embedding_requires_explicit_authorization_and_license_identity`,
+`font_table_preserves_unknown_children_and_relationship_attributes`,
+`embedded_font_parts_are_packaged_deterministically`, and the pinned
+`public_authored_theme_and_fonts_match_pinned_word_resolution` differential all
+passed. The integrated `/verify --full` gate passed at
+`d938e387fc2248499c724e826225789d45b31ac9` with pinned LibreOffice, Poppler,
+and python-pptx riders.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve caller authorization and license
+identity as part of every embedded-font mutation. Keep theme aliases and
+embedded bytes ahead of bundled fallback, and never make document-owned fonts
+observable through system discovery or the bundled asset inventory.
