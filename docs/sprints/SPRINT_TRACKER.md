@@ -405,6 +405,7 @@ defended.
 | F-X085 | S70 | M | 2 | 1 | 2026-09-07 | Shared one lazy exact-identity memo across restart scans and publication with bounded transient-memory evidence |
 | F-X086 | S70 | L | 4 | 1 | 2026-09-07 | Reused safe sourced prefix checkpoints across body-length changes while rebuilding shifted tails for exact provenance |
 | F-243 | S71 | L | 4 | 1 | 2026-09-07 | Added deterministic Word-compatible DOCX, DOCM, DOTX, and DOTM creation profiles with complete owned package graphs and an explicit compact profile |
+| F-249 | S71 | M | 2 | 1 | 2026-09-07 | Centralized deterministic Word package identifiers with collision-safe staged allocation and case-insensitive OPC identity validation |
 
 ## Velocity
 

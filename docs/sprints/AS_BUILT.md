@@ -12380,3 +12380,52 @@ claimed.
 content type and preserve the difference between macro-capable identity and an
 actual VBA payload. Any later fresh-package part must join the same staged,
 validated, deterministic construction path.
+
+### F-249, Deterministic package identifier allocation
+
+**Sprint.** S71
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The Word facade now owns deterministic allocation for
+relationship, bookmark, comment, drawing, numbering, part, and content-type
+identifiers. Imported and preserved identities are scanned before mutation,
+complete identifier bundles are reserved on staged candidates, and equivalent
+construction orders serialize to identical package bytes.
+
+**Non-obvious choices.** OOXML category scopes remain independent and
+relationship identifiers remain local to each source part. Normalized package
+identity compares ASCII case-insensitively while retaining the first authored
+spelling. Producer relationships captured at open retain their identifiers,
+while newly authored relationships follow deterministic semantic ordering.
+
+**Deviations from the design plan.** None. Eighteen remediation and audit
+cycles closed preservation, package-identity, relationship-type, atomic-save,
+and cross-facade gaps. The final two independent microscope passes reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `equivalent_construction_orders_allocate_declared_stable_identifiers`
+and `repeated_saves_are_byte_identical_after_allocation` passed. Collision,
+scope, internal-reopen, header and footer relationship, content-type identity,
+full workspace, WASM, documentation, packaging, and advisory gates also passed.
+The integrated `/verify --full` gate passed at
+`a9c68a4d77199bd597b8b7ed74d7553776484444`.
+
+**Hash harness.** Exactly two reviewed document XML entries changed.
+`feature_showcase:word/document.xml` changed from
+`3afc92178fe9e0e932d2685988ed6cc541124d3d8c806504b429b6db78990762` to
+`7c38b482fb5611c39edaf3a7931e62a49fef81861e76e05d5039830db7cc7053`, and
+`report:word/document.xml` changed from
+`5a834b2ebe01156c082f25ea05483c135d3718beae7d80b2224e0a02f9b93365` to
+`a879be8fcb630c39824270e40b0a34dba56fb5c04010f27720da4b96df76f12a`.
+Every other entry remained unchanged, 47 of 49.
+
+**Notes for future sessions.** Keep package identity normalization and retained
+producer spelling paired. All new Word facade mutations that allocate more than
+one identifier must reserve and validate the complete bundle before publication.

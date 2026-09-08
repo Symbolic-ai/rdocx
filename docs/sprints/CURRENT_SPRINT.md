@@ -30,7 +30,7 @@ and rendering behavior.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-243 | Word-compatible fresh package profiles | L | done | - |
-| F-249 | Deterministic package identifier allocation | M | in-progress | codex |
+| F-249 | Deterministic package identifier allocation | M | done | - |
 | F-244 | Corpus settings and document properties | L | pending | - |
 | F-245 | Corpus themes, font tables, and embedded fonts | L | pending | - |
 | F-246 | Corpus style authoring | L | pending | - |
