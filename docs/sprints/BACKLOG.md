@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 9 | 0 | 15 |
+| M23, From-scratch business documents           | 24 | 9 | 1 | 14 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
 | X, Cross-cutting (opportunistic)            | 91 | 85 | 2 | 0  |
-| **Total** | **409** | **320** | **2** | **83** |
+| **Total** | **409** | **320** | **3** | **82** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -460,7 +460,7 @@ regenerated, never hand-edited.
 | F-245 | Corpus themes, font tables, and embedded fonts | S71 | L | done |
 | F-246 | Corpus style authoring | S71 | L | done |
 | F-247 | Complete numbering level and instance model | S71 | L | done |
-| F-248 | Style-linked numbering, counters, TOC, and REF | S71 | L | pending |
+| F-248 | Style-linked numbering, counters, TOC, and REF | S71 | L | in-progress |
 | F-249 | Deterministic package identifier allocation | S71 | M | done |
 | F-250 | Ordered mutable section facade | S72 | L | pending |
 | F-251 | Complete section and page geometry | S72 | L | pending |
