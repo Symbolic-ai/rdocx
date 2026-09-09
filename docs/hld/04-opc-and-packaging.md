@@ -271,22 +271,28 @@ references it. The same paragraph writer emits explicit hard breaks as run
 content. Both operations use the existing package-preserving save path, so
 unmodelled parts and relationships remain intact.
 
-Numbering state is also fail-closed at this boundary. Updating a known list
-level marks the existing numbering model for serialization. Rejecting an
-unknown list identifier or an invalid level does not create an empty numbering
-part, relationship, or content-type entry. Numbering parsers retain namespace
-declarations and compatibility attributes from modelled containers. Unknown
-level children use their `CT_Lvl` schema slots, while abstract-definition,
-instance, and root children keep insertion-aware boundaries. Mutating or adding
-a definition therefore preserves producer extensions, identifiers, templates,
-and level overrides verbatim. Identifier allocation uses the next value after
-the maximum when available and the first unoccupied value when the maximum is
-`u32::MAX`.
+Numbering state is also fail-closed at this boundary. Definition and instance
+create, update, and remove operations run on a staged candidate. They validate
+the complete numbering graph, including level ranges, placeholders, unique
+identifiers, override ownership, style references, and live paragraph
+references, before package mutation. Rejecting an invalid operation does not
+create a numbering part, relationship, content-type entry, or consumed
+identifier.
 
-Producer-defined `w:numFmt` values remain typed as their original token rather
-than being substituted with decimal numbering. Numbering serialization writes
-that token back unchanged. Layout and text exporters emit no marker for a
-format whose rendering semantics are unknown.
+Numbering parsers retain namespace declarations and compatibility attributes
+from modelled containers. Unknown level and override children use their schema
+slots, while abstract-definition, instance, and root children keep
+insertion-aware boundaries. Typed mutation therefore preserves producer
+extensions and unchanged imported overrides byte for byte. `CT_Lvl` and
+`CT_NumLvl` serialize their standard children in schema sequence. Identifier
+allocation uses the next value after the maximum when available and the first
+unoccupied value when the maximum is `u32::MAX`.
+
+Every standard `w:numFmt` token has a typed representation. Producer-defined
+values remain typed as their original token rather than being substituted with
+decimal numbering. Numbering serialization writes either form back unchanged.
+Layout and text exporters emit no marker for a format whose rendering
+semantics are not implemented.
 
 The main document reader retains root, body, and modeled-owner namespace facts
 that preserved raw descendants depend on. Save replays those declarations on

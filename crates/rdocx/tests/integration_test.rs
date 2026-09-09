@@ -4279,7 +4279,7 @@ fn rtf_writer_rejects_invalid_cell_width_boundaries() {
 }
 
 #[test]
-fn rtf_writer_diagnoses_unsupported_numbering_without_coercion() {
+fn rtf_writer_preserves_none_numbering_without_coercion() {
     let mut seed = Document::new();
     seed.add_list_definition(&[ListLevel::decimal(), ListLevel::bullet()]);
     let bytes = seed.to_bytes().unwrap();
@@ -4311,7 +4311,7 @@ fn rtf_writer_diagnoses_unsupported_numbering_without_coercion() {
     let rtf = rtf_text(written.bytes);
     assert!(!rtf.contains("\\ilvl8"), "{rtf}");
     assert!(
-        !rtf.contains("\\ls1\\ilvl0{\\plain\\f0 unsupported format}"),
+        rtf.contains("\\ls1\\ilvl0{\\plain\\f0 unsupported format}"),
         "{rtf}"
     );
     assert!(rtf.contains("{\\plain\\f0 too deep}"), "{rtf}");
@@ -4332,16 +4332,10 @@ fn rtf_writer_diagnoses_unsupported_numbering_without_coercion() {
         .collect::<Vec<_>>();
     assert_eq!(
         messages,
-        [
-            (
-                "body[0]/ppr/numPr/ilvl".to_owned(),
-                "numbering level above 8 was dropped during RTF export".to_owned(),
-            ),
-            (
-                "numbering[numId=1]/level[0]/numFmt".to_owned(),
-                "unsupported numbering format was dropped during RTF export".to_owned(),
-            ),
-        ]
+        [(
+            "body[0]/ppr/numPr/ilvl".to_owned(),
+            "numbering level above 8 was dropped during RTF export".to_owned(),
+        )]
     );
 }
 

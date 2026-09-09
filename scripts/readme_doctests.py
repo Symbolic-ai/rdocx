@@ -249,7 +249,7 @@ ROOT_CAPABILITY_CLAIMS = (
         "Styles",
         "Paragraph, character, and table style graphs have a bounded public surface",
     ),
-    ("DOCX-012", "Numbering", "Lists expose a useful subset of levels and instances"),
+    ("DOCX-012", "Numbering", "Numbering level and instance package model"),
     (
         "DOCX-017",
         "Headers and footers",

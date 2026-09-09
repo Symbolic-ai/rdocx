@@ -8981,6 +8981,8 @@ mod tests {
             nums: vec![rdocx_oxml::numbering::CT_Num {
                 num_id: 1,
                 abstract_num_id: 1,
+                abstract_num_id_raw: None,
+                level_overrides: Vec::new(),
                 extra_xml: Vec::new(),
                 extra_attributes: Vec::new(),
             }],
@@ -14601,6 +14603,8 @@ mod tests {
             nums: vec![CT_Num {
                 num_id: 1,
                 abstract_num_id: 1,
+                abstract_num_id_raw: None,
+                level_overrides: Vec::new(),
                 extra_xml: Vec::new(),
                 extra_attributes: Vec::new(),
             }],

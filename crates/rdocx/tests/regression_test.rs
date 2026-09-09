@@ -5984,46 +5984,58 @@ fn empty_modeled_controls_and_numeric_references_report_visible_content_accurate
 }
 
 #[test]
-fn producer_defined_number_formats_survive_save_and_reopen() {
-    let document_xml = wrap_word_body(
-        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
-    );
-    let numbering_xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="chicago"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#;
-    let mut seed = Document::new();
-    let mut package =
-        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
-    package.set_part("/word/document.xml", document_xml.into_bytes());
-    package.set_part("/word/numbering.xml", numbering_xml.to_vec());
-    package.content_types.add_override(
-        "/word/numbering.xml",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
-    );
-    package.get_or_create_part_rels("/word/document.xml").add(
-        oxml_opc::relationship::rel_types::NUMBERING,
-        "numbering.xml",
-    );
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    package.write_to(&mut bytes).unwrap();
+fn unrendered_number_formats_survive_without_decimal_coercion() {
+    for (format, expected_bullet, expect_rtf_diagnostic) in [
+        ("producerFormat", None, true),
+        ("chicago", Some(false), false),
+    ] {
+        let document_xml = wrap_word_body(
+            r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+        );
+        let numbering_xml = format!(
+            r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="{format}"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#
+        );
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        package.set_part("/word/numbering.xml", numbering_xml.into_bytes());
+        package.content_types.add_override(
+            "/word/numbering.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+        );
+        package.get_or_create_part_rels("/word/document.xml").add(
+            oxml_opc::relationship::rel_types::NUMBERING,
+            "numbering.xml",
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
 
-    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
-    assert_eq!(document.numbering_is_bullet(1), None);
-    assert!(!document.to_html_fragment().contains("<ol>"));
-    assert!(!document.to_markdown().contains("1. item"));
-    assert!(
-        document
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert_eq!(document.numbering_is_bullet(1), expected_bullet);
+        let html = document.to_html_fragment();
+        assert!(!html.contains("<ol>"));
+        assert!(!html.contains("<ul>"));
+        let markdown = document.to_markdown();
+        assert!(!markdown.contains("1. item"));
+        assert!(!markdown.contains("- item"));
+        let has_rtf_diagnostic = document
             .to_rtf_bytes()
             .unwrap()
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.message.contains("numbering format"))
-    );
+            .any(|diagnostic| diagnostic.message.contains("numbering format"));
+        assert_eq!(has_rtf_diagnostic, expect_rtf_diagnostic);
 
-    let saved = document.to_bytes().unwrap();
-    let reopened = Document::from_bytes(&saved).unwrap();
-    assert_eq!(reopened.numbering_is_bullet(1), None);
-    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
-    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
-    assert!(numbering.contains(r#"<w:numFmt w:val="chicago"/>"#));
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.numbering_is_bullet(1), expected_bullet);
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let numbering =
+            std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+        assert!(numbering.contains(&format!(r#"<w:numFmt w:val="{format}"/>"#)));
+    }
 }
 
 #[test]

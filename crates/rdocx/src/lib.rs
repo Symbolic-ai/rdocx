@@ -53,8 +53,10 @@ pub use content_control::ContentControlRef;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, Document, EmbeddedFont, EmbeddedFontKind,
     FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
-    ListLevelSuffix, ListNumberFormat, NumberingFormat, NumberingLevel, OutlineNode, RenderOptions,
-    UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
+    ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
+    NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
+    NumberingLevelOverride, OutlineNode, RenderOptions, UnsupportedXmlRef, WordCreationProfile,
+    WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

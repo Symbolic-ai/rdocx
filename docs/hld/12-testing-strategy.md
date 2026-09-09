@@ -211,6 +211,14 @@ decoys still fail closed. The complete `rdocx-oxml` and `rdocx` suites, public
 package dry runs, archive ceiling, and unchanged 49-entry hash harness complete
 the gate.
 
+The numbering package-model gate enumerates every standard number format and
+round-trips every public level property through `Document`. It separately
+checks typed start and replacement-level overrides, `CT_Lvl` and `CT_NumLvl`
+schema order, clean public-authored diagnostics, whole-graph atomic rejection,
+style-link inspection, and byte-exact producer-extension retention across a
+modeled update. The complete `rdocx-oxml` and `rdocx` suites, public package dry
+runs, archive ceiling, and unchanged 49-entry hash harness complete the gate.
+
 The legacy horizontal-rule reader regression classifies canonical, aliased,
 default, locally shadowed, and ancestor-bound Word, VML, and Office names by
 expanded namespace URI. Its negative matrix keeps false, numeric, missing,

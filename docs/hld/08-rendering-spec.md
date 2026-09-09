@@ -755,6 +755,14 @@ bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting earlier numbering input
 cannot leave a later generated marker stale.
 
+Word numbering input carries the complete typed level and instance package
+model, including start and replacement-level overrides. Decimal, alphabetic,
+Roman, bullet, and `none` markers retain their established layout behavior.
+Other standard formats cross the package boundary without being collapsed to
+decimal. Until their visible formatter is implemented, layout and text exports
+emit no invented marker. Restart and style-linked counter semantics belong to
+the F-248 counter owner.
+
 Relationship-resolved embedded font faces enter `LayoutInput.fonts` under the
 font-table record name. Their OOXML font key deobfuscates the package bytes
 before shaping. This explicit document input has priority over bundled fallback

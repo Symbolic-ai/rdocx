@@ -1,6 +1,6 @@
 # F-247, Complete numbering level and instance model
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-243, F-249
@@ -39,8 +39,9 @@ standard set, including `none`. Extend `ListLevel` with level text, paragraph
 style link, suffix, alignment, indentation, marker run properties, legal
 numbering, restart-after-level, and supported producer-extension values.
 
-Type and preserve `w:pStyle` in this story, but defer its standalone public
-mutation to the two-sided F-248 transaction. Add concrete public
+Type, inspect, and preserve `w:pStyle` in this story, but do not expose its
+standalone public mutation. The two-sided F-248 transaction will author both
+the style and numbering links together. Add concrete public
 `NumberingDefinition`, `NumberingInstance`, and
 `NumberingLevelOverride` values plus document create, inspect, update, and
 remove operations. Model `CT_NumLvl` overrides and start overrides directly in
@@ -65,7 +66,7 @@ extensions byte-identical.
 
 | Category | Test | Asserts |
 |---|---|---|
-| round-trip | `all_public_numbering_level_properties_survive_reopen` | Every format, text, style link, suffix, alignment, indent, marker property, legal flag, and restart value returns through the facade. |
+| round-trip | `all_public_numbering_level_properties_survive_reopen` | Every authored format, text, suffix, alignment, indent, marker property, legal flag, and restart value returns through the facade, while an imported style link remains inspectable and unchanged. |
 | round-trip | `numbering_instances_and_overrides_round_trip_in_schema_order` | Level and start overrides serialize at the correct sequence positions and reopen identically. |
 | regression | `public_authored_numbering_reports_no_unmodeled_properties` | A source-built definition and instance are fully covered by typed diagnostics. |
 | regression | `invalid_numbering_mutation_is_atomic` | Bad levels, ids, placeholders, links, and overrides return an error without changing bytes or allocation state. |
@@ -90,8 +91,13 @@ created solely through the public API.
 
 - **Any parser or serializer**. Test XSD child order, fixed write prefixes,
   prefix-tolerant reads, and byte-exact retention of every unmodeled subtree.
-- **Public API of a published crate**. State additive pre-1.0 impact and run the
-  verified workspace package dry-run with archive-size assertions.
+- **Public API of a published crate**. The new operations and value types are
+  additive pre-1.0 APIs. Completing the exhaustive `ListNumberFormat` enum and
+  extending `ListLevel` are source-breaking for exhaustive matches and struct
+  literals, and adding owned properties removes `Copy` from both public types.
+  Explicit numbering-definition level identities also change the owned
+  projection. Record that impact and run the verified workspace package dry-run
+  with archive-size assertions.
 
 ## Hash harness
 
@@ -100,14 +106,14 @@ and layout remain stable unless a caller uses the new typed properties.
 
 ## Implementation checklist
 
-- [ ] Complete standard format enums and mappings.
-- [ ] Extend typed level properties and their schema-ordered serializer.
-- [ ] Model numbering instances, level overrides, and start overrides.
-- [ ] Add public create, inspect, update, and remove operations.
-- [ ] Validate the whole candidate and preserve producer extensions.
-- [ ] Add exhaustive public round-trip and atomic-failure coverage.
-- [ ] Run the full gate and routed package dry-run.
-- [ ] Update exactly the listed HLD files.
+- [x] Complete standard format enums and mappings.
+- [x] Extend typed level properties and their schema-ordered serializer.
+- [x] Model numbering instances, level overrides, and start overrides.
+- [x] Add public create, inspect, update, and remove operations.
+- [x] Validate the whole candidate and preserve producer extensions.
+- [x] Add exhaustive public round-trip and atomic-failure coverage.
+- [x] Run the full gate and routed package dry-run.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

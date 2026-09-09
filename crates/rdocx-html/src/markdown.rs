@@ -85,17 +85,21 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 
     let level = abstract_num.levels.iter().find(|l| l.ilvl == ilvl)?;
 
-    if matches!(
-        level.num_fmt.as_ref(),
-        Some(rdocx_oxml::numbering::ST_NumberFormat::Other(_))
-    ) {
-        return None;
-    }
-
-    let is_ordered = !matches!(
-        level.num_fmt.as_ref(),
-        Some(rdocx_oxml::numbering::ST_NumberFormat::Bullet)
-    );
+    use rdocx_oxml::numbering::ST_NumberFormat;
+    let is_ordered = match level.num_fmt.as_ref() {
+        Some(ST_NumberFormat::Bullet) => false,
+        None
+        | Some(
+            ST_NumberFormat::Decimal
+            | ST_NumberFormat::UpperRoman
+            | ST_NumberFormat::LowerRoman
+            | ST_NumberFormat::UpperLetter
+            | ST_NumberFormat::LowerLetter
+            | ST_NumberFormat::Ordinal
+            | ST_NumberFormat::None,
+        ) => true,
+        Some(_) => return None,
+    };
 
     Some((is_ordered, ilvl))
 }

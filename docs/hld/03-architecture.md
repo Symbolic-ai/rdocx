@@ -396,10 +396,20 @@ does not maintain a second reader model.
 
 The low-level text reader decodes visible `w:t` and `w:delText` content
 fallibly and rejects malformed encoded values instead of publishing partial
-text. The numbering grammar retains producer-defined `w:numFmt` tokens in
-`ST_NumberFormat::Other(String)`. Its writer emits those tokens unchanged,
-while render and export consumers decline to invent a marker for an unknown
-format.
+text. The numbering grammar types the complete standard `w:numFmt` token set
+and retains producer-defined tokens in `ST_NumberFormat::Other(String)`.
+`CT_Lvl` owns typed restart, legal-numbering, template, tentative, style-link,
+indentation, marker-property, and sequence-ranked raw state. `CT_NumLvl` owns
+typed start and replacement-level overrides. Their writers emit standard and
+producer-defined values unchanged while render and export consumers decline to
+invent a marker when they do not implement a format's visible semantics.
+
+The `Document` facade projects abstract definitions and numbering instances as
+owned concrete values. Create, update, and remove operations validate level
+ranges, placeholders, identifiers, override ownership, style references, and
+the complete candidate graph before committing the staged package. Standalone
+numbering style-link mutation remains outside this owner because F-248 writes
+both sides of that cross-part invariant in one transaction.
 
 The same grammar owns the bounded `w:ffData` projection on complex legacy form
 fields and the `w:glossaryDocument` root model. Typed form values and glossary

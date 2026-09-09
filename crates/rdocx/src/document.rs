@@ -28,7 +28,9 @@ use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
 };
 use rdocx_oxml::namespace::matches_local_name;
-use rdocx_oxml::numbering::{CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
+use rdocx_oxml::numbering::{
+    CT_AbstractNum, CT_Lvl, CT_Num, CT_NumLvl, CT_Numbering, ST_LvlSuffix, ST_NumberFormat,
+};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::settings::{
     CT_Settings, CharacterSpacingControl, CompatibilitySetting, DocumentProtection,
@@ -423,6 +425,46 @@ fn xml_text_is_whitespace(text: &quick_xml::events::BytesText<'_>) -> bool {
 
 fn xml_bytes_are_whitespace(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| byte.is_ascii_whitespace())
+}
+
+fn typed_numbering_leaf_has_unmodeled(raw: &[u8], word_prefixes: &[String]) -> bool {
+    if raw_has_child_content(raw) {
+        return true;
+    }
+    let mut reader = quick_xml::Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
+                let mut value_count = 0usize;
+                for attribute in element.attributes() {
+                    let Ok(attribute) = attribute else {
+                        return true;
+                    };
+                    let name = attribute.key.as_ref();
+                    if name == b"xmlns" || name.starts_with(b"xmlns:") {
+                        continue;
+                    }
+                    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
+                        return true;
+                    };
+                    let prefix = &name[..separator];
+                    let local = &name[separator + 1..];
+                    if local != b"val"
+                        || !word_prefixes
+                            .iter()
+                            .any(|candidate| candidate.as_bytes() == prefix)
+                    {
+                        return true;
+                    }
+                    value_count += 1;
+                }
+                return value_count != 1;
+            }
+            Ok(Event::Eof) | Err(_) => return true,
+            _ => buffer.clear(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -4687,6 +4729,14 @@ impl Document {
             .collect::<HashMap<_, _>>();
         let mut occupied_nums = self.identifiers.preserved_numbering_instance_ids.clone();
         let mut occupied_abstract = self.identifiers.preserved_abstract_numbering_ids.clone();
+        let referenced_abstract = abstract_by_num.values().copied().collect::<HashSet<_>>();
+        occupied_abstract.extend(
+            numbering
+                .abstract_nums
+                .iter()
+                .map(|definition| definition.abstract_num_id)
+                .filter(|id| !referenced_abstract.contains(id)),
+        );
         let mut num_remap = HashMap::new();
         let mut abstract_remap = HashMap::new();
         for old_num in semantic_nums {
@@ -7246,15 +7296,93 @@ impl Document {
             level_text: level.lvl_text.as_deref(),
             alignment: level.lvl_jc.map(list_level_alignment),
             paragraph_style: level.p_style.as_deref(),
+            restart: level.restart.map(ListLevelRestart::from_st),
+            legal_numbering: level.legal,
+            indent_left: level
+                .ppr
+                .as_ref()
+                .and_then(|properties| properties.ind_left),
+            indent_hanging: level
+                .ppr
+                .as_ref()
+                .and_then(|properties| properties.ind_hanging),
+            indent_first_line: level
+                .ppr
+                .as_ref()
+                .and_then(|properties| properties.ind_first_line),
+            marker_properties: level.rpr.as_ref(),
+            template_code: level.template_code.as_deref(),
+            tentative: level.tentative,
             has_unmodeled_properties: !instance.extra_xml.is_empty()
                 || !instance.extra_attributes.is_empty()
+                || instance
+                    .abstract_num_id_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
+                || instance
+                    .level_overrides
+                    .iter()
+                    .any(numbering_override_has_unmodeled)
                 || !definition.extra_xml.is_empty()
                 || !definition.extra_attributes.is_empty()
-                || definition.nsid_raw.is_some()
-                || definition.tmpl_raw.is_some()
+                || definition
+                    .nsid_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
+                || definition
+                    .multi_level_type_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
+                || definition
+                    .tmpl_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
                 || !level.extra_xml.is_empty()
                 || !level.extra_attributes.is_empty()
-                || level.p_style_raw.is_some()
+                || level.start_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
+                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                })
+                || level
+                    .num_fmt_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
+                || level
+                    .p_style_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
+                || level
+                    .restart_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
+                || level.legal_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
+                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                })
+                || level.suffix_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
+                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                })
+                || level
+                    .lvl_text_raw
+                    .as_ref()
+                    .is_some_and(|(_, raw, prefixes)| {
+                        typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                    })
+                || level.lvl_jc_raw.as_ref().is_some_and(|(_, raw, prefixes)| {
+                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                })
                 || level.ppr_raw.is_some()
                 || level.rpr_raw.is_some(),
             has_paragraph_presentation: level.ppr.as_ref().is_some_and(|properties| {
@@ -8258,6 +8386,17 @@ impl Document {
 
     fn reserve_numbering_bundle(&mut self) -> Result<()> {
         self.identifiers.observe_package_graph(&self.package)?;
+        if let Some(numbering) = &self.numbering {
+            self.identifiers.abstract_numbering_ids.extend(
+                numbering
+                    .abstract_nums
+                    .iter()
+                    .map(|definition| definition.abstract_num_id),
+            );
+            self.identifiers
+                .numbering_instance_ids
+                .extend(numbering.nums.iter().map(|instance| instance.num_id));
+        }
         let part_name = match self.numbering_part_name.as_deref() {
             Some(part_name) => part_name.to_owned(),
             None => self
@@ -8482,12 +8621,20 @@ impl Document {
     /// doc.add_paragraph("third decimal").set_numbering(num_id, 1);
     /// ```
     pub fn add_list_definition(&mut self, levels: &[ListLevel]) -> u32 {
+        if levels
+            .iter()
+            .take(9)
+            .enumerate()
+            .any(|(level, value)| validate_list_level(level as u32, value).is_err())
+        {
+            return 0;
+        }
         let mut candidate = self.clone_for_staging();
         candidate
             .reserve_numbering_bundle()
             .expect("an in-memory document can allocate a numbering part");
         candidate.invalidate_layout();
-        let levels: Vec<(ST_NumberFormat, Option<u32>)> = levels
+        let formats: Vec<(ST_NumberFormat, Option<u32>)> = levels
             .iter()
             .take(9)
             .map(|level| (level.format.to_st(), level.start))
@@ -8498,9 +8645,543 @@ impl Document {
             .expect("an in-memory document cannot exhaust numbering identifiers");
         let num_id = candidate
             .ensure_numbering()
-            .add_list_with_ids(&levels, abstract_id, num_id);
+            .add_list_with_ids(&formats, abstract_id, num_id);
+        if let Some(definition) = candidate.numbering.as_mut().and_then(|numbering| {
+            numbering
+                .abstract_nums
+                .iter_mut()
+                .find(|definition| definition.abstract_num_id == abstract_id)
+        }) {
+            for (level, value) in levels.iter().take(9).enumerate() {
+                let existing = &definition.levels[level];
+                definition.levels[level] = merge_list_level(existing, value)
+                    .expect("list level was validated before staged allocation");
+            }
+        }
+        if candidate.validate_numbering_graph().is_err() {
+            return 0;
+        }
         self.commit_staged_mutation(candidate);
         num_id
+    }
+
+    /// Inspect all abstract numbering definitions in package order.
+    pub fn numbering_definitions(&self) -> Vec<NumberingDefinition> {
+        self.numbering
+            .as_ref()
+            .map(|numbering| {
+                numbering
+                    .abstract_nums
+                    .iter()
+                    .map(|definition| NumberingDefinition {
+                        id: definition.abstract_num_id,
+                        levels: definition
+                            .levels
+                            .iter()
+                            .map(|level| NumberingDefinitionLevel {
+                                level: level.ilvl,
+                                properties: list_level_from_ct(level),
+                            })
+                            .collect(),
+                        paragraph_style_links: definition
+                            .levels
+                            .iter()
+                            .map(|level| level.p_style.clone())
+                            .collect(),
+                        has_unmodeled_properties: !definition.extra_xml.is_empty()
+                            || !definition.extra_attributes.is_empty()
+                            || definition
+                                .nsid_raw
+                                .as_ref()
+                                .is_some_and(|(_, raw, prefixes)| {
+                                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                                })
+                            || definition.multi_level_type_raw.as_ref().is_some_and(
+                                |(_, raw, prefixes)| {
+                                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                                },
+                            )
+                            || definition
+                                .tmpl_raw
+                                .as_ref()
+                                .is_some_and(|(_, raw, prefixes)| {
+                                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                                })
+                            || definition.levels.iter().any(|level| {
+                                numbering_level_has_unmodeled(level)
+                                    || matches!(
+                                        level.num_fmt.as_ref(),
+                                        Some(ST_NumberFormat::Other(_))
+                                    )
+                            }),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Inspect one abstract numbering definition by identifier.
+    pub fn numbering_definition(&self, id: u32) -> Option<NumberingDefinition> {
+        self.numbering_definitions()
+            .into_iter()
+            .find(|definition| definition.id == id)
+    }
+
+    /// Inspect all numbering instances in package order.
+    pub fn numbering_instances(&self) -> Vec<NumberingInstance> {
+        self.numbering
+            .as_ref()
+            .map(|numbering| {
+                numbering
+                    .nums
+                    .iter()
+                    .map(|instance| NumberingInstance {
+                        id: instance.num_id,
+                        definition_id: instance.abstract_num_id,
+                        level_overrides: instance
+                            .level_overrides
+                            .iter()
+                            .map(|value| NumberingLevelOverride {
+                                level: value.ilvl,
+                                start: value.start_override,
+                                replacement: value.level.as_ref().map(list_level_from_ct),
+                                paragraph_style_link: value
+                                    .level
+                                    .as_ref()
+                                    .and_then(|level| level.p_style.clone()),
+                                has_unmodeled_properties: numbering_override_has_unmodeled(value),
+                            })
+                            .collect(),
+                        has_unmodeled_properties: !instance.extra_xml.is_empty()
+                            || !instance.extra_attributes.is_empty()
+                            || instance.abstract_num_id_raw.as_ref().is_some_and(
+                                |(_, raw, prefixes)| {
+                                    typed_numbering_leaf_has_unmodeled(raw, prefixes)
+                                },
+                            )
+                            || instance
+                                .level_overrides
+                                .iter()
+                                .any(numbering_override_has_unmodeled),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Inspect one numbering instance by identifier.
+    pub fn numbering_instance(&self, id: u32) -> Option<NumberingInstance> {
+        self.numbering_instances()
+            .into_iter()
+            .find(|instance| instance.id == id)
+    }
+
+    /// Create an abstract numbering definition and return its identifier.
+    pub fn add_numbering_definition(&mut self, levels: &[ListLevel]) -> Result<u32> {
+        validate_numbering_level_slice(levels)?;
+        let authored = levels
+            .iter()
+            .enumerate()
+            .map(|(level, value)| ct_level_from_list(level as u32, value))
+            .collect::<Result<Vec<_>>>()?;
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_numbering_bundle()?;
+        let id = candidate.identifiers.reserve_abstract_numbering_id()?;
+        let mut definition = CT_AbstractNum::new(id);
+        definition.multi_level_type = Some("hybridMultilevel".to_owned());
+        definition.levels = authored;
+        candidate.ensure_numbering().push_abstract_num(definition);
+        candidate.validate_numbering_graph()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    /// Replace the modeled levels of an existing abstract definition.
+    pub fn update_numbering_definition(
+        &mut self,
+        id: u32,
+        levels: &[NumberingDefinitionLevel],
+    ) -> Result<()> {
+        validate_numbering_definition_levels(levels)?;
+        let mut candidate = self.clone_for_staging();
+        let numbering = candidate
+            .numbering
+            .as_mut()
+            .ok_or_else(|| Error::Other(format!("numbering definition {id} does not exist")))?;
+        let definition = numbering
+            .abstract_nums
+            .iter_mut()
+            .find(|definition| definition.abstract_num_id == id)
+            .ok_or_else(|| Error::Other(format!("numbering definition {id} does not exist")))?;
+        if definition.levels.len() != levels.len() {
+            return Err(Error::Other(format!(
+                "numbering definition {id} updates must retain its {} levels",
+                definition.levels.len()
+            )));
+        }
+        definition.levels = definition
+            .levels
+            .iter()
+            .map(|existing| {
+                let value = levels
+                    .iter()
+                    .find(|value| value.level == existing.ilvl)
+                    .ok_or_else(|| {
+                        Error::Other(format!(
+                            "numbering definition {id} update is missing level {}",
+                            existing.ilvl
+                        ))
+                    })?;
+                merge_list_level(existing, &value.properties)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        candidate.reserve_numbering_bundle()?;
+        candidate.validate_numbering_graph()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove an abstract definition that no instance references.
+    pub fn remove_numbering_definition(&mut self, id: u32) -> Result<bool> {
+        let Some(numbering) = self.numbering.as_ref() else {
+            return Ok(false);
+        };
+        if !numbering
+            .abstract_nums
+            .iter()
+            .any(|definition| definition.abstract_num_id == id)
+        {
+            return Ok(false);
+        }
+        if let Some(instance) = numbering
+            .nums
+            .iter()
+            .find(|instance| instance.abstract_num_id == id)
+        {
+            return Err(Error::Other(format!(
+                "numbering definition {id} is referenced by instance {}",
+                instance.num_id
+            )));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .numbering
+            .as_mut()
+            .expect("checked numbering part")
+            .remove_abstract_num(id);
+        candidate.validate_numbering_graph()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(true)
+    }
+
+    /// Create a numbering instance for an existing definition.
+    pub fn add_numbering_instance(
+        &mut self,
+        definition_id: u32,
+        overrides: &[NumberingLevelOverride],
+    ) -> Result<u32> {
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_numbering_bundle()?;
+        let numbering = candidate.ensure_numbering();
+        if !numbering
+            .abstract_nums
+            .iter()
+            .any(|definition| definition.abstract_num_id == definition_id)
+        {
+            return Err(Error::Other(format!(
+                "numbering definition {definition_id} does not exist"
+            )));
+        }
+        let level_overrides = overrides
+            .iter()
+            .map(numbering_override_from_public)
+            .collect::<Result<Vec<_>>>()?;
+        let id = candidate.identifiers.reserve_numbering_instance_id()?;
+        candidate.ensure_numbering().push_num(CT_Num {
+            num_id: id,
+            abstract_num_id: definition_id,
+            abstract_num_id_raw: None,
+            level_overrides,
+            extra_xml: Vec::new(),
+            extra_attributes: Vec::new(),
+        });
+        candidate.validate_numbering_graph()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    /// Replace the definition and overrides used by an existing instance.
+    pub fn update_numbering_instance(
+        &mut self,
+        id: u32,
+        definition_id: u32,
+        overrides: &[NumberingLevelOverride],
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        let numbering = candidate
+            .numbering
+            .as_mut()
+            .ok_or_else(|| Error::Other(format!("numbering instance {id} does not exist")))?;
+        if !numbering
+            .abstract_nums
+            .iter()
+            .any(|definition| definition.abstract_num_id == definition_id)
+        {
+            return Err(Error::Other(format!(
+                "numbering definition {definition_id} does not exist"
+            )));
+        }
+        let instance = numbering
+            .nums
+            .iter_mut()
+            .find(|instance| instance.num_id == id)
+            .ok_or_else(|| Error::Other(format!("numbering instance {id} does not exist")))?;
+        let mut updated = Vec::with_capacity(overrides.len());
+        for value in overrides {
+            let existing = instance
+                .level_overrides
+                .iter()
+                .find(|existing| existing.ilvl == value.level);
+            updated.push(numbering_override_for_update(existing, value)?);
+        }
+        instance.abstract_num_id = definition_id;
+        instance.level_overrides = updated;
+        candidate.reserve_numbering_bundle()?;
+        candidate.validate_numbering_graph()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Remove an unreferenced numbering instance.
+    pub fn remove_numbering_instance(&mut self, id: u32) -> Result<bool> {
+        let Some(numbering) = self.numbering.as_ref() else {
+            return Ok(false);
+        };
+        if !numbering.nums.iter().any(|instance| instance.num_id == id) {
+            return Ok(false);
+        }
+        if self.document_references_numbering_instance(id)? {
+            return Err(Error::Other(format!(
+                "numbering instance {id} is referenced by document content"
+            )));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate
+            .numbering
+            .as_mut()
+            .expect("checked numbering part")
+            .remove_num(id);
+        candidate.validate_numbering_graph()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(true)
+    }
+
+    /// Validate the complete typed numbering graph.
+    pub fn validate_numbering_graph(&self) -> Result<()> {
+        let numbering = self.numbering.as_ref();
+        let Some(numbering) = numbering else {
+            let live_references = self.document_numbering_references()?;
+            if let Some((num_id, level)) = live_references.first() {
+                return Err(Error::Other(format!(
+                    "document content references missing numbering instance {num_id} at level {level}"
+                )));
+            }
+            return Ok(());
+        };
+        let mut definition_ids = HashSet::new();
+        for definition in &numbering.abstract_nums {
+            if !definition_ids.insert(definition.abstract_num_id) {
+                return Err(Error::Other(format!(
+                    "duplicate numbering definition id {}",
+                    definition.abstract_num_id
+                )));
+            }
+            let mut levels = HashSet::new();
+            for level in &definition.levels {
+                if level.ilvl > 8 || !levels.insert(level.ilvl) {
+                    return Err(Error::Other(format!(
+                        "numbering definition {} has invalid or duplicate level {}",
+                        definition.abstract_num_id, level.ilvl
+                    )));
+                }
+                validate_ct_numbering_level(level)?;
+                if let Some(style_id) = level.p_style.as_deref()
+                    && self.styles.get_by_id(style_id).is_none()
+                {
+                    return Err(Error::Other(format!(
+                        "numbering definition {} references missing style '{style_id}'",
+                        definition.abstract_num_id
+                    )));
+                }
+            }
+        }
+        let mut instance_ids = HashSet::new();
+        for instance in &numbering.nums {
+            if instance.num_id == 0 || !instance_ids.insert(instance.num_id) {
+                return Err(Error::Other(format!(
+                    "invalid or duplicate numbering instance id {}",
+                    instance.num_id
+                )));
+            }
+            let definition = numbering
+                .abstract_nums
+                .iter()
+                .find(|definition| definition.abstract_num_id == instance.abstract_num_id)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "numbering instance {} references missing definition {}",
+                        instance.num_id, instance.abstract_num_id
+                    ))
+                })?;
+            let mut override_levels = HashSet::new();
+            for level_override in &instance.level_overrides {
+                if level_override.ilvl > 8 || !override_levels.insert(level_override.ilvl) {
+                    return Err(Error::Other(format!(
+                        "numbering instance {} has invalid or duplicate override level {}",
+                        instance.num_id, level_override.ilvl
+                    )));
+                }
+                if !definition
+                    .levels
+                    .iter()
+                    .any(|level| level.ilvl == level_override.ilvl)
+                {
+                    return Err(Error::Other(format!(
+                        "numbering instance {} override level {} is not owned by definition {}",
+                        instance.num_id, level_override.ilvl, instance.abstract_num_id
+                    )));
+                }
+                if let Some(level) = &level_override.level {
+                    if level.ilvl != level_override.ilvl {
+                        return Err(Error::Other(format!(
+                            "numbering instance {} override level {} owns replacement level {}",
+                            instance.num_id, level_override.ilvl, level.ilvl
+                        )));
+                    }
+                    validate_ct_numbering_level(level)?;
+                    if let Some(style_id) = level.p_style.as_deref()
+                        && self.styles.get_by_id(style_id).is_none()
+                    {
+                        return Err(Error::Other(format!(
+                            "numbering instance {} override references missing style '{style_id}'",
+                            instance.num_id
+                        )));
+                    }
+                }
+            }
+        }
+        let live_references = self.document_numbering_references()?;
+        for (num_id, level) in live_references {
+            let instance = numbering
+                .nums
+                .iter()
+                .find(|instance| instance.num_id == num_id)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "document content references missing numbering instance {num_id} at level {level}"
+                    ))
+                })?;
+            let definition = numbering
+                .abstract_nums
+                .iter()
+                .find(|definition| definition.abstract_num_id == instance.abstract_num_id)
+                .expect("numbering instances were validated above");
+            if !definition
+                .levels
+                .iter()
+                .any(|candidate| candidate.ilvl == level)
+            {
+                return Err(Error::Other(format!(
+                    "document content references numbering instance {num_id} at missing level {level}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn document_numbering_references(&self) -> Result<Vec<(u32, u32)>> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let mut references = Vec::new();
+        for xml in candidate
+            .word_story_part_names()
+            .into_iter()
+            .filter_map(|part_name| {
+                candidate
+                    .package
+                    .get_part(&part_name)
+                    .filter(|bytes| identifier_xml_is_well_formed(bytes))
+            })
+        {
+            for direct in xml_paragraph_numbering_properties(xml)? {
+                let style_id = direct.style_id.as_deref().or_else(|| {
+                    candidate
+                        .styles
+                        .get_default(StyleType::Paragraph)
+                        .map(|style| style.style_id.as_str())
+                });
+                let mut effective =
+                    style::resolve_paragraph_properties(style_id, &candidate.styles);
+                candidate.apply_effective_numbering(&mut effective, Some(&direct), style_id);
+                if let Some(num_id) = effective.num_id
+                    && num_id != 0
+                {
+                    references.push((num_id, effective.num_ilvl.unwrap_or(0)));
+                }
+            }
+        }
+        Ok(references)
+    }
+
+    fn word_story_part_names(&self) -> Vec<String> {
+        let mut story_parts = vec![self.doc_part_name.clone()];
+        if let Some(relationships) = self.package.get_part_rels(&self.doc_part_name) {
+            story_parts.extend(
+                relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| {
+                        relationship_is_internal(relationship)
+                            && matches!(
+                                relationship.rel_type.as_str(),
+                                rel_types::HEADER
+                                    | rel_types::FOOTER
+                                    | rel_types::FOOTNOTES
+                                    | rel_types::ENDNOTES
+                                    | rel_types::COMMENTS
+                                    | rel_types::GLOSSARY_DOCUMENT
+                            )
+                    })
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+                    }),
+            );
+        }
+        story_parts
+    }
+
+    fn document_references_numbering_instance(&self, id: u32) -> Result<bool> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let mut owners = candidate.word_story_part_names();
+        owners.extend(candidate.styles_part_name.clone());
+        for xml in owners.into_iter().filter_map(|part_name| {
+            candidate
+                .package
+                .get_part(&part_name)
+                .filter(|bytes| identifier_xml_is_well_formed(bytes))
+        }) {
+            if xml_references_numbering_instance(xml, id)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Redefine one level (0–8) of an existing list definition, for callers
@@ -8508,14 +9189,46 @@ impl Document {
     ///
     /// Returns `false` when `num_id` is unknown or `level` is out of range.
     pub fn set_list_level(&mut self, num_id: u32, level: u32, spec: ListLevel) -> bool {
+        if validate_list_level(level, &spec).is_err() {
+            return false;
+        }
         let mut candidate = self.clone_for_staging();
         let updated = candidate.numbering.as_mut().is_some_and(|numbering| {
-            numbering.set_list_level(num_id, level, spec.format.to_st(), spec.start)
+            let Some(abstract_id) = numbering
+                .nums
+                .iter()
+                .find(|instance| instance.num_id == num_id)
+                .map(|instance| instance.abstract_num_id)
+            else {
+                return false;
+            };
+            let Some(definition) = numbering
+                .abstract_nums
+                .iter_mut()
+                .find(|definition| definition.abstract_num_id == abstract_id)
+            else {
+                return false;
+            };
+            let Some(index) = definition
+                .levels
+                .iter()
+                .position(|existing| existing.ilvl == level)
+            else {
+                return false;
+            };
+            let Ok(updated) = merge_list_level(&definition.levels[index], &spec) else {
+                return false;
+            };
+            definition.levels[index] = updated;
+            true
         });
         if updated {
             candidate
                 .reserve_numbering_bundle()
                 .expect("an in-memory document can allocate a numbering part");
+            if candidate.validate_numbering_graph().is_err() {
+                return false;
+            }
             candidate.invalidate_layout();
             self.commit_staged_mutation(candidate);
         }
@@ -8741,7 +9454,26 @@ impl Document {
                     .map(|style| style.style_id.as_str())
             });
         let mut effective = style::resolve_paragraph_properties(style_id, &self.styles);
+        self.apply_effective_numbering(&mut effective, direct, style_id);
 
+        if let Some((num_id, level)) = effective.num_id.zip(effective.num_ilvl)
+            && let Some(definition) = self.resolved_numbering_level_definition(num_id, level)
+            && let Some(properties) = &definition.ppr
+        {
+            effective.merge_from(properties);
+        }
+        if let Some(properties) = direct {
+            effective.merge_from(properties);
+        }
+        effective
+    }
+
+    fn apply_effective_numbering(
+        &self,
+        effective: &mut CT_PPr,
+        direct: Option<&CT_PPr>,
+        style_id: Option<&str>,
+    ) {
         effective.num_id = direct
             .and_then(|properties| properties.num_id)
             .or(effective.num_id);
@@ -8753,17 +9485,6 @@ impl Document {
                 .num_ilvl
                 .or_else(|| self.numbering_level_for_style(num_id, style_id));
         }
-
-        if let Some((num_id, level)) = effective.num_id.zip(effective.num_ilvl)
-            && let Some(definition) = self.numbering_definition(num_id, level)
-            && let Some(properties) = &definition.ppr
-        {
-            effective.merge_from(properties);
-        }
-        if let Some(properties) = direct {
-            effective.merge_from(properties);
-        }
-        effective
     }
 
     /// Resolve the effective run properties for the given paragraph and character styles,
@@ -8801,7 +9522,7 @@ impl Document {
         effective
     }
 
-    fn numbering_definition(
+    fn resolved_numbering_level_definition(
         &self,
         num_id: u32,
         level: u32,
@@ -12383,27 +13104,136 @@ fn section_has_layout(properties: &CT_SectPr) -> bool {
 }
 
 /// Numbering format for one level of a custom list definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListNumberFormat {
-    Bullet,
     Decimal,
-    LowerLetter,
-    UpperLetter,
-    LowerRoman,
     UpperRoman,
+    LowerRoman,
+    UpperLetter,
+    LowerLetter,
     Ordinal,
+    CardinalText,
+    OrdinalText,
+    Hex,
+    Chicago,
+    IdeographDigital,
+    JapaneseCounting,
+    Aiueo,
+    Iroha,
+    DecimalFullWidth,
+    DecimalHalfWidth,
+    JapaneseLegal,
+    JapaneseDigitalTenThousand,
+    DecimalEnclosedCircle,
+    DecimalFullWidth2,
+    AiueoFullWidth,
+    IrohaFullWidth,
+    DecimalZero,
+    Bullet,
+    Ganada,
+    Chosung,
+    DecimalEnclosedFullstop,
+    DecimalEnclosedParen,
+    DecimalEnclosedCircleChinese,
+    IdeographEnclosedCircle,
+    IdeographTraditional,
+    IdeographZodiac,
+    IdeographZodiacTraditional,
+    TaiwaneseCounting,
+    IdeographLegalTraditional,
+    TaiwaneseCountingThousand,
+    TaiwaneseDigital,
+    ChineseCounting,
+    ChineseLegalSimplified,
+    ChineseCountingThousand,
+    KoreanDigital,
+    KoreanCounting,
+    KoreanLegal,
+    KoreanDigital2,
+    Hebrew1,
+    ArabicAlpha,
+    Hebrew2,
+    ArabicAbjad,
+    HindiVowels,
+    HindiConsonants,
+    HindiNumbers,
+    HindiCounting,
+    ThaiLetters,
+    ThaiNumbers,
+    ThaiCounting,
+    VietnameseCounting,
+    NumberInDash,
+    RussianLower,
+    RussianUpper,
+    None,
+    /// A producer-defined format retained across inspection and mutation.
+    Other(String),
 }
 
 impl ListNumberFormat {
-    fn to_st(self) -> ST_NumberFormat {
+    fn to_st(&self) -> ST_NumberFormat {
         match self {
-            Self::Bullet => ST_NumberFormat::Bullet,
             Self::Decimal => ST_NumberFormat::Decimal,
-            Self::LowerLetter => ST_NumberFormat::LowerLetter,
-            Self::UpperLetter => ST_NumberFormat::UpperLetter,
-            Self::LowerRoman => ST_NumberFormat::LowerRoman,
             Self::UpperRoman => ST_NumberFormat::UpperRoman,
+            Self::LowerRoman => ST_NumberFormat::LowerRoman,
+            Self::UpperLetter => ST_NumberFormat::UpperLetter,
+            Self::LowerLetter => ST_NumberFormat::LowerLetter,
             Self::Ordinal => ST_NumberFormat::Ordinal,
+            Self::CardinalText => ST_NumberFormat::CardinalText,
+            Self::OrdinalText => ST_NumberFormat::OrdinalText,
+            Self::Hex => ST_NumberFormat::Hex,
+            Self::Chicago => ST_NumberFormat::Chicago,
+            Self::IdeographDigital => ST_NumberFormat::IdeographDigital,
+            Self::JapaneseCounting => ST_NumberFormat::JapaneseCounting,
+            Self::Aiueo => ST_NumberFormat::Aiueo,
+            Self::Iroha => ST_NumberFormat::Iroha,
+            Self::DecimalFullWidth => ST_NumberFormat::DecimalFullWidth,
+            Self::DecimalHalfWidth => ST_NumberFormat::DecimalHalfWidth,
+            Self::JapaneseLegal => ST_NumberFormat::JapaneseLegal,
+            Self::JapaneseDigitalTenThousand => ST_NumberFormat::JapaneseDigitalTenThousand,
+            Self::DecimalEnclosedCircle => ST_NumberFormat::DecimalEnclosedCircle,
+            Self::DecimalFullWidth2 => ST_NumberFormat::DecimalFullWidth2,
+            Self::AiueoFullWidth => ST_NumberFormat::AiueoFullWidth,
+            Self::IrohaFullWidth => ST_NumberFormat::IrohaFullWidth,
+            Self::DecimalZero => ST_NumberFormat::DecimalZero,
+            Self::Bullet => ST_NumberFormat::Bullet,
+            Self::Ganada => ST_NumberFormat::Ganada,
+            Self::Chosung => ST_NumberFormat::Chosung,
+            Self::DecimalEnclosedFullstop => ST_NumberFormat::DecimalEnclosedFullstop,
+            Self::DecimalEnclosedParen => ST_NumberFormat::DecimalEnclosedParen,
+            Self::DecimalEnclosedCircleChinese => ST_NumberFormat::DecimalEnclosedCircleChinese,
+            Self::IdeographEnclosedCircle => ST_NumberFormat::IdeographEnclosedCircle,
+            Self::IdeographTraditional => ST_NumberFormat::IdeographTraditional,
+            Self::IdeographZodiac => ST_NumberFormat::IdeographZodiac,
+            Self::IdeographZodiacTraditional => ST_NumberFormat::IdeographZodiacTraditional,
+            Self::TaiwaneseCounting => ST_NumberFormat::TaiwaneseCounting,
+            Self::IdeographLegalTraditional => ST_NumberFormat::IdeographLegalTraditional,
+            Self::TaiwaneseCountingThousand => ST_NumberFormat::TaiwaneseCountingThousand,
+            Self::TaiwaneseDigital => ST_NumberFormat::TaiwaneseDigital,
+            Self::ChineseCounting => ST_NumberFormat::ChineseCounting,
+            Self::ChineseLegalSimplified => ST_NumberFormat::ChineseLegalSimplified,
+            Self::ChineseCountingThousand => ST_NumberFormat::ChineseCountingThousand,
+            Self::KoreanDigital => ST_NumberFormat::KoreanDigital,
+            Self::KoreanCounting => ST_NumberFormat::KoreanCounting,
+            Self::KoreanLegal => ST_NumberFormat::KoreanLegal,
+            Self::KoreanDigital2 => ST_NumberFormat::KoreanDigital2,
+            Self::Hebrew1 => ST_NumberFormat::Hebrew1,
+            Self::ArabicAlpha => ST_NumberFormat::ArabicAlpha,
+            Self::Hebrew2 => ST_NumberFormat::Hebrew2,
+            Self::ArabicAbjad => ST_NumberFormat::ArabicAbjad,
+            Self::HindiVowels => ST_NumberFormat::HindiVowels,
+            Self::HindiConsonants => ST_NumberFormat::HindiConsonants,
+            Self::HindiNumbers => ST_NumberFormat::HindiNumbers,
+            Self::HindiCounting => ST_NumberFormat::HindiCounting,
+            Self::ThaiLetters => ST_NumberFormat::ThaiLetters,
+            Self::ThaiNumbers => ST_NumberFormat::ThaiNumbers,
+            Self::ThaiCounting => ST_NumberFormat::ThaiCounting,
+            Self::VietnameseCounting => ST_NumberFormat::VietnameseCounting,
+            Self::NumberInDash => ST_NumberFormat::NumberInDash,
+            Self::RussianLower => ST_NumberFormat::RussianLower,
+            Self::RussianUpper => ST_NumberFormat::RussianUpper,
+            Self::None => ST_NumberFormat::None,
+            Self::Other(value) => ST_NumberFormat::Other(value.clone()),
         }
     }
 }
@@ -12411,13 +13241,65 @@ impl ListNumberFormat {
 /// The numbering format reported by the read-only numbering projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumberingFormat<'a> {
-    Bullet,
     Decimal,
-    LowerLetter,
-    UpperLetter,
-    LowerRoman,
     UpperRoman,
+    LowerRoman,
+    UpperLetter,
+    LowerLetter,
     Ordinal,
+    CardinalText,
+    OrdinalText,
+    Hex,
+    Chicago,
+    IdeographDigital,
+    JapaneseCounting,
+    Aiueo,
+    Iroha,
+    DecimalFullWidth,
+    DecimalHalfWidth,
+    JapaneseLegal,
+    JapaneseDigitalTenThousand,
+    DecimalEnclosedCircle,
+    DecimalFullWidth2,
+    AiueoFullWidth,
+    IrohaFullWidth,
+    DecimalZero,
+    Bullet,
+    Ganada,
+    Chosung,
+    DecimalEnclosedFullstop,
+    DecimalEnclosedParen,
+    DecimalEnclosedCircleChinese,
+    IdeographEnclosedCircle,
+    IdeographTraditional,
+    IdeographZodiac,
+    IdeographZodiacTraditional,
+    TaiwaneseCounting,
+    IdeographLegalTraditional,
+    TaiwaneseCountingThousand,
+    TaiwaneseDigital,
+    ChineseCounting,
+    ChineseLegalSimplified,
+    ChineseCountingThousand,
+    KoreanDigital,
+    KoreanCounting,
+    KoreanLegal,
+    KoreanDigital2,
+    Hebrew1,
+    ArabicAlpha,
+    Hebrew2,
+    ArabicAbjad,
+    HindiVowels,
+    HindiConsonants,
+    HindiNumbers,
+    HindiCounting,
+    ThaiLetters,
+    ThaiNumbers,
+    ThaiCounting,
+    VietnameseCounting,
+    NumberInDash,
+    RussianLower,
+    RussianUpper,
     None,
     /// A producer-defined format value retained by rdocx.
     Other(&'a str),
@@ -12426,13 +13308,65 @@ pub enum NumberingFormat<'a> {
 impl<'a> NumberingFormat<'a> {
     fn from_st(value: &'a ST_NumberFormat) -> Self {
         match value {
-            ST_NumberFormat::Bullet => Self::Bullet,
             ST_NumberFormat::Decimal => Self::Decimal,
-            ST_NumberFormat::LowerLetter => Self::LowerLetter,
-            ST_NumberFormat::UpperLetter => Self::UpperLetter,
-            ST_NumberFormat::LowerRoman => Self::LowerRoman,
             ST_NumberFormat::UpperRoman => Self::UpperRoman,
+            ST_NumberFormat::LowerRoman => Self::LowerRoman,
+            ST_NumberFormat::UpperLetter => Self::UpperLetter,
+            ST_NumberFormat::LowerLetter => Self::LowerLetter,
             ST_NumberFormat::Ordinal => Self::Ordinal,
+            ST_NumberFormat::CardinalText => Self::CardinalText,
+            ST_NumberFormat::OrdinalText => Self::OrdinalText,
+            ST_NumberFormat::Hex => Self::Hex,
+            ST_NumberFormat::Chicago => Self::Chicago,
+            ST_NumberFormat::IdeographDigital => Self::IdeographDigital,
+            ST_NumberFormat::JapaneseCounting => Self::JapaneseCounting,
+            ST_NumberFormat::Aiueo => Self::Aiueo,
+            ST_NumberFormat::Iroha => Self::Iroha,
+            ST_NumberFormat::DecimalFullWidth => Self::DecimalFullWidth,
+            ST_NumberFormat::DecimalHalfWidth => Self::DecimalHalfWidth,
+            ST_NumberFormat::JapaneseLegal => Self::JapaneseLegal,
+            ST_NumberFormat::JapaneseDigitalTenThousand => Self::JapaneseDigitalTenThousand,
+            ST_NumberFormat::DecimalEnclosedCircle => Self::DecimalEnclosedCircle,
+            ST_NumberFormat::DecimalFullWidth2 => Self::DecimalFullWidth2,
+            ST_NumberFormat::AiueoFullWidth => Self::AiueoFullWidth,
+            ST_NumberFormat::IrohaFullWidth => Self::IrohaFullWidth,
+            ST_NumberFormat::DecimalZero => Self::DecimalZero,
+            ST_NumberFormat::Bullet => Self::Bullet,
+            ST_NumberFormat::Ganada => Self::Ganada,
+            ST_NumberFormat::Chosung => Self::Chosung,
+            ST_NumberFormat::DecimalEnclosedFullstop => Self::DecimalEnclosedFullstop,
+            ST_NumberFormat::DecimalEnclosedParen => Self::DecimalEnclosedParen,
+            ST_NumberFormat::DecimalEnclosedCircleChinese => Self::DecimalEnclosedCircleChinese,
+            ST_NumberFormat::IdeographEnclosedCircle => Self::IdeographEnclosedCircle,
+            ST_NumberFormat::IdeographTraditional => Self::IdeographTraditional,
+            ST_NumberFormat::IdeographZodiac => Self::IdeographZodiac,
+            ST_NumberFormat::IdeographZodiacTraditional => Self::IdeographZodiacTraditional,
+            ST_NumberFormat::TaiwaneseCounting => Self::TaiwaneseCounting,
+            ST_NumberFormat::IdeographLegalTraditional => Self::IdeographLegalTraditional,
+            ST_NumberFormat::TaiwaneseCountingThousand => Self::TaiwaneseCountingThousand,
+            ST_NumberFormat::TaiwaneseDigital => Self::TaiwaneseDigital,
+            ST_NumberFormat::ChineseCounting => Self::ChineseCounting,
+            ST_NumberFormat::ChineseLegalSimplified => Self::ChineseLegalSimplified,
+            ST_NumberFormat::ChineseCountingThousand => Self::ChineseCountingThousand,
+            ST_NumberFormat::KoreanDigital => Self::KoreanDigital,
+            ST_NumberFormat::KoreanCounting => Self::KoreanCounting,
+            ST_NumberFormat::KoreanLegal => Self::KoreanLegal,
+            ST_NumberFormat::KoreanDigital2 => Self::KoreanDigital2,
+            ST_NumberFormat::Hebrew1 => Self::Hebrew1,
+            ST_NumberFormat::ArabicAlpha => Self::ArabicAlpha,
+            ST_NumberFormat::Hebrew2 => Self::Hebrew2,
+            ST_NumberFormat::ArabicAbjad => Self::ArabicAbjad,
+            ST_NumberFormat::HindiVowels => Self::HindiVowels,
+            ST_NumberFormat::HindiConsonants => Self::HindiConsonants,
+            ST_NumberFormat::HindiNumbers => Self::HindiNumbers,
+            ST_NumberFormat::HindiCounting => Self::HindiCounting,
+            ST_NumberFormat::ThaiLetters => Self::ThaiLetters,
+            ST_NumberFormat::ThaiNumbers => Self::ThaiNumbers,
+            ST_NumberFormat::ThaiCounting => Self::ThaiCounting,
+            ST_NumberFormat::VietnameseCounting => Self::VietnameseCounting,
+            ST_NumberFormat::NumberInDash => Self::NumberInDash,
+            ST_NumberFormat::RussianLower => Self::RussianLower,
+            ST_NumberFormat::RussianUpper => Self::RussianUpper,
             ST_NumberFormat::None => Self::None,
             ST_NumberFormat::Other(value) => Self::Other(value),
         }
@@ -12447,6 +13381,25 @@ pub enum ListLevelSuffix {
     Nothing,
 }
 
+/// Explicit restart behavior for a numbering level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListLevelRestart {
+    /// Continue across every more-significant level.
+    Never,
+    /// Restart after the given zero-based, more-significant level.
+    After(u32),
+}
+
+impl ListLevelRestart {
+    fn from_st(value: u32) -> Self {
+        if value == 0 {
+            Self::Never
+        } else {
+            Self::After(value - 1)
+        }
+    }
+}
+
 impl ListLevelSuffix {
     fn from_st(value: ST_LvlSuffix) -> Self {
         match value {
@@ -12458,7 +13411,7 @@ impl ListLevelSuffix {
 }
 
 /// Resolved reader metadata for one numbering definition level.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NumberingLevel<'a> {
     /// The zero-based list level.
     pub level: u32,
@@ -12476,6 +13429,22 @@ pub struct NumberingLevel<'a> {
     pub alignment: Option<crate::paragraph::Alignment>,
     /// The paragraph style associated with this numbering level.
     pub paragraph_style: Option<&'a str>,
+    /// Explicit restart behavior. Absence means the OOXML default.
+    pub restart: Option<ListLevelRestart>,
+    /// Whether inherited placeholders use decimal legal numbering.
+    pub legal_numbering: Option<bool>,
+    /// Left indentation in twips.
+    pub indent_left: Option<oxml_core::Twips>,
+    /// Hanging indentation in twips.
+    pub indent_hanging: Option<oxml_core::Twips>,
+    /// First-line indentation in twips.
+    pub indent_first_line: Option<oxml_core::Twips>,
+    /// Typed properties applied only to the numbering marker.
+    pub marker_properties: Option<&'a CT_RPr>,
+    /// Producer template code from `w:tplc`.
+    pub template_code: Option<&'a str>,
+    /// Whether the producer marked this level tentative.
+    pub tentative: Option<bool>,
     /// Whether this level retains semantic facts this projection does not model.
     pub has_unmodeled_properties: bool,
     /// Whether the list item has nonstandard paragraph-level presentation.
@@ -12494,12 +13463,42 @@ fn list_level_alignment(value: ST_Jc) -> crate::paragraph::Alignment {
 }
 
 /// One level of a custom list definition for [`Document::add_list_definition`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ListLevel {
     /// Numbering format for this level.
     pub format: ListNumberFormat,
     /// Starting number (defaults to 1; ignored for bullet levels).
     pub start: Option<u32>,
+    level_text: Option<String>,
+    suffix: Option<ListLevelSuffix>,
+    alignment: Option<crate::paragraph::Alignment>,
+    indent_left: Option<oxml_core::Twips>,
+    indent_hanging: Option<oxml_core::Twips>,
+    indent_first_line: Option<oxml_core::Twips>,
+    marker_properties: Option<CT_RPr>,
+    legal_numbering: Option<bool>,
+    restart: Option<ListLevelRestart>,
+    template_code: Option<String>,
+    tentative: Option<bool>,
+    source_level: Option<Box<CT_Lvl>>,
+}
+
+impl PartialEq for ListLevel {
+    fn eq(&self, other: &Self) -> bool {
+        self.format == other.format
+            && self.start == other.start
+            && self.level_text == other.level_text
+            && self.suffix == other.suffix
+            && self.alignment == other.alignment
+            && self.indent_left == other.indent_left
+            && self.indent_hanging == other.indent_hanging
+            && self.indent_first_line == other.indent_first_line
+            && self.marker_properties == other.marker_properties
+            && self.legal_numbering == other.legal_numbering
+            && self.restart == other.restart
+            && self.template_code == other.template_code
+            && self.tentative == other.tentative
+    }
 }
 
 impl ListLevel {
@@ -12508,6 +13507,18 @@ impl ListLevel {
         ListLevel {
             format,
             start: None,
+            level_text: None,
+            suffix: None,
+            alignment: None,
+            indent_left: None,
+            indent_hanging: None,
+            indent_first_line: None,
+            marker_properties: None,
+            legal_numbering: None,
+            restart: None,
+            template_code: None,
+            tentative: None,
+            source_level: None,
         }
     }
 
@@ -12525,6 +13536,825 @@ impl ListLevel {
     pub fn start(mut self, start: u32) -> Self {
         self.start = Some(start);
         self
+    }
+
+    /// Set the level-text template or bullet glyph.
+    pub fn level_text(mut self, value: impl Into<String>) -> Self {
+        self.level_text = Some(value.into());
+        self
+    }
+
+    /// Select the content emitted after the marker.
+    pub fn suffix(mut self, value: ListLevelSuffix) -> Self {
+        self.suffix = Some(value);
+        self
+    }
+
+    /// Set marker alignment.
+    pub fn alignment(mut self, value: crate::paragraph::Alignment) -> Self {
+        self.alignment = Some(value);
+        self
+    }
+
+    /// Set left, hanging, and first-line indentation in twips.
+    pub fn indentation(
+        mut self,
+        left: Option<oxml_core::Twips>,
+        hanging: Option<oxml_core::Twips>,
+        first_line: Option<oxml_core::Twips>,
+    ) -> Self {
+        self.indent_left = left;
+        self.indent_hanging = hanging;
+        self.indent_first_line = first_line;
+        self
+    }
+
+    /// Set properties applied only to the numbering marker.
+    pub fn marker_properties(mut self, value: CT_RPr) -> Self {
+        self.marker_properties = Some(value);
+        self
+    }
+
+    /// Select legal-numbering placeholder behavior.
+    pub fn legal_numbering(mut self, value: bool) -> Self {
+        self.legal_numbering = Some(value);
+        self
+    }
+
+    /// Set explicit restart behavior.
+    pub fn restart(mut self, value: ListLevelRestart) -> Self {
+        self.restart = Some(value);
+        self
+    }
+
+    /// Set the eight-hex-digit producer template code.
+    pub fn template_code(mut self, value: impl Into<String>) -> Self {
+        self.template_code = Some(value.into());
+        self
+    }
+
+    /// Set the producer tentative flag.
+    pub fn tentative(mut self, value: bool) -> Self {
+        self.tentative = Some(value);
+        self
+    }
+
+    /// Return the configured level-text template, when one was supplied.
+    pub fn level_text_value(&self) -> Option<&str> {
+        self.level_text.as_deref()
+    }
+
+    /// Return the configured marker suffix, when one was supplied.
+    pub fn suffix_value(&self) -> Option<ListLevelSuffix> {
+        self.suffix
+    }
+
+    /// Return the configured marker alignment, when one was supplied.
+    pub fn alignment_value(&self) -> Option<crate::paragraph::Alignment> {
+        self.alignment
+    }
+
+    /// Return the configured left, hanging, and first-line indentation.
+    pub fn indentation_value(
+        &self,
+    ) -> (
+        Option<oxml_core::Twips>,
+        Option<oxml_core::Twips>,
+        Option<oxml_core::Twips>,
+    ) {
+        (
+            self.indent_left,
+            self.indent_hanging,
+            self.indent_first_line,
+        )
+    }
+
+    /// Return the configured marker run properties.
+    pub fn marker_properties_value(&self) -> Option<&CT_RPr> {
+        self.marker_properties.as_ref()
+    }
+
+    /// Return the configured legal-numbering flag.
+    pub fn legal_numbering_value(&self) -> Option<bool> {
+        self.legal_numbering
+    }
+
+    /// Return the configured restart behavior.
+    pub fn restart_value(&self) -> Option<ListLevelRestart> {
+        self.restart
+    }
+
+    /// Return the configured producer template code.
+    pub fn template_code_value(&self) -> Option<&str> {
+        self.template_code.as_deref()
+    }
+
+    /// Return the configured tentative flag.
+    pub fn tentative_value(&self) -> Option<bool> {
+        self.tentative
+    }
+}
+
+/// Owned public projection of an abstract numbering definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NumberingDefinition {
+    /// The abstract numbering definition identifier.
+    pub id: u32,
+    /// The definition's ordered levels.
+    pub levels: Vec<NumberingDefinitionLevel>,
+    /// Imported style links, indexed in parallel with `levels`.
+    pub paragraph_style_links: Vec<Option<String>>,
+    /// Whether the definition contains imported properties outside this projection.
+    pub has_unmodeled_properties: bool,
+}
+
+/// One explicitly identified level in an inspected numbering definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NumberingDefinitionLevel {
+    /// The zero-based `w:ilvl` identifier.
+    pub level: u32,
+    /// The modeled properties owned by this level.
+    pub properties: ListLevel,
+}
+
+/// One typed override owned by a numbering instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NumberingLevelOverride {
+    /// The zero-based level receiving the override.
+    pub level: u32,
+    /// An optional starting-value override.
+    pub start: Option<u32>,
+    /// An optional replacement level definition.
+    pub replacement: Option<ListLevel>,
+    /// Imported style link for the replacement level.
+    pub paragraph_style_link: Option<String>,
+    /// Whether the override contains imported properties outside this projection.
+    pub has_unmodeled_properties: bool,
+}
+
+impl NumberingLevelOverride {
+    /// Create an empty override for a zero-based level.
+    pub fn new(level: u32) -> Self {
+        Self {
+            level,
+            start: None,
+            replacement: None,
+            paragraph_style_link: None,
+            has_unmodeled_properties: false,
+        }
+    }
+
+    /// Set the override's starting value.
+    pub fn start(mut self, value: u32) -> Self {
+        self.start = Some(value);
+        self
+    }
+
+    /// Replace the level definition for this instance.
+    pub fn replacement(mut self, value: ListLevel) -> Self {
+        self.replacement = Some(value);
+        self
+    }
+}
+
+/// Owned public projection of one numbering instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NumberingInstance {
+    /// The numbering instance identifier used by document paragraphs.
+    pub id: u32,
+    /// The referenced abstract numbering definition identifier.
+    pub definition_id: u32,
+    /// Typed overrides applied by this instance.
+    pub level_overrides: Vec<NumberingLevelOverride>,
+    /// Whether the instance contains imported properties outside this projection.
+    pub has_unmodeled_properties: bool,
+}
+
+fn list_alignment_to_st(value: crate::paragraph::Alignment) -> ST_Jc {
+    match value {
+        crate::paragraph::Alignment::Left => ST_Jc::Left,
+        crate::paragraph::Alignment::Center => ST_Jc::Center,
+        crate::paragraph::Alignment::Right => ST_Jc::Right,
+        crate::paragraph::Alignment::Justify => ST_Jc::Both,
+    }
+}
+
+fn list_level_restart_to_st(value: ListLevelRestart) -> Option<u32> {
+    match value {
+        ListLevelRestart::Never => Some(0),
+        ListLevelRestart::After(level) => level.checked_add(1),
+    }
+}
+
+fn list_level_from_ct(level: &CT_Lvl) -> ListLevel {
+    let mut value = list_level_values_from_ct(level);
+    value.source_level = Some(Box::new(level.clone()));
+    value
+}
+
+fn list_level_values_from_ct(level: &CT_Lvl) -> ListLevel {
+    ListLevel {
+        format: level
+            .num_fmt
+            .clone()
+            .map(list_number_format_from_st)
+            .unwrap_or(ListNumberFormat::Decimal),
+        start: level.start,
+        level_text: level.lvl_text.clone(),
+        suffix: level.suffix.map(ListLevelSuffix::from_st),
+        alignment: level.lvl_jc.map(list_level_alignment),
+        indent_left: level.ppr.as_ref().and_then(|value| value.ind_left),
+        indent_hanging: level.ppr.as_ref().and_then(|value| value.ind_hanging),
+        indent_first_line: level.ppr.as_ref().and_then(|value| value.ind_first_line),
+        marker_properties: level.rpr.clone(),
+        legal_numbering: level.legal,
+        restart: level.restart.map(ListLevelRestart::from_st),
+        template_code: level.template_code.clone(),
+        tentative: level.tentative,
+        source_level: None,
+    }
+}
+
+pub(crate) fn list_number_format_from_st(value: ST_NumberFormat) -> ListNumberFormat {
+    // Both enums intentionally have the same standard token set.
+    match value.to_str() {
+        "decimal" => ListNumberFormat::Decimal,
+        "upperRoman" => ListNumberFormat::UpperRoman,
+        "lowerRoman" => ListNumberFormat::LowerRoman,
+        "upperLetter" => ListNumberFormat::UpperLetter,
+        "lowerLetter" => ListNumberFormat::LowerLetter,
+        "ordinal" => ListNumberFormat::Ordinal,
+        "cardinalText" => ListNumberFormat::CardinalText,
+        "ordinalText" => ListNumberFormat::OrdinalText,
+        "hex" => ListNumberFormat::Hex,
+        "chicago" => ListNumberFormat::Chicago,
+        "ideographDigital" => ListNumberFormat::IdeographDigital,
+        "japaneseCounting" => ListNumberFormat::JapaneseCounting,
+        "Aiueo" => ListNumberFormat::Aiueo,
+        "Iroha" => ListNumberFormat::Iroha,
+        "decimalFullWidth" => ListNumberFormat::DecimalFullWidth,
+        "decimalHalfWidth" => ListNumberFormat::DecimalHalfWidth,
+        "japaneseLegal" => ListNumberFormat::JapaneseLegal,
+        "japaneseDigitalTenThousand" => ListNumberFormat::JapaneseDigitalTenThousand,
+        "decimalEnclosedCircle" => ListNumberFormat::DecimalEnclosedCircle,
+        "decimalFullWidth2" => ListNumberFormat::DecimalFullWidth2,
+        "aiueoFullWidth" => ListNumberFormat::AiueoFullWidth,
+        "irohaFullWidth" => ListNumberFormat::IrohaFullWidth,
+        "decimalZero" => ListNumberFormat::DecimalZero,
+        "bullet" => ListNumberFormat::Bullet,
+        "ganada" => ListNumberFormat::Ganada,
+        "chosung" => ListNumberFormat::Chosung,
+        "decimalEnclosedFullstop" => ListNumberFormat::DecimalEnclosedFullstop,
+        "decimalEnclosedParen" => ListNumberFormat::DecimalEnclosedParen,
+        "decimalEnclosedCircleChinese" => ListNumberFormat::DecimalEnclosedCircleChinese,
+        "ideographEnclosedCircle" => ListNumberFormat::IdeographEnclosedCircle,
+        "ideographTraditional" => ListNumberFormat::IdeographTraditional,
+        "ideographZodiac" => ListNumberFormat::IdeographZodiac,
+        "ideographZodiacTraditional" => ListNumberFormat::IdeographZodiacTraditional,
+        "taiwaneseCounting" => ListNumberFormat::TaiwaneseCounting,
+        "ideographLegalTraditional" => ListNumberFormat::IdeographLegalTraditional,
+        "taiwaneseCountingThousand" => ListNumberFormat::TaiwaneseCountingThousand,
+        "taiwaneseDigital" => ListNumberFormat::TaiwaneseDigital,
+        "chineseCounting" => ListNumberFormat::ChineseCounting,
+        "chineseLegalSimplified" => ListNumberFormat::ChineseLegalSimplified,
+        "chineseCountingThousand" => ListNumberFormat::ChineseCountingThousand,
+        "koreanDigital" => ListNumberFormat::KoreanDigital,
+        "koreanCounting" => ListNumberFormat::KoreanCounting,
+        "koreanLegal" => ListNumberFormat::KoreanLegal,
+        "koreanDigital2" => ListNumberFormat::KoreanDigital2,
+        "hebrew1" => ListNumberFormat::Hebrew1,
+        "arabicAlpha" => ListNumberFormat::ArabicAlpha,
+        "hebrew2" => ListNumberFormat::Hebrew2,
+        "arabicAbjad" => ListNumberFormat::ArabicAbjad,
+        "hindiVowels" => ListNumberFormat::HindiVowels,
+        "hindiConsonants" => ListNumberFormat::HindiConsonants,
+        "hindiNumbers" => ListNumberFormat::HindiNumbers,
+        "hindiCounting" => ListNumberFormat::HindiCounting,
+        "thaiLetters" => ListNumberFormat::ThaiLetters,
+        "thaiNumbers" => ListNumberFormat::ThaiNumbers,
+        "thaiCounting" => ListNumberFormat::ThaiCounting,
+        "vietnameseCounting" => ListNumberFormat::VietnameseCounting,
+        "numberInDash" => ListNumberFormat::NumberInDash,
+        "russianLower" => ListNumberFormat::RussianLower,
+        "russianUpper" => ListNumberFormat::RussianUpper,
+        "none" => ListNumberFormat::None,
+        other => ListNumberFormat::Other(other.to_owned()),
+    }
+}
+
+fn numbering_level_has_unmodeled(level: &CT_Lvl) -> bool {
+    let unprojected_paragraph_properties = level.ppr.as_ref().is_some_and(|properties| {
+        let projected = CT_PPr {
+            ind_left: properties.ind_left,
+            ind_hanging: properties.ind_hanging,
+            ind_first_line: properties.ind_first_line,
+            ..CT_PPr::default()
+        };
+        properties != &projected
+    });
+    !level.extra_xml.is_empty()
+        || !level.extra_attributes.is_empty()
+        || level
+            .start_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level
+            .num_fmt_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level
+            .p_style_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level
+            .restart_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level
+            .legal_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level
+            .suffix_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level
+            .lvl_text_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level
+            .lvl_jc_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || level.ppr_raw.is_some()
+        || level.rpr_raw.is_some()
+        || unprojected_paragraph_properties
+        || matches!(level.num_fmt.as_ref(), Some(ST_NumberFormat::Other(_)))
+}
+
+fn numbering_override_has_unmodeled(value: &CT_NumLvl) -> bool {
+    !value.extra_xml.is_empty()
+        || !value.extra_attributes.is_empty()
+        || value
+            .start_override_raw
+            .as_ref()
+            .is_some_and(|(_, raw, prefixes)| typed_numbering_leaf_has_unmodeled(raw, prefixes))
+        || value
+            .level
+            .as_ref()
+            .is_some_and(numbering_level_has_unmodeled)
+}
+
+fn validate_list_level(level: u32, value: &ListLevel) -> Result<()> {
+    if level > 8 {
+        return Err(Error::Other(format!(
+            "numbering level {level} is outside the supported range 0 through 8"
+        )));
+    }
+    if value.indent_hanging.is_some() && value.indent_first_line.is_some() {
+        return Err(Error::Other(format!(
+            "numbering level {level} cannot have both hanging and first-line indentation"
+        )));
+    }
+    if let Some(ListLevelRestart::After(owner)) = value.restart
+        && owner >= level
+    {
+        return Err(Error::Other(format!(
+            "numbering level {level} cannot restart after level {owner}"
+        )));
+    }
+    if let Some(template_code) = &value.template_code
+        && (template_code.len() != 8 || !template_code.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(Error::Other(format!(
+            "numbering level {level} template code must contain eight hexadecimal digits"
+        )));
+    }
+    if let Some(text) = &value.level_text {
+        let bytes = text.as_bytes();
+        let mut position = 0usize;
+        while position < bytes.len() {
+            if bytes[position] != b'%' {
+                position += 1;
+                continue;
+            }
+            let Some(next) = bytes.get(position + 1).copied() else {
+                return Err(Error::Other(format!(
+                    "numbering level {level} has an incomplete placeholder"
+                )));
+            };
+            if next == b'%' {
+                position += 2;
+                continue;
+            }
+            if !(b'1'..=b'9').contains(&next) || u32::from(next - b'1') > level {
+                return Err(Error::Other(format!(
+                    "numbering level {level} has an invalid placeholder %{}",
+                    char::from(next)
+                )));
+            }
+            position += 2;
+        }
+    }
+    Ok(())
+}
+
+fn default_list_level_text(level: u32, format: &ListNumberFormat) -> String {
+    const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
+    match format {
+        ListNumberFormat::Bullet => BULLETS[level as usize % BULLETS.len()].to_owned(),
+        ListNumberFormat::None => String::new(),
+        _ => format!("%{}.", level + 1),
+    }
+}
+
+fn ct_level_from_list(level: u32, value: &ListLevel) -> Result<CT_Lvl> {
+    validate_list_level(level, value)?;
+    let mut result = CT_Lvl::new(level);
+    result.template_code.clone_from(&value.template_code);
+    result.tentative = value.tentative;
+    result.start = Some(value.start.unwrap_or(1));
+    result.num_fmt = Some(value.format.to_st());
+    result.restart = value.restart.and_then(list_level_restart_to_st);
+    result.legal = value.legal_numbering;
+    result.suffix = value.suffix.map(|suffix| match suffix {
+        ListLevelSuffix::Tab => ST_LvlSuffix::Tab,
+        ListLevelSuffix::Space => ST_LvlSuffix::Space,
+        ListLevelSuffix::Nothing => ST_LvlSuffix::Nothing,
+    });
+    result.lvl_text = Some(
+        value
+            .level_text
+            .clone()
+            .unwrap_or_else(|| default_list_level_text(level, &value.format)),
+    );
+    result.lvl_jc = Some(
+        value
+            .alignment
+            .map(list_alignment_to_st)
+            .unwrap_or(ST_Jc::Left),
+    );
+    let default_left = (level + 1)
+        .checked_mul(720)
+        .and_then(|value| i32::try_from(value).ok())
+        .map(oxml_core::Twips)
+        .ok_or_else(|| Error::Other(format!("numbering level {level} indentation overflow")))?;
+    result.ppr = Some(CT_PPr {
+        ind_left: Some(value.indent_left.unwrap_or(default_left)),
+        ind_hanging: Some(value.indent_hanging.unwrap_or(oxml_core::Twips(360))),
+        ind_first_line: value.indent_first_line,
+        ..CT_PPr::default()
+    });
+    if value.indent_first_line.is_some() && value.indent_hanging.is_none() {
+        result
+            .ppr
+            .as_mut()
+            .expect("created paragraph properties")
+            .ind_hanging = None;
+    }
+    result.rpr.clone_from(&value.marker_properties);
+    Ok(result)
+}
+
+fn merge_list_level(existing: &CT_Lvl, value: &ListLevel) -> Result<CT_Lvl> {
+    if value.source_level.as_deref() == Some(existing) {
+        let source = list_level_values_from_ct(existing);
+        let mut merged = existing.clone();
+        if value.format != source.format {
+            merged.num_fmt = Some(value.format.to_st());
+        }
+        if value.start != source.start {
+            merged.start = value.start;
+        }
+        if value.level_text != source.level_text {
+            merged.lvl_text.clone_from(&value.level_text);
+        }
+        if value.suffix != source.suffix {
+            merged.suffix = value.suffix.map(|suffix| match suffix {
+                ListLevelSuffix::Tab => ST_LvlSuffix::Tab,
+                ListLevelSuffix::Space => ST_LvlSuffix::Space,
+                ListLevelSuffix::Nothing => ST_LvlSuffix::Nothing,
+            });
+        }
+        if value.alignment != source.alignment {
+            merged.lvl_jc = value.alignment.map(list_alignment_to_st);
+        }
+        if value.restart != source.restart {
+            merged.restart = value.restart.and_then(list_level_restart_to_st);
+        }
+        if value.legal_numbering != source.legal_numbering {
+            merged.legal = value.legal_numbering;
+        }
+        if value.template_code != source.template_code {
+            merged.template_code.clone_from(&value.template_code);
+        }
+        if value.tentative != source.tentative {
+            merged.tentative = value.tentative;
+        }
+        if value.indentation_value() != source.indentation_value() {
+            let properties = merged.ppr.get_or_insert_with(CT_PPr::default);
+            properties.ind_left = value.indent_left;
+            properties.ind_hanging = value.indent_hanging;
+            properties.ind_first_line = value.indent_first_line;
+        }
+        if value.marker_properties != source.marker_properties {
+            merged.rpr.clone_from(&value.marker_properties);
+        }
+        return Ok(merged);
+    }
+    let mut authored = ct_level_from_list(existing.ilvl, value)?;
+    authored.start_raw.clone_from(&existing.start_raw);
+    authored.num_fmt_raw.clone_from(&existing.num_fmt_raw);
+    authored.p_style.clone_from(&existing.p_style);
+    authored.p_style_raw.clone_from(&existing.p_style_raw);
+    authored.restart_raw.clone_from(&existing.restart_raw);
+    authored.legal_raw.clone_from(&existing.legal_raw);
+    authored.suffix_raw.clone_from(&existing.suffix_raw);
+    authored.lvl_text_raw.clone_from(&existing.lvl_text_raw);
+    authored.lvl_jc_raw.clone_from(&existing.lvl_jc_raw);
+    authored.extra_xml.clone_from(&existing.extra_xml);
+    authored
+        .extra_attributes
+        .clone_from(&existing.extra_attributes);
+    authored.ppr_raw.clone_from(&existing.ppr_raw);
+    authored.rpr_raw.clone_from(&existing.rpr_raw);
+    Ok(authored)
+}
+
+fn reject_conflicting_raw_level_attribute(level: &CT_Lvl, local_name: &[u8]) -> Result<()> {
+    if level.extra_attributes.iter().any(|(name, _)| {
+        name.as_bytes()
+            .rsplit(|byte| *byte == b':')
+            .next()
+            .is_some_and(|local| local == local_name)
+    }) {
+        return Err(Error::Other(format!(
+            "cannot replace unmodeled numbering level attribute '{}'",
+            String::from_utf8_lossy(local_name)
+        )));
+    }
+    Ok(())
+}
+
+fn validate_numbering_level_slice(levels: &[ListLevel]) -> Result<()> {
+    if levels.is_empty() || levels.len() > 9 {
+        return Err(Error::Other(format!(
+            "numbering definitions require 1 through 9 levels, received {}",
+            levels.len()
+        )));
+    }
+    for (level, value) in levels.iter().enumerate() {
+        validate_list_level(level as u32, value)?;
+    }
+    Ok(())
+}
+
+fn validate_numbering_definition_levels(levels: &[NumberingDefinitionLevel]) -> Result<()> {
+    if levels.is_empty() || levels.len() > 9 {
+        return Err(Error::Other(format!(
+            "numbering definitions require 1 through 9 levels, received {}",
+            levels.len()
+        )));
+    }
+    let mut seen = HashSet::new();
+    for value in levels {
+        if !seen.insert(value.level) {
+            return Err(Error::Other(format!(
+                "numbering definition contains duplicate level {}",
+                value.level
+            )));
+        }
+        validate_list_level(value.level, &value.properties)?;
+    }
+    Ok(())
+}
+
+fn validate_ct_numbering_level(level: &CT_Lvl) -> Result<()> {
+    if level.template_code.is_some() {
+        reject_conflicting_raw_level_attribute(level, b"tplc")?;
+    }
+    if level.tentative.is_some() {
+        reject_conflicting_raw_level_attribute(level, b"tentative")?;
+    }
+    validate_list_level(level.ilvl, &list_level_from_ct(level))
+}
+
+fn numbering_override_from_public(value: &NumberingLevelOverride) -> Result<CT_NumLvl> {
+    if value.level > 8 {
+        return Err(Error::Other(format!(
+            "numbering override level {} is outside the supported range 0 through 8",
+            value.level
+        )));
+    }
+    if value.paragraph_style_link.is_some() {
+        return Err(Error::Other(
+            "standalone numbering style-link mutation is deferred to F-248".to_owned(),
+        ));
+    }
+    if value.has_unmodeled_properties {
+        return Err(Error::Other(
+            "a new numbering override cannot claim imported unmodeled properties".to_owned(),
+        ));
+    }
+    let mut result = CT_NumLvl::new(value.level);
+    result.start_override = value.start;
+    result.level = value
+        .replacement
+        .as_ref()
+        .map(|level| ct_level_from_list(value.level, level))
+        .transpose()?;
+    Ok(result)
+}
+
+fn numbering_override_for_update(
+    existing: Option<&CT_NumLvl>,
+    value: &NumberingLevelOverride,
+) -> Result<CT_NumLvl> {
+    let Some(existing) = existing else {
+        return numbering_override_from_public(value);
+    };
+    let existing_style = existing
+        .level
+        .as_ref()
+        .and_then(|level| level.p_style.as_deref());
+    if value.paragraph_style_link.as_deref() != existing_style {
+        return Err(Error::Other(
+            "standalone numbering style-link mutation is deferred to F-248".to_owned(),
+        ));
+    }
+    let mut result = existing.clone();
+    result.start_override = value.start;
+    result.level = match (&existing.level, &value.replacement) {
+        (Some(existing), Some(replacement)) => Some(merge_list_level(existing, replacement)?),
+        (None, Some(replacement)) => Some(ct_level_from_list(value.level, replacement)?),
+        (_, None) => None,
+    };
+    Ok(result)
+}
+
+fn xml_paragraph_numbering_properties(xml: &[u8]) -> Result<Vec<CT_PPr>> {
+    struct ParagraphState {
+        depth: usize,
+        ppr_depth: Option<usize>,
+        numpr_depth: Option<usize>,
+        properties: CT_PPr,
+    }
+
+    fn word_value(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> Result<Option<String>> {
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+            if matches!(
+                namespace,
+                ResolveResult::Bound(value) if value.as_ref() == WORD_NAMESPACE.as_bytes()
+            ) && local.as_ref() == b"val"
+            {
+                return attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                    .map(|value| Some(value.into_owned()))
+                    .map_err(|error| Error::Other(error.to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    fn apply_leaf(
+        reader: &NsReader<&[u8]>,
+        state: &mut ParagraphState,
+        depth: usize,
+        local_name: &[u8],
+        element: &BytesStart<'_>,
+    ) -> Result<()> {
+        if local_name == b"pStyle" && state.ppr_depth == depth.checked_sub(1) {
+            state.properties.style_id = word_value(reader, element)?;
+        } else if state.numpr_depth == depth.checked_sub(1) {
+            if local_name == b"numId" {
+                state.properties.num_id =
+                    word_value(reader, element)?.and_then(|value| value.parse::<u32>().ok());
+            } else if local_name == b"ilvl" {
+                state.properties.num_ilvl =
+                    word_value(reader, element)?.and_then(|value| value.parse::<u32>().ok());
+            }
+        }
+        Ok(())
+    }
+
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0_usize;
+    let mut paragraphs = Vec::new();
+    let mut result = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        match event {
+            Event::Start(ref element) => {
+                let is_word = matches!(
+                    namespace,
+                    ResolveResult::Bound(value)
+                        if value.as_ref() == WORD_NAMESPACE.as_bytes()
+                );
+                let local_name = element.local_name();
+                if is_word && local_name.as_ref() == b"p" {
+                    paragraphs.push(ParagraphState {
+                        depth,
+                        ppr_depth: None,
+                        numpr_depth: None,
+                        properties: CT_PPr::default(),
+                    });
+                } else if is_word && let Some(state) = paragraphs.last_mut() {
+                    if local_name.as_ref() == b"pPr" && depth == state.depth + 1 {
+                        state.ppr_depth = Some(depth);
+                    } else if local_name.as_ref() == b"numPr"
+                        && state.ppr_depth == depth.checked_sub(1)
+                    {
+                        state.numpr_depth = Some(depth);
+                    } else {
+                        apply_leaf(&reader, state, depth, local_name.as_ref(), element)?;
+                    }
+                }
+                depth += 1;
+            }
+            Event::Empty(ref element) => {
+                let is_word = matches!(
+                    namespace,
+                    ResolveResult::Bound(value)
+                        if value.as_ref() == WORD_NAMESPACE.as_bytes()
+                );
+                let local_name = element.local_name();
+                if is_word && local_name.as_ref() == b"p" {
+                    result.push(CT_PPr::default());
+                } else if is_word && let Some(state) = paragraphs.last_mut() {
+                    apply_leaf(&reader, state, depth, local_name.as_ref(), element)?;
+                }
+            }
+            Event::End(ref element) => {
+                depth = depth.saturating_sub(1);
+                let is_word = matches!(
+                    namespace,
+                    ResolveResult::Bound(value)
+                        if value.as_ref() == WORD_NAMESPACE.as_bytes()
+                );
+                if is_word && element.local_name().as_ref() == b"p" {
+                    if let Some(paragraph) = paragraphs.pop_if(|state| state.depth == depth) {
+                        result.push(paragraph.properties);
+                    }
+                } else if let Some(state) = paragraphs.last_mut() {
+                    if state.numpr_depth == Some(depth) {
+                        state.numpr_depth = None;
+                    }
+                    if state.ppr_depth == Some(depth) {
+                        state.ppr_depth = None;
+                        state.numpr_depth = None;
+                    }
+                }
+            }
+            Event::Eof => return Ok(result),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn xml_references_numbering_instance(xml: &[u8], id: u32) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element)
+                if matches!(
+                    namespace,
+                    ResolveResult::Bound(value)
+                        if value.as_ref() == WORD_NAMESPACE.as_bytes()
+                ) && element.local_name().as_ref() == b"numId" =>
+            {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+                    let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                    if !matches!(
+                        namespace,
+                        ResolveResult::Bound(value)
+                            if value.as_ref() == WORD_NAMESPACE.as_bytes()
+                    ) || local.as_ref() != b"val"
+                    {
+                        continue;
+                    }
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(error.to_string()))?;
+                    if value.parse::<u32>().ok() == Some(id) {
+                        return Ok(true);
+                    }
+                }
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 
@@ -12867,6 +14697,15 @@ mod tests {
     const FX087_PAGES_BUILD: &str = "7044.0.273";
     const FX087_CANDIDATE_SHA256: &str =
         "54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9";
+
+    fn replace_numbering_xml(document: &mut Document, xml: Vec<u8>) -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        package.set_part(DEFAULT_NUMBERING_PART, xml);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        bytes.into_inner()
+    }
 
     #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
     fn signature_fixture(name: &str) -> Vec<u8> {
@@ -19724,6 +21563,844 @@ mod tests {
     }
 
     #[test]
+    fn all_public_numbering_level_properties_survive_reopen() {
+        let formats = [
+            ListNumberFormat::Decimal,
+            ListNumberFormat::UpperRoman,
+            ListNumberFormat::LowerRoman,
+            ListNumberFormat::UpperLetter,
+            ListNumberFormat::LowerLetter,
+            ListNumberFormat::Ordinal,
+            ListNumberFormat::CardinalText,
+            ListNumberFormat::OrdinalText,
+            ListNumberFormat::Hex,
+            ListNumberFormat::Chicago,
+            ListNumberFormat::IdeographDigital,
+            ListNumberFormat::JapaneseCounting,
+            ListNumberFormat::Aiueo,
+            ListNumberFormat::Iroha,
+            ListNumberFormat::DecimalFullWidth,
+            ListNumberFormat::DecimalHalfWidth,
+            ListNumberFormat::JapaneseLegal,
+            ListNumberFormat::JapaneseDigitalTenThousand,
+            ListNumberFormat::DecimalEnclosedCircle,
+            ListNumberFormat::DecimalFullWidth2,
+            ListNumberFormat::AiueoFullWidth,
+            ListNumberFormat::IrohaFullWidth,
+            ListNumberFormat::DecimalZero,
+            ListNumberFormat::Bullet,
+            ListNumberFormat::Ganada,
+            ListNumberFormat::Chosung,
+            ListNumberFormat::DecimalEnclosedFullstop,
+            ListNumberFormat::DecimalEnclosedParen,
+            ListNumberFormat::DecimalEnclosedCircleChinese,
+            ListNumberFormat::IdeographEnclosedCircle,
+            ListNumberFormat::IdeographTraditional,
+            ListNumberFormat::IdeographZodiac,
+            ListNumberFormat::IdeographZodiacTraditional,
+            ListNumberFormat::TaiwaneseCounting,
+            ListNumberFormat::IdeographLegalTraditional,
+            ListNumberFormat::TaiwaneseCountingThousand,
+            ListNumberFormat::TaiwaneseDigital,
+            ListNumberFormat::ChineseCounting,
+            ListNumberFormat::ChineseLegalSimplified,
+            ListNumberFormat::ChineseCountingThousand,
+            ListNumberFormat::KoreanDigital,
+            ListNumberFormat::KoreanCounting,
+            ListNumberFormat::KoreanLegal,
+            ListNumberFormat::KoreanDigital2,
+            ListNumberFormat::Hebrew1,
+            ListNumberFormat::ArabicAlpha,
+            ListNumberFormat::Hebrew2,
+            ListNumberFormat::ArabicAbjad,
+            ListNumberFormat::HindiVowels,
+            ListNumberFormat::HindiConsonants,
+            ListNumberFormat::HindiNumbers,
+            ListNumberFormat::HindiCounting,
+            ListNumberFormat::ThaiLetters,
+            ListNumberFormat::ThaiNumbers,
+            ListNumberFormat::ThaiCounting,
+            ListNumberFormat::VietnameseCounting,
+            ListNumberFormat::NumberInDash,
+            ListNumberFormat::RussianLower,
+            ListNumberFormat::RussianUpper,
+            ListNumberFormat::None,
+        ];
+        let mut document = Document::new();
+        for chunk in formats.chunks(9) {
+            let levels = chunk
+                .iter()
+                .cloned()
+                .map(ListLevel::new)
+                .collect::<Vec<_>>();
+            document.add_numbering_definition(&levels).unwrap();
+        }
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let reopened_formats = reopened
+            .numbering_definitions()
+            .into_iter()
+            .flat_map(|definition| definition.levels)
+            .map(|level| level.properties.format)
+            .collect::<Vec<_>>();
+        assert_eq!(reopened_formats, formats);
+
+        let mut document = Document::new();
+        let levels = [
+            ListLevel::decimal(),
+            ListLevel::new(ListNumberFormat::LowerRoman)
+                .start(4)
+                .level_text("%1.%2)")
+                .suffix(ListLevelSuffix::Space)
+                .alignment(Alignment::Center)
+                .indentation(Some(Twips(1440)), Some(Twips(240)), None)
+                .marker_properties(CT_RPr {
+                    bold: Some(true),
+                    color: Some("2B6FE3".to_owned()),
+                    ..CT_RPr::default()
+                })
+                .legal_numbering(true)
+                .restart(ListLevelRestart::After(0))
+                .template_code("A1B2C3D4")
+                .tentative(false),
+        ];
+        let definition_id = document.add_numbering_definition(&levels).unwrap();
+        let instance_id = document.add_numbering_instance(definition_id, &[]).unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let level = reopened.numbering_level(instance_id, 1).unwrap();
+        assert_eq!(level.format, NumberingFormat::LowerRoman);
+        assert_eq!(level.start, 4);
+        assert_eq!(level.level_text, Some("%1.%2)"));
+        assert_eq!(level.suffix, ListLevelSuffix::Space);
+        assert_eq!(level.alignment, Some(Alignment::Center));
+        assert_eq!(level.indent_left, Some(Twips(1440)));
+        assert_eq!(level.indent_hanging, Some(Twips(240)));
+        assert_eq!(level.legal_numbering, Some(true));
+        assert_eq!(level.restart, Some(ListLevelRestart::After(0)));
+        assert_eq!(level.template_code, Some("A1B2C3D4"));
+        assert_eq!(level.tentative, Some(false));
+        assert_eq!(level.marker_properties.unwrap().bold, Some(true));
+        assert_eq!(
+            level.marker_properties.unwrap().color.as_deref(),
+            Some("2B6FE3")
+        );
+
+        let mut imported = Document::new();
+        let definition_id = imported
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance_id = imported.add_numbering_instance(definition_id, &[]).unwrap();
+        let xml = format!(
+            r#"<n:numbering xmlns:n="{WORD_NAMESPACE}"><n:abstractNum n:abstractNumId="{definition_id}"><n:lvl n:ilvl="0"><n:start n:val="1"/><n:numFmt n:val="decimal"/><n:pStyle n:val="Normal"></n:pStyle><n:lvlText n:val="%1."/></n:lvl></n:abstractNum><n:num n:numId="{instance_id}"><n:abstractNumId n:val="{definition_id}"/></n:num></n:numbering>"#
+        );
+        let bytes = replace_numbering_xml(&mut imported, xml.into_bytes());
+        let imported = Document::from_bytes(&bytes).unwrap();
+        let definition = imported.numbering_definition(definition_id).unwrap();
+        assert_eq!(
+            definition.paragraph_style_links,
+            vec![Some("Normal".to_owned())]
+        );
+        assert!(!definition.has_unmodeled_properties);
+        let level = imported.numbering_level(instance_id, 0).unwrap();
+        assert_eq!(level.paragraph_style, Some("Normal"));
+        assert!(!level.has_unmodeled_properties);
+    }
+
+    #[test]
+    fn list_level_semantic_equality_ignores_source_provenance() {
+        let authored = ListLevel::new(ListNumberFormat::LowerRoman)
+            .start(4)
+            .level_text("%1.%2)")
+            .suffix(ListLevelSuffix::Space)
+            .alignment(Alignment::Center)
+            .indentation(Some(Twips(1440)), Some(Twips(240)), None)
+            .marker_properties(CT_RPr {
+                bold: Some(true),
+                color: Some("2B6FE3".to_owned()),
+                ..CT_RPr::default()
+            })
+            .legal_numbering(true)
+            .restart(ListLevelRestart::After(0))
+            .template_code("A1B2C3D4")
+            .tentative(false);
+        let source = ct_level_from_list(1, &authored).unwrap();
+        let inspected = list_level_from_ct(&source);
+        let reconstructed = list_level_values_from_ct(&source);
+
+        assert_eq!(inspected, reconstructed);
+        assert_ne!(inspected, reconstructed.clone().start(9));
+    }
+
+    #[test]
+    fn numbering_instances_and_overrides_round_trip_in_schema_order() {
+        let mut document = Document::new();
+        let definition_id = document
+            .add_numbering_definition(&[ListLevel::decimal(), ListLevel::decimal()])
+            .unwrap();
+        let instance_id = document
+            .add_numbering_instance(
+                definition_id,
+                &[NumberingLevelOverride::new(1)
+                    .start(5)
+                    .replacement(ListLevel::new(ListNumberFormat::UpperRoman).level_text("%2)"))],
+            )
+            .unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+        let instance = xml
+            .find(&format!("<w:num w:numId=\"{instance_id}\""))
+            .unwrap();
+        let abstract_id = xml[instance..].find("<w:abstractNumId ").unwrap();
+        let level_override = xml[instance..].find("<w:lvlOverride ").unwrap();
+        let start_override = xml[instance + level_override..]
+            .find("<w:startOverride ")
+            .unwrap();
+        let replacement = xml[instance + level_override..]
+            .find("<w:lvl w:ilvl=\"1\"")
+            .unwrap();
+        assert!(abstract_id < level_override);
+        assert!(start_override < replacement);
+
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let instance = reopened.numbering_instance(instance_id).unwrap();
+        assert_eq!(instance.definition_id, definition_id);
+        assert_eq!(instance.level_overrides.len(), 1);
+        assert_eq!(instance.level_overrides[0].level, 1);
+        assert_eq!(instance.level_overrides[0].start, Some(5));
+        assert_eq!(
+            instance.level_overrides[0]
+                .replacement
+                .as_ref()
+                .unwrap()
+                .format,
+            ListNumberFormat::UpperRoman
+        );
+    }
+
+    #[test]
+    fn public_authored_numbering_reports_no_unmodeled_properties() {
+        let mut document = Document::new();
+        let definition_id = document
+            .add_numbering_definition(&[
+                ListLevel::decimal().level_text("%1."),
+                ListLevel::new(ListNumberFormat::LowerLetter)
+                    .level_text("%1.%2.")
+                    .legal_numbering(false),
+            ])
+            .unwrap();
+        let instance_id = document
+            .add_numbering_instance(definition_id, &[NumberingLevelOverride::new(1).start(3)])
+            .unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert!(
+            !reopened
+                .numbering_definition(definition_id)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        assert!(
+            !reopened
+                .numbering_instance(instance_id)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+        assert!(
+            !reopened
+                .numbering_level(instance_id, 1)
+                .unwrap()
+                .has_unmodeled_properties
+        );
+    }
+
+    #[test]
+    fn imported_numbering_projection_update_preserves_unknown_format_and_omissions() {
+        let mut source = Document::new();
+        let definition_id = source
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance_id = source.add_numbering_instance(definition_id, &[]).unwrap();
+        let xml = format!(
+            r#"<w:numbering xmlns:w="{WORD_NAMESPACE}"><w:abstractNum w:abstractNumId="{definition_id}"><w:lvl w:ilvl="0"><w:numFmt w:val="producerFormat"/></w:lvl></w:abstractNum><w:num w:numId="{instance_id}"><w:abstractNumId w:val="{definition_id}"/></w:num></w:numbering>"#
+        );
+        let imported = replace_numbering_xml(&mut source, xml.into_bytes());
+        let mut document = Document::from_bytes(&imported).unwrap();
+        let canonical = document.to_bytes().unwrap();
+        let before = OpcPackage::from_reader(Cursor::new(&canonical))
+            .unwrap()
+            .get_part(DEFAULT_NUMBERING_PART)
+            .unwrap()
+            .to_vec();
+
+        let definition = document.numbering_definition(definition_id).unwrap();
+        assert_eq!(
+            definition.levels[0].properties.format,
+            ListNumberFormat::Other("producerFormat".to_owned())
+        );
+        assert_eq!(definition.levels[0].properties.start, None);
+        assert_eq!(
+            definition.levels[0].properties.indentation_value(),
+            (None, None, None)
+        );
+        document
+            .update_numbering_definition(definition_id, &definition.levels)
+            .unwrap();
+        let after_bytes = document.to_bytes().unwrap();
+        let after = OpcPackage::from_reader(Cursor::new(after_bytes))
+            .unwrap()
+            .get_part(DEFAULT_NUMBERING_PART)
+            .unwrap()
+            .to_vec();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn numbering_crud_updates_and_removes_unreferenced_values() {
+        let mut document = Document::new();
+        let first_definition = document
+            .add_numbering_definition(&[ListLevel::decimal(), ListLevel::decimal()])
+            .unwrap();
+        let second_definition = document
+            .add_numbering_definition(&[ListLevel::decimal(), ListLevel::decimal()])
+            .unwrap();
+        assert_ne!(first_definition, second_definition);
+        let instance_id = document
+            .add_numbering_instance(first_definition, &[NumberingLevelOverride::new(1).start(3)])
+            .unwrap();
+
+        let mut definition = document.numbering_definition(first_definition).unwrap();
+        definition.levels[1].properties = definition.levels[1]
+            .properties
+            .clone()
+            .start(7)
+            .level_text("%1.%2)")
+            .suffix(ListLevelSuffix::Space);
+        document
+            .update_numbering_definition(first_definition, &definition.levels)
+            .unwrap();
+        let mut instance = document.numbering_instance(instance_id).unwrap();
+        instance.level_overrides[0].start = Some(9);
+        document
+            .update_numbering_instance(instance_id, second_definition, &instance.level_overrides)
+            .unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened
+                .numbering_definition(first_definition)
+                .unwrap()
+                .levels[1]
+                .properties
+                .start,
+            Some(7)
+        );
+        let instance = reopened.numbering_instance(instance_id).unwrap();
+        assert_eq!(instance.definition_id, second_definition);
+        assert_eq!(instance.level_overrides[0].start, Some(9));
+
+        assert!(reopened.remove_numbering_instance(instance_id).unwrap());
+        assert!(
+            reopened
+                .remove_numbering_definition(first_definition)
+                .unwrap()
+        );
+        assert!(
+            reopened
+                .remove_numbering_definition(second_definition)
+                .unwrap()
+        );
+        assert!(!reopened.remove_numbering_instance(instance_id).unwrap());
+        let reopened = Document::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+        assert!(reopened.numbering_definitions().is_empty());
+        assert!(reopened.numbering_instances().is_empty());
+    }
+
+    #[test]
+    fn moving_a_live_numbering_instance_cannot_orphan_its_paragraph_level() {
+        let mut document = Document::new();
+        let complete = document
+            .add_numbering_definition(&[
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+            ])
+            .unwrap();
+        let incomplete = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(complete, &[]).unwrap();
+        assert!(
+            document
+                .add_paragraph("deep item")
+                .set_numbering(instance, 2)
+        );
+        let baseline = document.to_bytes().unwrap();
+
+        assert!(
+            document
+                .update_numbering_instance(instance, incomplete, &[])
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert_eq!(
+            document.numbering_instance(instance).unwrap().definition_id,
+            complete
+        );
+    }
+
+    #[test]
+    fn moving_an_instance_cannot_orphan_a_style_inherited_paragraph_level() {
+        let mut document = Document::new();
+        let complete = document
+            .add_numbering_definition(&[
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+            ])
+            .unwrap();
+        let incomplete = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(complete, &[]).unwrap();
+        document
+            .add_style(
+                StyleBuilder::paragraph("DeepListBase", "Deep List Base").paragraph_properties(
+                    CT_PPr {
+                        num_id: Some(instance),
+                        num_ilvl: Some(2),
+                        ..CT_PPr::default()
+                    },
+                ),
+            )
+            .unwrap();
+        document
+            .add_style(
+                StyleBuilder::paragraph("DeepListChild", "Deep List Child")
+                    .based_on("DeepListBase"),
+            )
+            .unwrap();
+        document.add_paragraph("deep item").style("DeepListChild");
+        let baseline = document.to_bytes().unwrap();
+
+        assert!(
+            document
+                .update_numbering_instance(instance, incomplete, &[])
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert_eq!(
+            document.numbering_instance(instance).unwrap().definition_id,
+            complete
+        );
+    }
+
+    #[test]
+    fn moving_an_instance_cannot_orphan_a_related_story_paragraph_level() {
+        let mut document = Document::new();
+        let complete = document
+            .add_numbering_definition(&[
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+            ])
+            .unwrap();
+        let incomplete = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(complete, &[]).unwrap();
+        document.set_header("header");
+        let (relationship_id, _) = document.header_footer_rel_ids().into_iter().next().unwrap();
+        let part_name = {
+            let relationship = document
+                .package
+                .get_part_rels(&document.doc_part_name)
+                .unwrap()
+                .get_by_id(&relationship_id)
+                .unwrap();
+            OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target)
+        };
+        document.package.set_part(
+            &part_name,
+            format!(
+                r#"<n:hdr xmlns:n="{WORD_NAMESPACE}"><n:p><n:pPr><n:numPr><n:ilvl n:val="2"/><n:numId n:val="{instance}"/></n:numPr></n:pPr><n:r><n:t>header</n:t></n:r></n:p></n:hdr>"#
+            )
+            .into_bytes(),
+        );
+        let baseline = document.to_bytes().unwrap();
+
+        assert!(
+            document
+                .update_numbering_instance(instance, incomplete, &[])
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert_eq!(
+            document.numbering_instance(instance).unwrap().definition_id,
+            complete
+        );
+    }
+
+    #[test]
+    fn paragraph_numbering_scan_does_not_pair_different_paragraphs() {
+        let xml = format!(
+            r#"<n:root xmlns:n="{WORD_NAMESPACE}"><n:p><n:pPr><n:numPr><n:ilvl n:val="2"/></n:numPr></n:pPr></n:p><n:p><n:pPr><n:numPr><n:numId n:val="7"/></n:numPr></n:pPr></n:p></n:root>"#
+        );
+
+        let properties = xml_paragraph_numbering_properties(xml.as_bytes()).unwrap();
+        assert_eq!(properties.len(), 2);
+        assert_eq!(properties[0].num_id, None);
+        assert_eq!(properties[0].num_ilvl, Some(2));
+        assert_eq!(properties[1].num_id, Some(7));
+        assert_eq!(properties[1].num_ilvl, None);
+    }
+
+    #[test]
+    fn opaque_custom_xml_numbering_data_is_not_a_live_story_reference() {
+        const CUSTOM_XML_RELATIONSHIP: &str =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+        const CUSTOM_XML_PART: &str = "/customXml/item1.xml";
+
+        let mut document = Document::new();
+        let complete = document
+            .add_numbering_definition(&[
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+                ListLevel::decimal(),
+            ])
+            .unwrap();
+        let incomplete = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(complete, &[]).unwrap();
+        document.package.set_part(
+            CUSTOM_XML_PART,
+            format!(
+                r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="{instance}"/></w:numPr></w:pPr></w:p>"#
+            )
+            .into_bytes(),
+        );
+        document
+            .package
+            .content_types
+            .add_override(CUSTOM_XML_PART, "application/xml");
+        document
+            .package
+            .get_or_create_part_rels(&document.doc_part_name)
+            .add_with_id(
+                "producerCustomXml",
+                CUSTOM_XML_RELATIONSHIP,
+                "../customXml/item1.xml",
+            );
+
+        document
+            .update_numbering_instance(instance, incomplete, &[])
+            .unwrap();
+        assert_eq!(
+            document.numbering_instance(instance).unwrap().definition_id,
+            incomplete
+        );
+        assert!(document.remove_numbering_instance(instance).unwrap());
+        let saved = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        assert!(saved.get_part(CUSTOM_XML_PART).is_some());
+    }
+
+    #[test]
+    fn numbering_instance_removal_respects_style_references() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        document
+            .add_style(
+                StyleBuilder::paragraph("UnusedListStyle", "Unused List Style")
+                    .paragraph_properties(CT_PPr {
+                        num_id: Some(instance),
+                        num_ilvl: Some(0),
+                        ..CT_PPr::default()
+                    }),
+            )
+            .unwrap();
+
+        assert!(document.remove_numbering_instance(instance).is_err());
+        assert!(document.numbering_instance(instance).is_some());
+    }
+
+    #[test]
+    fn fresh_level_attributes_conflicting_with_retained_aliases_are_atomic() {
+        let mut source = Document::new();
+        let definition_id = source
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let xml = format!(
+            r#"<n:numbering xmlns:n="{WORD_NAMESPACE}"><n:abstractNum n:abstractNumId="{definition_id}"><n:lvl n:ilvl="0" n:tplc="bad" n:tentative="maybe"><n:numFmt n:val="decimal"/></n:lvl></n:abstractNum></n:numbering>"#
+        );
+        let imported = replace_numbering_xml(&mut source, xml.into_bytes());
+        let mut document = Document::from_bytes(&imported).unwrap();
+        let baseline = document.to_bytes().unwrap();
+        let mut definition = document.numbering_definition(definition_id).unwrap();
+
+        definition.levels[0].properties = ListLevel::decimal().template_code("A1B2C3D4");
+        assert!(
+            document
+                .update_numbering_definition(definition_id, &definition.levels)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+
+        definition.levels[0].properties = ListLevel::decimal().tentative(true);
+        assert!(
+            document
+                .update_numbering_definition(definition_id, &definition.levels)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        let unchanged = document.numbering_definition(definition_id).unwrap();
+        assert_eq!(unchanged.levels[0].properties.template_code_value(), None);
+        assert_eq!(unchanged.levels[0].properties.tentative_value(), None);
+    }
+
+    #[test]
+    fn sparse_numbering_definition_levels_keep_identifiers_through_update() {
+        let mut source = Document::new();
+        let definition_id = source
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let xml = format!(
+            r#"<w:numbering xmlns:w="{WORD_NAMESPACE}"><w:abstractNum w:abstractNumId="{definition_id}"><w:lvl w:ilvl="2"><w:numFmt w:val="decimal"/><w:lvlRestart w:val="1"/><w:lvlText w:val="%3."/></w:lvl></w:abstractNum></w:numbering>"#
+        );
+        let imported = replace_numbering_xml(&mut source, xml.into_bytes());
+        let mut document = Document::from_bytes(&imported).unwrap();
+        let canonical = document.to_bytes().unwrap();
+        let definition = document.numbering_definition(definition_id).unwrap();
+        assert_eq!(definition.levels[0].level, 2);
+        assert_eq!(
+            definition.levels[0].properties.level_text_value(),
+            Some("%3.")
+        );
+        document
+            .update_numbering_definition(definition_id, &definition.levels)
+            .unwrap();
+        assert_eq!(document.to_bytes().unwrap(), canonical);
+
+        let replacement = [NumberingDefinitionLevel {
+            level: 2,
+            properties: ListLevel::decimal()
+                .level_text("%3)")
+                .restart(ListLevelRestart::After(0)),
+        }];
+        document
+            .update_numbering_definition(definition_id, &replacement)
+            .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(Cursor::new(&saved)).unwrap();
+        let numbering =
+            String::from_utf8(package.get_part(DEFAULT_NUMBERING_PART).unwrap().to_vec()).unwrap();
+        assert!(numbering.contains(r#"<w:lvl w:ilvl="2""#), "{numbering}");
+        assert!(numbering.contains(r#"w:val="%3)""#), "{numbering}");
+    }
+
+    #[test]
+    fn invalid_numbering_mutation_is_atomic() {
+        let mut document = Document::new();
+        let definition_id = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance_id = document.add_numbering_instance(definition_id, &[]).unwrap();
+        assert!(document.add_paragraph("item").set_numbering(instance_id, 0));
+        let baseline = document.to_bytes().unwrap();
+
+        for invalid in [
+            ListLevel::decimal().level_text("%2."),
+            ListLevel::decimal().restart(ListLevelRestart::After(0)),
+            ListLevel::decimal().template_code("xyz"),
+        ] {
+            assert!(document.add_numbering_definition(&[invalid]).is_err());
+            assert_eq!(document.to_bytes().unwrap(), baseline);
+        }
+        assert!(document.add_numbering_instance(u32::MAX, &[]).is_err());
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert!(
+            document
+                .add_numbering_instance(definition_id, &[NumberingLevelOverride::new(9)])
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert!(
+            document
+                .add_numbering_instance(definition_id, &[NumberingLevelOverride::new(1)])
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert!(
+            document
+                .add_numbering_instance(
+                    definition_id,
+                    &[
+                        NumberingLevelOverride::new(0),
+                        NumberingLevelOverride::new(0),
+                    ],
+                )
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert!(document.remove_numbering_instance(instance_id).is_err());
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert!(document.remove_numbering_definition(definition_id).is_err());
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].p_style =
+            Some("MissingStyle".to_owned());
+        let invalid_graph = document.to_bytes().unwrap();
+        assert!(
+            document
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), invalid_graph);
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].p_style = None;
+
+        let next_definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        assert_eq!(next_definition, definition_id + 1);
+        let next_instance = document
+            .add_numbering_instance(next_definition, &[])
+            .unwrap();
+        assert_eq!(next_instance, instance_id + 1);
+    }
+
+    #[test]
+    fn imported_numbering_extensions_remain_byte_identical() {
+        let mut document = Document::new();
+        let definition_id = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance_id = document
+            .add_numbering_instance(definition_id, &[NumberingLevelOverride::new(0).start(4)])
+            .unwrap();
+        let numbering = document.numbering.as_mut().unwrap();
+        numbering
+            .root_attributes
+            .push(("xmlns:ext".to_owned(), "urn:producer".to_owned()));
+        let definition = numbering
+            .abstract_nums
+            .iter_mut()
+            .find(|value| value.abstract_num_id == definition_id)
+            .unwrap();
+        definition
+            .extra_xml
+            .push((7, b"<ext:definition/>".to_vec()));
+        definition.levels[0].p_style = Some("Normal".to_owned());
+        definition.levels[0]
+            .extra_xml
+            .push((7, b"<ext:level value=\"kept\"/>".to_vec()));
+        let instance = numbering
+            .nums
+            .iter_mut()
+            .find(|value| value.num_id == instance_id)
+            .unwrap();
+        instance
+            .extra_xml
+            .push((1, b"<ext:instance value=\"kept\"/>".to_vec()));
+        instance.level_overrides[0]
+            .extra_xml
+            .push((1, b"<ext:override value=\"kept\"/>".to_vec()));
+        let before = numbering.to_xml().unwrap();
+
+        let definition = document.numbering_definition(definition_id).unwrap();
+        document
+            .update_numbering_definition(definition_id, &definition.levels)
+            .unwrap();
+        let instance = document.numbering_instance(instance_id).unwrap();
+        document
+            .update_numbering_instance(
+                instance_id,
+                instance.definition_id,
+                &instance.level_overrides,
+            )
+            .unwrap();
+        let after = document.numbering.as_ref().unwrap().to_xml().unwrap();
+        assert_eq!(after, before);
+        assert_eq!(
+            document
+                .numbering_definition(definition_id)
+                .unwrap()
+                .paragraph_style_links,
+            vec![Some("Normal".to_owned())]
+        );
+
+        let mut source = Document::new();
+        let definition_id = source
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance_id = source.add_numbering_instance(definition_id, &[]).unwrap();
+        let xml = format!(
+            r#"<n:numbering xmlns:n="{WORD_NAMESPACE}" xmlns:ext="urn:producer"><ext:root value="kept"/><n:abstractNum n:abstractNumId="{definition_id}" ext:definition="kept"><ext:definition-child/><n:multiLevelType n:val="hybridMultilevel" ext:leaf="type"><ext:type-child/></n:multiLevelType><n:lvl n:ilvl="0"><n:start n:val="1" ext:leaf="start"><ext:start-child/></n:start><n:numFmt n:val="producerFormat" ext:leaf="format"><ext:format-child/></n:numFmt><n:lvlRestart n:val="0" ext:restart="kept"></n:lvlRestart><n:pStyle n:val="Normal"></n:pStyle><n:isLgl n:val="false"/><n:suff n:val="space" ext:leaf="suffix"><ext:suffix-child/></n:suff><ext:level-child/><n:lvlText n:val="%1." ext:leaf="text"><ext:text-child/></n:lvlText><n:lvlJc n:val="left" ext:leaf="alignment"><ext:alignment-child/></n:lvlJc></n:lvl></n:abstractNum><n:num n:numId="{instance_id}" ext:instance="kept"><n:abstractNumId n:val="{definition_id}" ext:reference="kept"><ext:reference-child/></n:abstractNumId><ext:instance-child/><n:lvlOverride n:ilvl="0" ext:override="kept"><n:startOverride n:val="4" ext:start="kept"></n:startOverride><ext:override-child/><n:lvl n:ilvl="0"><n:numFmt n:val="decimal"/><n:lvlText n:val="%1)"/><ext:replacement-child/></n:lvl></n:lvlOverride></n:num></n:numbering>"#
+        );
+        let imported = replace_numbering_xml(&mut source, xml.into_bytes());
+        let mut imported = Document::from_bytes(&imported).unwrap();
+        let canonical_bytes = imported.to_bytes().unwrap();
+        let canonical = OpcPackage::from_reader(Cursor::new(&canonical_bytes))
+            .unwrap()
+            .get_part(DEFAULT_NUMBERING_PART)
+            .unwrap()
+            .to_vec();
+        let canonical_xml = String::from_utf8(canonical.clone()).unwrap();
+        assert!(canonical_xml.contains("<ext:type-child/>"));
+        assert!(canonical_xml.contains("<n:lvlOverride"));
+        assert!(canonical_xml.contains("<n:startOverride"));
+        assert!(canonical_xml.contains("<ext:reference-child/>"));
+        for payload in [
+            "<ext:start-child/>",
+            "<ext:format-child/>",
+            "<ext:suffix-child/>",
+            "<ext:text-child/>",
+            "<ext:alignment-child/>",
+        ] {
+            assert!(canonical_xml.contains(payload), "{canonical_xml}");
+        }
+        let abstract_reference = canonical_xml.find("<n:abstractNumId ").unwrap();
+        let override_position = canonical_xml.find("<n:lvlOverride ").unwrap();
+        let start_position = canonical_xml.find("<n:startOverride ").unwrap();
+        let replacement_position = canonical_xml[override_position..]
+            .find("<n:lvl n:ilvl=\"0\"")
+            .unwrap()
+            + override_position;
+        assert!(abstract_reference < override_position);
+        assert!(start_position < replacement_position);
+
+        let definition = imported.numbering_definition(definition_id).unwrap();
+        assert_eq!(
+            definition.paragraph_style_links,
+            vec![Some("Normal".to_owned())]
+        );
+        assert!(definition.has_unmodeled_properties);
+        imported
+            .update_numbering_definition(definition_id, &definition.levels)
+            .unwrap();
+        let instance = imported.numbering_instance(instance_id).unwrap();
+        assert!(instance.has_unmodeled_properties);
+        imported
+            .update_numbering_instance(
+                instance_id,
+                instance.definition_id,
+                &instance.level_overrides,
+            )
+            .unwrap();
+        let after = OpcPackage::from_reader(Cursor::new(imported.to_bytes().unwrap()))
+            .unwrap()
+            .get_part(DEFAULT_NUMBERING_PART)
+            .unwrap()
+            .to_vec();
+        assert_eq!(after, canonical);
+    }
+
+    #[test]
     fn rejected_list_level_update_does_not_materialize_numbering() {
         let mut doc = Document::new();
         assert!(doc.numbering.is_none());
@@ -19766,19 +22443,19 @@ mod tests {
         let mut doc = Document::new();
         let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
         let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
-        level.num_fmt = Some(ST_NumberFormat::Other("chicago".to_owned()));
+        level.num_fmt = Some(ST_NumberFormat::Other("producerFormat".to_owned()));
         level.start = Some(4);
         level.suffix = Some(ST_LvlSuffix::Space);
         level.lvl_jc = Some(ST_Jc::Center);
-        level.p_style = Some("ListNumber".to_owned());
+        level.p_style = Some("Normal".to_owned());
 
         let level = doc.numbering_level(num_id, 0).expect("numbering level");
-        assert_eq!(level.format, NumberingFormat::Other("chicago"));
-        assert_eq!(level.format_name, "chicago");
+        assert_eq!(level.format, NumberingFormat::Other("producerFormat"));
+        assert_eq!(level.format_name, "producerFormat");
         assert_eq!(level.start, 4);
         assert_eq!(level.suffix, ListLevelSuffix::Space);
         assert_eq!(level.alignment, Some(Alignment::Center));
-        assert_eq!(level.paragraph_style, Some("ListNumber"));
+        assert_eq!(level.paragraph_style, Some("Normal"));
         assert!(!level.has_unmodeled_properties);
         assert!(!level.has_paragraph_presentation);
         assert!(!level.has_marker_presentation);
@@ -19835,16 +22512,10 @@ mod tests {
         ));
 
         let definition = &mut doc.numbering.as_mut().unwrap().abstract_nums[2];
-        definition.nsid = Some("12345678".to_owned());
-        definition.nsid_raw = Some((
-            Some("12345678".to_owned()),
-            b"<w:nsid w:val=\"12345678\" producer:fact=\"kept\"/>".to_vec(),
-            vec!["w".to_owned(), "producer".to_owned()],
-        ));
-        definition.levels[0].p_style = Some("ListNumber".to_owned());
-        definition.levels[0].p_style_raw = Some((
-            Some("ListNumber".to_owned()),
-            b"<w:pStyle w:val=\"ListNumber\"><producer:fact/></w:pStyle>".to_vec(),
+        definition.levels[0].start = Some(1);
+        definition.levels[0].start_raw = Some((
+            Some(1),
+            b"<w:start w:val=\"1\"><producer:fact/></w:start>".to_vec(),
             vec!["w".to_owned(), "producer".to_owned()],
         ));
 
@@ -19862,6 +22533,15 @@ mod tests {
             doc.numbering_level(raw_leaf_metadata_id, 0)
                 .expect("raw leaf metadata level")
                 .has_unmodeled_properties
+        );
+        assert!(
+            doc.numbering_definition(
+                doc.numbering_instance(raw_leaf_metadata_id)
+                    .expect("raw leaf metadata instance")
+                    .definition_id,
+            )
+            .expect("raw leaf metadata definition")
+            .has_unmodeled_properties
         );
     }
 

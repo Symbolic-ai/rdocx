@@ -226,13 +226,21 @@ inheritance outside the limited ABI.
 
 The public `rdocx` facade is the common source for native, Python, WASM, and
 CLI consumers. Custom lists are created with `Document::add_list_definition`
-from up to nine `ListLevel` values. Each value selects a `ListNumberFormat` and
-an optional start number. Later slice entries are ignored because Word exposes
-exactly nine levels. Paragraph numbering stores an explicit list ID and a
-zero-based level from 0 through 8. Its in-place setters return `false` without
-mutation for a larger value. `Document::set_list_level` can redefine an
-existing level without rebuilding the document. A rejected redefinition is
-side-effect free.
+from up to nine `ListLevel` values. Each value can select any standard
+`ListNumberFormat` plus start, level text, suffix, alignment, indentation,
+marker run properties, legal numbering, restart, template code, and tentative
+state. The compatibility method still ignores entries after Word's ninth
+level. Paragraph numbering stores an explicit list ID and a zero-based level
+from 0 through 8. Its in-place setters return `false` without mutation for a
+larger value. `Document::set_list_level` can redefine an existing level without
+rebuilding the document. A rejected redefinition is side-effect free.
+
+Native Rust also exposes owned `NumberingDefinition`, `NumberingInstance`, and
+`NumberingLevelOverride` values plus fallible inspect, create, update, remove,
+and whole-graph validation operations. These operations preserve imported
+style links but do not mutate them independently. F-248 owns the two-sided
+style-link operation. Python, WASM, and CLI bindings gain no numbering graph
+authoring surface.
 
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
 `Document::package_class` reads the exact main-part override.
@@ -866,16 +874,22 @@ intentional pre-1.0 Rust source breaks. Consumers that inspect positioned
 elements handle the existing multilingual variant for both Word and
 Presentation results.
 
-The next stable Rust family includes the numbering preservation model.
-`CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
+The stable Rust numbering family includes complete standard number-format
+enums and the numbering preservation model. `CT_Lvl`, `CT_AbstractNum`,
+`CT_NumLvl`, `CT_Num`, and `CT_Numbering` expose typed and raw XML state so
 producer extensions survive typed mutations. `ST_NumberFormat::Other(String)`
-retains producer-defined tokens, so the enum is no longer `Copy` and `to_str`
-borrows its value. Full struct literals written against the prior pre-1.0 API
-must add the preservation fields, or callers should use the existing
-constructors. These are intentional pre-1.0 source breaks. Python, WASM, and
-CLI consumers continue through the package-preserving facade and do not
-construct these low-level structs. Existing Python import error mapping uses
-the generic `RdocxError` exception and gains no new exception type.
+retains producer-defined tokens, so the enum is not `Copy` and `to_str` borrows
+its value. Completing the exhaustive `ListNumberFormat` enum and extending
+`ListLevel` require exhaustive matches and full struct literals to be updated.
+Owned format tokens and level properties remove the former `Copy`
+implementations from both public types. `NumberingDefinition::levels` uses
+explicit `NumberingDefinitionLevel` entries so sparse imported `w:ilvl` values
+remain addressable. Full low-level struct literals must add the preservation
+fields or use the existing constructors. These are intentional pre-1.0 source
+breaks. Python, WASM, and CLI consumers continue through the
+package-preserving facade and do not construct these low-level structs.
+Existing Python import error mapping uses the generic `RdocxError` exception
+and gains no new exception type.
 
 The same intentional low-level pre-1.0 boundary includes retained document
 background children, linked drawing relationship ids, numbering style and

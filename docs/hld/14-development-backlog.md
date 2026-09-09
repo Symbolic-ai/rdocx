@@ -2300,10 +2300,12 @@ effective formatting and visible output as the sanitized Word oracle.
 
 ### F-247, Complete numbering level and instance model (L)
 Model and author full numbering levels and instances, including level text,
-paragraph-style links, suffix, alignment, indentation, marker properties,
-legal numbering, restart controls, level overrides, and start overrides. The
-public format type accepts the complete standard set, including `none`, without
-requiring raw XML.
+suffix, alignment, indentation, marker properties, legal numbering, restart
+controls, level overrides, and start overrides. Imported paragraph-style links
+are typed, inspectable, and preserved. Their two-sided mutation belongs to
+F-248. The public format type accepts the complete standard set, including
+`none`, without requiring raw XML. Definition and instance CRUD validates the
+complete candidate graph before publishing.
 **Depends on**: F-243, F-249.
 **Test gate**: round-trip. Every typed level and override survives save and
 reopen with schema-correct order and reports no unmodeled properties when

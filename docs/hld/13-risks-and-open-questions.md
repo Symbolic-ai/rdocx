@@ -87,8 +87,9 @@ focused deterministic render coverage.
 Diffuse, because it touches every writer, and violations are silent until
 PowerPoint refuses the file.
 
-*Mitigation*: `OrderedRawChildren`, plus the corpus-wide "opens without repair"
-gate at M8 and M11.
+*Mitigation*: `OrderedRawChildren`, typed numbering children with explicit XSD
+ranks, focused `CT_Lvl` and `CT_NumLvl` order assertions, plus the corpus-wide
+"opens without repair" gate at M8 and M11.
 
 ### R6, raw-XML preservation against relationship remapping
 
@@ -196,6 +197,11 @@ Style graph mutations use the same rule. Adding or updating one side of a
 legal paragraph and character link updates the reciprocal edge in the staged
 candidate. Missing targets, incompatible types, duplicate defaults, cycles,
 and live references abort before the document changes.
+
+Numbering graph mutations use staged definition and instance values. They
+preserve and expose imported paragraph-style links, but independent link
+mutation is unavailable. F-248 owns the operation that writes the numbering
+level link and style numbering properties together.
 
 ## Assumptions that would invalidate the plan if wrong
 

@@ -105,7 +105,7 @@ struct WriterList {
     levels: Vec<WriterListLevel>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct WriterListLevel {
     format: Option<ListNumberFormat>,
     start: u32,
@@ -908,7 +908,8 @@ impl<'a> RtfWriter<'a> {
         for list in &self.lists {
             write!(output, "{{\\list")?;
             for level in &list.levels {
-                let format = level.format.unwrap_or(ListNumberFormat::Decimal);
+                let fallback = ListNumberFormat::Decimal;
+                let format = level.format.as_ref().unwrap_or(&fallback);
                 write!(
                     output,
                     "{{\\listlevel\\levelnfc{}\\levelnfcn{}\\levelstartat{}}}",
@@ -1233,15 +1234,17 @@ impl<'a> RtfWriter<'a> {
                     .levels
                     .iter()
                     .find(|level| level.ilvl == level_index);
-                let format = level
-                    .and_then(|level| level.num_fmt.clone())
-                    .and_then(public_number_format);
-                if level.and_then(|level| level.num_fmt.as_ref()).is_some() && format.is_none() {
-                    self.diagnose(
-                        &format!("numbering[numId={num_id}]/level[{level_index}]/numFmt"),
-                        "unsupported numbering format was dropped during RTF export",
-                    );
-                }
+                let format = match level.and_then(|level| level.num_fmt.clone()) {
+                    Some(ST_NumberFormat::Other(_)) => {
+                        self.diagnose(
+                            &format!("numbering[numId={num_id}]/level[{level_index}]/numFmt"),
+                            "unsupported numbering format was dropped during RTF export",
+                        );
+                        Some(ListNumberFormat::None)
+                    }
+                    Some(value) => Some(crate::document::list_number_format_from_st(value)),
+                    None => None,
+                };
                 levels.push(WriterListLevel {
                     format,
                     start: level.and_then(|level| level.start).unwrap_or(1),
@@ -1474,20 +1477,7 @@ fn parse_hex_color(color: &str) -> Option<(u8, u8, u8)> {
     Some((red, green, blue))
 }
 
-fn public_number_format(format: ST_NumberFormat) -> Option<ListNumberFormat> {
-    match format {
-        ST_NumberFormat::Bullet => Some(ListNumberFormat::Bullet),
-        ST_NumberFormat::Decimal => Some(ListNumberFormat::Decimal),
-        ST_NumberFormat::LowerLetter => Some(ListNumberFormat::LowerLetter),
-        ST_NumberFormat::UpperLetter => Some(ListNumberFormat::UpperLetter),
-        ST_NumberFormat::LowerRoman => Some(ListNumberFormat::LowerRoman),
-        ST_NumberFormat::UpperRoman => Some(ListNumberFormat::UpperRoman),
-        ST_NumberFormat::Ordinal => Some(ListNumberFormat::Ordinal),
-        _ => None,
-    }
-}
-
-fn list_format_value(format: ListNumberFormat) -> i32 {
+fn list_format_value(format: &ListNumberFormat) -> i32 {
     match format {
         ListNumberFormat::Decimal => 0,
         ListNumberFormat::UpperRoman => 1,
@@ -1495,7 +1485,61 @@ fn list_format_value(format: ListNumberFormat) -> i32 {
         ListNumberFormat::UpperLetter => 3,
         ListNumberFormat::LowerLetter => 4,
         ListNumberFormat::Ordinal => 5,
+        ListNumberFormat::CardinalText => 6,
+        ListNumberFormat::OrdinalText => 7,
+        ListNumberFormat::Hex => 8,
+        ListNumberFormat::Chicago => 9,
+        ListNumberFormat::IdeographDigital => 10,
+        ListNumberFormat::JapaneseCounting => 11,
+        ListNumberFormat::Aiueo => 12,
+        ListNumberFormat::Iroha => 13,
+        ListNumberFormat::DecimalFullWidth => 14,
+        ListNumberFormat::DecimalHalfWidth => 15,
+        ListNumberFormat::JapaneseLegal => 16,
+        ListNumberFormat::JapaneseDigitalTenThousand => 17,
+        ListNumberFormat::DecimalEnclosedCircle => 18,
+        ListNumberFormat::DecimalFullWidth2 => 19,
+        ListNumberFormat::AiueoFullWidth => 20,
+        ListNumberFormat::IrohaFullWidth => 21,
+        ListNumberFormat::DecimalZero => 22,
         ListNumberFormat::Bullet => 23,
+        ListNumberFormat::Ganada => 24,
+        ListNumberFormat::Chosung => 25,
+        ListNumberFormat::DecimalEnclosedFullstop => 26,
+        ListNumberFormat::DecimalEnclosedParen => 27,
+        ListNumberFormat::DecimalEnclosedCircleChinese => 28,
+        ListNumberFormat::IdeographEnclosedCircle => 29,
+        ListNumberFormat::IdeographTraditional => 30,
+        ListNumberFormat::IdeographZodiac => 31,
+        ListNumberFormat::IdeographZodiacTraditional => 32,
+        ListNumberFormat::TaiwaneseCounting => 33,
+        ListNumberFormat::IdeographLegalTraditional => 34,
+        ListNumberFormat::TaiwaneseCountingThousand => 35,
+        ListNumberFormat::TaiwaneseDigital => 36,
+        ListNumberFormat::ChineseCounting => 37,
+        ListNumberFormat::ChineseLegalSimplified => 38,
+        ListNumberFormat::ChineseCountingThousand => 39,
+        ListNumberFormat::KoreanDigital => 41,
+        ListNumberFormat::KoreanCounting => 42,
+        ListNumberFormat::KoreanLegal => 43,
+        ListNumberFormat::KoreanDigital2 => 44,
+        ListNumberFormat::Hebrew1 => 45,
+        ListNumberFormat::ArabicAlpha => 46,
+        ListNumberFormat::Hebrew2 => 47,
+        ListNumberFormat::ArabicAbjad => 48,
+        ListNumberFormat::HindiVowels => 49,
+        ListNumberFormat::HindiConsonants => 50,
+        ListNumberFormat::HindiNumbers => 51,
+        ListNumberFormat::HindiCounting => 52,
+        ListNumberFormat::ThaiLetters => 53,
+        ListNumberFormat::ThaiNumbers => 54,
+        ListNumberFormat::ThaiCounting => 55,
+        ListNumberFormat::VietnameseCounting => 56,
+        ListNumberFormat::NumberInDash => 57,
+        ListNumberFormat::RussianLower => 58,
+        ListNumberFormat::RussianUpper => 59,
+        ListNumberFormat::None => 255,
+        ListNumberFormat::Other(_) => 0,
     }
 }
 
@@ -1558,6 +1602,62 @@ mod writer_tests {
         assert_eq!(
             written.diagnostics.last().unwrap().destination.as_deref(),
             Some("body[9999]")
+        );
+    }
+
+    #[test]
+    fn rtf_writer_preserves_all_typed_numbering_formats_without_inventing_markers() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[
+                ListLevel::new(ListNumberFormat::CardinalText),
+                ListLevel::new(ListNumberFormat::KoreanDigital),
+                ListLevel::new(ListNumberFormat::None),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for level in 0..3 {
+            assert!(
+                document
+                    .add_paragraph("level")
+                    .set_numbering(instance, level)
+            );
+        }
+
+        let written = document.to_rtf_bytes().unwrap();
+        let output = String::from_utf8(written.bytes).unwrap();
+        for control in [
+            "\\levelnfc6\\levelnfcn6",
+            "\\levelnfc41\\levelnfcn41",
+            "\\levelnfc255\\levelnfcn255",
+        ] {
+            assert!(output.contains(control), "{output}");
+        }
+        assert!(
+            written
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { !diagnostic.message.contains("unsupported numbering format") })
+        );
+
+        let mut producer = Document::new();
+        let definition = producer
+            .add_numbering_definition(&[ListLevel::new(ListNumberFormat::Other(
+                "vendorFormat".to_owned(),
+            ))])
+            .unwrap();
+        let instance = producer.add_numbering_instance(definition, &[]).unwrap();
+        assert!(producer.add_paragraph("item").set_numbering(instance, 0));
+        let written = producer.to_rtf_bytes().unwrap();
+        let output = String::from_utf8(written.bytes).unwrap();
+        assert!(output.contains("\\levelnfc255\\levelnfcn255"), "{output}");
+        assert_eq!(
+            written
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.message.contains("unsupported numbering format"))
+                .count(),
+            1
         );
     }
 }
@@ -1963,14 +2063,14 @@ struct PictureData {
     scale_y: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ListLevelData {
     format: ListNumberFormat,
     has_new_format: bool,
     start: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct ListLevelOverrideData {
     format: Option<ListNumberFormat>,
     has_new_format: bool,
@@ -2137,8 +2237,8 @@ fn ensure_list(
             })?
             .clone();
         for (level, replacement) in levels.iter_mut().zip(&override_data.levels) {
-            if let Some(format) = replacement.format {
-                level.format = format;
+            if let Some(format) = &replacement.format {
+                level.format = format.clone();
             }
             if let Some(start) = replacement.start {
                 level.start = Some(start);
@@ -2151,11 +2251,11 @@ fn ensure_list(
         let num_id = document.add_list_definition(&levels);
         projected_lists.insert(key, num_id);
         Ok(Some(num_id))
-    } else if let Some(format) = paragraph.inferred_list {
+    } else if let Some(format) = &paragraph.inferred_list {
         let key = format!("inferred:{format:?}");
         let num_id = *projected_lists
             .entry(key)
-            .or_insert_with(|| document.add_list_definition(&[ListLevel::new(format)]));
+            .or_insert_with(|| document.add_list_definition(&[ListLevel::new(format.clone())]));
         Ok(Some(num_id))
     } else {
         Ok(None)

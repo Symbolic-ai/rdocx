@@ -287,6 +287,10 @@ fn format_number(n: u32, fmt: ST_NumberFormat) -> String {
         ST_NumberFormat::Bullet | ST_NumberFormat::None | ST_NumberFormat::Other(_) => {
             String::new()
         }
+        // F-247 makes every standard OOXML token typed and round-trippable.
+        // Rendering algorithms beyond the established decimal, letter, and
+        // Roman families remain outside this package-level story.
+        _ => String::new(),
     }
 }
 
@@ -524,6 +528,8 @@ mod tests {
         numbering.nums.push(rdocx_oxml::numbering::CT_Num {
             num_id: second,
             abstract_num_id: abstract_id,
+            abstract_num_id_raw: None,
+            level_overrides: Vec::new(),
             extra_xml: Vec::new(),
             extra_attributes: Vec::new(),
         });
@@ -571,13 +577,14 @@ mod tests {
     #[test]
     fn producer_defined_number_formats_do_not_invent_layout_markers() {
         assert_eq!(
-            format_number(7, ST_NumberFormat::Other("chicago".to_owned())),
+            format_number(7, ST_NumberFormat::Other("producerFormat".to_owned())),
             ""
         );
         assert_eq!(format_number(7, ST_NumberFormat::Decimal), "7");
 
         let mut numbering = CT_Numbering::new();
-        let num_id = numbering.add_list(&[(ST_NumberFormat::Other("chicago".to_owned()), Some(1))]);
+        let num_id =
+            numbering.add_list(&[(ST_NumberFormat::Other("producerFormat".to_owned()), Some(1))]);
         let marker = generate_marker(num_id, 0, &numbering, &mut NumberingState::new()).unwrap();
         assert_eq!(marker.marker_text, "");
     }
