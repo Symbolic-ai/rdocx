@@ -76,7 +76,7 @@ pub use math::{
     equation_to_latex, equation_to_mathml,
 };
 pub use odt::{OdtDiagnostic, OdtReadResult, OdtWriteResult};
-pub use oxml_chart::{ChartData, ChartKind};
+pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 pub use oxml_core::app_properties::AppProperties;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::custom_properties::{CustomProperty, CustomPropertyValue};

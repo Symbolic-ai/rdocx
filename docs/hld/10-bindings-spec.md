@@ -116,6 +116,13 @@ these fields. These are intentional pre-1.0 source breaks for the next stable
 family. Established `TextSegment` construction and layout entrypoints retain
 their existing shapes.
 
+The shared native `ChartData` input includes optional category-axis and
+value-axis titles plus a typed `Vec<RgbColor>` palette. `oxml-chart`, `rdocx`,
+and `rpptx` re-export the same `RgbColor`. `ChartData::default()` supplies empty
+optional styling fields for callers using update syntax. The added fields are
+an intentional pre-1.0 struct-literal break and add no Python, WASM, or CLI
+chart entrypoints.
+
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
 deterministic layouts live in separate
 `Mutex<Option<Arc<WordLayoutResult>>>` caches. One private normal-font engine

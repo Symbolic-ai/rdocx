@@ -19,7 +19,7 @@ use std::path::Path;
 use diagram::{DiagramResources, ScopedDiagramResources};
 #[cfg(feature = "render")]
 use oxml_chart::CT_ChartSpace;
-pub use oxml_chart::{ChartData, ChartKind};
+pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};

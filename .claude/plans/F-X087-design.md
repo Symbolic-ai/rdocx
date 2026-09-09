@@ -1,6 +1,6 @@
 # F-X087, Portable authored Word charts from PR 71
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-158, F-245, F-249
@@ -110,8 +110,12 @@ delta.
 - **Public API of a published crate**. Record the intentional pre-1.0
   `ChartData` struct-literal break, document `Default` migration, run package
   dry-runs, and assert archive sizes.
-- **External oracle**. Bind Word 16.112.2 build 16.112.26082125 and Pages 14.5
-  build 7045.0.17 evidence to the exact candidate SHA and file digest.
+- **External oracle**. Bind Word 16.112.3 build 16.112.26083020 and Pages Creator
+  Studio 15.1.1 build 7044.0.273 evidence to the exact candidate SHA and file
+  digest. The replaced pull request used Word 16.112.2 build 16.112.26082125
+  and Pages 14.5 build 7045.0.17, which remain provenance rather than the gate.
+  Open the Pages candidate through LaunchServices so the sandbox receives its
+  file URL before AppleScript drives the export.
 - **New files**. This approved design plan is the only new tracked file before
   implementation. Production and tests stay in existing modules.
 
@@ -129,15 +133,15 @@ entrypoint changes in this story.
 
 ## Implementation checklist
 
-- [ ] Port only reviewed PR 71 production behavior and preserve Kevin Brown's credit.
-- [ ] Extend `ChartData` and serialize axes, titles, number formats, legends, palettes, and doughnut holes in schema order.
-- [ ] Re-export the one shared `RgbColor` through all three facades.
-- [ ] Stage complete document, theme, package, and identifier state atomically.
-- [ ] Reject or safely replace mistyped and malformed related themes.
-- [ ] Add deterministic allocation, facade, round-trip, and failure regressions.
-- [ ] Record Word and Pages evidence at the exact candidate SHA and digest.
-- [ ] Run the full gate, hash harness, crate DAG, package dry-run, and archive-size checks.
-- [ ] Update exactly the listed HLD files.
+- [x] Port only reviewed PR 71 production behavior and preserve Kevin Brown's credit.
+- [x] Extend `ChartData` and serialize axes, titles, number formats, legends, palettes, and doughnut holes in schema order.
+- [x] Re-export the one shared `RgbColor` through all three facades.
+- [x] Stage complete document, theme, package, and identifier state atomically.
+- [x] Reject or safely replace mistyped and malformed related themes.
+- [x] Add deterministic allocation, facade, round-trip, and failure regressions.
+- [x] Record Word and Pages evidence at the exact candidate SHA and digest.
+- [x] Run the full gate, hash harness, crate DAG, package dry-run, and archive-size checks.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

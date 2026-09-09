@@ -515,10 +515,17 @@ unrelated part merely because the conventional comment path exists.
 Word chart assembly follows the same independent suffix rule as PowerPoint.
 The document relationship targets `/word/charts/chartN.xml`, and that chart's
 package relationship targets `/word/embeddings/WorkbookN.xlsx`. Both parts and
-their content-type overrides are staged with the drawing on cloned package and
+their content-type overrides are staged with the drawing on complete typed
 document state. The mutation becomes visible only after the typed ChartML,
-SpreadsheetML workbook, relationships, content types, and structured drawing
-all serialize successfully.
+SpreadsheetML workbook, relationships, content types, structured drawing,
+theme projection, and shared identifier owner all validate.
+
+An authored Word chart requires one effective internal document-theme edge.
+Its target must exist, carry the exact theme content type, and parse as a
+DrawingML theme. A valid related theme is reused. Otherwise the facade stages
+the Office default under a collision-safe `/word/theme/themeN.xml` name and
+retargets the ineffective theme edge or allocates a new one. Source theme bytes
+remain unchanged, and preserved charts do not synthesize themes.
 
 ## Media
 

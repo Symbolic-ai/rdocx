@@ -682,6 +682,30 @@ workbook rejection, nested ZIP limits, and atomic residual-scan failure. The
 native-only API is absent from Python, WASM, and CLI wrappers. No sample invokes
 redaction, so all 49 hash entries remain unchanged.
 
+The portable authored-chart gate constructs line, bar, pie, and doughnut
+documents through the public Word API. Focused regressions check axis titles,
+explicit visibility, value-axis formats, series and indexed point colours,
+one-series legends, percentage labels, the doughnut hole, exact workbook data,
+complete staged identifiers, typed theme reuse, collision handling, malformed
+theme replacement, failure atomicity, and save/reopen preservation. A facade
+test proves that `oxml-chart`, `rdocx`, and `rpptx` expose the same `RgbColor`.
+
+The ignored external oracle generates the exact
+`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`
+candidate in code. Microsoft Word 16.112.3 build 16.112.26083020 must open it
+without repair. Pages Creator Studio 15.1.1 build 7044.0.273 must render the
+declared axes, colours, percentages, legend, and doughnut shape, then export
+DOCX bytes whose ChartML and relationship-owned workbooks retain the source
+semantics across all four editable workbooks. The test opens the candidate
+through macOS LaunchServices before AppleScript export so Pages receives the
+sandbox-scoped file URL. Each run records the exported
+DOCX digest. That digest is not a fixed expectation because Pages recalculates
+manual chart layout coordinates and drawing extents between exports. The gate
+compares the parsed chart and workbook semantics instead of producer bytes.
+This gate hardens Kevin Brown's PR 71 contribution without importing its stale
+delivery records. No standard sample authors a chart, so all 49 hash entries
+remain unchanged.
+
 The watermark golden gate builds a five-page document in code, renders with
 bundled fonts, and compares the exact PNG-byte digest for every page. It also
 requires the selected watermark group to precede ordinary header and body

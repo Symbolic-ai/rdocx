@@ -20,6 +20,14 @@ const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aa
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const MHTML_ORACLE_HTML: &str = "<h1>Oracle title</h1><p><strong>bold</strong> <a href='https://example.test/'>link</a><img src='https://example.test/pixel.png' width='2' height='3'></p><ol><li>one</li><li>two</li></ol><table><tr><td>cell</td></tr></table>";
 
+#[test]
+fn chart_rgb_colour_is_reexported_by_all_three_facades() {
+    let shared = oxml_chart::RgbColor::new(0x2B, 0x6F, 0xE3);
+    let word: rdocx::RgbColor = shared;
+    let presentation: rpptx::RgbColor = word;
+    assert_eq!(presentation, shared);
+}
+
 mod fresh_word_package_profile_tests {
     use super::*;
     use oxml_opc::content_types;
@@ -2264,6 +2272,7 @@ fn encoded_drawing_relationship_ids_reopen_extract_and_render() {
                 categories: vec!["North".to_owned(), "South".to_owned()],
                 series: vec![("Revenue".to_owned(), vec![12.0, 18.0])],
                 number_format: Some("0".to_owned()),
+                ..oxml_chart::ChartData::default()
             },
         )
         .unwrap();

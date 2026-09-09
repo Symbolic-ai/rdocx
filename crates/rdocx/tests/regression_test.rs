@@ -12588,6 +12588,7 @@ fn redaction_removes_chart_cache_and_embedded_workbook_traces() {
                 categories: vec!["secret north".to_owned(), "public".to_owned()],
                 series: vec![("secret revenue".to_owned(), vec![12.5, 19.0])],
                 number_format: None,
+                ..ChartData::default()
             },
         )
         .unwrap();
@@ -12606,6 +12607,7 @@ fn redaction_removes_chart_cache_and_embedded_workbook_traces() {
                 categories: vec!["north".to_owned(), "south".to_owned()],
                 series: vec![("revenue".to_owned(), vec![12.5, 19.0])],
                 number_format: None,
+                ..ChartData::default()
             },
         )
         .unwrap();
@@ -12684,6 +12686,7 @@ fn redaction_failure_is_atomic() {
                 categories: vec!["secret".to_owned()],
                 series: vec![("public".to_owned(), vec![1.0])],
                 number_format: None,
+                ..ChartData::default()
             },
         )
         .unwrap();

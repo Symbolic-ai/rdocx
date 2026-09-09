@@ -10916,6 +10916,7 @@ fn f124_chart_data() -> ChartData {
             ("Cost".to_owned(), vec![8.0, 11.5, 9.75]),
         ],
         number_format: Some("0.00".to_owned()),
+        ..ChartData::default()
     }
 }
 
@@ -11273,26 +11274,31 @@ fn add_chart_rejects_invalid_data_without_mutation() {
             categories: Vec::new(),
             series: vec![("Revenue".to_owned(), Vec::new())],
             number_format: None,
+            ..ChartData::default()
         },
         ChartData {
             categories: vec!["North".to_owned()],
             series: Vec::new(),
             number_format: None,
+            ..ChartData::default()
         },
         ChartData {
             categories: vec!["North".to_owned(), "South".to_owned()],
             series: vec![("Revenue".to_owned(), vec![12.5])],
             number_format: None,
+            ..ChartData::default()
         },
         ChartData {
             categories: vec!["North".to_owned()],
             series: vec![("Revenue".to_owned(), vec![f64::NAN])],
             number_format: None,
+            ..ChartData::default()
         },
         ChartData {
             categories: vec!["North".to_owned()],
             series: vec![("Revenue".to_owned(), vec![12.5])],
             number_format: Some(String::new()),
+            ..ChartData::default()
         },
     ];
     for data in invalid {
@@ -11351,6 +11357,7 @@ fn add_chart_rejects_invalid_data_without_mutation() {
         categories: vec!["not numeric".to_owned()],
         series: vec![("Revenue".to_owned(), vec![12.5])],
         number_format: None,
+        ..ChartData::default()
     };
     assert!(
         presentation
@@ -11374,6 +11381,7 @@ fn add_chart_authors_each_supported_family() {
         categories: vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
         series: vec![("Revenue".to_owned(), vec![12.5, 19.0, 14.25])],
         number_format: None,
+        ..ChartData::default()
     };
     for (kind, plot_element) in [
         (ChartKind::Bar, "c:barChart"),

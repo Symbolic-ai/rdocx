@@ -4551,7 +4551,8 @@ Integrate Kevin Brown's PR 71 contribution as a hardened S71 scope exception.
 Authored Word charts remain editable across Microsoft Word and Apple Pages
 without image flattening. Typed axis titles, explicit visible axes, value-axis
 number formats, generic RGB palettes, category-point colours, pie and doughnut
-legends, and explicit doughnut holes serialize in schema order. A chart gains a
+legends, percentage labels, explicit doughnut holes, and optional numeric-cache
+format omission serialize in schema order. A chart gains a
 relationship-owned Office theme only when no valid theme exists. A related
 theme is valid only when its target exists, has the theme content type, and
 parses as a DrawingML theme.
@@ -4565,10 +4566,15 @@ identity.
 **Depends on**: F-158, F-245, F-249.
 **Test gate**: differential. At the reviewed S71 implementation SHA,
 source-built line, bar, pie, and doughnut documents save and reopen with exact
-chart and editable-workbook semantics. Microsoft Word 16.112.2 build
-16.112.26082125 opens the exact candidate without repair. Apple Pages 14.5
-build 7045.0.17 renders the authored axes, colours, legend, percentages, and
-doughnut shape, then exports a DOCX whose chart and workbook data remain exact.
+chart and editable-workbook semantics. The candidate has SHA-256
+`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`.
+Microsoft Word 16.112.3 build
+16.112.26083020 opens the exact candidate without repair. Pages Creator Studio
+15.1.1 build 7044.0.273 renders the authored axes, colours, legend, percentages,
+and doughnut shape, then exports a DOCX whose chart and workbook data remain
+exact across all four editable workbooks. Each run records the export digest,
+while the gate compares parsed semantics because Pages recalculates manual
+chart layout coordinates and drawing extents between exports.
 Malformed correctly typed themes fail or are replaced on a staged candidate
 without changing retained source bytes. The hash harness remains unchanged at
 49 of 49.

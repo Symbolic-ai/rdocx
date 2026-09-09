@@ -292,6 +292,11 @@ theme part or creates the missing package edge atomically. Word layout projects
 the shared value through `rdocx_oxml::theme::Theme`. The legacy Word tint and
 shade helper remains unchanged.
 
+Callers with a concrete palette construct `ColorChoice` through
+`ColorChoice::srgb(RgbColor)`. `oxml-chart` re-exports the same `RgbColor`, so
+Word and PowerPoint chart facades share one colour value while the DrawingML
+writer retains ownership of fixed-prefix `a:srgbClr` serialization.
+
 ## Preservation
 
 Anything not in the list above is captured verbatim through

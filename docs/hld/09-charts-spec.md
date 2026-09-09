@@ -405,6 +405,9 @@ pub struct ChartData {
     pub categories: Vec<String>,
     pub series: Vec<(String, Vec<f64>)>,
     pub number_format: Option<String>,
+    pub category_axis_title: Option<String>,
+    pub value_axis_title: Option<String>,
+    pub palette: Vec<RgbColor>,
 }
 
 pub fn authored_chart_parts(
@@ -446,6 +449,18 @@ valid. Pie and doughnut charts accept one series. Scatter categories must
 parse as finite numeric values. Each owning facade validates that both chart
 extents are positive before staging package mutation.
 
+Cartesian authoring emits explicit visible axes in schema order. Optional axis
+titles use typed rich text, and the value axis receives the requested number
+format. An empty palette retains theme-derived styling. A nonempty palette
+cycles across series, while one-series bars and pie-family plots also receive
+indexed category-point colours. Pie and doughnut charts emit a one-series
+category legend and percentage labels. Doughnut charts write the 50 percent
+hole explicitly.
+
+Numeric-reference caches accept an omitted optional `c:formatCode` as General.
+An unchanged cache preserves that omission, while selecting another format
+materializes the element in its schema position.
+
 The Presentation facade owns its mutation because package parts and
 relationships are not available through `SlideMut`. One call writes the typed
 chart part, one editable workbook part, the slide-to-chart and
@@ -468,11 +483,28 @@ as the sole write-back source, including unmodelled producer children.
 `Document::add_chart` uses Word flow placement rather than slide coordinates.
 It accepts width and height, appends one paragraph containing an inline chart
 drawing, and returns that paragraph for ordinary formatting. The Word facade
-stages the shared helper output, document-to-chart relationship,
-chart-to-workbook package relationship, both content-type overrides, and the
-drawing as one atomic package mutation. Serialization or validation failure
-leaves the document unchanged. Chart and workbook names allocate independently
-after the greatest occupied positive suffix.
+stages its complete `Document`, shared identifier owner, typed theme state, the
+shared helper output, document-to-chart relationship, chart-to-workbook package
+relationship, both content-type overrides, and the drawing as one atomic
+package mutation. A related theme is reusable only when its internal target
+exists, has the exact theme content type, and parses successfully. A missing,
+mistyped, or malformed theme receives a collision-safe Office default without
+overwriting retained source bytes. Serialization or validation failure leaves
+the document unchanged. Chart and workbook names allocate independently after
+the greatest occupied positive suffix.
+
+The source-built portable candidate has SHA-256
+`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`.
+Its automated gate saves and reopens line, bar, pie, and doughnut charts with
+exact ChartML and editable-workbook semantics. The external gate remains bound
+to Microsoft Word 16.112.3 build 16.112.26083020 and Pages Creator Studio
+15.1.1 build 7044.0.273. Each run records the Pages Creator Studio export
+digest, then structurally verifies all four chart parts and editable workbooks.
+The digest is evidence rather than a fixed gate because Pages recalculates
+manual chart layout coordinates and drawing extents between exports.
+Pages Creator Studio may rewrite a formula-backed value series as `c:numLit`.
+The gate accepts only the expected two-point literal form when the
+reference-backed typed authoring model reports that specific mismatch.
 
 `Document::redact_text` keeps the two chart representations synchronized in a
 staged package. It removes the exact literal from DrawingML labels and string
