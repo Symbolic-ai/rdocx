@@ -8,7 +8,8 @@ business-document corpus. The public facade must create each foundation from
 scratch, save and reopen it without repair, and preserve deterministic package
 and rendering behavior. The approved scope exceptions also harden Kevin
 Brown's PR 71 authored Word charts and verify the S70 Issue 69 fixes before the
-issue is closed.
+issue is closed. The product and every crate README also present shipped value
+and evidence-backed differentiation before implementation status.
 
 ## Spec references
 
@@ -45,6 +46,7 @@ issue is closed.
 | F-248 | Style-linked numbering, counters, TOC, and REF | L | in-progress | codex |
 | F-X087 | Portable authored Word charts from PR 71 | L | in-progress | codex |
 | F-X088 | Verify and close Issue 69 after S70 fixes | S | in-progress | codex |
+| F-X089 | Capability-led README family | L | pending | - |
 
 ## Sequencing note
 
@@ -57,11 +59,14 @@ those foundations. F-246 follows F-245 so effective styles resolve through the
 authored theme and font state. F-248 begins only after F-246 and F-247 complete
 both sides of the style-linked numbering invariant.
 
-F-X087 and F-X088 are user-approved scope exceptions. They raise S71 from the
-usual maximum of seven F-IDs to nine. F-X087 integrates Kevin Brown's PR 71
+F-X087 through F-X089 are user-approved scope exceptions. They raise S71 from
+the usual maximum of seven F-IDs to ten. F-X087 integrates Kevin Brown's PR 71
 through the sprint branch, preserves contributor credit, and reaches `main`
 only through `/close-sprint`. F-X088 verifies the three completed S70 fixes
 against the live Issue 69 report before posting evidence and closing the issue.
+F-X089 restores capability-led product messaging at the root and across every
+crate without weakening the checked accuracy contract established by F-242 and
+F-X009.
 
 ## Definition of done for this sprint
 
@@ -94,3 +99,6 @@ against the live Issue 69 report before posting evidence and closing the issue.
 - Issue 69 is closed only after all six focused S70 regressions and the full
   gate pass on the reviewed S71 SHA, with `@emptinessform` credited and the
   affected v0.13.1 release stated accurately.
+- The root and all 26 crate READMEs lead with shipped value, checked examples,
+  and accurate package relationships. The root comparison demonstrates the
+  toolkit's breadth through dated official evidence without volatile claims.
