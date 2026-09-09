@@ -46,7 +46,7 @@ and evidence-backed differentiation before implementation status.
 | F-248 | Style-linked numbering, counters, TOC, and REF | L | in-progress | codex |
 | F-X087 | Portable authored Word charts from PR 71 | L | in-progress | codex |
 | F-X088 | Verify and close Issue 69 after S70 fixes | S | in-progress | codex |
-| F-X089 | Capability-led README family | L | pending | - |
+| F-X089 | Capability-led README family | L | in-progress | codex |
 
 ## Sequencing note
 
