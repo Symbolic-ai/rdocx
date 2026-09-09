@@ -410,6 +410,10 @@ defended.
 | F-244 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic settings plus core, application, and custom property authoring with deterministic removal and raw XML preservation |
 | F-246 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic paragraph, character, and table style graphs with effective resolution and pinned Word formatting parity |
 | F-247 | S71 | L | 4 | 1 | 2026-09-09 | Added complete numbering definitions, levels, instances, and overrides with atomic graph validation, exact XML preservation, and non-coercing export behavior |
+| F-248 | S71 | L | 4 | 1 | 2026-09-09 | Added atomic style-linked numbering plus result-local counters shared by body, table, TOC, and REF output |
+| F-X087 | S71 | L | 4 | 1 | 2026-09-09 | Folded Kevin Brown's PR 71 into portable editable Word charts with atomic theme ownership and verified Word and Pages interoperability |
+| F-X088 | S71 | S | 1 | 1 | 2026-09-09 | Verified all Issue 69 fixes with six regressions and 21-sample timing evidence, credited the reporter, and closed the issue |
+| F-X089 | S71 | L | 4 | 1 | 2026-09-09 | Reframed the root and all 26 crate READMEs around implemented outcomes, checked examples, and bounded official comparisons |
 
 ## Velocity
 

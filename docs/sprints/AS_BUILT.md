@@ -12605,3 +12605,181 @@ the largest archive was 4,603,514 bytes against the 10 MiB limit.
 story references inside one atomic validation boundary. Preserve producer XML
 verbatim, and never invent render semantics for a typed format that an exporter
 does not support.
+
+### F-248, Style-linked numbering, counters, TOC, and REF
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now links and unlinks paragraph
+styles and numbering levels atomically. Result-local counters cover concrete
+instances, overrides, continuation, restarts, sections, table cells, `numId`
+zero suppression, numbered TOC entries, and numbering-aware REF fields.
+
+**Non-obvious choices.** Distinct concrete instances start independently even
+when they share an abstract definition. This intentionally differs from the
+captured Word 16.112.3 shared-definition sequence. Imported numbering and style
+XML retains namespace aliases, producer attributes, revisions, unmodelled
+children, and schema positions.
+
+**Deviations from the design plan.** None. Three microscope passes closed
+counter projection, XML escaping, and oracle-provenance gaps. Pass 3 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md`.
+
+**Tests.** `three_level_style_linked_numbering_matches_pinned_word`,
+`style_numbering_link_is_atomic_in_both_directions`,
+`num_id_zero_suppresses_only_the_selected_paragraph`,
+`numbering_state_crosses_tables_and_sections_in_document_order`, and
+`style_linked_numbering_survives_reopen_and_rebuild` passed. The differential
+compared 27 exact Word records, three normalized TOC records, and a two-page
+150 DPI visual oracle. Its minimum ink coverage was 0.983131 and every edge,
+distribution, and projection threshold passed. The test gate was proven
+mutation-sensitive. The integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the style and numbering sides inside one
+staged validation boundary. Body, table, TOC, and REF output must share the same
+result-local counter projection.
+
+### F-X087, Portable authored Word charts from PR 71
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Kevin Brown's PR 71 contribution is folded into S71 as a
+hardened authored Word chart path. Line, bar, pie, and doughnut charts retain
+editable workbooks, typed axes, titles, number formats, legends, series and
+point colours, percentage labels, and explicit doughnut holes across save and
+reopen. The shared `RgbColor` is available through the chart, Word, and
+PowerPoint facades.
+
+**Non-obvious choices.** A related Office theme is reused only when its target,
+content type, and DrawingML parse all validate. Otherwise a collision-safe
+default is staged without overwriting retained source bytes. Complete document,
+theme, package, relationship, content-type, and identifier state publishes in
+one atomic mutation. Pages export digests are evidence rather than fixed gates
+because Pages recalculates manual chart layout values between exports.
+
+**Deviations from the design plan.** None. Four microscope passes closed theme,
+atomicity, schema-order, public migration, and external-oracle gaps. Pass 4
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/09-charts-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The authored line, bar, pie, and doughnut round-trip, theme
+atomicity, deterministic allocation, and three-facade colour gates passed. The
+source candidate SHA-256 was
+`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`.
+Microsoft Word 16.112.3 build 16.112.26083020 opened it without repair. Pages
+Creator Studio 15.1.1 build 7044.0.273 rendered the declared visual facts and
+exported four semantically exact editable workbooks. The final observed export
+SHA-256 was
+`ac5ce7c4cb0f6389286f271af3c71ec4b18c35bca28c5b6a22ea24126c95504f`.
+The integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve Kevin Brown's contribution credit in
+the next stable release. PR 71 remains the source contribution record, while
+the reviewed hardened equivalent reaches `main` only through `/close-sprint`.
+
+### F-X088, Verify and close Issue 69 after S70 fixes
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The three S70 Issue 69 mechanisms were verified together
+against the exact v0.13.1 release and the integrated S71 source. Six focused
+correctness regressions passed, a qualified same-environment timing
+reconstruction measured every reported edit family, and Issue 69 was closed
+with authenticated evidence and credit for `@emptinessform`.
+
+**Non-obvious choices.** The reporter fork contains no committed timing
+harness. The temporary release-mode reconstruction therefore matched the 700
+four-line paragraphs, one 3 by 3 table every 50 paragraphs, 63-page prime,
+three edit positions, warmup, seven alternating rounds, and deterministic
+fonts while explicitly distinguishing direct macOS engine mutation from the
+reported Windows editor environment.
+
+**Deviations from the design plan.** None. Three microscope passes checked the
+correctness, timing, external-state, credit, and evidence boundaries. Pass 3
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** All six note invalidation, restart identity, and sourced edit
+regressions passed. Each operation had 21 measured samples. The v0.13.1 and S71
+minimum and median times in milliseconds were 13.954 and 15.151 versus 13.832
+and 15.310 for typing, 45.115 and 48.157 versus 14.213 and 14.688 for footnote
+insertion, 51.323 and 52.845 versus 19.928 and 22.269 for footnote deletion,
+13.328 and 13.933 versus 13.549 and 13.978 for Enter, 13.721 and 14.136 versus
+13.389 and 14.159 for merge, and 13.454 and 13.790 versus 13.360 and 13.956 for
+selection deletion. Footnote insertion and deletion medians fell by 69.5 and
+57.9 percent, and all S71 medians were at most 22.269 milliseconds. Note edits
+changed from zero cache hits and 700 builds to 699 hits and one build. The
+integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** v0.13.1 remains affected. The next stable
+release inventory must retain Issue 69 and offered commits `4777a741`,
+`eff0ea0c`, `9e48bc86`, and `c8315b92`, with no promised release date.
+
+### F-X089, Capability-led README family
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The root README now leads with the complete native document
+workflow, an implemented capability summary, checked examples, and a dated
+official-source comparison. All 26 crate READMEs now lead with the outcome each
+consumer can achieve, implemented highlights, direct-use guidance, workspace
+relationships, installation or invocation instructions, and a checked example.
+
+**Non-obvious choices.** Exact limitations remain one click away in the
+canonical capability matrix instead of dominating the product front page.
+Comparison claims are bounded to reviewed alternatives and official evidence.
+Volatile price, popularity, footprint, memory, and performance claims stay out
+unless a reproducible repository measurement supports them.
+
+**Deviations from the design plan.** None. Three microscope passes closed
+boundary wording, comparison-row validation, evidence multiplicity, package
+status, and mutation-coverage gaps. Pass 3 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The capability narrative, crate audience, local-link, official
+comparison, inventory, metadata, snippet, and archive mutation matrices passed.
+`python3 scripts/readme_doctests.py` validated 27 README files, compiled 23
+Rust examples, and matched the exact 22 publishable archive inventories.
+`python3 scripts/readme_doctests.py --check-official-links` resolved all ten
+approved official sources. Every package dry run and archive-size check passed.
+The integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the root README focused on outcomes and
+keep every crate page specific to its direct consumer. Extend the existing
+validator whenever the public message gains a new claim or comparison row.
