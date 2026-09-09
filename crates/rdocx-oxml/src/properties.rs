@@ -1,6 +1,11 @@
 //! Paragraph properties (`CT_PPr`) and run properties (`CT_RPr`).
 
+use std::borrow::Cow;
+
+use quick_xml::escape::escape;
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::name::QName;
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::borders::{CT_PBdr, CT_Tabs};
@@ -8,7 +13,9 @@ use crate::document::CT_SectPr;
 use crate::error::Result;
 use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{
-    local_namespace_overrides, merged_owner_bindings, parse_scoped_rpr_with_owner_bindings,
+    local_namespace_overrides, merged_owner_bindings, namespace_binding, namespace_bindings,
+    parse_scoped_rpr_with_owner_bindings, typed_leaf_requires_raw, typed_leaf_value,
+    write_typed_leaf_raw,
 };
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::CT_Revision;
@@ -141,14 +148,32 @@ pub struct CT_PPr {
     pub rpr: Option<CT_RPr>,
     /// Numbering level (numPr/ilvl)
     pub num_ilvl: Option<u32>,
+    /// Original value and XML carrier for `w:numPr/w:ilvl`.
+    #[doc(hidden)]
+    pub num_ilvl_raw: Option<(Option<u32>, Vec<u8>, Vec<String>)>,
     /// Numbering ID (numPr/numId)
     pub num_id: Option<u32>,
+    /// Original value and XML carrier for `w:numPr/w:numId`.
+    #[doc(hidden)]
+    pub num_id_raw: Option<(Option<u32>, Vec<u8>, Vec<String>)>,
+    /// Unmodelled attributes and namespace declarations from `w:numPr`.
+    #[doc(hidden)]
+    pub num_pr_extra_attributes: Vec<(String, String)>,
+    /// Unmodelled children retained at their schema-child boundary in `w:numPr`.
+    #[doc(hidden)]
+    pub num_pr_extra_xml: Vec<(usize, usize, Vec<u8>)>,
     /// Section properties embedded in paragraph (section break)
     pub sect_pr: Option<CT_SectPr>,
     /// Tracked insertion of the numbering properties.
     pub numbering_revision: Option<CT_Revision>,
     /// Malformed or foreign numbering markers retained inside `w:numPr`.
     pub numbering_revision_xml: Vec<Vec<u8>>,
+    /// Schema boundaries and source ordinals for retained numbering markers.
+    #[doc(hidden)]
+    pub numbering_revision_xml_positions: Vec<(usize, usize)>,
+    /// Schema boundary and source ordinal for the typed numbering marker.
+    #[doc(hidden)]
+    pub numbering_revision_position: Option<(usize, usize)>,
     /// Prior paragraph properties from the schema-final `w:pPrChange`.
     pub change: Option<CT_Revision>,
     /// Malformed tracked-change elements retained without a typed projection.
@@ -339,6 +364,181 @@ fn flush_ppr_raw(ppr: &mut CT_PPr, pending_raw: &mut Vec<Vec<u8>>, slot: u8) {
     }
 }
 
+fn typed_num_pr_scope(
+    word_prefixes: &[String],
+    owner_bindings: &[(String, String)],
+) -> Vec<String> {
+    let mut scope = word_prefixes.to_vec();
+    for binding in word_prefixes
+        .iter()
+        .filter(|prefix| !prefix.starts_with('\0'))
+        .map(|prefix| namespace_binding(prefix, W_NS))
+        .chain(
+            owner_bindings
+                .iter()
+                .map(|(prefix, namespace)| namespace_binding(prefix, namespace)),
+        )
+    {
+        if !scope.contains(&binding) {
+            scope.push(binding);
+        }
+    }
+    scope
+}
+
+type PreservedNumPrRoot = (
+    Vec<(String, String)>,
+    Vec<(String, String)>,
+    Vec<(String, String)>,
+);
+
+fn preserved_num_pr_root_attributes(
+    root: &BytesStart<'_>,
+    word_prefixes: &[String],
+    owner_bindings: &[(String, String)],
+) -> Result<PreservedNumPrRoot> {
+    let mut attributes = root
+        .attributes()
+        .map(|attribute| {
+            let attribute = attribute?;
+            Ok((
+                std::str::from_utf8(attribute.key.as_ref())?.to_owned(),
+                std::str::from_utf8(attribute.value.as_ref())?.to_owned(),
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, root.decoder())?
+                    .into_owned(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let local_bindings = attributes
+        .iter()
+        .filter_map(|(name, _, namespace)| {
+            if name == "xmlns" {
+                Some((String::new(), namespace.clone()))
+            } else {
+                name.strip_prefix("xmlns:")
+                    .map(|prefix| (prefix.to_owned(), namespace.clone()))
+            }
+        })
+        .collect::<Vec<_>>();
+    attributes.retain(|(name, _, value)| name != "xmlns:w" || value != W_NS);
+    let typed_root_scope = typed_num_pr_scope(word_prefixes, owner_bindings);
+    let all_bindings = namespace_bindings(&typed_root_scope);
+    let root_attribute_prefixes = attributes
+        .iter()
+        .filter_map(|(name, _, _)| {
+            let (prefix, _) = name.split_once(':')?;
+            (prefix != "xmlns").then_some(prefix.to_owned())
+        })
+        .collect::<Vec<_>>();
+    for prefix in root_attribute_prefixes {
+        let declaration = format!("xmlns:{prefix}");
+        if attributes.iter().any(|(name, _, _)| name == &declaration) {
+            continue;
+        }
+        if let Some((_, namespace)) = all_bindings
+            .iter()
+            .find(|(candidate, _)| candidate == &prefix)
+        {
+            attributes.push((
+                declaration,
+                escape(namespace).into_owned(),
+                namespace.clone(),
+            ));
+        }
+    }
+    Ok((
+        attributes
+            .into_iter()
+            .map(|(name, raw_value, _)| (name, raw_value))
+            .collect(),
+        local_bindings,
+        all_bindings,
+    ))
+}
+
+fn num_pr_leaf_is_plain(raw: &[u8], word_prefixes: &[String]) -> Result<bool> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Empty(element) => {
+                return Ok(!typed_leaf_requires_raw(&element, word_prefixes, false)?);
+            }
+            Event::Start(element) => {
+                return Ok(!typed_leaf_requires_raw(&element, word_prefixes, true)?);
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn write_num_pr_leaf<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    raw: &[u8],
+    word_prefixes: &[String],
+    original: Option<u32>,
+    current: Option<u32>,
+) -> Result<()> {
+    if current == original {
+        if let Some(current) = current
+            && num_pr_leaf_is_plain(raw, word_prefixes)?
+        {
+            let value = current.to_string();
+            write_typed_leaf_raw(writer, raw, word_prefixes, Some(&value), "w")?;
+        } else {
+            writer.get_mut().write_all(raw)?;
+        }
+    } else if current.is_none() && num_pr_leaf_is_plain(raw, word_prefixes)? {
+        return Ok(());
+    } else {
+        let value = current.map(|value| value.to_string());
+        write_typed_leaf_raw(writer, raw, word_prefixes, value.as_deref(), "w")?;
+    }
+    Ok(())
+}
+
+fn raw_is_num_pr_leaf(raw: &[u8], word_prefixes: &[String], local: &[u8]) -> Result<bool> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Empty(element) | Event::Start(element) => {
+                return Ok(is_word_element(
+                    element.name().as_ref(),
+                    local,
+                    word_prefixes,
+                ));
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn write_num_pr_extras<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    extras: &[(usize, usize, Vec<u8>)],
+    boundary: usize,
+    scrub_local: Option<(&[u8], &[String])>,
+) -> Result<()> {
+    for (_, _, raw) in extras.iter().filter(|(at, _, _)| *at == boundary) {
+        if let Some((local, word_prefixes)) = scrub_local
+            && raw_is_num_pr_leaf(raw, word_prefixes, local)?
+        {
+            if !num_pr_leaf_is_plain(raw, word_prefixes)? {
+                write_typed_leaf_raw(writer, raw, word_prefixes, None, "w")?;
+            }
+        } else {
+            writer.get_mut().write_all(raw)?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(non_snake_case)]
 impl CT_PPr {
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
@@ -386,6 +586,7 @@ impl CT_PPr {
                             merged_owner_bindings(owner_bindings, &local_bindings);
                         Self::parse_num_pr(
                             reader,
+                            e,
                             &mut ppr,
                             &prefixes,
                             &num_pr_bindings,
@@ -537,6 +738,9 @@ impl CT_PPr {
                         }
                     } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
                         ppr.shading = Some(CT_Shd::from_xml_attrs(e)?);
+                    } else if is_word_element(name.as_ref(), b"numPr", &prefixes) {
+                        ppr.num_pr_extra_attributes =
+                            preserved_num_pr_root_attributes(e, &prefixes, owner_bindings)?.0;
                     } else if is_word_element(name.as_ref(), b"pPrChange", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_empty_element(e)?,
@@ -595,71 +799,196 @@ impl CT_PPr {
 
     fn parse_num_pr(
         reader: &mut Reader<&[u8]>,
+        root: &BytesStart<'_>,
         ppr: &mut CT_PPr,
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
         change_raw_index: &mut usize,
     ) -> Result<()> {
+        let (attributes, local_bindings, all_bindings) =
+            preserved_num_pr_root_attributes(root, word_prefixes, owner_bindings)?;
+        ppr.num_pr_extra_attributes = attributes;
+        let child_external_bindings = all_bindings
+            .iter()
+            .filter(|binding| {
+                !local_bindings.contains(binding) && !(binding.0 == "w" && binding.1 == W_NS)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let mut buf = Vec::new();
+        let mut boundary = 0usize;
+        let mut source_ordinal = 0usize;
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
+                    let typed_scope = typed_num_pr_scope(&prefixes, owner_bindings);
                     if is_word_element(name.as_ref(), b"ilvl", &prefixes) {
-                        if let Some(val) = get_word_val_attr(e, &prefixes)? {
-                            ppr.num_ilvl = Some(val.parse()?);
+                        let parsed =
+                            typed_leaf_value(e, &prefixes)?.and_then(|value| value.parse().ok());
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            &child_external_bindings,
+                        )?;
+                        if let Some((_, previous, _)) =
+                            ppr.num_ilvl_raw.replace((parsed, raw, typed_scope))
+                        {
+                            ppr.num_pr_extra_xml.push((0, source_ordinal, previous));
                         }
-                    } else if is_word_element(name.as_ref(), b"numId", &prefixes)
-                        && let Some(val) = get_word_val_attr(e, &prefixes)?
-                    {
-                        ppr.num_id = Some(val.parse()?);
+                        ppr.num_ilvl = parsed;
+                        boundary = 1;
+                    } else if is_word_element(name.as_ref(), b"numId", &prefixes) {
+                        let parsed =
+                            typed_leaf_value(e, &prefixes)?.and_then(|value| value.parse().ok());
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            &child_external_bindings,
+                        )?;
+                        if let Some((_, previous, _)) =
+                            ppr.num_id_raw.replace((parsed, raw, typed_scope))
+                        {
+                            ppr.num_pr_extra_xml.push((1, source_ordinal, previous));
+                        }
+                        ppr.num_id = parsed;
+                        boundary = 2;
+                    } else if is_word_element(name.as_ref(), b"numberingChange", &prefixes) {
+                        ppr.num_pr_extra_xml.push((
+                            3,
+                            source_ordinal,
+                            crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                &child_external_bindings,
+                            )?,
+                        ));
+                        boundary = 3;
                     } else if is_word_element(name.as_ref(), b"ins", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_empty_element(e)?,
-                            owner_bindings,
+                            &child_external_bindings,
                         )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = ppr.numbering_revision.replace(revision) {
                                 ppr.numbering_revision_xml
                                     .insert(*change_raw_index, previous.into_raw_xml());
+                                ppr.numbering_revision_xml_positions.insert(
+                                    *change_raw_index,
+                                    ppr.numbering_revision_position
+                                        .unwrap_or((3, source_ordinal)),
+                                );
                             }
                             *change_raw_index = ppr.numbering_revision_xml.len();
+                            ppr.numbering_revision_position =
+                                Some((if boundary < 4 { 3 } else { 4 }, source_ordinal));
                         } else {
                             ppr.numbering_revision_xml.push(raw);
+                            ppr.numbering_revision_xml_positions
+                                .push((if boundary < 4 { 3 } else { 4 }, source_ordinal));
                         }
+                        boundary = 4;
                     } else if matches_local_name(name.as_ref(), b"ins") {
                         ppr.numbering_revision_xml
                             .push(crate::text::raw_with_external_bindings(
                                 &capture_empty_element(e)?,
-                                owner_bindings,
+                                &child_external_bindings,
                             )?);
+                        ppr.numbering_revision_xml_positions
+                            .push((if boundary < 4 { 3 } else { 4 }, source_ordinal));
+                        boundary = 4;
+                    } else {
+                        ppr.num_pr_extra_xml.push((
+                            boundary,
+                            source_ordinal,
+                            crate::text::raw_with_external_bindings(
+                                &capture_empty_element(e)?,
+                                &child_external_bindings,
+                            )?,
+                        ));
                     }
                 }
                 Ok(Event::Start(ref e)) => {
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(e.name().as_ref(), b"ins", &prefixes) {
+                    let typed_scope = typed_num_pr_scope(&prefixes, owner_bindings);
+                    if is_word_element(e.name().as_ref(), b"ilvl", &prefixes) {
+                        let parsed =
+                            typed_leaf_value(e, &prefixes)?.and_then(|value| value.parse().ok());
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
-                            owner_bindings,
+                            &child_external_bindings,
+                        )?;
+                        if let Some((_, previous, _)) =
+                            ppr.num_ilvl_raw.replace((parsed, raw, typed_scope))
+                        {
+                            ppr.num_pr_extra_xml.push((0, source_ordinal, previous));
+                        }
+                        ppr.num_ilvl = parsed;
+                        boundary = 1;
+                    } else if is_word_element(e.name().as_ref(), b"numId", &prefixes) {
+                        let parsed =
+                            typed_leaf_value(e, &prefixes)?.and_then(|value| value.parse().ok());
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            &child_external_bindings,
+                        )?;
+                        if let Some((_, previous, _)) =
+                            ppr.num_id_raw.replace((parsed, raw, typed_scope))
+                        {
+                            ppr.num_pr_extra_xml.push((1, source_ordinal, previous));
+                        }
+                        ppr.num_id = parsed;
+                        boundary = 2;
+                    } else if is_word_element(e.name().as_ref(), b"numberingChange", &prefixes) {
+                        ppr.num_pr_extra_xml.push((
+                            3,
+                            source_ordinal,
+                            crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                &child_external_bindings,
+                            )?,
+                        ));
+                        boundary = 3;
+                    } else if is_word_element(e.name().as_ref(), b"ins", &prefixes) {
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            &child_external_bindings,
                         )?;
                         if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                             if let Some(previous) = ppr.numbering_revision.replace(revision) {
                                 ppr.numbering_revision_xml
                                     .insert(*change_raw_index, previous.into_raw_xml());
+                                ppr.numbering_revision_xml_positions.insert(
+                                    *change_raw_index,
+                                    ppr.numbering_revision_position
+                                        .unwrap_or((3, source_ordinal)),
+                                );
                             }
                             *change_raw_index = ppr.numbering_revision_xml.len();
+                            ppr.numbering_revision_position =
+                                Some((if boundary < 4 { 3 } else { 4 }, source_ordinal));
                         } else {
                             ppr.numbering_revision_xml.push(raw);
+                            ppr.numbering_revision_xml_positions
+                                .push((if boundary < 4 { 3 } else { 4 }, source_ordinal));
                         }
+                        boundary = 4;
                     } else if matches_local_name(e.name().as_ref(), b"ins") {
                         ppr.numbering_revision_xml
                             .push(crate::text::raw_with_external_bindings(
                                 &capture_element(reader, e)?,
-                                owner_bindings,
+                                &child_external_bindings,
                             )?);
+                        ppr.numbering_revision_xml_positions
+                            .push((if boundary < 4 { 3 } else { 4 }, source_ordinal));
+                        boundary = 4;
                     } else {
-                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
+                        ppr.num_pr_extra_xml.push((
+                            boundary,
+                            source_ordinal,
+                            crate::text::raw_with_external_bindings(
+                                &capture_element(reader, e)?,
+                                &child_external_bindings,
+                            )?,
+                        ));
                     }
                 }
                 Ok(Event::End(ref e))
@@ -671,6 +1000,7 @@ impl CT_PPr {
                 Err(e) => return Err(e.into()),
                 _ => {}
             }
+            source_ordinal += 1;
             buf.clear();
         }
         Ok(())
@@ -715,27 +1045,110 @@ impl CT_PPr {
         }
 
         // numPr
+        let ilvl_raw_retained = match &self.num_ilvl_raw {
+            Some((original, raw, prefixes)) => {
+                self.num_ilvl == *original
+                    || self.num_ilvl.is_some()
+                    || !num_pr_leaf_is_plain(raw, prefixes)?
+            }
+            None => false,
+        };
+        let num_id_raw_retained = match &self.num_id_raw {
+            Some((original, raw, prefixes)) => {
+                self.num_id == *original
+                    || self.num_id.is_some()
+                    || !num_pr_leaf_is_plain(raw, prefixes)?
+            }
+            None => false,
+        };
         if self.num_id.is_some()
             || self.num_ilvl.is_some()
+            || num_id_raw_retained
+            || ilvl_raw_retained
+            || !self.num_pr_extra_attributes.is_empty()
+            || !self.num_pr_extra_xml.is_empty()
             || self.numbering_revision.is_some()
             || !self.numbering_revision_xml.is_empty()
         {
-            writer.write_event(Event::Start(BytesStart::new("w:numPr")))?;
-            if let Some(ilvl) = self.num_ilvl {
+            let mut num_pr = BytesStart::new("w:numPr");
+            for (name, value) in &self.num_pr_extra_attributes {
+                if name == "xmlns:w" && value != W_NS {
+                    return Err(crate::error::OxmlError::InvalidValue(
+                        "w:numPr shadows the Word namespace".to_owned(),
+                    ));
+                }
+                num_pr.push_attribute(Attribute {
+                    key: QName(name.as_bytes()),
+                    value: Cow::Borrowed(value.as_bytes()),
+                });
+            }
+            writer.write_event(Event::Start(num_pr))?;
+            let ilvl_scrub = self
+                .num_ilvl_raw
+                .as_ref()
+                .and_then(|(original, _, prefixes)| {
+                    (original.is_some() && self.num_ilvl.is_none())
+                        .then_some((b"ilvl".as_slice(), prefixes.as_slice()))
+                });
+            write_num_pr_extras(writer, &self.num_pr_extra_xml, 0, ilvl_scrub)?;
+            if let Some((original, raw, prefixes)) = &self.num_ilvl_raw {
+                write_num_pr_leaf(writer, raw, prefixes, *original, self.num_ilvl)?;
+            } else if let Some(ilvl) = self.num_ilvl {
                 let mut e = BytesStart::new("w:ilvl");
                 e.push_attribute(("w:val", buf.format(ilvl)));
                 writer.write_event(Event::Empty(e))?;
             }
-            if let Some(num_id) = self.num_id {
+            let num_id_scrub = self
+                .num_id_raw
+                .as_ref()
+                .and_then(|(original, _, prefixes)| {
+                    (original.is_some() && self.num_id.is_none())
+                        .then_some((b"numId".as_slice(), prefixes.as_slice()))
+                });
+            write_num_pr_extras(writer, &self.num_pr_extra_xml, 1, num_id_scrub)?;
+            if let Some((original, raw, prefixes)) = &self.num_id_raw {
+                write_num_pr_leaf(writer, raw, prefixes, *original, self.num_id)?;
+            } else if let Some(num_id) = self.num_id {
                 let mut e = BytesStart::new("w:numId");
                 e.push_attribute(("w:val", buf.format(num_id)));
                 writer.write_event(Event::Empty(e))?;
             }
-            for raw in &self.numbering_revision_xml {
-                writer.get_mut().write_all(raw)?;
+            write_num_pr_extras(writer, &self.num_pr_extra_xml, 2, None)?;
+            enum Tail<'a> {
+                Raw(&'a [u8]),
+                Extra(&'a [u8]),
+                Revision(&'a CT_Revision),
+            }
+            let mut tail = Vec::<((usize, usize, usize), Tail<'_>)>::new();
+            for (index, raw) in self.numbering_revision_xml.iter().enumerate() {
+                let position = self
+                    .numbering_revision_xml_positions
+                    .get(index)
+                    .copied()
+                    .unwrap_or((3, index));
+                tail.push(((position.0, position.1, index), Tail::Raw(raw)));
+            }
+            for (index, (boundary, ordinal, raw)) in self
+                .num_pr_extra_xml
+                .iter()
+                .enumerate()
+                .filter(|(_, (boundary, _, _))| *boundary >= 3)
+            {
+                tail.push(((*boundary, *ordinal, index), Tail::Extra(raw)));
             }
             if let Some(revision) = &self.numbering_revision {
-                revision.write_xml(writer)?;
+                let position = self.numbering_revision_position.unwrap_or((3, usize::MAX));
+                tail.push((
+                    (position.0, position.1, usize::MAX),
+                    Tail::Revision(revision),
+                ));
+            }
+            tail.sort_by_key(|(position, _)| *position);
+            for (_, child) in tail {
+                match child {
+                    Tail::Raw(raw) | Tail::Extra(raw) => writer.get_mut().write_all(raw)?,
+                    Tail::Revision(revision) => revision.write_xml(writer)?,
+                }
             }
             writer.write_event(Event::End(BytesEnd::new("w:numPr")))?;
         }
@@ -882,6 +1295,10 @@ impl CT_PPr {
             && self.rpr.is_none()
             && self.num_id.is_none()
             && self.num_ilvl.is_none()
+            && self.num_id_raw.is_none()
+            && self.num_ilvl_raw.is_none()
+            && self.num_pr_extra_attributes.is_empty()
+            && self.num_pr_extra_xml.is_empty()
             && self.sect_pr.is_none()
             && self.numbering_revision.is_none()
             && self.numbering_revision_xml.is_empty()
@@ -3025,5 +3442,206 @@ mod tests {
             .rtl,
             None
         );
+    }
+
+    #[test]
+    fn extended_num_pr_payload_survives_value_overlay_and_unlink() {
+        let mut ppr = parse_ppr(
+            r#"<w:numPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:producer" ext:root="kept"><ext:before/><w:ilvl w:val="2" ext:leaf="level"><ext:level-child/></w:ilvl><ext:between/><w:numId w:val="7" ext:leaf="id"><ext:id-child/></w:numId><ext:after/></w:numPr>"#,
+        );
+        assert_eq!((ppr.num_id, ppr.num_ilvl), (Some(7), Some(2)));
+        ppr.num_id = Some(9);
+        ppr.num_ilvl = Some(1);
+        let mut output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(
+            output,
+            r#"<w:pPr><w:numPr xmlns:ext="urn:producer" ext:root="kept"><ext:before/><w:ilvl w:val="1" ext:leaf="level"><ext:level-child/></w:ilvl><ext:between/><w:numId w:val="9" ext:leaf="id"><ext:id-child/></w:numId><ext:after/></w:numPr></w:pPr>"#
+        );
+        for retained in [
+            r#"ext:root="kept""#,
+            "<ext:before/>",
+            r#"ext:leaf="level""#,
+            "<ext:level-child/>",
+            "<ext:between/>",
+            r#"ext:leaf="id""#,
+            "<ext:id-child/>",
+            "<ext:after/>",
+        ] {
+            assert!(output.contains(retained), "{output}");
+        }
+        assert!(output.contains(r#"w:val="1""#), "{output}");
+        assert!(output.contains(r#"w:val="9""#), "{output}");
+        assert!(output.find("<w:ilvl").unwrap() < output.find("<w:numId").unwrap());
+
+        ppr.num_id = None;
+        ppr.num_ilvl = None;
+        let mut cleared = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut cleared)).unwrap();
+        let cleared = String::from_utf8(cleared).unwrap();
+        assert_eq!(
+            cleared,
+            r#"<w:pPr><w:numPr xmlns:ext="urn:producer" ext:root="kept"><ext:before/><w:ilvl ext:leaf="level"><ext:level-child/></w:ilvl><ext:between/><w:numId ext:leaf="id"><ext:id-child/></w:numId><ext:after/></w:numPr></w:pPr>"#
+        );
+    }
+
+    #[test]
+    fn self_closing_num_pr_root_attributes_retain_inherited_bindings() {
+        let raw = br#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:a&amp;b"><w:numPr ext:root="kept"/></w:pPr>"#;
+        let ppr = crate::numbering::parse_scoped_ppr(raw, &["w".to_owned()]).unwrap();
+        let mut output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            r#"<w:pPr><w:numPr ext:root="kept" xmlns:ext="urn:a&amp;b"></w:numPr></w:pPr>"#
+        );
+    }
+
+    #[test]
+    fn num_pr_alias_duplicates_and_malformed_values_remain_ordered() {
+        let mut ppr = parse_ppr(
+            r#"<q:numPr xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:producer"><q:ilvl q:val="1" ext:mark="first"/><q:ilvl q:val="2"/><ext:between/><q:numId q:val="bad"/></q:numPr>"#,
+        );
+        assert_eq!(ppr.num_ilvl, Some(2));
+        assert_eq!(ppr.num_id, None);
+
+        let mut unchanged = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut unchanged)).unwrap();
+        let unchanged = String::from_utf8(unchanged).unwrap();
+        let first = unchanged.find(r#"q:val="1" ext:mark="first""#).unwrap();
+        let second = unchanged.find(r#"q:val="2""#).unwrap();
+        let between = unchanged.find("<ext:between/>").unwrap();
+        let malformed = unchanged.find(r#"q:val="bad""#).unwrap();
+        assert!(first < second && second < between && between < malformed);
+
+        ppr.num_ilvl = Some(3);
+        ppr.num_id = Some(9);
+        let mut changed = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut changed)).unwrap();
+        let changed = String::from_utf8(changed).unwrap();
+        assert!(changed.contains(r#"q:val="1" ext:mark="first""#));
+        assert!(changed.contains(r#"q:val="3""#));
+        assert!(changed.contains(r#"q:val="9""#));
+        assert!(!changed.contains(r#"q:val="bad""#));
+    }
+
+    #[test]
+    fn foreign_num_pr_lookalikes_remain_untyped() {
+        let ppr = parse_ppr(
+            r#"<q:numPr xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:ext="urn:producer"><ext:ilvl ext:val="4"/><ext:numId ext:val="8"/></q:numPr>"#,
+        );
+        assert_eq!((ppr.num_id, ppr.num_ilvl), (None, None));
+        let mut output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(r#"<ext:ilvl ext:val="4"/>"#));
+        assert!(output.contains(r#"<ext:numId ext:val="8"/>"#));
+    }
+
+    #[test]
+    fn a_foreign_w_binding_on_num_pr_fails_closed() {
+        let ppr = parse_ppr(
+            r#"<q:numPr xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w="urn:producer"><q:numId q:val="7"/></q:numPr>"#,
+        );
+        let error = ppr
+            .to_xml(&mut Writer::new(Vec::new()))
+            .expect_err("a fixed w:numPr cannot retain a foreign w binding");
+        assert!(error.to_string().contains("shadows the Word namespace"));
+    }
+
+    #[test]
+    fn plain_num_pr_disappears_after_values_are_cleared() {
+        let mut ppr = parse_ppr(r#"<w:numPr><w:ilvl w:val="2"/><w:numId w:val="7"/></w:numPr>"#);
+        ppr.num_id = None;
+        ppr.num_ilvl = None;
+        let mut output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("numPr"), "{output}");
+    }
+
+    #[test]
+    fn num_pr_revision_and_producer_children_keep_total_source_order() {
+        let source = r#"<w:numPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:producer"><w:ins w:id="501" w:author="Ada"/><x:a/><x:ins x:mark="foreign"/><x:b/><w:ins w:id="502" w:author="Ada"/><x:c/></w:numPr>"#;
+        let write = |ppr: &CT_PPr| {
+            let mut output = Vec::new();
+            ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+            String::from_utf8(output).unwrap()
+        };
+        let assert_order = |output: &str, tokens: &[&str]| {
+            let positions = tokens
+                .iter()
+                .map(|token| {
+                    output
+                        .find(token)
+                        .unwrap_or_else(|| panic!("missing {token}: {output}"))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{output}"
+            );
+        };
+
+        let mut ppr = parse_ppr(source);
+        assert!(ppr.numbering_revision.is_some(), "{ppr:?}");
+        let output = write(&ppr);
+        assert_order(
+            &output,
+            &[
+                r#"w:id="501""#,
+                "<x:a",
+                r#"x:mark="foreign""#,
+                "<x:b",
+                r#"w:id="502""#,
+                "<x:c",
+            ],
+        );
+
+        let reopened =
+            parse_ppr(&output[output.find('>').unwrap() + 1..output.rfind("</w:pPr>").unwrap()]);
+        assert_order(
+            &write(&reopened),
+            &[
+                r#"w:id="501""#,
+                "<x:a",
+                r#"x:mark="foreign""#,
+                "<x:b",
+                r#"w:id="502""#,
+                "<x:c",
+            ],
+        );
+
+        ppr.numbering_revision = None;
+        let cleared = write(&ppr);
+        assert!(!cleared.contains(r#"w:id="502""#), "{cleared}");
+        assert_order(
+            &cleared,
+            &[
+                r#"w:id="501""#,
+                "<x:a",
+                r#"x:mark="foreign""#,
+                "<x:b",
+                "<x:c",
+            ],
+        );
+    }
+
+    #[test]
+    fn authored_num_pr_values_precede_a_retained_numbering_change() {
+        let mut ppr = parse_ppr(
+            r#"<w:numPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:numberingChange w:id="9" w:author="Ada"><w:original w:val="kept"/></w:numberingChange></w:numPr>"#,
+        );
+        ppr.num_ilvl = Some(2);
+        ppr.num_id = Some(7);
+        let mut output = Vec::new();
+        ppr.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        let ilvl = output.find("<w:ilvl").unwrap();
+        let num_id = output.find("<w:numId").unwrap();
+        let change = output.find("<w:numberingChange").unwrap();
+        assert!(ilvl < num_id && num_id < change, "{output}");
+        assert!(output.contains(r#"<w:original w:val="kept"/>"#), "{output}");
     }
 }

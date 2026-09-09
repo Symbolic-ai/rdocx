@@ -19,7 +19,7 @@ use std::path::Path;
 use diagram::{DiagramResources, ScopedDiagramResources};
 #[cfg(feature = "render")]
 use oxml_chart::CT_ChartSpace;
-pub use oxml_chart::{ChartData, ChartKind};
+pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu};
@@ -624,7 +624,7 @@ impl MediaStore {
         let mut parts = package
             .parts
             .iter()
-            .filter(|(part_name, _)| part_name.starts_with("/ppt/media/"))
+            .filter(|(part_name, _)| part_name.to_ascii_lowercase().starts_with("/ppt/media/"))
             .collect::<Vec<_>>();
         parts.sort_unstable_by_key(|(part_name, _)| part_name.as_str());
         for (part_name, bytes) in parts {
@@ -1228,10 +1228,7 @@ impl Presentation {
                 .package_rels
                 .get_by_type(rel_types::CORE_PROPERTIES)
                 .is_none()
-            && self
-                .package
-                .parts
-                .contains_key(&self.core_properties_part_name)
+            && self.package.contains_part(&self.core_properties_part_name)
         {
             return Err(Error::CorePropertiesPartCollision {
                 part_name: self.core_properties_part_name.clone(),
@@ -1518,11 +1515,11 @@ impl Presentation {
             .package
             .parts
             .keys()
-            .filter(|part| part.starts_with("/ppt/media/"))
+            .filter(|part| part.to_ascii_lowercase().starts_with("/ppt/media/"))
             .collect::<Vec<_>>();
         media_parts.sort_unstable();
         for part in media_parts {
-            if !incoming_targets.contains(part.as_str()) {
+            if !incoming_targets.contains(&part.to_ascii_lowercase()) {
                 orphan_media.push(ValidationIssue::OrphanMedia { part: part.clone() });
             }
         }
@@ -1611,13 +1608,13 @@ impl Presentation {
     }
 
     fn current_part_xml(&self, part_name: &str) -> Option<Vec<u8>> {
-        if part_name == self.presentation_part {
+        if part_name.eq_ignore_ascii_case(&self.presentation_part) {
             return self.presentation.to_xml().ok();
         }
         if let Some(slide) = self
             .slides
             .iter()
-            .find(|slide| slide.part_name == part_name)
+            .find(|slide| slide.part_name.eq_ignore_ascii_case(part_name))
         {
             return slide.slide.to_xml().ok();
         }
@@ -1625,7 +1622,7 @@ impl Presentation {
             .slides
             .iter()
             .filter_map(|slide| slide.notes.as_ref())
-            .find(|notes| notes.part_name == part_name)
+            .find(|notes| notes.part_name.eq_ignore_ascii_case(part_name))
         {
             return notes.notes.to_xml().ok();
         }
@@ -1743,8 +1740,7 @@ impl Presentation {
         if staged.comment_authors_part.is_none() {
             if staged
                 .package
-                .parts
-                .contains_key(DEFAULT_POWERPOINT_AUTHORS_PART)
+                .contains_part(DEFAULT_POWERPOINT_AUTHORS_PART)
             {
                 return Err(Error::CollaborationPartCollision {
                     part_name: DEFAULT_POWERPOINT_AUTHORS_PART.to_owned(),
@@ -1779,11 +1775,12 @@ impl Presentation {
         if staged.slides[slide_index].comments.is_none() {
             if staged
                 .package
-                .parts
-                .contains_key(DEFAULT_POWERPOINT_COMMENTS_PART)
+                .contains_part(DEFAULT_POWERPOINT_COMMENTS_PART)
                 && !staged.slides.iter().any(|slide| {
                     slide.comments.as_ref().is_some_and(|comments| {
-                        comments.part_name == DEFAULT_POWERPOINT_COMMENTS_PART
+                        comments
+                            .part_name
+                            .eq_ignore_ascii_case(DEFAULT_POWERPOINT_COMMENTS_PART)
                     })
                 })
             {
@@ -2136,28 +2133,23 @@ impl Presentation {
         collect_media_targets(&self.package, &record.part_name, &mut media_candidates);
         if let Some(notes) = &record.notes {
             collect_media_targets(&self.package, &notes.part_name, &mut media_candidates);
-            self.package.parts.remove(&notes.part_name);
-            self.package.part_rels.remove(&notes.part_name);
-            self.package
-                .content_types
-                .overrides
-                .remove(&notes.part_name);
+            self.package.remove_part(&notes.part_name);
+            self.package.remove_part_rels(&notes.part_name);
+            self.package.content_types.remove_override(&notes.part_name);
         }
         if let Some(comments) = &record.comments {
-            self.package.parts.remove(&comments.part_name);
-            self.package.part_rels.remove(&comments.part_name);
+            self.package.remove_part(&comments.part_name);
+            self.package.remove_part_rels(&comments.part_name);
             self.package
                 .content_types
-                .overrides
-                .remove(&comments.part_name);
+                .remove_override(&comments.part_name);
         }
-        self.package.parts.remove(&record.part_name);
-        self.package.part_rels.remove(&record.part_name);
+        self.package.remove_part(&record.part_name);
+        self.package.remove_part_rels(&record.part_name);
         self.package
             .content_types
-            .overrides
-            .remove(&record.part_name);
-        if let Some(relationships) = self.package.part_rels.get_mut(&self.presentation_part) {
+            .remove_override(&record.part_name);
+        if let Some(relationships) = self.package.get_part_rels_mut(&self.presentation_part) {
             relationships
                 .items
                 .retain(|relationship| relationship.id != presentation_relationship_id);
@@ -2345,12 +2337,9 @@ impl Presentation {
             }
         })?;
         self.package.set_part(&slide_part, slide_xml);
+        self.package.set_part_rels(&slide_part, slide_relationships);
         self.package
-            .part_rels
-            .insert(slide_part.clone(), slide_relationships);
-        self.package
-            .part_rels
-            .insert(self.presentation_part.clone(), presentation_relationships);
+            .set_part_rels(&self.presentation_part, presentation_relationships);
         self.package
             .content_types
             .add_override(&slide_part, content_types::SLIDE);
@@ -2450,12 +2439,9 @@ impl Presentation {
         })?;
 
         self.package.set_part(&slide_part, slide_xml);
+        self.package.set_part_rels(&slide_part, slide_relationships);
         self.package
-            .part_rels
-            .insert(slide_part.clone(), slide_relationships);
-        self.package
-            .part_rels
-            .insert(self.presentation_part.clone(), presentation_relationships);
+            .set_part_rels(&self.presentation_part, presentation_relationships);
         self.package
             .content_types
             .add_override(&slide_part, content_types::SLIDE);
@@ -2530,7 +2516,7 @@ impl Presentation {
         )
         .map_err(|error| invalid_shape_construction("add picture", error))?;
 
-        package.part_rels.insert(slide_part, relationships);
+        package.set_part_rels(&slide_part, relationships);
         self.package = package;
         self.media_store = media_store;
         let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
@@ -2767,7 +2753,7 @@ impl Presentation {
                 settings.trigger,
             )
             .map_err(|error| invalid_media_mutation("add media", error.to_string()))?;
-        staged.package.part_rels.insert(slide_part, relationships);
+        staged.package.set_part_rels(&slide_part, relationships);
         self.commit_candidate(staged)?;
         self.slides[slide_index]
             .slide
@@ -2874,7 +2860,7 @@ impl Presentation {
             }
             false
         });
-        staged.package.part_rels.insert(slide_part, relationships);
+        staged.package.set_part_rels(&slide_part, relationships);
         prune_unreachable_media(&mut staged.package, &candidates);
         staged.media_store = MediaStore::scan(&staged.package);
         self.commit_candidate(staged)
@@ -2962,7 +2948,7 @@ impl Presentation {
             }
             false
         });
-        staged.package.part_rels.insert(slide_part, relationships);
+        staged.package.set_part_rels(&slide_part, relationships);
         prune_unreachable_media(&mut staged.package, &candidates);
         staged.media_store = MediaStore::scan(&staged.package);
         self.commit_candidate(staged)
@@ -4144,7 +4130,7 @@ fn resolve_diagram_part<T>(
         return DiagramPart::External(relationship.target.clone());
     }
     let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
-    let Some(xml) = package.parts.get(&target) else {
+    let Some(xml) = package.get_part(&target) else {
         return DiagramPart::MissingTarget(target);
     };
     match parse(xml) {
@@ -4180,7 +4166,10 @@ fn collect_media_targets(package: &OpcPackage, source_part: &str, targets: &mut 
             continue;
         }
         let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
-        if target.starts_with("/ppt/media/") {
+        if target
+            .get(.."/ppt/media/".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("/ppt/media/"))
+        {
             targets.insert(target);
         }
     }
@@ -4190,7 +4179,8 @@ fn prune_unreachable_media(package: &mut OpcPackage, candidates: &HashSet<String
     for candidate in candidates {
         let reachable_from_root = package.package_rels.items.iter().any(|relationship| {
             !relationship_is_external(relationship)
-                && OpcPackage::resolve_rel_target("/", &relationship.target) == *candidate
+                && OpcPackage::resolve_rel_target("/", &relationship.target)
+                    .eq_ignore_ascii_case(candidate)
         });
         let reachable_from_part = package
             .part_rels
@@ -4199,13 +4189,13 @@ fn prune_unreachable_media(package: &mut OpcPackage, candidates: &HashSet<String
                 relationships.items.iter().any(|relationship| {
                     !relationship_is_external(relationship)
                         && OpcPackage::resolve_rel_target(source_part, &relationship.target)
-                            == *candidate
+                            .eq_ignore_ascii_case(candidate)
                 })
             });
         if !reachable_from_root && !reachable_from_part {
-            package.parts.remove(candidate);
-            package.part_rels.remove(candidate);
-            package.content_types.overrides.remove(candidate);
+            package.remove_part(candidate);
+            package.remove_part_rels(candidate);
+            package.content_types.remove_override(candidate);
         }
     }
 }
@@ -4422,8 +4412,8 @@ fn validate_relationship_scope(
             continue;
         }
         let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
-        incoming_targets.insert(target.clone());
-        if !package.parts.contains_key(&target) {
+        incoming_targets.insert(target.to_ascii_lowercase());
+        if !package.contains_part(&target) {
             unreachable_targets.push(ValidationIssue::UnreachableRelationshipTarget {
                 part: source_part.to_owned(),
                 target,
@@ -9101,6 +9091,24 @@ mod write_tests {
 
     fn package_after_save(presentation: Presentation) -> OpcPackage {
         OpcPackage::from_reader(Cursor::new(presentation.to_bytes().unwrap())).unwrap()
+    }
+
+    #[test]
+    fn presentation_main_part_and_relationship_owner_resolve_case_equivalent_spelling() {
+        let mut package = package_after_save(presentation_with_slide());
+        let presentation_xml = package.parts.remove("/ppt/presentation.xml").unwrap();
+        package
+            .parts
+            .insert("/PPT/PRESENTATION.XML".to_owned(), presentation_xml);
+        let relationships = package.part_rels.remove("/ppt/presentation.xml").unwrap();
+        package
+            .part_rels
+            .insert("/PPT/PRESENTATION.XML".to_owned(), relationships);
+
+        let presentation = Presentation::from_package(package).unwrap();
+        let saved = package_after_save(presentation);
+        assert!(saved.parts.contains_key("/PPT/PRESENTATION.XML"));
+        assert!(saved.part_rels.contains_key("/PPT/PRESENTATION.XML"));
     }
 
     fn presentation_from_package(package: OpcPackage) -> Presentation {

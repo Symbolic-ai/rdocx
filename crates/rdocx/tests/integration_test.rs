@@ -10,11 +10,1308 @@ use rdocx::{
     BodyItemRef, BorderStyle, Length, ListLevel, MhtmlDiagnostic, ParagraphRef, RunPosition,
     RunRange, SectionBreak, StyleBuilder, TabAlignment, TabLeader, UnderlineStyle,
 };
-use rdocx::{Document, PackageReadLimits, RevisionKind, WordPackageClass};
+use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
+use rdocx_oxml::CT_BorderEdge;
+use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
+use rdocx_oxml::shared::ST_Border;
+use rdocx_oxml::table::{CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TcPr};
 
 const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
 const MHTML_ORACLE_VERSION: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const MHTML_ORACLE_HTML: &str = "<h1>Oracle title</h1><p><strong>bold</strong> <a href='https://example.test/'>link</a><img src='https://example.test/pixel.png' width='2' height='3'></p><ol><li>one</li><li>two</li></ol><table><tr><td>cell</td></tr></table>";
+
+#[test]
+fn chart_rgb_colour_is_reexported_by_all_three_facades() {
+    let shared = oxml_chart::RgbColor::new(0x2B, 0x6F, 0xE3);
+    let word: rdocx::RgbColor = shared;
+    let presentation: rpptx::RgbColor = word;
+    assert_eq!(presentation, shared);
+}
+
+mod fresh_word_package_profile_tests {
+    use super::*;
+    use oxml_opc::content_types;
+
+    const STYLES_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml";
+    const SETTINGS_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml";
+    const FONT_TABLE_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
+
+    fn all_classes() -> [WordPackageClass; 4] {
+        [
+            WordPackageClass::Document,
+            WordPackageClass::MacroEnabledDocument,
+            WordPackageClass::Template,
+            WordPackageClass::MacroEnabledTemplate,
+        ]
+    }
+
+    fn main_content_type(class: WordPackageClass) -> &'static str {
+        match class {
+            WordPackageClass::Document => content_types::WORD_DOCUMENT,
+            WordPackageClass::MacroEnabledDocument => content_types::WORD_DOCUMENT_MACRO_ENABLED,
+            WordPackageClass::Template => content_types::WORD_TEMPLATE,
+            WordPackageClass::MacroEnabledTemplate => content_types::WORD_TEMPLATE_MACRO_ENABLED,
+        }
+    }
+
+    fn package_from_profile(profile: WordCreationProfile) -> OpcPackage {
+        let mut document = Document::new_with_profile(profile);
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap()
+    }
+
+    fn package_bytes(package: &OpcPackage) -> Vec<u8> {
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        output.into_inner()
+    }
+
+    fn relationship_types(package: &OpcPackage, source: &str) -> Vec<String> {
+        let relationships = if source == "/" {
+            &package.package_rels
+        } else {
+            package.get_part_rels(source).unwrap()
+        };
+        let mut types: Vec<_> = relationships
+            .items
+            .iter()
+            .map(|relationship| relationship.rel_type.clone())
+            .collect();
+        types.sort_unstable();
+        types
+    }
+
+    fn assert_internal_targets_exist(package: &OpcPackage) {
+        for (source, relationships) in std::iter::once(("/", &package.package_rels)).chain(
+            package
+                .part_rels
+                .iter()
+                .map(|(source, relationships)| (source.as_str(), relationships)),
+        ) {
+            let mut ids = std::collections::HashSet::new();
+            for relationship in &relationships.items {
+                assert!(ids.insert(&relationship.id), "duplicate relationship ID");
+                if relationship.target_mode.as_deref() != Some("External") {
+                    let target = OpcPackage::resolve_rel_target(source, &relationship.target);
+                    assert!(
+                        package.get_part(&target).is_some(),
+                        "{source} targets missing part {target}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn word_compatible_profiles_reopen_with_the_same_package_class() {
+        for class in all_classes() {
+            let mut package = package_from_profile(WordCreationProfile::WordCompatible(class));
+            const PROBE: &[u8] =
+                br#"<probe xmlns="urn:rdocx:f243"><opaque keep="exact"> bytes </opaque></probe>"#;
+            package.set_part("/custom/profile-probe.xml", PROBE.to_vec());
+            package
+                .content_types
+                .add_override("/custom/profile-probe.xml", "application/xml");
+            package.package_rels.add_with_id(
+                "profileProbe",
+                "urn:rdocx:relationships/profile-probe",
+                "custom/profile-probe.xml",
+            );
+            let mut reopened =
+                Document::from_bytes(&package_bytes(&package)).expect("compatible profile reopens");
+            assert_eq!(reopened.package_class().unwrap(), class);
+            let saved = reopened.to_bytes().expect("reopened profile serializes");
+            let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+            assert_eq!(saved.get_part("/custom/profile-probe.xml"), Some(PROBE));
+            let relationship = saved
+                .package_rels
+                .get_by_id("profileProbe")
+                .expect("unmodelled relationship survives");
+            assert_eq!(
+                relationship.rel_type,
+                "urn:rdocx:relationships/profile-probe"
+            );
+            assert_eq!(relationship.target, "custom/profile-probe.xml");
+        }
+    }
+
+    #[test]
+    fn word_compatible_profiles_have_a_complete_normalized_package_graph() {
+        let required_parts = [
+            "/docProps/app.xml",
+            "/docProps/core.xml",
+            "/word/document.xml",
+            "/word/fontTable.xml",
+            "/word/settings.xml",
+            "/word/styles.xml",
+            "/word/theme/theme1.xml",
+        ];
+        for class in all_classes() {
+            let package = package_from_profile(WordCreationProfile::WordCompatible(class));
+            let mut parts: Vec<_> = package.parts.keys().map(String::as_str).collect();
+            parts.sort_unstable();
+            assert_eq!(parts, required_parts);
+            assert_eq!(package.content_types.overrides.len(), required_parts.len());
+            assert_eq!(
+                package.content_types.override_for("/word/document.xml"),
+                Some(main_content_type(class))
+            );
+            for (part_name, expected) in [
+                ("/word/styles.xml", STYLES_CONTENT_TYPE),
+                ("/word/settings.xml", SETTINGS_CONTENT_TYPE),
+                ("/word/fontTable.xml", FONT_TABLE_CONTENT_TYPE),
+                ("/word/theme/theme1.xml", content_types::THEME),
+                ("/docProps/core.xml", content_types::CORE_PROPERTIES),
+                ("/docProps/app.xml", content_types::EXTENDED_PROPERTIES),
+            ] {
+                assert_eq!(
+                    package.content_types.override_for(part_name),
+                    Some(expected)
+                );
+            }
+            assert_eq!(
+                relationship_types(&package, "/"),
+                [
+                    rel_types::EXTENDED_PROPERTIES,
+                    rel_types::DOCUMENT,
+                    rel_types::CORE_PROPERTIES,
+                ]
+            );
+            assert_eq!(
+                relationship_types(&package, "/word/document.xml"),
+                [
+                    rel_types::FONT_TABLE,
+                    rel_types::SETTINGS,
+                    rel_types::STYLES,
+                    rel_types::THEME,
+                ]
+            );
+            assert_internal_targets_exist(&package);
+            assert!(
+                package
+                    .package_rels
+                    .get_by_type(rel_types::VBA_PROJECT)
+                    .is_none()
+            );
+            assert!(
+                package
+                    .get_part_rels("/word/document.xml")
+                    .unwrap()
+                    .get_by_type(rel_types::VBA_PROJECT)
+                    .is_none()
+            );
+            let core =
+                std::str::from_utf8(package.get_part("/docProps/core.xml").unwrap()).unwrap();
+            assert!(!core.contains("dcterms:created"));
+            assert!(!core.contains("dcterms:modified"));
+        }
+    }
+
+    #[test]
+    fn document_new_uses_the_word_compatible_docx_profile() {
+        let default = Document::new().to_bytes().unwrap();
+        let compatible = Document::new_with_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ))
+        .to_bytes()
+        .unwrap();
+        let minimal =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document))
+                .to_bytes()
+                .unwrap();
+        assert_eq!(default, compatible);
+        assert_ne!(minimal, compatible);
+        let minimal = OpcPackage::from_reader(std::io::Cursor::new(minimal)).unwrap();
+        let mut minimal_parts: Vec<_> = minimal.parts.keys().map(String::as_str).collect();
+        minimal_parts.sort_unstable();
+        assert_eq!(minimal_parts, ["/word/document.xml", "/word/styles.xml"]);
+        assert_eq!(relationship_types(&minimal, "/"), [rel_types::DOCUMENT]);
+        assert_eq!(
+            relationship_types(&minimal, "/word/document.xml"),
+            [rel_types::STYLES]
+        );
+    }
+
+    #[test]
+    fn equivalent_fresh_profiles_serialize_identically() {
+        for class in all_classes() {
+            let mut first = Document::new_with_profile(WordCreationProfile::WordCompatible(class));
+            let mut second = Document::new_with_profile(WordCreationProfile::WordCompatible(class));
+            let first_bytes = first.to_bytes().unwrap();
+            assert_eq!(first_bytes, second.to_bytes().unwrap());
+            assert_eq!(
+                first_bytes,
+                Document::from_bytes(&first_bytes)
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap()
+            );
+        }
+    }
+}
+
+mod theme_and_embedded_font_tests {
+    use super::*;
+    use oxml_drawing::color::ColorChoice;
+    use quick_xml::events::BytesStart;
+    use rdocx::{
+        CT_OfficeStyleSheet, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
+        ThemeFontLanguage,
+    };
+
+    const FONT_KEY: &str = "{00112233-4455-6677-8899-AABBCCDDEEFF}";
+    const FONT_REL_TYPE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font";
+    const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    const WORD_THEME_COLOR_ORACLE: [&str; 12] = [
+        "030330", "FFFFFF", "030330", "FFFFFF", "D9DBFF", "FF0054", "9482FF", "4A458C", "E0DED9",
+        "030330", "9482FF", "FF0054",
+    ];
+    const CARLITO: &[u8] = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+    const CALADEA: &[u8] = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+
+    fn license(authorized: bool, identity: &str) -> FontEmbeddingLicense {
+        FontEmbeddingLicense::new(authorized, identity)
+    }
+
+    fn corpus_font() -> FontDefinition {
+        FontDefinition::new("Corpus Sans")
+            .with_alternate_name("Carlito")
+            .with_family("swiss")
+            .with_pitch("variable")
+    }
+
+    fn embedded_font() -> EmbeddedFont {
+        EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(true, "Apache-2.0: Carlito"),
+        )
+    }
+
+    fn srgb_color(value: &str) -> ColorChoice {
+        let mut element = BytesStart::new("a:srgbClr");
+        element.push_attribute(("val", value));
+        ColorChoice::from_empty_xml(&element).unwrap()
+    }
+
+    fn apply_word_color_projection(theme: &mut CT_OfficeStyleSheet) {
+        let colors = &mut theme.theme_elements.color_scheme;
+        colors.dark1 = srgb_color(WORD_THEME_COLOR_ORACLE[0]);
+        colors.light1 = srgb_color(WORD_THEME_COLOR_ORACLE[1]);
+        colors.dark2 = srgb_color(WORD_THEME_COLOR_ORACLE[2]);
+        colors.light2 = srgb_color(WORD_THEME_COLOR_ORACLE[3]);
+        colors.accent1 = srgb_color(WORD_THEME_COLOR_ORACLE[4]);
+        colors.accent2 = srgb_color(WORD_THEME_COLOR_ORACLE[5]);
+        colors.accent3 = srgb_color(WORD_THEME_COLOR_ORACLE[6]);
+        colors.accent4 = srgb_color(WORD_THEME_COLOR_ORACLE[7]);
+        colors.accent5 = srgb_color(WORD_THEME_COLOR_ORACLE[8]);
+        colors.accent6 = srgb_color(WORD_THEME_COLOR_ORACLE[9]);
+        colors.hyperlink = srgb_color(WORD_THEME_COLOR_ORACLE[10]);
+        colors.followed_hyperlink = srgb_color(WORD_THEME_COLOR_ORACLE[11]);
+    }
+
+    fn theme_color_projection(theme: &CT_OfficeStyleSheet) -> Vec<String> {
+        theme
+            .theme_elements
+            .color_scheme
+            .iter()
+            .map(|(_, color)| match color {
+                ColorChoice::Srgb { value, .. } => value.to_string(),
+                ColorChoice::System {
+                    last_color: Some(value),
+                    ..
+                } => value.to_string(),
+                other => panic!("unexpected theme color in Word projection: {other:?}"),
+            })
+            .collect()
+    }
+
+    fn package_bytes(package: &OpcPackage) -> Vec<u8> {
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        output.into_inner()
+    }
+
+    fn authored_document() -> Document {
+        let mut document = Document::new();
+        let mut theme = CT_OfficeStyleSheet::office_default();
+        theme.name = Some("Corpus Theme".to_owned());
+        apply_word_color_projection(&mut theme);
+        theme.theme_elements.font_scheme.major_font.latin.typeface = "Corpus Sans".to_owned();
+        theme.theme_elements.font_scheme.minor_font.latin.typeface = "Corpus Sans".to_owned();
+        document.set_theme(theme).unwrap();
+        document
+            .set_language_defaults(ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("zh-CN".to_owned()),
+                bidi: Some("ar-SA".to_owned()),
+            })
+            .unwrap();
+        document.set_font(corpus_font()).unwrap();
+        document.embed_font("Corpus Sans", embedded_font()).unwrap();
+        document
+    }
+
+    #[test]
+    fn authored_theme_font_table_and_embedded_fonts_survive_reopen() {
+        let mut document = authored_document();
+        let expected_theme = document.theme().unwrap().clone();
+        let expected_languages = document.theme_font_language().unwrap().clone();
+        let expected_fonts = document.fonts();
+
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+
+        assert_eq!(reopened.theme(), Some(&expected_theme));
+        assert_eq!(reopened.theme_font_language(), Some(&expected_languages));
+        assert_eq!(reopened.fonts(), expected_fonts);
+        let corpus = reopened
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap();
+        assert_eq!(corpus.embedded_fonts[0].data, CARLITO);
+
+        assert_eq!(
+            reopened
+                .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+                .unwrap(),
+            Some(embedded_font())
+        );
+        assert!(
+            reopened
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "Corpus Sans")
+                .unwrap()
+                .embedded_fonts
+                .is_empty()
+        );
+        reopened.embed_font("Corpus Sans", embedded_font()).unwrap();
+        assert!(reopened.remove_font("Corpus Sans").unwrap().is_some());
+        assert!(
+            reopened
+                .fonts()
+                .into_iter()
+                .all(|font| font.name != "Corpus Sans")
+        );
+    }
+
+    #[test]
+    fn font_embedding_requires_explicit_authorization_and_license_identity() {
+        let mut document = Document::new();
+        document.set_font(corpus_font()).unwrap();
+        let before = document.to_bytes().unwrap();
+
+        let denied = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(false, "Apache-2.0: Carlito"),
+        );
+        assert!(document.embed_font("Corpus Sans", denied).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let unidentified = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(true, ""),
+        );
+        assert!(document.embed_font("Corpus Sans", unidentified).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let invalid_key = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            "00112233-4455-6677-8899-AABBCCDDEEFF",
+            license(true, "Apache-2.0: Carlito"),
+        );
+        assert!(document.embed_font("Corpus Sans", invalid_key).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let mut invalid_family = corpus_font();
+        invalid_family.family = Some("unknown".to_owned());
+        assert!(document.set_font(invalid_family).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let mut invalid_pitch = corpus_font();
+        invalid_pitch.pitch = Some("wide".to_owned());
+        assert!(document.set_font(invalid_pitch).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let normalized_identity = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(true, "Apache-2.0\nCarlito"),
+        );
+        assert!(
+            document
+                .embed_font("Corpus Sans", normalized_identity)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        let exact_identity = "Apache-2.0 & \"Carlito\"";
+        document
+            .embed_font(
+                "Corpus Sans",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    CARLITO.to_vec(),
+                    FONT_KEY,
+                    license(true, exact_identity),
+                ),
+            )
+            .unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "Corpus Sans")
+                .unwrap()
+                .embedded_fonts[0]
+                .license
+                .identity,
+            exact_identity
+        );
+    }
+
+    #[test]
+    fn font_table_preserves_unknown_children_and_relationship_attributes() {
+        let mut document = Document::new();
+        let bytes = document.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><q:fonts xmlns:q="{WORD_NS}" xmlns:r="{REL_NS}" xmlns:x="urn:producer" xmlns:mc="{MC_NS}" xmlns:w15="urn:producer:w15" mc:Ignorable="w15"><!--root-before--><?root kept?> <x:before x:keep="exact"/><q:font q:name="Corpus Sans"><!--font-before--><?font kept?> <x:fontBefore x:keep="exact"/><q:altName q:val="Original" x:property="kept &amp; &quot;quoted&quot;"> <!--property-note--><?producer kept?></q:altName><q:panose1 q:val="020B0604020202020204"/><x:middle x:keep="exact"/><q:family q:val="swiss" x:property="family-kept"/><q:pitch q:val="variable" x:property="pitch-kept"/><q:embedRegular r:id="producerFont" q:fontKey="{FONT_KEY}" x:keep="relationship-attribute"><!--relationship-note--></q:embedRegular><x:after x:keep="exact"/></q:font><x:between x:keep="exact"/><q:font q:name="Keep Sans"><q:family q:val="swiss"/></q:font><x:tail x:keep="exact"/></q:fonts>"#
+        );
+        package.set_part("/word/fontTable.xml", xml.into_bytes());
+        package.set_part("/word/fonts/producer.odttf", vec![7; 64]);
+        package.content_types.add_override(
+            "/word/fonts/producer.odttf",
+            "application/vnd.openxmlformats-officedocument.obfuscatedFont",
+        );
+        package
+            .get_or_create_part_rels("/word/fontTable.xml")
+            .add_with_id("producerFont", FONT_REL_TYPE, "fonts/producer.odttf");
+
+        let mut document = Document::from_bytes(&package_bytes(&package)).unwrap();
+        let parsed = document.fonts();
+        let corpus = parsed
+            .iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap();
+        assert_eq!(corpus.alternate_name.as_deref(), Some("Original"));
+        assert_eq!(corpus.embedded_fonts.len(), 1);
+        document
+            .set_font(corpus_font().with_alternate_name("Updated"))
+            .unwrap();
+        let saved =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let output = std::str::from_utf8(saved.get_part("/word/fontTable.xml").unwrap()).unwrap();
+
+        for fragment in [
+            r#"<x:before x:keep="exact"/>"#,
+            r#"<!--root-before--><?root kept?> "#,
+            r#"<!--font-before--><?font kept?> "#,
+            r#"<x:fontBefore x:keep="exact"/>"#,
+            r#"<x:middle x:keep="exact"/>"#,
+            r#"x:property="kept &amp; &quot;quoted&quot;""#,
+            r#"x:property="family-kept""#,
+            r#"x:property="pitch-kept""#,
+            r#"x:keep="relationship-attribute""#,
+            r#"<q:panose1 q:val="020B0604020202020204"/>"#,
+            r#"<!--property-note-->"#,
+            r#"<?producer kept?>"#,
+            r#"<!--relationship-note-->"#,
+            r#"<x:after x:keep="exact"/>"#,
+            r#"<x:between x:keep="exact"/>"#,
+            r#"<x:tail x:keep="exact"/>"#,
+        ] {
+            assert!(output.contains(fragment), "missing {fragment} in {output}");
+        }
+        assert!(output.contains(&format!(r#"xmlns:q="{WORD_NS}""#)));
+        assert!(output.contains(&format!(r#"xmlns:mc="{MC_NS}""#)));
+        assert!(output.contains(r#"mc:Ignorable="w15 rdocx""#));
+        assert!(output.contains(
+            r#"<w:altName w:val="Updated" x:property="kept &amp; &quot;quoted&quot;"> <!--property-note--><?producer kept?></w:altName>"#
+        ));
+        assert!(output.find("fontBefore").unwrap() < output.find("altName").unwrap());
+        assert!(output.find("altName").unwrap() < output.find("embedRegular").unwrap());
+
+        let mut reopened = Document::from_bytes(&package_bytes(&saved)).unwrap();
+        assert!(reopened.remove_font("Corpus Sans").unwrap().is_some());
+        let removed =
+            OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+        let output = std::str::from_utf8(removed.get_part("/word/fontTable.xml").unwrap()).unwrap();
+        assert!(output.contains(r#"<x:before x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:between x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:tail x:keep="exact"/>"#));
+        assert!(output.find("before").unwrap() < output.find("between").unwrap());
+        assert!(output.find("between").unwrap() < output.find("Keep Sans").unwrap());
+        assert!(output.find("Keep Sans").unwrap() < output.find("tail").unwrap());
+
+        let conflicting_xml = format!(
+            r#"<q:fonts xmlns:q="{WORD_NS}" xmlns:w="urn:producer"><q:font q:name="Unsafe"/></q:fonts>"#
+        );
+        let mut conflicting_package =
+            OpcPackage::from_reader(std::io::Cursor::new(Document::new().to_bytes().unwrap()))
+                .unwrap();
+        conflicting_package.set_part("/word/fontTable.xml", conflicting_xml.into_bytes());
+        let mut conflicting = Document::from_bytes(&package_bytes(&conflicting_package)).unwrap();
+        let before = conflicting.to_bytes().unwrap();
+        assert!(conflicting.set_font(corpus_font()).is_err());
+        assert_eq!(conflicting.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn public_authored_theme_and_fonts_match_pinned_word_resolution() {
+        const WORD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+        const LIBREOFFICE_ORACLE: &str =
+            "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+        const WORD_FONT_TABLE_ORACLE: &str = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            r#"<w:font w:name="Arial"><w:panose1 w:val="020B0604020202020204"/>"#,
+            r#"<w:charset w:val="00"/><w:family w:val="swiss"/>"#,
+            r#"<w:pitch w:val="variable"/><w:sig w:usb0="E0002EFF" "#,
+            r#"w:usb1="C000785B" w:usb2="00000009" w:usb3="00000000" "#,
+            r#"w:csb0="000001FF" w:csb1="00000000"/></w:font></w:fonts>"#,
+        );
+        assert_eq!(WORD_ORACLE, MHTML_ORACLE_VERSION);
+        assert_eq!(LIBREOFFICE_ORACLE, ODT_ORACLE_VERSION);
+
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            LIBREOFFICE_ORACLE
+        );
+
+        let mut authored = authored_document();
+        authored
+            .add_paragraph("")
+            .add_run("Pinned theme and font resolution")
+            .font("Corpus Sans")
+            .size(18.0);
+
+        let theme = authored.theme().unwrap();
+        let font = authored
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap();
+        assert_eq!(
+            theme.theme_elements.font_scheme.major_font.latin.typeface,
+            "Corpus Sans"
+        );
+        assert_eq!(
+            theme.theme_elements.font_scheme.minor_font.latin.typeface,
+            "Corpus Sans"
+        );
+        assert_eq!(
+            theme_color_projection(theme),
+            WORD_THEME_COLOR_ORACLE.map(str::to_owned)
+        );
+        let reopened_theme = Document::from_bytes(&authored.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            theme_color_projection(reopened_theme.theme().unwrap()),
+            WORD_THEME_COLOR_ORACLE.map(str::to_owned)
+        );
+        let mut word_package =
+            OpcPackage::from_reader(std::io::Cursor::new(Document::new().to_bytes().unwrap()))
+                .unwrap();
+        word_package.set_part(
+            "/word/fontTable.xml",
+            WORD_FONT_TABLE_ORACLE.as_bytes().to_vec(),
+        );
+        let word_oracle = Document::from_bytes(&package_bytes(&word_package)).unwrap();
+        let word_font = word_oracle
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Arial")
+            .unwrap();
+        assert_eq!(word_font.family.as_deref(), Some("swiss"));
+        assert_eq!(word_font.pitch.as_deref(), Some("variable"));
+        assert_eq!(font.family, word_font.family);
+        assert_eq!(font.pitch, word_font.pitch);
+
+        let mut oracle = Document::new();
+        oracle
+            .add_paragraph("")
+            .add_run("Pinned theme and font resolution")
+            .font("Carlito")
+            .size(18.0);
+
+        let authored_render = authored.render_page_to_png_deterministic(0, 150.0).unwrap();
+        assert_eq!(
+            authored_render,
+            oracle.render_page_to_png_deterministic(0, 150.0).unwrap()
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-theme-font-oracle-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        let source = root.join("source.docx");
+        std::fs::write(&source, authored.to_bytes().unwrap()).unwrap();
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("docx")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("LibreOffice conversion starts");
+        assert!(status.success());
+        let normalized = Document::open(output.join("source.docx")).unwrap();
+        assert_eq!(
+            authored_render,
+            normalized
+                .render_page_to_png_deterministic(0, 150.0)
+                .unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn embedded_font_parts_are_packaged_deterministically() {
+        let mut first = authored_document();
+        let mut second = authored_document();
+        let first_bytes = first.to_bytes().unwrap();
+
+        assert_eq!(first_bytes, first.to_bytes().unwrap());
+        assert_eq!(first_bytes, second.to_bytes().unwrap());
+
+        let package = OpcPackage::from_reader(std::io::Cursor::new(first_bytes)).unwrap();
+        let font_parts: Vec<_> = package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/word/fonts/"))
+            .collect();
+        assert_eq!(font_parts.len(), 1);
+        let relationships = package.get_part_rels("/word/fontTable.xml").unwrap();
+        assert_eq!(
+            relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == FONT_REL_TYPE)
+                .count(),
+            1
+        );
+
+        let original_relationship = relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == FONT_REL_TYPE)
+            .unwrap();
+        let original_id = original_relationship.id.clone();
+        let original_target = original_relationship.target.clone();
+        let mut package = package;
+        package
+            .get_or_create_part_rels("/word/fontTable.xml")
+            .add_with_id("producerShared", FONT_REL_TYPE, &original_target);
+        let font_table = std::str::from_utf8(package.get_part("/word/fontTable.xml").unwrap())
+            .unwrap()
+            .replace(
+                "</w:fonts>",
+                &format!(
+                    r#"<w:font w:name="Shared Same Id"><w:embedRegular r:id="{original_id}" w:fontKey="{FONT_KEY}"/></w:font><w:font w:name="Shared Same Part"><w:embedRegular r:id="producerShared" w:fontKey="{FONT_KEY}"/></w:font></w:fonts>"#
+                ),
+            );
+        package.set_part("/word/fontTable.xml", font_table.into_bytes());
+
+        let mut shared = Document::from_bytes(&package_bytes(&package)).unwrap();
+        shared
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        assert_eq!(
+            shared
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "Shared Same Id")
+                .unwrap()
+                .embedded_fonts[0]
+                .data,
+            CARLITO
+        );
+        shared
+            .embed_font(
+                "Shared Same Id",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    CALADEA.to_vec(),
+                    FONT_KEY,
+                    license(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        let fonts = shared.fonts();
+        assert_eq!(
+            fonts
+                .iter()
+                .find(|font| font.name == "Shared Same Id")
+                .unwrap()
+                .embedded_fonts[0]
+                .data,
+            CALADEA
+        );
+        assert_eq!(
+            fonts
+                .iter()
+                .find(|font| font.name == "Shared Same Part")
+                .unwrap()
+                .embedded_fonts[0]
+                .data,
+            CARLITO
+        );
+        let shared_package =
+            OpcPackage::from_reader(std::io::Cursor::new(shared.to_bytes().unwrap())).unwrap();
+        assert_eq!(
+            shared_package
+                .get_part_rels("/word/fontTable.xml")
+                .unwrap()
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == FONT_REL_TYPE)
+                .count(),
+            2
+        );
+        assert_eq!(
+            shared_package
+                .parts
+                .keys()
+                .filter(|part| part.starts_with("/word/fonts/"))
+                .count(),
+            2
+        );
+
+        let mut wrong_type_package = OpcPackage::from_reader(std::io::Cursor::new(
+            authored_document().to_bytes().unwrap(),
+        ))
+        .unwrap();
+        let wrong_type_relationship = wrong_type_package
+            .get_part_rels_mut("/word/fontTable.xml")
+            .unwrap()
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.rel_type == FONT_REL_TYPE)
+            .unwrap();
+        let wrong_type_id = wrong_type_relationship.id.clone();
+        wrong_type_relationship.rel_type = rel_types::IMAGE.to_owned();
+        let mut wrong_type = Document::from_bytes(&package_bytes(&wrong_type_package)).unwrap();
+        wrong_type
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        let wrong_type_saved =
+            OpcPackage::from_reader(std::io::Cursor::new(wrong_type.to_bytes().unwrap())).unwrap();
+        assert_eq!(
+            wrong_type_saved
+                .get_part_rels("/word/fontTable.xml")
+                .unwrap()
+                .get_by_id(&wrong_type_id)
+                .unwrap()
+                .rel_type,
+            rel_types::IMAGE
+        );
+
+        let mut cross_owner_package = OpcPackage::from_reader(std::io::Cursor::new(
+            authored_document().to_bytes().unwrap(),
+        ))
+        .unwrap();
+        let font_target = cross_owner_package
+            .get_part_rels("/word/fontTable.xml")
+            .unwrap()
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == FONT_REL_TYPE)
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target("/word/fontTable.xml", &relationship.target)
+            })
+            .unwrap();
+        cross_owner_package.package_rels.add_with_id(
+            "producerFontReference",
+            "urn:producer:font-reference",
+            font_target.trim_start_matches('/'),
+        );
+        let mut cross_owner = Document::from_bytes(&package_bytes(&cross_owner_package)).unwrap();
+        cross_owner
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        let cross_owner_saved =
+            OpcPackage::from_reader(std::io::Cursor::new(cross_owner.to_bytes().unwrap())).unwrap();
+        assert!(cross_owner_saved.get_part(&font_target).is_some());
+        assert!(
+            cross_owner_saved
+                .package_rels
+                .get_by_id("producerFontReference")
+                .is_some()
+        );
+
+        let mut cross_owner_replace =
+            Document::from_bytes(&package_bytes(&cross_owner_package)).unwrap();
+        cross_owner_replace
+            .embed_font(
+                "Corpus Sans",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    CALADEA.to_vec(),
+                    FONT_KEY,
+                    license(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        let cross_owner_replace_saved = OpcPackage::from_reader(std::io::Cursor::new(
+            cross_owner_replace.to_bytes().unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            cross_owner_replace_saved.get_part(&font_target),
+            cross_owner_package.get_part(&font_target)
+        );
+
+        let raw_reference =
+            format!(r#"<rdocx:fontRef r:id="{original_id}" rdocx:keep="exact"/></w:fonts>"#);
+        let raw_reference_table =
+            std::str::from_utf8(cross_owner_package.get_part("/word/fontTable.xml").unwrap())
+                .unwrap()
+                .replace("</w:fonts>", &raw_reference);
+        let mut raw_reference_package = cross_owner_package;
+        raw_reference_package.set_part("/word/fontTable.xml", raw_reference_table.into_bytes());
+        let mut raw_reference_document =
+            Document::from_bytes(&package_bytes(&raw_reference_package)).unwrap();
+        raw_reference_document
+            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+            .unwrap();
+        let raw_reference_saved = OpcPackage::from_reader(std::io::Cursor::new(
+            raw_reference_document.to_bytes().unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            raw_reference_saved
+                .get_part_rels("/word/fontTable.xml")
+                .unwrap()
+                .get_by_id(&original_id)
+                .is_some()
+        );
+    }
+}
+
+mod settings_and_properties_tests {
+    use super::*;
+    use rdocx::{
+        AppProperties, CharacterSpacingControl, CompatibilitySetting, CoreProperties,
+        CustomProperty, CustomPropertyValue, ThemeFontLanguage, Twips,
+    };
+
+    const CUSTOM_FMTID: &str = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}";
+    const COMPATIBILITY_URI: &str = "http://schemas.microsoft.com/office/word";
+
+    #[test]
+    fn authored_settings_and_properties_survive_reopen() {
+        let mut document = Document::new();
+        document
+            .set_core_properties(CoreProperties {
+                title: Some("Quarterly proposal".to_owned()),
+                creator: Some("Example author".to_owned()),
+                subject: Some("Corpus settings".to_owned()),
+                description: Some("Source-built metadata".to_owned()),
+                keywords: Some("proposal, deterministic".to_owned()),
+                last_modified_by: Some("Example reviewer".to_owned()),
+                created: Some("2026-09-07T00:00:00Z".to_owned()),
+                modified: Some("2026-09-07T01:00:00Z".to_owned()),
+            })
+            .unwrap();
+        let mut application = AppProperties::default();
+        application.template = Some("Business.dotx".to_owned());
+        application.manager = Some("Example manager".to_owned());
+        application.company = Some("Example company".to_owned());
+        application.pages = Some(7);
+        application.words = Some(420);
+        application.application = Some("rdocx test".to_owned());
+        application.application_version = Some("1.0".to_owned());
+        document
+            .set_application_properties(application.clone())
+            .unwrap();
+        document
+            .set_custom_property(CustomProperty {
+                fmtid: CUSTOM_FMTID.to_owned(),
+                pid: 2,
+                name: Some("ClientCode".to_owned()),
+                value: CustomPropertyValue::Lpwstr("EXAMPLE-001".to_owned()),
+            })
+            .unwrap();
+        document.set_document_variable("Customer", "Ada").unwrap();
+        document
+            .set_compatibility_setting("compatibilityMode", COMPATIBILITY_URI, "15")
+            .unwrap();
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document
+            .set_character_spacing_control(CharacterSpacingControl::CompressPunctuation)
+            .unwrap();
+        document
+            .set_language_defaults(ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("ja-JP".to_owned()),
+                bidi: Some("ar-SA".to_owned()),
+            })
+            .unwrap();
+
+        let bytes = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened.core_properties().unwrap().title.as_deref(),
+            Some("Quarterly proposal")
+        );
+        assert_eq!(reopened.application_properties(), Some(&application));
+        assert_eq!(
+            reopened.custom_property("ClientCode").unwrap().value,
+            CustomPropertyValue::Lpwstr("EXAMPLE-001".to_owned())
+        );
+        assert_eq!(reopened.document_variable("Customer"), Some("Ada"));
+        assert_eq!(
+            reopened.compatibility_settings(),
+            [CompatibilitySetting {
+                name: "compatibilityMode".to_owned(),
+                uri: COMPATIBILITY_URI.to_owned(),
+                value: "15".to_owned(),
+            }]
+        );
+        assert_eq!(reopened.default_tab_stop(), Some(Twips(720)));
+        assert_eq!(
+            reopened.character_spacing_control(),
+            Some(CharacterSpacingControl::CompressPunctuation)
+        );
+        assert_eq!(
+            reopened.theme_font_language().unwrap(),
+            &ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("ja-JP".to_owned()),
+                bidi: Some("ar-SA".to_owned()),
+            }
+        );
+
+        assert_eq!(
+            reopened.remove_document_variable("Customer").unwrap(),
+            Some("Ada".to_owned())
+        );
+        assert!(
+            reopened
+                .remove_compatibility_setting("compatibilityMode", COMPATIBILITY_URI)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            reopened.remove_default_tab_stop().unwrap(),
+            Some(Twips(720))
+        );
+        assert_eq!(
+            reopened.remove_character_spacing_control().unwrap(),
+            Some(CharacterSpacingControl::CompressPunctuation)
+        );
+        assert!(reopened.remove_theme_font_language().unwrap().is_some());
+        let removed_bytes = reopened.to_bytes().unwrap();
+        let removed = Document::from_bytes(&removed_bytes).unwrap();
+        assert_eq!(removed.document_variable("Customer"), None);
+        assert!(removed.compatibility_settings().is_empty());
+        assert_eq!(removed.default_tab_stop(), None);
+        assert_eq!(removed.character_spacing_control(), None);
+        assert_eq!(removed.theme_font_language(), None);
+    }
+
+    #[test]
+    fn removing_one_property_family_prunes_only_its_owned_graph() {
+        let mut document =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        document
+            .set_core_properties(CoreProperties {
+                title: Some("Retained title".to_owned()),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut application = AppProperties::default();
+        application.company = Some("Retained company".to_owned());
+        document.set_application_properties(application).unwrap();
+        document
+            .set_custom_property(CustomProperty {
+                fmtid: CUSTOM_FMTID.to_owned(),
+                pid: 2,
+                name: Some("RemoveMe".to_owned()),
+                value: CustomPropertyValue::Bool(true),
+            })
+            .unwrap();
+        document.set_document_variable("KeepMe", "yes").unwrap();
+
+        assert!(
+            document
+                .remove_custom_property("RemoveMe")
+                .unwrap()
+                .is_some()
+        );
+        let bytes = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::CUSTOM_PROPERTIES)
+                .is_none()
+        );
+        assert!(package.get_part("/docProps/custom.xml").is_none());
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_some()
+        );
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::EXTENDED_PROPERTIES)
+                .is_some()
+        );
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.title(), Some("Retained title"));
+        assert_eq!(
+            reopened
+                .application_properties()
+                .unwrap()
+                .company
+                .as_deref(),
+            Some("Retained company")
+        );
+        assert_eq!(reopened.document_variable("KeepMe"), Some("yes"));
+
+        assert!(reopened.remove_application_properties().unwrap().is_some());
+        assert!(reopened.remove_core_properties().unwrap().is_some());
+        let bytes = reopened.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::EXTENDED_PROPERTIES)
+                .is_none()
+        );
+        assert!(
+            package
+                .package_rels
+                .get_by_type(rel_types::CORE_PROPERTIES)
+                .is_none()
+        );
+        assert!(
+            package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .get_by_type(rel_types::SETTINGS)
+                .is_some()
+        );
+
+        let mut settings_only =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        settings_only
+            .set_document_variable("Temporary", "value")
+            .unwrap();
+        assert_eq!(
+            settings_only.remove_document_variable("Temporary").unwrap(),
+            Some("value".to_owned())
+        );
+        let settings_only = settings_only.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(settings_only)).unwrap();
+        assert!(
+            package
+                .get_part_rels("/word/document.xml")
+                .unwrap()
+                .get_by_type(rel_types::SETTINGS)
+                .is_none()
+        );
+        assert!(package.get_part("/word/settings.xml").is_none());
+    }
+
+    #[test]
+    fn settings_mutation_preserves_unmodeled_children_in_schema_order() {
+        const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let mut seed = Document::new();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let settings = format!(
+            r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:producer"><q:defaultTabStop q:val="360"/><x:before x:keep="exact"><x:child/></x:before><q:characterSpacingControl q:val="doNotCompress"/><q:compat><q:compatSetting q:name="compatibilityMode" q:uri="{COMPATIBILITY_URI}" q:val="14"/><x:inside x:keep="exact"/></q:compat><q:docVars><q:docVar q:name="Original" q:val="one"/><x:variable x:keep="exact"/></q:docVars><x:after x:keep="exact"/><q:themeFontLang q:val="en-US" q:eastAsia="zh-CN"/></q:settings>"#
+        );
+        package.set_part("/word/settings.xml", settings.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        document.set_default_tab_stop(Twips(720)).unwrap();
+        document
+            .set_character_spacing_control(
+                CharacterSpacingControl::CompressPunctuationAndJapaneseKana,
+            )
+            .unwrap();
+        document
+            .set_compatibility_setting("compatibilityMode", COMPATIBILITY_URI, "15")
+            .unwrap();
+        document.set_document_variable("Added", "two").unwrap();
+        assert_eq!(
+            document.remove_document_variable("Original").unwrap(),
+            Some("one".to_owned())
+        );
+        document
+            .set_language_defaults(ThemeFontLanguage {
+                latin: Some("en-GB".to_owned()),
+                east_asia: Some("ja-JP".to_owned()),
+                bidi: None,
+            })
+            .unwrap();
+
+        let saved =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let output = std::str::from_utf8(saved.get_part("/word/settings.xml").unwrap()).unwrap();
+        assert!(output.contains(r#"<x:before x:keep="exact"><x:child/></x:before>"#));
+        assert!(output.contains(r#"<x:inside x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:variable x:keep="exact"/>"#));
+        assert!(output.contains(r#"<x:after x:keep="exact"/>"#));
+        assert!(!output.contains("Original"));
+        assert!(output.contains("Added"));
+        assert!(
+            output.find("defaultTabStop").unwrap()
+                < output.find("characterSpacingControl").unwrap()
+        );
+        assert!(
+            output.find("characterSpacingControl").unwrap() < output.find("compatSetting").unwrap()
+        );
+        assert!(output.find("compatSetting").unwrap() < output.find("docVar").unwrap());
+        assert!(output.find("docVar").unwrap() < output.find("themeFontLang").unwrap());
+    }
+
+    #[test]
+    fn fresh_property_output_has_no_clock_or_host_input() {
+        fn authored() -> Vec<u8> {
+            let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
+                WordPackageClass::Document,
+            ));
+            document
+                .set_core_properties(CoreProperties {
+                    title: Some("Deterministic metadata".to_owned()),
+                    ..Default::default()
+                })
+                .unwrap();
+            let mut application = AppProperties::default();
+            application.application = Some("rdocx".to_owned());
+            application.application_version = Some("test".to_owned());
+            document.set_application_properties(application).unwrap();
+            document.to_bytes().unwrap()
+        }
+
+        let first = authored();
+        let second = authored();
+        assert_eq!(first, second);
+
+        let mut invalid =
+            Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+        let before = invalid.to_bytes().unwrap();
+        assert!(invalid.set_default_tab_stop(Twips(-1)).is_err());
+        assert_eq!(invalid.to_bytes().unwrap(), before);
+        let package = OpcPackage::from_reader(std::io::Cursor::new(first)).unwrap();
+        let core = std::str::from_utf8(package.get_part("/docProps/core.xml").unwrap()).unwrap();
+        assert!(!core.contains("dcterms:created"));
+        assert!(!core.contains("dcterms:modified"));
+    }
+}
+
+#[test]
+fn identifier_scopes_do_not_alias_or_overreach() {
+    let mut document = Document::new();
+    document.add_paragraph("scope");
+    let range = RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: 1,
+        },
+    };
+    assert_eq!(document.add_bookmark("Scope", range).unwrap(), 0);
+    assert_eq!(
+        document
+            .add_comment(range, "Author", None, "Scoped comment")
+            .unwrap(),
+        0
+    );
+    assert_eq!(document.add_list_definition(&[ListLevel::decimal()]), 1);
+    document.add_picture(
+        b"scope-image",
+        "scope.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+    let bytes = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let document_relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let image_relationship = document_relationships
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == rel_types::IMAGE)
+        .unwrap()
+        .id
+        .clone();
+    package.set_part("/word/header-scope.xml", b"<scope/>".to_vec());
+    package
+        .content_types
+        .add_override("/word/header-scope.xml", "application/xml");
+    package
+        .get_or_create_part_rels("/word/header-scope.xml")
+        .add_with_id(&image_relationship, "urn:scope", "scope-target.xml");
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let mut reopened = Document::from_bytes(&output.into_inner()).unwrap();
+    let saved = reopened.to_bytes().unwrap();
+    let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+
+    assert!(
+        saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .get_by_id(&image_relationship)
+            .is_some()
+    );
+    assert!(
+        saved
+            .get_part_rels("/word/header-scope.xml")
+            .unwrap()
+            .get_by_id(&image_relationship)
+            .is_some()
+    );
+    let document_xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    let comments_xml = std::str::from_utf8(saved.get_part("/word/comments.xml").unwrap()).unwrap();
+    let numbering_xml =
+        std::str::from_utf8(saved.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(document_xml.contains(r#"w:bookmarkStart w:id="0""#));
+    assert!(comments_xml.contains(r#"w:id="0""#));
+    assert!(document_xml.contains(r#"wp:docPr id="1""#));
+    assert!(numbering_xml.contains(r#"w:num w:numId="1""#));
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MhtmlOracleRecord {
@@ -274,6 +1571,30 @@ mod flat_opc_package_class_tests {
                 .get_part("/custom/preserved.xml")
         );
         assert_eq!(reopened.get_part("/custom/empty.bin"), Some(&[][..]));
+    }
+
+    #[test]
+    fn flat_opc_accepts_sole_mixed_case_special_names_and_relationship_owner() {
+        let document =
+            Document::from_bytes(&package_bytes(&source_package(WordPackageClass::Document)))
+                .unwrap();
+        let flat = String::from_utf8(document.to_flat_opc_bytes().unwrap()).unwrap();
+        let mixed = flat
+            .replace("pkg:name=\"/_rels/.rels\"", "pkg:name=\"/_RELS/.RELS\"")
+            .replace(
+                "pkg:name=\"/word/_rels/document.xml.rels\"",
+                "pkg:name=\"/WORD/_RELS/DOCUMENT.XML.RELS\"",
+            )
+            .replace(
+                "pkg:name=\"/word/document.xml\"",
+                "pkg:name=\"/WORD/DOCUMENT.XML\"",
+            );
+
+        let mut imported = Document::from_flat_opc_bytes(mixed.as_bytes()).unwrap();
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(imported.to_bytes().unwrap())).unwrap();
+        assert!(package.parts.contains_key("/WORD/DOCUMENT.XML"));
+        assert!(package.part_rels.contains_key("/WORD/DOCUMENT.XML"));
     }
 
     #[test]
@@ -620,8 +1941,8 @@ mod flat_opc_package_class_tests {
             let converted = document.to_bytes_as(class).unwrap();
             let package = OpcPackage::from_reader(std::io::Cursor::new(converted)).unwrap();
             assert_eq!(
-                package.content_types.overrides["/word/document.xml"],
-                content_type(class)
+                package.content_types.override_for("/word/document.xml"),
+                Some(content_type(class))
             );
             assert_eq!(package.parts, baseline.parts);
             assert_eq!(
@@ -746,6 +2067,7 @@ mod flat_opc_package_class_tests {
                 .unwrap(),
             &valid[first_part_end..]
         );
+        let case_variant_duplicate = duplicate.replacen("/_rels/.rels", "/_RELS/.RELS", 1);
         let mismatched_data = valid
             .replacen("<pkg:xmlData>", "<pkg:binaryData>", 1)
             .replacen("</pkg:xmlData>", "</pkg:binaryData>", 1);
@@ -783,6 +2105,7 @@ mod flat_opc_package_class_tests {
             mismatched_data,
             extra_data,
             duplicate,
+            case_variant_duplicate,
             malformed_relationship,
             nested_relationship_filename,
             valid.replacen(
@@ -928,6 +2251,106 @@ end timeout"#,
         }
         std::fs::remove_dir_all(directory).unwrap();
     }
+}
+
+#[test]
+fn encoded_drawing_relationship_ids_reopen_extract_and_render() {
+    let image = mhtml_pixel_png();
+    let mut source = Document::new();
+    source.add_picture(
+        &image,
+        "encoded.png",
+        Length::inches(1.0),
+        Length::inches(1.0),
+    );
+    source
+        .add_chart(
+            oxml_chart::ChartKind::Bar,
+            Length::inches(3.0),
+            Length::inches(2.0),
+            &oxml_chart::ChartData {
+                categories: vec!["North".to_owned(), "South".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![12.0, 18.0])],
+                number_format: Some("0".to_owned()),
+                ..oxml_chart::ChartData::default()
+            },
+        )
+        .unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+        .expect("authored drawing package");
+    let relationships = package
+        .get_part_rels("/word/document.xml")
+        .expect("document relationships");
+    let image_id = relationships
+        .get_by_type(rel_types::IMAGE)
+        .expect("image relationship")
+        .id
+        .clone();
+    let chart_id = relationships
+        .get_by_type(rel_types::CHART)
+        .expect("chart relationship")
+        .id
+        .clone();
+    let document_xml = String::from_utf8(
+        package
+            .get_part("/word/document.xml")
+            .expect("document part")
+            .to_vec(),
+    )
+    .unwrap()
+    .replace(
+        &format!(r#"r:embed="{image_id}""#),
+        &format!(r#"r:embed="{}""#, image_id.replacen('I', "&#73;", 1)),
+    )
+    .replace(
+        &format!(r#"r:id="{chart_id}""#),
+        &format!(r#"r:id="{}""#, chart_id.replacen('I', "&#x49;", 1)),
+    );
+    assert!(document_xml.contains("r&#73;d"));
+    assert!(document_xml.contains("r&#x49;d"));
+    package.set_part("/word/document.xml", document_xml.into_bytes());
+
+    let mut producer_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut producer_bytes).unwrap();
+    let mut document =
+        Document::from_bytes(producer_bytes.get_ref()).expect("encoded drawing package reopens");
+    assert_eq!(document.images()[0].embed_id, image_id);
+    assert_eq!(document.image_data(&image_id), Some(image.clone()));
+
+    let page = document
+        .layout_page(0)
+        .unwrap()
+        .expect("encoded drawings produce a page");
+    fn has_group(elements: &[oxml_layout::PositionedElement]) -> bool {
+        elements.iter().any(|element| match element {
+            oxml_layout::PositionedElement::Group(_) => true,
+            oxml_layout::PositionedElement::MarkedContent { children, .. } => has_group(children),
+            _ => false,
+        })
+    }
+    let mut images = 0;
+    let mut paths = 0;
+    oxml_layout::walk(&page.elements, &mut |element, _| match element {
+        oxml_layout::PositionedElement::Image { .. } => images += 1,
+        oxml_layout::PositionedElement::Path(_) => paths += 1,
+        _ => {}
+    });
+    assert_eq!(images, 1);
+    assert!(
+        has_group(&page.elements),
+        "the decoded chart relationship should render a group"
+    );
+    assert!(paths > 0, "the decoded chart should render vector geometry");
+    let rendered = document
+        .render_page_to_png_deterministic(0, 72.0)
+        .unwrap()
+        .expect("encoded drawing page renders");
+    assert!(rendered.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).expect("saved drawing package reopens");
+    assert_eq!(reopened.images()[0].embed_id, image_id);
+    assert_eq!(reopened.image_data(&image_id), Some(image));
 }
 
 fn normalized_mhtml_record(
@@ -2040,7 +3463,8 @@ fn html_import_projects_a_reopenable_word_document() {
 #[test]
 fn settings_relationship_target_is_resolved_instead_of_assumed() {
     let settings = br#"<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:documentProtection w:edit="comments" w:enforcement="true" w:hash="custom-hash" w:salt="custom-salt"/></w:settings>"#;
-    let mut seed = Document::new();
+    let mut seed =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
     let bytes = seed.to_bytes().unwrap();
     let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
     package.set_part("/word/config/protection.xml", settings.to_vec());
@@ -2855,7 +4279,7 @@ fn rtf_writer_rejects_invalid_cell_width_boundaries() {
 }
 
 #[test]
-fn rtf_writer_diagnoses_unsupported_numbering_without_coercion() {
+fn rtf_writer_preserves_none_numbering_without_coercion() {
     let mut seed = Document::new();
     seed.add_list_definition(&[ListLevel::decimal(), ListLevel::bullet()]);
     let bytes = seed.to_bytes().unwrap();
@@ -2887,7 +4311,7 @@ fn rtf_writer_diagnoses_unsupported_numbering_without_coercion() {
     let rtf = rtf_text(written.bytes);
     assert!(!rtf.contains("\\ilvl8"), "{rtf}");
     assert!(
-        !rtf.contains("\\ls1\\ilvl0{\\plain\\f0 unsupported format}"),
+        rtf.contains("\\ls1\\ilvl0{\\plain\\f0 unsupported format}"),
         "{rtf}"
     );
     assert!(rtf.contains("{\\plain\\f0 too deep}"), "{rtf}");
@@ -2908,16 +4332,10 @@ fn rtf_writer_diagnoses_unsupported_numbering_without_coercion() {
         .collect::<Vec<_>>();
     assert_eq!(
         messages,
-        [
-            (
-                "body[0]/ppr/numPr/ilvl".to_owned(),
-                "numbering level above 8 was dropped during RTF export".to_owned(),
-            ),
-            (
-                "numbering[numId=1]/level[0]/numFmt".to_owned(),
-                "unsupported numbering format was dropped during RTF export".to_owned(),
-            ),
-        ]
+        [(
+            "body[0]/ppr/numPr/ilvl".to_owned(),
+            "numbering level above 8 was dropped during RTF export".to_owned(),
+        )]
     );
 }
 
@@ -4558,9 +5976,11 @@ fn custom_style_round_trip() {
         StyleBuilder::paragraph("CustomHeading", "Custom Heading")
             .based_on("Heading1")
             .next_style("Normal"),
-    );
+    )
+    .unwrap();
 
-    doc.add_style(StyleBuilder::character("Emphasis", "Emphasis Style"));
+    doc.add_style(StyleBuilder::character("Emphasis", "Emphasis Style"))
+        .unwrap();
 
     doc.add_paragraph("Custom styled").style("CustomHeading");
 
@@ -4575,6 +5995,589 @@ fn custom_style_round_trip() {
 
     let paras = doc2.paragraphs();
     assert_eq!(paras[0].style_id(), Some("CustomHeading"));
+}
+
+#[test]
+fn source_built_style_graph_matches_pinned_word_effective_formatting() {
+    const WORD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+    const LIBREOFFICE_ORACLE: &str =
+        "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
+    const MAX_DIFFERING_RENDER_BYTES: usize = 0;
+    const WORD_STYLES_ORACLE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Times New Roman"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="character" w:styleId="CorpusBodyChar"><w:name w:val="Corpus Body Char"/><w:link w:val="CorpusBody"/><w:rPr><w:b/><w:i/><w:color w:val="2E5A88"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="CorpusBody" w:default="1"><w:name w:val="Corpus Body"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:link w:val="CorpusBodyChar"/><w:autoRedefine w:val="0"/><w:hidden w:val="0"/><w:uiPriority w:val="17"/><w:semiHidden/><w:unhideWhenUsed/><w:qFormat/><w:locked w:val="0"/><w:pPr><w:spacing w:after="0"/></w:pPr><w:rPr><w:sz w:val="28"/></w:rPr></w:style>
+  <w:style w:type="table" w:styleId="CorpusTable" w:default="1"><w:name w:val="Corpus Table"/><w:tblPr><w:shd w:val="clear" w:fill="F2F2F2"/></w:tblPr><w:tblStylePr w:type="band1Horz"><w:tcPr><w:shd w:val="clear" w:fill="D9EAF7"/></w:tcPr></w:tblStylePr></w:style>
+</w:styles>"#;
+    assert_eq!(WORD_ORACLE, MHTML_ORACLE_VERSION);
+    assert_eq!(LIBREOFFICE_ORACLE, ODT_ORACLE_VERSION);
+
+    let mut authored = corpus_style_document();
+    let authored_paragraph = authored.resolve_paragraph_properties(None);
+    let authored_run = authored.resolve_run_properties(Some("CorpusBody"), Some("CorpusBody"));
+    assert_eq!(authored_paragraph.space_after, Some(rdocx::Twips(0)));
+    assert_eq!(authored_run.bold, Some(true));
+    assert_eq!(authored_run.italic, Some(true));
+    assert_eq!(authored_run.color.as_deref(), Some("2E5A88"));
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(authored.to_bytes().unwrap())).unwrap();
+    package.set_part("/word/styles.xml", WORD_STYLES_ORACLE.as_bytes().to_vec());
+    let mut oracle_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut oracle_bytes).unwrap();
+    let oracle = Document::from_bytes(oracle_bytes.get_ref()).unwrap();
+    oracle.validate_style_graph().unwrap();
+    assert_eq!(
+        oracle.resolve_paragraph_properties(None),
+        authored_paragraph
+    );
+    assert_eq!(
+        oracle.resolve_run_properties(Some("CorpusBody"), Some("CorpusBody")),
+        authored_run
+    );
+    let authored_render = authored
+        .render_page_to_png_deterministic(0, 150.0)
+        .unwrap()
+        .unwrap();
+    let oracle_render = oracle
+        .render_page_to_png_deterministic(0, 150.0)
+        .unwrap()
+        .unwrap();
+    let differing = authored_render
+        .iter()
+        .zip(&oracle_render)
+        .filter(|(left, right)| left != right)
+        .count()
+        + authored_render.len().abs_diff(oracle_render.len());
+    assert_eq!(differing, MAX_DIFFERING_RENDER_BYTES);
+
+    if std::env::var_os("RDOCX_RUN_PINNED_STYLE_ORACLE").is_some() {
+        let version = std::process::Command::new("soffice")
+            .arg("--version")
+            .output()
+            .expect("pinned LibreOffice is installed");
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout).trim(),
+            LIBREOFFICE_ORACLE
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "rdocx-style-oracle-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = root.join("output");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        let source = root.join("source.docx");
+        std::fs::write(&source, authored.to_bytes().unwrap()).unwrap();
+        let status = std::process::Command::new("soffice")
+            .arg("--headless")
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .arg("--convert-to")
+            .arg("docx")
+            .arg("--outdir")
+            .arg(&output)
+            .arg(&source)
+            .status()
+            .expect("pinned LibreOffice style normalization starts");
+        assert!(status.success());
+        let normalized = Document::open(output.join("source.docx")).unwrap();
+        normalized.validate_style_graph().unwrap();
+        let normalized_paragraph = normalized.resolve_paragraph_properties(None);
+        assert_eq!(
+            normalized_paragraph.space_after,
+            authored_paragraph.space_after
+        );
+        let normalized_run =
+            normalized.resolve_run_properties(Some("CorpusBody"), Some("CorpusBody"));
+        assert_eq!(normalized_run.bold, authored_run.bold);
+        assert_eq!(normalized_run.italic, authored_run.italic);
+        assert_eq!(normalized_run.color, authored_run.color);
+        assert_eq!(
+            normalized.style("CorpusBody").unwrap().linked_style(),
+            Some("CorpusBodyChar")
+        );
+        assert_eq!(
+            normalized.style("CorpusBodyChar").unwrap().linked_style(),
+            Some("CorpusBody")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[test]
+fn invalid_style_graph_never_publishes_a_partial_mutation() {
+    let mut document = Document::new();
+    let before = document.to_bytes().unwrap();
+
+    let error = document
+        .add_style(StyleBuilder::paragraph("Broken", "Broken").based_on("MissingStyle"))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("MissingStyle"));
+    assert!(document.style("Broken").is_none());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document
+        .add_style(StyleBuilder::paragraph("CycleA", "Cycle A").based_on("Normal"))
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("CycleB", "Cycle B").based_on("CycleA"))
+        .unwrap();
+    let before_cycle = document.to_bytes().unwrap();
+    assert!(
+        document
+            .set_style(StyleBuilder::paragraph("CycleA", "Cycle A").based_on("CycleB"))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_cycle);
+
+    document
+        .add_style(StyleBuilder::character("WrongLink", "Wrong Link"))
+        .unwrap();
+    let before_link = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_style(
+                StyleBuilder::character("WrongTarget", "Wrong Target").linked_style("WrongLink")
+            )
+            .is_err()
+    );
+    assert!(document.style("WrongTarget").is_none());
+    assert_eq!(document.to_bytes().unwrap(), before_link);
+
+    document
+        .add_style(StyleBuilder::table("DuplicateRegion", "Duplicate Region"))
+        .unwrap();
+    let before_regions = document.to_bytes().unwrap();
+    assert!(
+        document
+            .set_style(
+                StyleBuilder::table("DuplicateRegion", "Duplicate Region")
+                    .conditional_table_style("firstRow", None, None, None)
+                    .conditional_table_style("firstRow", None, None, None),
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_regions);
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let duplicate_defaults = styles.replace(
+        r#"<w:style w:type="paragraph" w:styleId="Heading1">"#,
+        r#"<w:style w:type="paragraph" w:styleId="Heading1" w:default="1">"#,
+    );
+    package.set_part("/word/styles.xml", duplicate_defaults.into_bytes());
+    let mut invalid_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut invalid_bytes).unwrap();
+    let mut invalid = Document::from_bytes(invalid_bytes.get_ref()).unwrap();
+    assert!(invalid.validate_style_graph().is_err());
+    let invalid_before = invalid.to_bytes().unwrap();
+    assert!(
+        invalid
+            .add_style(StyleBuilder::paragraph("Rejected", "Rejected"))
+            .is_err()
+    );
+    assert_eq!(invalid.to_bytes().unwrap(), invalid_before);
+}
+
+#[test]
+fn authored_style_graph_survives_save_and_reopen() {
+    let mut document = corpus_style_document();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    reopened.validate_style_graph().unwrap();
+    let paragraph = reopened.style("CorpusBody").unwrap();
+    assert!(paragraph.is_default());
+    assert_eq!(paragraph.based_on(), Some("Normal"));
+    assert_eq!(paragraph.next_style(), Some("Normal"));
+    assert_eq!(paragraph.linked_style(), Some("CorpusBodyChar"));
+    assert_eq!(paragraph.priority(), Some(17));
+    assert_eq!(paragraph.auto_redefine(), Some(false));
+    assert_eq!(paragraph.hidden(), Some(false));
+    assert_eq!(paragraph.semi_hidden(), Some(true));
+    assert_eq!(paragraph.unhide_when_used(), Some(true));
+    assert_eq!(paragraph.quick_format(), Some(true));
+    assert_eq!(paragraph.locked(), Some(false));
+    assert_eq!(
+        paragraph
+            .paragraph_properties()
+            .and_then(|properties| properties.space_after),
+        Some(rdocx::Twips(0))
+    );
+    assert_eq!(
+        reopened.style("CorpusBodyChar").unwrap().linked_style(),
+        Some("CorpusBody")
+    );
+    let table = reopened.style("CorpusTable").unwrap();
+    assert!(table.is_default());
+    assert_eq!(table.conditional_table_styles().len(), 1);
+    assert_eq!(table.conditional_table_styles()[0].region, "band1Horz");
+    assert_eq!(
+        table.conditional_table_styles()[0]
+            .cell_properties
+            .as_ref()
+            .and_then(|properties| properties.shading.as_ref())
+            .and_then(|shading| shading.fill.as_deref()),
+        Some("D9EAF7")
+    );
+
+    let mut updated = reopened;
+    updated
+        .set_style(
+            StyleBuilder::paragraph("CorpusBody", "Corpus Body")
+                .clear_based_on()
+                .clear_next_style()
+                .clear_linked_style()
+                .clear_priority()
+                .clear_auto_redefine()
+                .clear_hidden()
+                .clear_semi_hidden()
+                .clear_unhide_when_used()
+                .clear_quick_format()
+                .clear_locked()
+                .clear_paragraph_properties()
+                .clear_run_properties(),
+        )
+        .unwrap();
+    let paragraph = updated.style("CorpusBody").unwrap();
+    assert_eq!(paragraph.based_on(), None);
+    assert_eq!(paragraph.next_style(), None);
+    assert_eq!(paragraph.linked_style(), None);
+    assert_eq!(paragraph.priority(), None);
+    assert_eq!(paragraph.paragraph_properties(), None);
+    assert_eq!(paragraph.run_properties(), None);
+    assert_eq!(
+        updated.style("CorpusBodyChar").unwrap().linked_style(),
+        None
+    );
+    updated
+        .set_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .clear_table_properties()
+                .clear_conditional_table_styles(),
+        )
+        .unwrap();
+    assert_eq!(
+        updated.style("CorpusTable").unwrap().table_properties(),
+        None
+    );
+    assert!(
+        updated
+            .style("CorpusTable")
+            .unwrap()
+            .conditional_table_styles()
+            .is_empty()
+    );
+}
+
+#[test]
+fn conditional_table_style_updates_preserve_siblings_and_existing_groups() {
+    let mut document = corpus_style_document();
+    document
+        .set_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .conditional_table_style(
+                    "band1Horz",
+                    Some(CT_PPr {
+                        space_after: Some(rdocx::Twips(60)),
+                        ..CT_PPr::default()
+                    }),
+                    None,
+                    None,
+                )
+                .conditional_table_style(
+                    "firstRow",
+                    None,
+                    None,
+                    Some(CT_TcPr {
+                        shading: Some(CT_Shd {
+                            val: "clear".to_owned(),
+                            color: None,
+                            fill: Some("112233".to_owned()),
+                        }),
+                        ..CT_TcPr::default()
+                    }),
+                ),
+        )
+        .unwrap();
+
+    let table = document.style("CorpusTable").unwrap();
+    assert_eq!(table.conditional_table_styles().len(), 2);
+    let band = table
+        .conditional_table_styles()
+        .iter()
+        .find(|region| region.region == "band1Horz")
+        .unwrap();
+    assert_eq!(
+        band.paragraph_properties
+            .as_ref()
+            .and_then(|properties| properties.space_after),
+        Some(rdocx::Twips(60))
+    );
+    assert_eq!(
+        band.cell_properties
+            .as_ref()
+            .and_then(|properties| properties.shading.as_ref())
+            .and_then(|shading| shading.fill.as_deref()),
+        Some("D9EAF7")
+    );
+
+    document
+        .set_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .clear_conditional_table_styles()
+                .conditional_table_style("lastRow", None, None, None),
+        )
+        .unwrap();
+    let table = document.style("CorpusTable").unwrap();
+    let regions = table.conditional_table_styles();
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].region, "lastRow");
+}
+
+#[test]
+fn table_style_updates_merge_nested_borders_and_margins() {
+    let mut document = Document::new();
+    document
+        .add_style(StyleBuilder::table("LayeredTable", "Layered Table"))
+        .unwrap();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let styles = styles.replace(
+        r#"<w:name w:val="Layered Table"/>"#,
+        r#"<w:name w:val="Layered Table"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="111111"/><w:bottom w:val="double" w:sz="12" w:color="222222"/><x:diagonal xmlns:x="urn:producer" x:keep="exact"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="140" w:type="dxa"/></w:tblCellMar></w:tblPr>"#,
+    );
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    document
+        .set_style(
+            StyleBuilder::table("LayeredTable", "Layered Table").table_properties(CT_TblPr {
+                borders: Some(CT_TblBorders {
+                    top: Some(CT_BorderEdge {
+                        val: ST_Border::Thick,
+                        sz: Some(16),
+                        space: None,
+                        color: Some("AABBCC".to_owned()),
+                    }),
+                    ..CT_TblBorders::default()
+                }),
+                cell_margin: Some(CT_TblCellMar {
+                    top: Some(rdocx::Twips(240)),
+                    ..CT_TblCellMar::default()
+                }),
+                ..CT_TblPr::default()
+            }),
+        )
+        .unwrap();
+
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let output = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert!(output.contains(r#"<w:top w:val="thick" w:sz="16" w:color="AABBCC"/>"#));
+    assert!(output.contains(r#"<w:bottom w:val="double" w:sz="12" w:color="222222"/>"#));
+    assert_eq!(output.matches(r#"x:diagonal"#).count(), 1);
+    assert!(output.contains(r#"<w:top w:w="240" w:type="dxa"/>"#));
+    assert!(output.contains(r#"<w:left w:w="140" w:type="dxa"/>"#));
+}
+
+#[test]
+fn style_removal_rejects_live_references_and_preserves_unknown_xml() {
+    let mut document = Document::new();
+    document
+        .add_style(StyleBuilder::paragraph("Disposable", "Disposable"))
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("Unused", "Unused"))
+        .unwrap();
+    document
+        .add_style(StyleBuilder::paragraph("Keeper", "Keeper"))
+        .unwrap();
+    document
+        .add_paragraph("live style reference")
+        .style("Disposable");
+
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let extension = r#"<x:producer xmlns:x="urn:producer" x:exact="&amp; &quot;kept&quot;"/>"#;
+    let paragraph_extension = r#"<x:pKeep xmlns:x="urn:producer" x:exact="paragraph"/>"#;
+    let run_extension = r#"<x:rKeep xmlns:x="urn:producer" x:exact="run"/>"#;
+    let styles = styles.replace(
+        r#"<w:name w:val="Keeper"/>"#,
+        &format!(
+            r#"<w:name w:val="Keeper"/><w:pPr>{paragraph_extension}<w:spacing w:after="100"/></w:pPr><w:rPr>{run_extension}<w:b/></w:rPr>{extension}"#
+        ),
+    );
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    assert!(document.remove_style("Disposable").is_err());
+    assert!(document.style("Disposable").is_some());
+    document
+        .set_style(
+            StyleBuilder::paragraph("Keeper", "Updated Keeper")
+                .priority(9)
+                .paragraph_properties(CT_PPr {
+                    space_before: Some(rdocx::Twips(40)),
+                    ..CT_PPr::default()
+                })
+                .run_properties(CT_RPr {
+                    color: Some("335577".to_owned()),
+                    ..CT_RPr::default()
+                }),
+        )
+        .unwrap();
+    assert!(document.remove_style("Unused").unwrap());
+    document.paragraph_mut(0).unwrap().set_style("Normal");
+    assert!(document.remove_style("Disposable").unwrap());
+
+    let saved =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let output = std::str::from_utf8(saved.get_part("/word/styles.xml").unwrap()).unwrap();
+    assert_eq!(output.matches(extension).count(), 1);
+    assert_eq!(output.matches(paragraph_extension).count(), 1);
+    assert_eq!(output.matches(run_extension).count(), 1);
+    let keeper = document.style("Keeper").unwrap();
+    assert_eq!(
+        keeper
+            .paragraph_properties()
+            .and_then(|properties| properties.space_after),
+        Some(rdocx::Twips(100))
+    );
+    assert_eq!(
+        keeper
+            .paragraph_properties()
+            .and_then(|properties| properties.space_before),
+        Some(rdocx::Twips(40))
+    );
+    assert_eq!(
+        keeper
+            .run_properties()
+            .and_then(|properties| properties.bold),
+        Some(true)
+    );
+    assert_eq!(
+        keeper
+            .run_properties()
+            .and_then(|properties| properties.color.as_deref()),
+        Some("335577")
+    );
+    assert!(document.style("Unused").is_none());
+    assert!(document.style("Disposable").is_none());
+
+    document
+        .add_style(StyleBuilder::paragraph("NoteStyle", "Note Style"))
+        .unwrap();
+    document.add_footnote("styled note");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let notes = String::from_utf8(package.get_part("/word/footnotes.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "<w:p>",
+            r#"<w:p><x:producer xmlns:x="urn:producer"><w:pStyle w:val="NoteStyle"/></x:producer>"#,
+            1,
+        );
+    package.set_part("/word/footnotes.xml", notes.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut with_note_style = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert!(with_note_style.remove_style("NoteStyle").is_err());
+    assert!(with_note_style.style("NoteStyle").is_some());
+}
+
+fn corpus_style_document() -> Document {
+    let mut document = Document::new();
+    document
+        .add_style(
+            StyleBuilder::character("CorpusBodyChar", "Corpus Body Char").run_properties(CT_RPr {
+                bold: Some(true),
+                italic: Some(true),
+                color: Some("2E5A88".to_owned()),
+                ..CT_RPr::default()
+            }),
+        )
+        .unwrap();
+    document
+        .add_style(
+            StyleBuilder::paragraph("CorpusBody", "Corpus Body")
+                .based_on("Normal")
+                .next_style("Normal")
+                .linked_style("CorpusBodyChar")
+                .priority(17)
+                .auto_redefine(false)
+                .hidden(false)
+                .semi_hidden(true)
+                .unhide_when_used(true)
+                .quick_format(true)
+                .locked(false)
+                .paragraph_properties(CT_PPr {
+                    space_after: Some(rdocx::Twips(0)),
+                    ..CT_PPr::default()
+                })
+                .run_properties(CT_RPr {
+                    sz: Some(rdocx_oxml::HalfPoint(28)),
+                    ..CT_RPr::default()
+                }),
+        )
+        .unwrap();
+    document
+        .add_style(
+            StyleBuilder::table("CorpusTable", "Corpus Table")
+                .table_properties(CT_TblPr {
+                    shading: Some(CT_Shd {
+                        val: "clear".to_owned(),
+                        color: None,
+                        fill: Some("F2F2F2".to_owned()),
+                    }),
+                    ..CT_TblPr::default()
+                })
+                .conditional_table_style(
+                    "band1Horz",
+                    None,
+                    None,
+                    Some(CT_TcPr {
+                        shading: Some(CT_Shd {
+                            val: "clear".to_owned(),
+                            color: None,
+                            fill: Some("D9EAF7".to_owned()),
+                        }),
+                        ..CT_TcPr::default()
+                    }),
+                ),
+        )
+        .unwrap();
+    document
+        .set_default_style(rdocx::StyleType::Paragraph, "CorpusBody")
+        .unwrap();
+    document
+        .set_default_style(rdocx::StyleType::Table, "CorpusTable")
+        .unwrap();
+    document
+        .add_paragraph("")
+        .style("CorpusBody")
+        .add_run("Corpus style graph")
+        .style("CorpusBody");
+    let mut table = document.add_table(2, 1);
+    table.row(0).unwrap().cell(0).unwrap().set_text("Band one");
+    table.row(1).unwrap().cell(0).unwrap().set_text("Band two");
+    document
 }
 
 #[test]
@@ -4660,7 +6663,8 @@ fn comprehensive_document_round_trip() {
     let mut doc = Document::new();
 
     // Custom style
-    doc.add_style(StyleBuilder::paragraph("BlockQuote", "Block Quote").based_on("Normal"));
+    doc.add_style(StyleBuilder::paragraph("BlockQuote", "Block Quote").based_on("Normal"))
+        .unwrap();
 
     // Page setup
     doc.set_margins(
@@ -5309,7 +7313,7 @@ fn core_properties_at_relationship_target_round_trip_in_place() {
     let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
     let core_xml = package.parts.remove("/docProps/core.xml").unwrap();
     package.set_part("/custom/metadata.xml", core_xml);
-    package.content_types.overrides.remove("/docProps/core.xml");
+    package.content_types.remove_override("/docProps/core.xml");
     package.content_types.add_override(
         "/custom/metadata.xml",
         "application/vnd.openxmlformats-package.core-properties+xml",
@@ -5385,6 +7389,63 @@ fn three_comments_and_cross_paragraph_anchors_round_trip_byte_identically() {
         saved_package.get_part("/word/document.xml"),
         Some(document_xml.as_bytes())
     );
+}
+
+#[test]
+fn encoded_comment_ids_reopen_as_one_complete_comment_anchor() {
+    let mut source = Document::new();
+    source.add_paragraph("commented");
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+        .expect("source package");
+    package.set_part(
+        "/word/document.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:commentRangeStart w:id="&#55;"/><w:r><w:t>commented</w:t></w:r><w:commentRangeEnd w:id="&#x37;"/><w:r><w:commentReference w:id="&#55;"/></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>"#.to_vec(),
+    );
+    package.set_part(
+        "/word/comments.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:author="Ada" w:id="7"><w:p><w:r><w:t>encoded anchor</w:t></w:r></w:p></w:comment></w:comments>"#.to_vec(),
+    );
+    package.content_types.add_override(
+        "/word/comments.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(rel_types::COMMENTS, "comments.xml");
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).expect("encoded comment package");
+    assert_eq!(document.comments()[0].id(), 7);
+    let paragraph = document.paragraph(0).expect("comment paragraph");
+    let range_ids = paragraph
+        .items()
+        .filter_map(|item| match item {
+            rdocx::paragraph::ParagraphItemRef::CommentRangeStart(id) => Some((true, id)),
+            rdocx::paragraph::ParagraphItemRef::CommentRangeEnd(id) => Some((false, id)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(range_ids, [(true, 7), (false, 7)]);
+    let reference_ids = paragraph
+        .runs()
+        .filter_map(|run| {
+            run.items().find_map(|item| match item {
+                rdocx::run::RunItemRef::CommentReference(id) => Some(id),
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reference_ids, [7]);
+
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).expect("saved comment package reopens");
+    assert_eq!(reopened.comments()[0].id(), 7);
+    let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    let xml = std::str::from_utf8(saved.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains(r#"<w:commentRangeStart w:id="7"/>"#));
+    assert!(xml.contains(r#"<w:commentRangeEnd w:id="7"/>"#));
+    assert!(xml.contains(r#"<w:commentReference w:id="7"/>"#));
 }
 
 #[test]
@@ -7485,8 +9546,8 @@ mod header_footer_pdf {
             PRODUCER_PART
         );
         assert_eq!(
-            package.content_types.overrides.get("/custom/producer.bin"),
-            Some(&"application/x-producer-private".to_owned())
+            package.content_types.override_for("/custom/producer.bin"),
+            Some("application/x-producer-private")
         );
         let relationship = package
             .get_part_rels("/word/document.xml")
@@ -7864,8 +9925,37 @@ mod legacy_forms_and_building_blocks {
                 .into_bytes(),
             );
             let document = Document::from_bytes(&package_bytes(package)).unwrap();
-            assert!(document.legacy_form_fields().is_err(), "{case}");
+            if case == "traversal" {
+                assert!(document.legacy_form_fields().is_err(), "{case}");
+            } else {
+                assert!(document.legacy_form_fields().unwrap().is_empty(), "{case}");
+            }
         }
+
+        let mut package = base_package();
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        let malformed = relationships.add(rel_types::HEADER, "ignored.xml");
+        relationships
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == malformed)
+            .unwrap()
+            .target_mode = Some("internal".into());
+        relationships.add(rel_types::HEADER, "valid.xml");
+        package.set_part(
+            "/word/valid.xml",
+            format!(
+                r#"<w:hdr xmlns:w="{WORD_NS}">{}</w:hdr>"#,
+                text_form("valid", "value")
+            )
+            .into_bytes(),
+        );
+        package.content_types.add_override(
+            "/word/valid.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        let document = Document::from_bytes(&package_bytes(package)).unwrap();
+        assert_eq!(document.legacy_form_fields().unwrap().len(), 1);
     }
 
     #[test]
@@ -7969,7 +10059,6 @@ mod legacy_forms_and_building_blocks {
         );
         for case in [
             "duplicate",
-            "external",
             "traversal",
             "missing",
             "wrong-type",
@@ -7982,17 +10071,9 @@ mod legacy_forms_and_building_blocks {
             } else {
                 "glossary/document.xml"
             };
-            let id = relationships.add(rel_types::GLOSSARY_DOCUMENT, target);
+            relationships.add(rel_types::GLOSSARY_DOCUMENT, target);
             if case == "duplicate" {
                 relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/other.xml");
-            }
-            if case == "external" {
-                relationships
-                    .items
-                    .iter_mut()
-                    .find(|relationship| relationship.id == id)
-                    .unwrap()
-                    .target_mode = Some("External".into());
             }
             let part_name = "/word/glossary/document.xml";
             if case != "missing" && case != "traversal" {
@@ -8018,6 +10099,40 @@ mod legacy_forms_and_building_blocks {
                 "{case} glossary graph must fail closed"
             );
         }
+
+        for mode in ["External", "internal", "ProducerDefined"] {
+            let mut package = base_package();
+            let relationships = package.get_or_create_part_rels("/word/document.xml");
+            let ignored = relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/ignored.xml");
+            relationships
+                .items
+                .iter_mut()
+                .find(|relationship| relationship.id == ignored)
+                .unwrap()
+                .target_mode = Some(mode.into());
+            let document = Document::from_bytes(&package_bytes(package)).unwrap();
+            assert!(document.building_blocks().unwrap().is_empty(), "{mode}");
+        }
+
+        let mut package = base_package();
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        let ignored = relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/ignored.xml");
+        relationships
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.id == ignored)
+            .unwrap()
+            .target_mode = Some("internal".into());
+        relationships.add(rel_types::GLOSSARY_DOCUMENT, "glossary/document.xml");
+        package.set_part(
+            "/word/glossary/document.xml",
+            format!(r#"<w:glossaryDocument xmlns:w="{WORD_NS}"><w:docParts><w:docPart><w:docPartPr><w:name w:val="valid"/></w:docPartPr><w:docPartBody><w:p/></w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#).into_bytes(),
+        );
+        package
+            .content_types
+            .add_override("/word/glossary/document.xml", GLOSSARY_CONTENT_TYPE);
+        let document = Document::from_bytes(&package_bytes(package)).unwrap();
+        assert_eq!(document.building_blocks().unwrap().len(), 1);
     }
 
     #[test]
@@ -8639,19 +10754,12 @@ mod legacy_forms_and_building_blocks {
                 .into_bytes(),
             );
         }
-        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
-        let before = document.to_bytes().unwrap();
-        assert!(document.legacy_form_fields().is_err());
-        assert!(
-            document
-                .set_legacy_form_field_value(
-                    "/word/header-id-one.xml",
-                    0,
-                    LegacyFormFieldValue::Text("changed".to_owned()),
-                )
-                .is_err()
-        );
-        assert_eq!(document.to_bytes().unwrap(), before);
+        let mut output = std::io::Cursor::new(Vec::new());
+        assert!(matches!(
+            package.write_to(&mut output),
+            Err(oxml_opc::OpcError::InvalidRelationship)
+        ));
+        assert!(output.into_inner().is_empty());
     }
 
     #[test]

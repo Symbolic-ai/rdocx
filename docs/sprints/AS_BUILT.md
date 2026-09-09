@@ -12335,3 +12335,451 @@ sourced tail identity. The integrated `/verify --full` gate passed at
 **Notes for future sessions.** Preserve the distinction between safe prefix
 restart and unsafe shifted-tail reuse. Body-index provenance after a structural
 edit must always be rebuilt from the edit through the document end.
+
+### F-243, Word-compatible fresh package profiles
+
+**Sprint.** S71
+**Completed.** 2026-09-07
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** `Document::new()` now creates a deterministic
+Word-compatible DOCX package that owns its document, styles, settings, theme,
+font table, core properties, and application properties. The public
+`WordCreationProfile` constructor creates DOCX, DOCM, DOTX, and DOTM package
+classes with their exact main-part content types, while an explicit minimal
+profile retains the previous compact graph.
+
+**Non-obvious choices.** Main-part content type remains the single authority
+for package class. Fresh macro-capable profiles declare DOCM or DOTM identity
+without inventing a VBA project, and fresh core properties omit timestamps so
+equivalent constructions serialize identically. The complete candidate graph
+is staged and validated before it becomes a public document.
+
+**Deviations from the design plan.** None. Microscope passes 1 through 3 found
+and closed graph, conformance, and capability-classification gaps. Pass 4
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The round-trip gate
+`fresh_word_package_profile_tests::word_compatible_profiles_reopen_with_the_same_package_class`
+passed for all four package classes. Complete normalized graph, strict
+validation, default-profile, explicit-minimal-profile, deterministic-save, and
+unmodelled-content preservation regressions also passed. The integrated
+`/verify --full` gate passed at
+`0120ae6da8b2b1e4813c90663f13fa7b5dbd8e15`. The optional native Word gate was
+not configured in this environment, so no native no-repair observation is
+claimed.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep package class derived from the main-part
+content type and preserve the difference between macro-capable identity and an
+actual VBA payload. Any later fresh-package part must join the same staged,
+validated, deterministic construction path.
+
+### F-249, Deterministic package identifier allocation
+
+**Sprint.** S71
+**Completed.** 2026-09-07
+**Size.** M, estimated 2 days, actual 1 day
+
+**What was built.** The Word facade now owns deterministic allocation for
+relationship, bookmark, comment, drawing, numbering, part, and content-type
+identifiers. Imported and preserved identities are scanned before mutation,
+complete identifier bundles are reserved on staged candidates, and equivalent
+construction orders serialize to identical package bytes.
+
+**Non-obvious choices.** OOXML category scopes remain independent and
+relationship identifiers remain local to each source part. Normalized package
+identity compares ASCII case-insensitively while retaining the first authored
+spelling. Producer relationships captured at open retain their identifiers,
+while newly authored relationships follow deterministic semantic ordering.
+
+**Deviations from the design plan.** None. Eighteen remediation and audit
+cycles closed preservation, package-identity, relationship-type, atomic-save,
+and cross-facade gaps. The final two independent microscope passes reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/13-risks-and-open-questions.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `equivalent_construction_orders_allocate_declared_stable_identifiers`
+and `repeated_saves_are_byte_identical_after_allocation` passed. Collision,
+scope, internal-reopen, header and footer relationship, content-type identity,
+full workspace, WASM, documentation, packaging, and advisory gates also passed.
+The integrated `/verify --full` gate passed at
+`a9c68a4d77199bd597b8b7ed74d7553776484444`.
+
+**Hash harness.** Exactly two reviewed document XML entries changed.
+`feature_showcase:word/document.xml` changed from
+`3afc92178fe9e0e932d2685988ed6cc541124d3d8c806504b429b6db78990762` to
+`7c38b482fb5611c39edaf3a7931e62a49fef81861e76e05d5039830db7cc7053`, and
+`report:word/document.xml` changed from
+`5a834b2ebe01156c082f25ea05483c135d3718beae7d80b2224e0a02f9b93365` to
+`a879be8fcb630c39824270e40b0a34dba56fb5c04010f27720da4b96df76f12a`.
+Every other entry remained unchanged, 47 of 49.
+
+**Notes for future sessions.** Keep package identity normalization and retained
+producer spelling paired. All new Word facade mutations that allocate more than
+one identifier must reserve and validate the complete bundle before publication.
+
+### F-245, Corpus themes, font tables, and embedded fonts
+
+**Sprint.** S71
+**Completed.** 2026-09-08
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The public Word facade now authors DrawingML themes,
+language defaults, typed font-table records, and caller-supplied embedded font
+parts. Embedded font mutations require explicit authorization and exact license
+identity, own the complete relationship and content-type graph, and feed
+authored theme aliases and deobfuscated font bytes into deterministic layout
+before bundled fallback.
+
+**Non-obvious choices.** The implementation reuses the shared concrete theme
+type and gives font-table XML one focused schema owner. It accepts strict OOXML
+font keys while normalizing compact and hyphenated legacy filenames before
+deobfuscation. Caller fonts remain document-owned and never enter the bundled
+font inventory or system-font discovery path. The public API change is additive
+for the pre-1.0 crates.
+
+**Deviations from the design plan.** None. Seven microscope passes closed
+atomicity, preservation, namespace, compatibility, and oracle gaps. Pass 7
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/08-rendering-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** `authored_theme_font_table_and_embedded_fonts_survive_reopen`,
+`font_embedding_requires_explicit_authorization_and_license_identity`,
+`font_table_preserves_unknown_children_and_relationship_attributes`,
+`embedded_font_parts_are_packaged_deterministically`, and the pinned
+`public_authored_theme_and_fonts_match_pinned_word_resolution` differential all
+passed. The integrated `/verify --full` gate passed at
+`d938e387fc2248499c724e826225789d45b31ac9` with pinned LibreOffice, Poppler,
+and python-pptx riders.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve caller authorization and license
+identity as part of every embedded-font mutation. Keep theme aliases and
+embedded bytes ahead of bundled fallback, and never make document-owned fonts
+observable through system discovery or the bundled asset inventory.
+
+### F-244, Corpus settings and document properties
+
+**Sprint.** S71
+**Completed.** 2026-09-08
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The Word facade now owns relationship-resolved core,
+application, and custom properties plus the bounded corpus settings subset.
+Callers can read, set, and remove application properties, custom values,
+document variables, compatibility settings, default tab stops, character
+spacing control, and language defaults through atomic package mutations.
+
+**Non-obvious choices.** Optional parts are removed only when they are
+facade-owned and empty. Every mutation stages typed state, relationships,
+content types, and package bytes together. Parsed aliases and unmodelled
+settings children retain their original bytes and schema positions.
+
+**Deviations from the design plan.** None. Three microscope passes closed the
+atomicity, preservation, namespace, and workflow-owner gaps. Pass 3 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** `authored_settings_and_properties_survive_reopen`,
+`removing_one_property_family_prunes_only_its_owned_graph`,
+`settings_mutation_preserves_unmodeled_children_in_schema_order`, and
+`fresh_property_output_has_no_clock_or_host_input` passed. The integrated
+`/verify --full` gate passed at
+`11f2a2fe653b56c3cc2a3231ff3195c58ede1e72` with pinned LibreOffice and
+Poppler riders, all package archives below 10 MiB, and clean supply-chain
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep optional property-part ownership explicit.
+A malformed or foreign lookalike must remain preserved and unevaluated, and a
+failed cross-part mutation must publish no typed or package state.
+
+### F-246, Corpus style authoring
+
+**Sprint.** S71
+**Completed.** 2026-09-08
+**Size.** L, estimated 4 days, actual 2 days
+
+**What was built.** The public Word facade now creates, updates, defaults,
+removes, and validates paragraph, character, and table styles as one graph.
+Effective paragraph, run, and table formatting follows authored defaults,
+based-on chains, reciprocal links, next styles, theme fonts, and conditional
+table regions through deterministic layout.
+
+**Non-obvious choices.** Mutations validate a complete candidate graph before
+publishing it. Removal rejects live references rather than detaching them.
+Canonical generated empty style scalars use deterministic writer output, while
+producer-specific aliases and attributes retain exact source snapshots.
+
+**Deviations from the design plan.** None. Ten microscope passes closed graph,
+resolver, table-cascade, fragment-remapping, serializer, and completion-record
+gaps. Pass 10 reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md`.
+
+**Tests.** `source_built_style_graph_matches_pinned_word_effective_formatting`,
+`invalid_style_graph_never_publishes_a_partial_mutation`,
+`authored_style_graph_survives_save_and_reopen`, and
+`style_removal_rejects_live_references_and_preserves_unknown_xml` passed. The
+integrated `/verify --full` gate passed at
+`11f2a2fe653b56c3cc2a3231ff3195c58ede1e72` with pinned LibreOffice and
+Poppler riders, all package archives below 10 MiB, and clean supply-chain
+checks.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep style ids type-compatible across based-on,
+link, and next edges. Preserve unmodelled XML and lexical producer details, and
+invalidate layout exactly once after a complete valid graph is published.
+
+### F-247, Complete numbering level and instance model
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The public Word facade now creates, inspects, updates,
+removes, and validates complete numbering definitions and instances. Numbering
+levels cover the standard format set, marker text, style links, suffixes,
+alignment, indentation, marker run properties, legal numbering, restart
+controls, and typed instance overrides.
+
+**Non-obvious choices.** Every mutation validates the complete candidate graph
+before publishing package or typed state. Producer-defined formats and
+unmodelled XML retain their original bytes and sequence positions. HTML,
+Markdown, EPUB, and RTF exporters diagnose standard formats they cannot render
+instead of silently coercing them to decimal markers.
+
+**Deviations from the design plan.** None. Nine microscope passes closed graph,
+namespace, preservation, schema-order, export, and regression gaps. Pass 9
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md`.
+
+**Tests.** `all_public_numbering_level_properties_survive_reopen`,
+`numbering_instances_and_overrides_round_trip_in_schema_order`,
+`public_authored_numbering_reports_no_unmodeled_properties`,
+`invalid_numbering_mutation_is_atomic`, and
+`imported_numbering_extensions_remain_byte_identical` passed. The round-trip
+gate was proven mutation-sensitive. The integrated `/verify --full` gate passed
+at `d07a8bb35811ca344dc4b685ba25485178ff323f` with pinned LibreOffice 26.2.5.2,
+Poppler 26.01.0, and uv 0.10.2 riders. The normal-user ODP permission regression
+passed separately. All 22 publishable crates verified from clean archives, and
+the largest archive was 4,603,514 bytes against the 10 MiB limit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep definition, instance, style, and related
+story references inside one atomic validation boundary. Preserve producer XML
+verbatim, and never invent render semantics for a typed format that an exporter
+does not support.
+
+### F-248, Style-linked numbering, counters, TOC, and REF
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The native Word facade now links and unlinks paragraph
+styles and numbering levels atomically. Result-local counters cover concrete
+instances, overrides, continuation, restarts, sections, table cells, `numId`
+zero suppression, numbered TOC entries, and numbering-aware REF fields.
+
+**Non-obvious choices.** Distinct concrete instances start independently even
+when they share an abstract definition. This intentionally differs from the
+captured Word 16.112.3 shared-definition sequence. Imported numbering and style
+XML retains namespace aliases, producer attributes, revisions, unmodelled
+children, and schema positions.
+
+**Deviations from the design plan.** None. Three microscope passes closed
+counter projection, XML escaping, and oracle-provenance gaps. Pass 3 reported
+zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md`.
+
+**Tests.** `three_level_style_linked_numbering_matches_pinned_word`,
+`style_numbering_link_is_atomic_in_both_directions`,
+`num_id_zero_suppresses_only_the_selected_paragraph`,
+`numbering_state_crosses_tables_and_sections_in_document_order`, and
+`style_linked_numbering_survives_reopen_and_rebuild` passed. The differential
+compared 27 exact Word records, three normalized TOC records, and a two-page
+150 DPI visual oracle. Its minimum ink coverage was 0.983131 and every edge,
+distribution, and projection threshold passed. The test gate was proven
+mutation-sensitive. The integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the style and numbering sides inside one
+staged validation boundary. Body, table, TOC, and REF output must share the same
+result-local counter projection.
+
+### F-X087, Portable authored Word charts from PR 71
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** Kevin Brown's PR 71 contribution is folded into S71 as a
+hardened authored Word chart path. Line, bar, pie, and doughnut charts retain
+editable workbooks, typed axes, titles, number formats, legends, series and
+point colours, percentage labels, and explicit doughnut holes across save and
+reopen. The shared `RgbColor` is available through the chart, Word, and
+PowerPoint facades.
+
+**Non-obvious choices.** A related Office theme is reused only when its target,
+content type, and DrawingML parse all validate. Otherwise a collision-safe
+default is staged without overwriting retained source bytes. Complete document,
+theme, package, relationship, content-type, and identifier state publishes in
+one atomic mutation. Pages export digests are evidence rather than fixed gates
+because Pages recalculates manual chart layout values between exports.
+
+**Deviations from the design plan.** None. Four microscope passes closed theme,
+atomicity, schema-order, public migration, and external-oracle gaps. Pass 4
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/05-drawingml-model.md`, `docs/hld/09-charts-spec.md`,
+`docs/hld/10-bindings-spec.md`, `docs/hld/12-testing-strategy.md`, and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** The authored line, bar, pie, and doughnut round-trip, theme
+atomicity, deterministic allocation, and three-facade colour gates passed. The
+source candidate SHA-256 was
+`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`.
+Microsoft Word 16.112.3 build 16.112.26083020 opened it without repair. Pages
+Creator Studio 15.1.1 build 7044.0.273 rendered the declared visual facts and
+exported four semantically exact editable workbooks. The final observed export
+SHA-256 was
+`ac5ce7c4cb0f6389286f271af3c71ec4b18c35bca28c5b6a22ea24126c95504f`.
+The integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Preserve Kevin Brown's contribution credit in
+the next stable release. PR 71 remains the source contribution record, while
+the reviewed hardened equivalent reaches `main` only through `/close-sprint`.
+
+### F-X088, Verify and close Issue 69 after S70 fixes
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The three S70 Issue 69 mechanisms were verified together
+against the exact v0.13.1 release and the integrated S71 source. Six focused
+correctness regressions passed, a qualified same-environment timing
+reconstruction measured every reported edit family, and Issue 69 was closed
+with authenticated evidence and credit for `@emptinessform`.
+
+**Non-obvious choices.** The reporter fork contains no committed timing
+harness. The temporary release-mode reconstruction therefore matched the 700
+four-line paragraphs, one 3 by 3 table every 50 paragraphs, 63-page prime,
+three edit positions, warmup, seven alternating rounds, and deterministic
+fonts while explicitly distinguishing direct macOS engine mutation from the
+reported Windows editor environment.
+
+**Deviations from the design plan.** None. Three microscope passes checked the
+correctness, timing, external-state, credit, and evidence boundaries. Pass 3
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md` and
+`docs/hld/14-development-backlog.md`.
+
+**Tests.** All six note invalidation, restart identity, and sourced edit
+regressions passed. Each operation had 21 measured samples. The v0.13.1 and S71
+minimum and median times in milliseconds were 13.954 and 15.151 versus 13.832
+and 15.310 for typing, 45.115 and 48.157 versus 14.213 and 14.688 for footnote
+insertion, 51.323 and 52.845 versus 19.928 and 22.269 for footnote deletion,
+13.328 and 13.933 versus 13.549 and 13.978 for Enter, 13.721 and 14.136 versus
+13.389 and 14.159 for merge, and 13.454 and 13.790 versus 13.360 and 13.956 for
+selection deletion. Footnote insertion and deletion medians fell by 69.5 and
+57.9 percent, and all S71 medians were at most 22.269 milliseconds. Note edits
+changed from zero cache hits and 700 builds to 699 hits and one build. The
+integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** v0.13.1 remains affected. The next stable
+release inventory must retain Issue 69 and offered commits `4777a741`,
+`eff0ea0c`, `9e48bc86`, and `c8315b92`, with no promised release date.
+
+### F-X089, Capability-led README family
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The root README now leads with the complete native document
+workflow, an implemented capability summary, checked examples, and a dated
+official-source comparison. All 26 crate READMEs now lead with the outcome each
+consumer can achieve, implemented highlights, direct-use guidance, workspace
+relationships, installation or invocation instructions, and a checked example.
+
+**Non-obvious choices.** Exact limitations remain one click away in the
+canonical capability matrix instead of dominating the product front page.
+Comparison claims are bounded to reviewed alternatives and official evidence.
+Volatile price, popularity, footprint, memory, and performance claims stay out
+unless a reproducible repository measurement supports them.
+
+**Deviations from the design plan.** None. Three microscope passes closed
+boundary wording, comparison-row validation, evidence multiplicity, package
+status, and mutation-coverage gaps. Pass 3 reported zero defects, zero smells,
+and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`,
+`docs/hld/14-development-backlog.md`, and
+`docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** The capability narrative, crate audience, local-link, official
+comparison, inventory, metadata, snippet, and archive mutation matrices passed.
+`python3 scripts/readme_doctests.py` validated 27 README files, compiled 23
+Rust examples, and matched the exact 22 publishable archive inventories.
+`python3 scripts/readme_doctests.py --check-official-links` resolved all ten
+approved official sources. Every package dry run and archive-size check passed.
+The integrated `/verify --full` gate passed at
+`f34e8f536821c6ea75353174bd9457769f77618c`.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep the root README focused on outcomes and
+keep every crate page specific to its direct consumer. Extend the existing
+validator whenever the public message gains a new claim or comparison row.

@@ -115,13 +115,13 @@ impl Document {
 
         let mut candidate = self.clone_for_staging();
         let mut report = RedactionReport::default();
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         redact_package(&mut candidate.package, selector, &mut report)?;
         validate_package_integrity(&candidate.package)?;
 
         let bytes = package_bytes(&candidate.package)?;
         scan_serialized_package(&bytes, selector, OUTER_LIMITS, 0)?;
-        let reopened = Document::from_bytes_with_limits(&bytes, OUTER_LIMITS)?;
+        let reopened = candidate.reopen_prepared_staged_with_limits(OUTER_LIMITS)?;
         validate_package_integrity(&reopened.package)?;
         self.commit_staged_mutation(reopened);
         Ok(report)
@@ -153,11 +153,9 @@ fn redact_package(
             .package_rels
             .get_all_by_type(relationship_type)
             .into_iter()
-            .map(|relationship| {
-                reject_external_relationship(relationship, "document properties")?;
-                Ok(OpcPackage::resolve_rel_target("/", &relationship.target))
-            })
-            .collect::<Result<Vec<_>>>()?;
+            .filter(|relationship| crate::document::relationship_is_internal(relationship))
+            .map(|relationship| OpcPackage::resolve_rel_target("/", &relationship.target))
+            .collect::<Vec<_>>();
         for part_name in targets {
             let xml = package
                 .get_part(&part_name)
@@ -186,7 +184,9 @@ fn redact_package(
 
         if let Some(relationships) = package.get_part_rels(&chart_part) {
             for relationship in relationships.get_all_by_type(rel_types::PACKAGE) {
-                reject_external_relationship(relationship, "chart workbook")?;
+                if !crate::document::relationship_is_internal(relationship) {
+                    continue;
+                }
                 workbook_parts.insert(OpcPackage::resolve_rel_target(
                     &chart_part,
                     &relationship.target,
@@ -224,7 +224,9 @@ fn word_story_parts(package: &OpcPackage) -> Result<Vec<String>> {
             ) {
                 continue;
             }
-            reject_external_relationship(relationship, "Word story")?;
+            if !crate::document::relationship_is_internal(relationship) {
+                continue;
+            }
             let target = OpcPackage::resolve_rel_target(&document_part, &relationship.target);
             if seen.insert(target.clone()) {
                 parts.push(target);
@@ -238,30 +240,15 @@ fn chart_parts(package: &OpcPackage) -> Result<Vec<String>> {
     let mut parts = HashSet::new();
     for (source, relationships) in &package.part_rels {
         for relationship in relationships.get_all_by_type(rel_types::CHART) {
-            reject_external_relationship(relationship, "chart")?;
+            if !crate::document::relationship_is_internal(relationship) {
+                continue;
+            }
             parts.insert(OpcPackage::resolve_rel_target(source, &relationship.target));
         }
     }
     let mut parts = parts.into_iter().collect::<Vec<_>>();
     parts.sort_unstable();
     Ok(parts)
-}
-
-fn reject_external_relationship(
-    relationship: &oxml_opc::relationship::Relationship,
-    surface: &str,
-) -> Result<()> {
-    if relationship
-        .target_mode
-        .as_deref()
-        .is_some_and(|mode| mode.eq_ignore_ascii_case("external"))
-    {
-        return Err(Error::Other(format!(
-            "redaction cannot include external {surface} relationship {}",
-            relationship.id
-        )));
-    }
-    Ok(())
 }
 
 fn redact_workbook(bytes: &[u8], selector: &str) -> Result<(Vec<u8>, usize)> {
@@ -1693,7 +1680,7 @@ fn validate_package_integrity(package: &OpcPackage) -> Result<()> {
     }
     validate_relationship_targets(package, "/", &package.package_rels)?;
     for (source, relationships) in &package.part_rels {
-        if !package.parts.contains_key(source) {
+        if !package.contains_part(source) {
             return Err(Error::Other(format!(
                 "redaction candidate has relationships for missing part {source}"
             )));
@@ -1716,15 +1703,11 @@ fn validate_relationship_targets(
                 relationship.id
             )));
         }
-        if relationship
-            .target_mode
-            .as_deref()
-            .is_some_and(|mode| mode.eq_ignore_ascii_case("external"))
-        {
+        if !crate::document::relationship_is_internal(relationship) {
             continue;
         }
         let target = OpcPackage::resolve_rel_target(source, &relationship.target);
-        if !package.parts.contains_key(&target) {
+        if !package.contains_part(&target) {
             return Err(Error::Other(format!(
                 "redaction candidate relationship {} from {source} targets missing part {target}",
                 relationship.id

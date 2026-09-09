@@ -1,6 +1,15 @@
 # rpptx-layout
 
-Presentation layout and placeholder inheritance resolution for PowerPoint-compatible slides.
+`rpptx-layout` resolves PresentationML inheritance into renderer-ready slides.
+It combines slide, layout, master, theme, placeholder, relationship, and
+resource state into owned shapes with concrete visual properties.
+
+## Capabilities
+
+- Slide, layout, master, theme, and placeholder inheritance.
+- Concrete shape styles, backgrounds, transforms, and geometry.
+- Text, bullets, spacing, autofit, and script-aware fonts.
+- Tables, source-scoped media, charts, links, and timeline evaluation.
 
 ## Use it when
 
@@ -8,7 +17,8 @@ Use this crate when resolving slide, layout, master, theme, and placeholder stat
 
 ## Relationship
 
-It sits between `rpptx-oxml` and `rpptx-render` and does not own package I/O.
+It sits between `rpptx-oxml` and `rpptx-render`. It does not own package I/O or
+emit final PDF or raster output.
 
 ## Example
 

@@ -85,6 +85,7 @@ defended.
 | S68 | M22, X | 2 | 2 | 0 | 8 | 1 | Added relationship-owned embedded-content and macro inventory, typed legacy forms, and glossary and building-block editing with atomic source preservation. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 2 clean after normalized Pack URI handling was corrected and shared XML validation was filed as F-X077. M22 continues in S69 with modern package and web variants |
 | S69 | M22, X | 8 | 7 | 1 | 11 | 2 | Completed M22 with shared strict XML validation, Flat OPC and modern Word package variants, bounded MHTML interchange, and restored hosted CI release readiness. Published and verified the shared 0.10.0 and 0.11.0 families and the stable 0.13.1 recovery. F-X078 records the immutable partial v0.13.0 attempt. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 23 clean |
 | S70 | M23, X | 7 | 7 | 0 | 19 | 2 | Established the modern DOCX capability matrix and private-corpus policy, added public from-scratch authoring conformance, replaced volatile README claims with evidence-backed coverage, and closed the three Issue 69 cache and restart gaps. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and sprint review pass 5 clean. M23 continues in S71 with public API completion |
+| S71 | M23, X | 10 | 10 | 0 | 35 | 3 | Added complete blank-package, property, theme, font, style, numbering, and deterministic identifier foundations. Folded Kevin Brown's authored Word charts into the sprint, closed Issue 69 with measured evidence and reporter credit, and made the root and all 26 crate READMEs capability-led. The full close gate passed with all 49 reviewed hashes, every package archive below 10 MiB, and final sprint review pass 9 clean. M23 continues in S72 with sections, stories, and content ownership |
 
 ## Completed features
 
@@ -404,6 +405,16 @@ defended.
 | F-242 | S70 | M | 2 | 1 | 2026-09-07 | Replaced volatile root README claims with matrix-backed capabilities, official comparison evidence, and metadata-derived validation |
 | F-X085 | S70 | M | 2 | 1 | 2026-09-07 | Shared one lazy exact-identity memo across restart scans and publication with bounded transient-memory evidence |
 | F-X086 | S70 | L | 4 | 1 | 2026-09-07 | Reused safe sourced prefix checkpoints across body-length changes while rebuilding shifted tails for exact provenance |
+| F-243 | S71 | L | 4 | 1 | 2026-09-07 | Added deterministic Word-compatible DOCX, DOCM, DOTX, and DOTM creation profiles with complete owned package graphs and an explicit compact profile |
+| F-249 | S71 | M | 2 | 1 | 2026-09-07 | Centralized deterministic Word package identifiers with collision-safe staged allocation and case-insensitive OPC identity validation |
+| F-245 | S71 | L | 4 | 2 | 2026-09-08 | Added public theme and font-table authoring, licensed embedded-font ownership, and deterministic authored-font layout resolution |
+| F-244 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic settings plus core, application, and custom property authoring with deterministic removal and raw XML preservation |
+| F-246 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic paragraph, character, and table style graphs with effective resolution and pinned Word formatting parity |
+| F-247 | S71 | L | 4 | 1 | 2026-09-09 | Added complete numbering definitions, levels, instances, and overrides with atomic graph validation, exact XML preservation, and non-coercing export behavior |
+| F-248 | S71 | L | 4 | 1 | 2026-09-09 | Added atomic style-linked numbering plus result-local counters shared by body, table, TOC, and REF output |
+| F-X087 | S71 | L | 4 | 1 | 2026-09-09 | Folded Kevin Brown's PR 71 into portable editable Word charts with atomic theme ownership and verified Word and Pages interoperability |
+| F-X088 | S71 | S | 1 | 1 | 2026-09-09 | Verified all Issue 69 fixes with six regressions and 21-sample timing evidence, credited the reporter, and closed the issue |
+| F-X089 | S71 | L | 4 | 1 | 2026-09-09 | Reframed the root and all 26 crate READMEs around implemented outcomes, checked examples, and bounded official comparisons |
 
 ## Velocity
 
@@ -489,6 +500,7 @@ five working days.
 | S68 | 2 | 1 | 10.00 |
 | S69 | 7 | 2 | 17.50 |
 | S70 | 7 | 2 | 17.50 |
+| S71 | 10 | 3 | 16.67 |
 
 ## Escalation record
 
@@ -562,3 +574,4 @@ was done about it. Empty is the expected state.
 | 2026-09-05 | Sprint estimate variance exceeded 30 percent | S68 | Record 1 actual day against 8 estimated. Two isolated workers reused the completed package-signature, field, and preservation foundations, while exhaustive feature reviews and the integrated sprint review concentrated fail-closed corrections in the owned Word package paths. The resulting 10.00 stories per week is not a sustainable forecast, so retain the dependency-defined S69 boundary |
 | 2026-09-06 | Sprint estimate variance exceeded 30 percent | S69 | Record 2 actual days against 11 estimated. Isolated workers, established package and release workflows, and two recovery releases allowed implementation, review, and publication work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S70 decision boundary |
 | 2026-09-07 | Sprint estimate variance exceeded 30 percent | S70 | Record 2 actual days against 19 estimated. Isolated workers and established conformance, documentation, and cache verification paths allowed independent audit and implementation work to overlap safely. The resulting 17.50 stories per week is not a sustainable forecast, so retain the dependency-defined S71 boundary |
+| 2026-09-09 | Sprint estimate variance exceeded 30 percent | S71 | Record 3 actual days against 35 estimated. Isolated workers, dependency-prefix reviews, and established package, Word, Pages, layout, and README gates allowed independent work and contribution hardening to overlap safely. The resulting 16.67 stories per week is not a sustainable forecast, so retain the dependency-defined S72 boundary |

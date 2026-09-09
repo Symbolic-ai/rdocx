@@ -613,10 +613,7 @@ fn signature_manifest_has_missing_reference(package: &OpcPackage) -> bool {
             .is_some_and(|references| {
                 references.into_iter().any(|reference| {
                     let path = reference.path;
-                    if path == "/[Content_Types].xml" {
-                        return false;
-                    }
-                    if path == "/_rels/.rels" {
+                    if signature_reference_is_package_manifest(&path) {
                         return false;
                     }
                     if let Some(source) = relationship_source_from_path(&path) {
@@ -632,10 +629,14 @@ fn signature_manifest_has_missing_reference(package: &OpcPackage) -> bool {
                                 != 1
                         });
                     }
-                    !package.parts.contains_key(&path)
+                    !package.contains_part(&path)
                 })
             })
     })
+}
+
+fn signature_reference_is_package_manifest(path: &str) -> bool {
+    path.eq_ignore_ascii_case("/[Content_Types].xml") || path.eq_ignore_ascii_case("/_rels/.rels")
 }
 
 #[derive(Debug)]
@@ -739,10 +740,16 @@ fn signature_references(xml: &[u8]) -> Result<Vec<SignatureReference>> {
 
 fn relationship_source_from_path(path: &str) -> Option<String> {
     let marker = "/_rels/";
-    let marker_index = path.rfind(marker)?;
-    let filename = path
-        .get(marker_index + marker.len()..)?
-        .strip_suffix(".rels")?;
+    let identity = path.to_ascii_lowercase();
+    let marker_index = identity.rfind(marker)?;
+    let filename = path.get(marker_index + marker.len()..)?;
+    if !filename
+        .get(filename.len().saturating_sub(".rels".len())..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".rels"))
+    {
+        return None;
+    }
+    let filename = &filename[..filename.len() - ".rels".len()];
     Some(format!("{}{filename}", &path[..marker_index + 1]))
 }
 
@@ -1208,7 +1215,7 @@ fn package_signature_graph(package: &OpcPackage) -> Result<Option<PackageSignatu
                 format!("{source_part}: misplaced digital-signature origin relationship"),
             ));
         }
-        if source_part != &origin_part
+        if !source_part.eq_ignore_ascii_case(&origin_part)
             && relationships
                 .items
                 .iter()
@@ -1299,8 +1306,7 @@ fn remove_relationship(
     required_relationship(package, source_part, relationship_id)?;
     let relationships =
         package
-            .part_rels
-            .get_mut(source_part)
+            .get_part_rels_mut(source_part)
             .ok_or_else(|| Error::MissingRelationship {
                 source_part: source_part.to_owned(),
                 relationship_id: relationship_id.to_owned(),
@@ -1322,15 +1328,16 @@ fn delete_if_unreachable(package: &mut OpcPackage, candidate: &str) {
     if relationship_target_is_reachable(package, candidate) {
         return;
     }
-    package.parts.remove(candidate);
-    package.part_rels.remove(candidate);
-    package.content_types.overrides.remove(candidate);
+    package.remove_part(candidate);
+    package.remove_part_rels(candidate);
+    package.content_types.remove_override(candidate);
 }
 
 fn relationship_target_is_reachable(package: &OpcPackage, candidate: &str) -> bool {
     package.package_rels.items.iter().any(|relationship| {
         !is_external(relationship)
-            && OpcPackage::resolve_rel_target("/", &relationship.target) == candidate
+            && OpcPackage::resolve_rel_target("/", &relationship.target)
+                .eq_ignore_ascii_case(candidate)
     }) || package
         .part_rels
         .iter()
@@ -1338,7 +1345,7 @@ fn relationship_target_is_reachable(package: &OpcPackage, candidate: &str) -> bo
             relationships.items.iter().any(|relationship| {
                 !is_external(relationship)
                     && OpcPackage::resolve_rel_target(source_part, &relationship.target)
-                        == candidate
+                        .eq_ignore_ascii_case(candidate)
             })
         })
 }
@@ -1359,14 +1366,14 @@ fn remove_package_signatures(package: &mut OpcPackage) -> Result<()> {
             && relationship.rel_type != INVALIDATED_PACKAGE_SIGNATURE
     });
     for (_, signature_part) in graph.signatures {
-        package.parts.remove(&signature_part);
-        package.part_rels.remove(&signature_part);
-        package.content_types.overrides.remove(&signature_part);
+        package.remove_part(&signature_part);
+        package.remove_part_rels(&signature_part);
+        package.content_types.remove_override(&signature_part);
     }
     for (_, origin_part) in graph.origins {
-        package.parts.remove(&origin_part);
-        package.part_rels.remove(&origin_part);
-        package.content_types.overrides.remove(&origin_part);
+        package.remove_part(&origin_part);
+        package.remove_part_rels(&origin_part);
+        package.content_types.remove_override(&origin_part);
     }
     Ok(())
 }
@@ -1384,7 +1391,7 @@ fn remove_vba_signatures(package: &mut OpcPackage, project_part: &str) -> Result
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if let Some(relationships) = package.part_rels.get_mut(project_part) {
+    if let Some(relationships) = package.get_part_rels_mut(project_part) {
         relationships.items.retain(|relationship| {
             !is_vba_signature(relationship) && relationship.rel_type != INVALIDATED_VBA_SIGNATURE
         });
@@ -1412,7 +1419,7 @@ fn retain_vba_signature_parts_as_evidence(package: &mut OpcPackage, project_part
                 .collect::<HashSet<_>>()
         })
         .unwrap_or_default();
-    if let Some(relationships) = package.part_rels.get_mut(project_part) {
+    if let Some(relationships) = package.get_part_rels_mut(project_part) {
         relationships.items.retain(|relationship| {
             !is_vba_signature(relationship) && relationship.rel_type != INVALIDATED_VBA_SIGNATURE
         });
@@ -1794,4 +1801,37 @@ fn malformed(part_name: &str, error: impl std::fmt::Display) -> Error {
 
 fn invalid(operation: &'static str, message: String) -> Error {
     Error::InvalidEmbeddedMutation { operation, message }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signature_manifest_and_origin_owner_paths_use_case_equivalent_identity() {
+        assert!(signature_reference_is_package_manifest(
+            "/[CONTENT_TYPES].XML"
+        ));
+        assert!(signature_reference_is_package_manifest("/_RELS/.RELS"));
+        let owner =
+            relationship_source_from_path("/_XMLSIGNATURES/_RELS/ORIGIN.SIGS.RELS").unwrap();
+        assert!(owner.eq_ignore_ascii_case("/_xmlsignatures/origin.sigs"));
+
+        let mut package = OpcPackage::new();
+        package.set_part("/_XMLSIGNATURES/ORIGIN.SIGS", Vec::new());
+        package.set_part(
+            "/_xmlsignatures/sig1.xml",
+            br#"<Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><SignedInfo><Reference URI="/[CONTENT_TYPES].XML"/></SignedInfo></Signature>"#.to_vec(),
+        );
+        package.package_rels.add_with_id(
+            "origin",
+            rel_types::DIGITAL_SIGNATURE_ORIGIN,
+            "_xmlsignatures/origin.sigs",
+        );
+        package
+            .get_or_create_part_rels("/_XMLSIGNATURES/ORIGIN.SIGS")
+            .add_with_id("signature", rel_types::DIGITAL_SIGNATURE, "sig1.xml");
+        assert!(package_signature_graph(&package).unwrap().is_some());
+        assert!(!signature_manifest_has_missing_reference(&package));
+    }
 }

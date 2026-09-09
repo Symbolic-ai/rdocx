@@ -286,6 +286,17 @@ floor for a template whose master lacks a theme relationship. It is *not* how
 `Presentation::new()` works, which uses a bundled binary template for the
 reasons given in `06-presentationml-model.md`.
 
+The native Word facade re-exports this same `CT_OfficeStyleSheet` for typed
+theme authoring. `Document::set_theme` serializes it to the existing related
+theme part or creates the missing package edge atomically. Word layout projects
+the shared value through `rdocx_oxml::theme::Theme`. The legacy Word tint and
+shade helper remains unchanged.
+
+Callers with a concrete palette construct `ColorChoice` through
+`ColorChoice::srgb(RgbColor)`. `oxml-chart` re-exports the same `RgbColor`, so
+Word and PowerPoint chart facades share one colour value while the DrawingML
+writer retains ownership of fixed-prefix `a:srgbClr` serialization.
+
 ## Preservation
 
 Anything not in the list above is captured verbatim through

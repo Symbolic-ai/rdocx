@@ -615,6 +615,15 @@ styles. Direct table and cell properties remain the final overlay. An explicit
 cell `nil` or `none` border yields to a visible table border only on the exact
 outer edge. The same value remains suppressive on an interior edge.
 
+A table without an explicit style uses the authored default table style.
+Its modeled base width, alignment, indent, borders, shading, look, and cell
+margins resolve base-first before direct table and cell overlays. Existing
+direct width and alignment behavior remains unchanged.
+Paragraphs without an explicit style use the authored default paragraph style.
+When a run names a paragraph style with a reciprocal character-style link, the
+linked character inheritance chain supplies its run properties. All three
+paths consume the validated style graph before direct formatting overlays.
+
 Anchors whose horizontal frame is `column` or `character` resolve within the
 cell content box. Page and margin frames remain page-relative. Paragraph and
 line vertical frames use the cell paragraph position. Foreground anchors paint
@@ -744,7 +753,35 @@ fields, hyperlinks, relationships, media, generated markers, content controls,
 preserved producer XML, and other traversal-sensitive input
 bypass body reuse. Encountering any such body block disables later
 retained-block reads for that layout, so inserting earlier numbering input
-cannot leave a later generated marker stale. A direct footnote or endnote
+cannot leave a later generated marker stale.
+
+Word numbering input carries the complete typed level and instance package
+model, including start and replacement-level overrides. Decimal, alphabetic,
+Roman, bullet, and `none` markers retain their established layout behavior.
+Other standard formats cross the package boundary without being collapsed to
+decimal. Until their visible formatter is implemented, layout and text exports
+emit no invented marker. One deterministic counter owner keys values by
+concrete `numId` and level. It applies configured starts, instance overrides,
+replacement levels, legal numbering, level restarts, and section restart
+policy while traversing body paragraphs and table cells in document order.
+`numId` zero suppresses only its paragraph and does not advance or corrupt a
+later sequence. Header and footer stories use independent counter state.
+
+Each resolved marker carries its displayed level, complete displayed context,
+numeric forms with literal level text removed, source-derived punctuation
+between levels, and concrete instance identity. Numbered TOC sources and REF
+fields consume that result-local projection. They do not replay numbering or
+maintain a second counter implementation.
+
+Relationship-resolved embedded font faces enter `LayoutInput.fonts` under the
+font-table record name. Their OOXML font key deobfuscates the package bytes
+before shaping. This explicit document input has priority over bundled fallback
+and needs no system-font discovery. Authored major and minor theme typefaces
+therefore resolve to the embedded face in deterministic layout. Theme or font
+mutation invalidates completed normal and deterministic layouts while reusable
+engines compare the changed theme and font bytes in their full context.
+
+A direct footnote or endnote
 reference in an otherwise safe body paragraph remains cacheable. Its explicit
 note ID is part of the complete typed paragraph key. Retained paragraph reads
 compare the base context separately from the exact footnote and endnote parts.
@@ -1111,6 +1148,22 @@ stored display with a stable diagnostic. The evaluator does not replace the
 single post-pagination substitution pass and does not trigger layout. `REF`
 resolves the same unique typed bookmark text used by layout, so pure
 evaluation and rendering share the same target-validity boundary.
+
+REF switch evaluation uses the bookmarked paragraph's resolved numbering in
+the flattened main-story paragraph order, including paragraphs inside tables
+and those after a table. `\n` returns the target level and `\w` returns its full
+numbering context. Word 16.112.3 measurements show that `\r` returns the target
+level when source and target share the immediate numbering parent. For a
+target level expression that does not embed ancestor placeholders, a different
+parent produces the full target context. `\t` removes literal alphanumeric and
+whitespace level text while retaining source punctuation. `\p` appends `above`
+or `below` for main-story targets, including an unnumbered target, and never
+borrows a main-story numbering context for another story. Layout records
+resolved numbering and all bookmark starts against source paragraphs. A first
+pass builds the complete result-local reference index whenever visible REF
+projection is required, then a second pass resolves both forward and backward
+targets. Facade numbering layout is created lazily only when a REF or TOC
+consumer requires it.
 
 Table-of-contents rebuild creates its provisional PAGEREF fields before
 calling the deterministic bundled-font layout. The existing post-pagination

@@ -1,6 +1,14 @@
 # oxml-core
 
-Format-neutral OOXML units, XML helpers, and core document-property types.
+Share exact OOXML units, XML helpers, and package-independent document property
+models.
+
+## Capabilities
+
+- Lengths in twips, EMUs, half-points, centipoints, and physical units.
+- Angles and thousandths-of-a-percent values used by OOXML schemas.
+- Core, application, and custom property parsing and writing.
+- XML 1.0 lexical validation, namespace handling, decoding, and raw capture.
 
 ## Use it when
 
@@ -8,7 +16,10 @@ Use this crate when implementing OOXML infrastructure shared by WordprocessingML
 
 ## Relationship
 
-Higher-level `oxml-*`, `rdocx-*`, and `rpptx-*` crates build on these primitives without introducing a format-specific dependency here.
+Higher-level `oxml-*`, `rdocx-*`, and `rpptx-*` crates build on these primitives
+without introducing a format-specific dependency here. These are focused OOXML
+building blocks, not a general DOM or schema implementation. Unit conversions
+follow the repository's exact truncation rules.
 
 ## Example
 

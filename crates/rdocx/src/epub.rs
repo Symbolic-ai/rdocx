@@ -365,7 +365,7 @@ impl<'a> EpubWriter<'a> {
                 return Some(total);
             };
             if relationship.rel_type != rel_types::IMAGE
-                || relationship.target_mode.as_deref() == Some("External")
+                || !crate::document::relationship_is_internal(relationship)
             {
                 return Some(total);
             }
@@ -394,7 +394,7 @@ impl<'a> EpubWriter<'a> {
                 continue;
             };
             if relationship.rel_type != rel_types::IMAGE
-                || relationship.target_mode.as_deref() == Some("External")
+                || !crate::document::relationship_is_internal(relationship)
             {
                 continue;
             }
@@ -802,10 +802,7 @@ impl<'a> EpubWriter<'a> {
                 )?;
             }
             if properties.num_id.is_some_and(|id| id != 0)
-                && detect_list(paragraph, self.document.numbering.as_ref()).is_none()
-                && list_definition(paragraph, self.document.numbering.as_ref()).is_none_or(
-                    |level| !matches!(level.num_fmt.as_ref(), Some(ST_NumberFormat::Other(_))),
-                )
+                && list_definition(paragraph, self.document.numbering.as_ref()).is_none()
             {
                 self.diagnose(
                     format!("{path}/properties/numbering"),
@@ -815,6 +812,8 @@ impl<'a> EpubWriter<'a> {
             if let Some(level) = list_definition(paragraph, self.document.numbering.as_ref()) {
                 let producer_defined =
                     matches!(level.num_fmt.as_ref(), Some(ST_NumberFormat::Other(_)));
+                let unrendered_standard =
+                    !producer_defined && epub_list_semantics(level.num_fmt.as_ref()).is_none();
                 if producer_defined {
                     self.diagnose(
                         format!("{path}/properties/numbering/format"),
@@ -828,6 +827,18 @@ impl<'a> EpubWriter<'a> {
                                 .to_owned(),
                         )?;
                     }
+                } else if unrendered_standard {
+                    self.diagnose(
+                        format!("{path}/properties/numbering/format"),
+                        "standard numbering format is not rendered by EPUB export and was emitted without a marker"
+                            .to_owned(),
+                    )?;
+                    if level.start.is_some_and(|start| start != 1) {
+                        self.diagnose(
+                            format!("{path}/properties/numbering/start"),
+                            "unrendered list start value was dropped during EPUB export".to_owned(),
+                        )?;
+                    }
                 } else if level.num_fmt == Some(ST_NumberFormat::Ordinal) {
                     self.diagnose(
                         format!("{path}/properties/numbering/format"),
@@ -838,12 +849,13 @@ impl<'a> EpubWriter<'a> {
                 if let Some(marker) = &level.lvl_text {
                     let standard = format!("%{}.", level.ilvl + 1);
                     if producer_defined
+                        || unrendered_standard
                         || level.num_fmt == Some(ST_NumberFormat::Bullet)
                         || marker != &standard
                     {
                         self.diagnose(
                             format!("{path}/properties/numbering/marker"),
-                            if producer_defined {
+                            if producer_defined || unrendered_standard {
                                 "list marker text was dropped during EPUB export"
                             } else {
                                 "custom list marker text was replaced by EPUB list semantics"
@@ -873,7 +885,7 @@ impl<'a> EpubWriter<'a> {
                 if level.suffix.is_some() {
                     self.diagnose(
                         format!("{path}/properties/numbering/suffix"),
-                        if producer_defined {
+                        if producer_defined || unrendered_standard {
                             "list marker suffix was dropped during EPUB export"
                         } else {
                             "list marker suffix spacing was normalized during EPUB export"
@@ -1335,7 +1347,7 @@ impl<'a> EpubWriter<'a> {
             return Some("unresolved image relationship was dropped during EPUB export");
         };
         if relationship.rel_type != rel_types::IMAGE
-            || relationship.target_mode.as_deref() == Some("External")
+            || !crate::document::relationship_is_internal(relationship)
         {
             return Some("non-package image relationship was dropped during EPUB export");
         }
@@ -1422,6 +1434,14 @@ fn render_styles(styles: &CT_Styles) -> Result<CT_Styles> {
             name: None,
             based_on: None,
             next_style: None,
+            linked_style: None,
+            auto_redefine: None,
+            hidden: None,
+            ui_priority: None,
+            semi_hidden: None,
+            unhide_when_used: None,
+            quick_format: None,
+            locked: None,
             is_default: style.is_default,
             ppr,
             rpr: None,
@@ -1429,6 +1449,8 @@ fn render_styles(styles: &CT_Styles) -> Result<CT_Styles> {
             table_properties_original: None,
             table_properties_xml: None,
             conditional_table_styles: Vec::new(),
+            extra_attributes: Vec::new(),
+            modeled_xml: Vec::new(),
             extra_xml: Vec::new(),
         });
     }
@@ -1462,6 +1484,8 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
         .map(|item| CT_Num {
             num_id: item.num_id,
             abstract_num_id: item.abstract_num_id,
+            abstract_num_id_raw: None,
+            level_overrides: item.level_overrides.clone(),
             extra_xml: Vec::new(),
             extra_attributes: Vec::new(),
         })
@@ -1476,13 +1500,24 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
                 .iter()
                 .map(|level| CT_Lvl {
                     ilvl: level.ilvl,
+                    template_code: level.template_code.clone(),
+                    tentative: level.tentative,
                     start: level.start,
+                    start_raw: None,
                     num_fmt: level.num_fmt.clone(),
+                    num_fmt_raw: None,
+                    restart: level.restart,
+                    restart_raw: None,
                     p_style: None,
                     p_style_raw: None,
+                    legal: level.legal,
+                    legal_raw: None,
                     suffix: level.suffix,
+                    suffix_raw: None,
                     lvl_text: None,
+                    lvl_text_raw: None,
                     lvl_jc: level.lvl_jc,
+                    lvl_jc_raw: None,
                     ppr: None,
                     rpr: None,
                     extra_xml: Vec::new(),
@@ -1494,6 +1529,7 @@ fn render_numbering(numbering: Option<&CT_Numbering>) -> Result<Option<CT_Number
             nsid: None,
             nsid_raw: None,
             multi_level_type: None,
+            multi_level_type_raw: None,
             tmpl: None,
             tmpl_raw: None,
             extra_xml: Vec::new(),
@@ -2452,6 +2488,12 @@ fn render_drawing_projection(drawing: &CT_Drawing) -> CT_Drawing {
         };
     };
     CT_Drawing::inline(CT_Inline {
+        doc_pr_id: drawing
+            .inline
+            .as_ref()
+            .map(|inline| inline.doc_pr_id)
+            .or_else(|| drawing.anchor.as_ref().map(|anchor| anchor.doc_pr_id))
+            .unwrap_or(1),
         extent_cx,
         extent_cy,
         embed_id: embed_id.to_owned(),
@@ -2588,21 +2630,7 @@ fn detect_list(paragraph: &CT_P, numbering: Option<&CT_Numbering>) -> Option<Lis
         .levels
         .iter()
         .find(|definition| definition.ilvl == level)?;
-    if matches!(definition.num_fmt.as_ref(), Some(ST_NumberFormat::Other(_))) {
-        return None;
-    }
-    let kind = match definition.num_fmt {
-        Some(ST_NumberFormat::Bullet) => ListKind::Unordered,
-        Some(ST_NumberFormat::None) => ListKind::None,
-        _ => ListKind::Ordered,
-    };
-    let marker_style = match definition.num_fmt {
-        Some(ST_NumberFormat::UpperRoman) => Some("upper-roman"),
-        Some(ST_NumberFormat::LowerRoman) => Some("lower-roman"),
-        Some(ST_NumberFormat::UpperLetter) => Some("upper-alpha"),
-        Some(ST_NumberFormat::LowerLetter) => Some("lower-alpha"),
-        _ => None,
-    };
+    let (kind, marker_style) = epub_list_semantics(definition.num_fmt.as_ref())?;
     Some(ListInfo {
         num_id,
         level,
@@ -2610,6 +2638,23 @@ fn detect_list(paragraph: &CT_P, numbering: Option<&CT_Numbering>) -> Option<Lis
         start: definition.start.unwrap_or(1),
         marker_style,
     })
+}
+
+fn epub_list_semantics(
+    format: Option<&ST_NumberFormat>,
+) -> Option<(ListKind, Option<&'static str>)> {
+    match format {
+        Some(ST_NumberFormat::Bullet) => Some((ListKind::Unordered, None)),
+        Some(ST_NumberFormat::None) => Some((ListKind::None, None)),
+        None | Some(ST_NumberFormat::Decimal | ST_NumberFormat::Ordinal) => {
+            Some((ListKind::Ordered, None))
+        }
+        Some(ST_NumberFormat::UpperRoman) => Some((ListKind::Ordered, Some("upper-roman"))),
+        Some(ST_NumberFormat::LowerRoman) => Some((ListKind::Ordered, Some("lower-roman"))),
+        Some(ST_NumberFormat::UpperLetter) => Some((ListKind::Ordered, Some("upper-alpha"))),
+        Some(ST_NumberFormat::LowerLetter) => Some((ListKind::Ordered, Some("lower-alpha"))),
+        Some(_) => None,
+    }
 }
 
 fn push_bounded_xhtml(output: &mut String, value: &str) -> Result<()> {
@@ -4267,6 +4312,8 @@ mod tests {
             definitions.nums.push(CT_Num {
                 num_id: id + 1,
                 abstract_num_id: 0,
+                abstract_num_id_raw: None,
+                level_overrides: Vec::new(),
                 extra_xml: Vec::new(),
                 extra_attributes: Vec::new(),
             });
@@ -4371,19 +4418,23 @@ mod tests {
     #[test]
     fn epub_reports_named_style_and_deep_heading_losses() {
         let mut document = Document::new();
-        document.add_style(
-            StyleBuilder::paragraph("Spaced", "Spaced").paragraph_properties(CT_PPr {
-                space_before: Some(Twips(240)),
-                ..Default::default()
-            }),
-        );
+        document
+            .add_style(
+                StyleBuilder::paragraph("Spaced", "Spaced").paragraph_properties(CT_PPr {
+                    space_before: Some(Twips(240)),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         document.add_paragraph("styled").set_style("Spaced");
-        document.add_style(
-            StyleBuilder::paragraph("DeepStyle", "Deep style").paragraph_properties(CT_PPr {
-                outline_lvl: Some(6),
-                ..Default::default()
-            }),
-        );
+        document
+            .add_style(
+                StyleBuilder::paragraph("DeepStyle", "Deep style").paragraph_properties(CT_PPr {
+                    outline_lvl: Some(6),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         document.add_paragraph("deep").set_style("Heading7");
         let direct = document.add_paragraph("direct deep");
         direct.inner.properties.get_or_insert_default().outline_lvl = Some(8);
@@ -4516,6 +4567,29 @@ mod tests {
                 .message
                 .contains("replaced by EPUB list semantics")
                 && !diagnostic.message.contains("spacing was normalized")
+        }));
+    }
+
+    #[test]
+    fn epub_does_not_coerce_unrendered_standard_numbering() {
+        let mut document = Document::new();
+        let number = document.add_list_definition(&[ListLevel::new(ListNumberFormat::Chicago)
+            .start(3)
+            .level_text("custom")]);
+        document
+            .add_paragraph("standard marker")
+            .set_numbering(number, 0);
+
+        let result = document.to_epub_bytes().unwrap();
+        let body = entry_text(&archive_entries(&result.bytes), "EPUB/document.xhtml");
+        assert!(!body.contains("<ol"), "{body}");
+        assert!(!body.contains("<ul"), "{body}");
+        assert!(body.contains("<p>standard marker</p>"), "{body}");
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "body[0]/properties/numbering/format"
+                && diagnostic
+                    .message
+                    .contains("standard numbering format is not rendered")
         }));
     }
 
@@ -4750,6 +4824,8 @@ mod tests {
             nums: vec![CT_Num {
                 num_id: 9,
                 abstract_num_id: 7,
+                abstract_num_id_raw: None,
+                level_overrides: Vec::new(),
                 extra_xml: Vec::new(),
                 extra_attributes: Vec::new(),
             }],
@@ -5118,7 +5194,10 @@ mod tests {
 
     #[test]
     fn epub_packages_only_structurally_valid_byte_sniffed_core_images() {
-        let mut document = Document::new();
+        let mut document =
+            Document::new_with_profile(crate::document::WordCreationProfile::Minimal(
+                crate::document::WordPackageClass::Document,
+            ));
         let valid = document.embed_image(PNG_1X1, "valid.bin");
         let forged = document.embed_image(b"not a PNG", "forged.png");
         let malformed = document.embed_image(b"\x89PNG\r\n\x1a\ntruncated", "malformed.png");
@@ -5672,12 +5751,14 @@ mod tests {
             .body
             .content
             .push(BodyContent::Table(table));
-        document.add_style(
-            StyleBuilder::paragraph("OracleDeep", "Oracle deep").paragraph_properties(CT_PPr {
-                outline_lvl: Some(6),
-                ..Default::default()
-            }),
-        );
+        document
+            .add_style(
+                StyleBuilder::paragraph("OracleDeep", "Oracle deep").paragraph_properties(CT_PPr {
+                    outline_lvl: Some(6),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
         document
             .add_paragraph("style-derived deep heading")
             .set_style("OracleDeep");

@@ -98,6 +98,28 @@ content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
 
+**Word package identifiers belong to the `rdocx` facade.** One private
+`DocumentIdentifiers` value owns category-specific occupied sets for each
+document. It scans normalized package parts, relationship owners, typed
+WordprocessingML, preserved XML, and content types. Part-name and resolved
+relationship-target occupancy uses ASCII-case-insensitive package identity
+while package maps retain producer spelling. Facade operations reserve
+complete identifier bundles on staged state, while serialization derives
+authored identifiers from final recursive document order before publishing the
+candidate. Relationship identifiers remain scoped to their owning part, and
+only identities captured at package open have preserved provenance. Current
+graph edges added later join authored semantic canonicalization even when no
+modeled `r:id` refers to them. Internal and external edges retain their targets
+and modes while receiving deterministic type-and-target order. Relationship
+attributes in retained body XML and raw drawing payloads are fixed occupants.
+Their values are found by expanded office relationship namespace, including
+bindings inherited by the document body, and are never remapped without a safe
+raw rewrite.
+bookmark, comment, drawing, abstract-numbering, and numbering-instance values
+remain separate namespaces. Rich-merge content-control `w:id` and non-visual
+drawing `cNvPr` values remain separate merge-local scopes rather than package
+identifier-owner categories.
+
 Bounded MHTML import and export use that same seam. The private MIME reader and
 writer live in the existing `rdocx` HTML owner, project through the existing
 HTML import path, and use `rdocx-html` only through its existing outbound
@@ -374,10 +396,34 @@ does not maintain a second reader model.
 
 The low-level text reader decodes visible `w:t` and `w:delText` content
 fallibly and rejects malformed encoded values instead of publishing partial
-text. The numbering grammar retains producer-defined `w:numFmt` tokens in
-`ST_NumberFormat::Other(String)`. Its writer emits those tokens unchanged,
-while render and export consumers decline to invent a marker for an unknown
-format.
+text. The numbering grammar types the complete standard `w:numFmt` token set
+and retains producer-defined tokens in `ST_NumberFormat::Other(String)`.
+`CT_Lvl` owns typed restart, legal-numbering, template, tentative, style-link,
+indentation, marker-property, and sequence-ranked raw state. `CT_NumLvl` owns
+typed start and replacement-level overrides. Their writers emit standard and
+producer-defined values unchanged while render and export consumers decline to
+invent a marker when they do not implement a format's visible semantics.
+
+The `Document` facade projects abstract definitions and numbering instances as
+owned concrete values. Create, update, and remove operations validate level
+ranges, placeholders, identifiers, override ownership, style references, and
+the complete candidate graph before committing the staged package. Standalone
+style-link mutation is forbidden. `link_style_to_numbering` and
+`unlink_style_from_numbering` stage the complete document, validate both
+graphs, write the style paragraph properties and effective numbering-level
+style link together, flush the candidate package, and publish once. A missing
+or conflicting style, instance, level, or reciprocal edge leaves the original
+document unchanged.
+
+The layout counter owner keys visible state by concrete `numId` and level. A
+reused instance continues its sequence across ordinary body paragraphs, table
+cells, and section boundaries unless its definition requests a section
+restart. A distinct instance starts independently even when it shares an
+abstract definition. Base-level starts and restart controls, instance start
+overrides, replacement-level formatting, legal numbering, and `numId` zero
+suppression enter the
+same result-local projection consumed by marker layout, TOC rebuild, and REF
+evaluation.
 
 The same grammar owns the bounded `w:ffData` projection on complex legacy form
 fields and the `w:glossaryDocument` root model. Typed form values and glossary
@@ -941,6 +987,37 @@ Both facades use the same borrow-handle idiom rdocx already has: a mutable
 consuming builders for formatting so calls chain, `&mut self` methods for adding
 content that return a nested handle, and index-based `Option`-returning
 accessors that never panic.
+
+The native Word facade creates a complete Word-compatible DOCX graph by
+default. `WordCreationProfile` separates package completeness from the four
+`WordPackageClass` identities, so native callers can select DOCX, DOCM, DOTX,
+or DOTM while retaining an explicit compact package option. The compatible
+profile owns its main document, styles, settings, theme, font table, core
+properties, and application properties without loading a template.
+
+`Document` keeps relationship-resolved typed theme and font-table state beside
+their resolved part names and dirty flags. The native facade re-exports the
+shared concrete DrawingML theme and owns concrete font-definition, embedded
+face, face-kind, and license-authorization values. Theme, font-table, embedded
+part, relationship, content-type, and layout-input changes publish from one
+staged clone. Caller font bytes and exact license identity are explicit input.
+The facade never searches the host for bytes to embed.
+
+Core, application, and custom property models are relationship-resolved
+package state owned by `Document`. The native facade exposes their existing
+concrete `oxml-core` types. Property creation, replacement, selective custom
+property removal, and whole-part removal all run on a staged document clone so
+the part, package relationship, content type, and typed model publish together.
+An empty custom-properties part is pruned only when the current facade created
+it. Settings mutations use the same staged boundary and keep the existing
+relationship-resolved target.
+
+`Document` also owns one relationship-resolved `CT_Styles` graph. Public style
+creation, update, default selection, and removal build a complete candidate,
+validate identifiers, reference types, defaults, links, next styles, and
+inheritance cycles, then publish the staged graph and invalidate layout once.
+The facade reuses the existing paragraph, run, table, and conditional property
+types. It does not introduce a second style model.
 
 The `rdocx` facade also provides direct immutable paragraph lookup. Mutable
 and read-only paragraph handles each provide total run count and lookup, while

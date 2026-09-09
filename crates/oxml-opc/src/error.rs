@@ -19,6 +19,9 @@ pub enum OpcError {
     #[error("part not found: {0}")]
     PartNotFound(String),
 
+    #[error("duplicate OPC part name: {0}")]
+    DuplicatePartName(String),
+
     #[error("OPC package exceeds {kind} limit of {limit}")]
     PackageLimitExceeded { kind: &'static str, limit: u64 },
 

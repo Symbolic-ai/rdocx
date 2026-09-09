@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use oxml_core::Length;
 use oxml_core::custom_properties::CustomPropertyValue;
@@ -18,6 +19,7 @@ use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 use rdocx_oxml::footnotes::{CT_Footnotes, NoteType};
 use rdocx_oxml::header_footer::CT_HdrFtr;
 use rdocx_oxml::namespace::{R_NS, W_NS, matches_local_name};
+use rdocx_oxml::numbering::ST_LvlSuffix;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::ST_SectionType;
@@ -29,6 +31,7 @@ use rdocx_oxml::text::{
 
 pub use rdocx_oxml::text::{LegacyFormFieldKind, LegacyFormFieldValue};
 
+use crate::document::DocumentIdentifiers;
 use crate::{Document, Error, Result, style};
 
 /// One legacy form field and its stable story-part identity.
@@ -107,7 +110,7 @@ impl Document {
         value: LegacyFormFieldValue,
     ) -> Result<LegacyFormFieldInfo> {
         let mut candidate = self.clone_for_staging();
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         if source_part == candidate.doc_part_name {
             let mut remaining = ordinal;
             if !set_nth_legacy_form_in_body(
@@ -142,8 +145,7 @@ impl Document {
             candidate.package.set_part(source_part, updated);
         }
 
-        let bytes = candidate.to_bytes()?;
-        let reopened = Document::from_bytes(&bytes)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .legacy_form_fields()?
             .into_iter()
@@ -195,7 +197,10 @@ fn legacy_story_parts(document: &Document) -> Result<Vec<(String, LegacyStoryKin
         let matching_relationships = relationships
             .items
             .iter()
-            .filter(|relationship| relationship.rel_type == relationship_type)
+            .filter(|relationship| {
+                relationship.rel_type == relationship_type
+                    && crate::document::relationship_is_internal(relationship)
+            })
             .collect::<Vec<_>>();
         if matches!(kind, LegacyStoryKind::Footnotes | LegacyStoryKind::Endnotes)
             && matching_relationships.len() > 1
@@ -206,28 +211,13 @@ fn legacy_story_parts(document: &Document) -> Result<Vec<(String, LegacyStoryKin
             )));
         }
         for relationship in matching_relationships {
-            if relationship
-                .target_mode
-                .as_deref()
-                .is_some_and(|mode| mode != "Internal")
-            {
-                return Err(Error::Other(
-                    "legacy form story relationship must be internal".to_owned(),
-                ));
-            }
             crate::building_block::validate_internal_target(
                 &document.doc_part_name,
                 &relationship.target,
             )?;
             let part_name =
                 OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target);
-            if document
-                .package
-                .content_types
-                .overrides
-                .get(&part_name)
-                .map(String::as_str)
-                != Some(kind.content_type())
+            if document.package.content_types.override_for(&part_name) != Some(kind.content_type())
             {
                 return Err(Error::Other(
                     "legacy form story requires its exact content type override".to_owned(),
@@ -784,31 +774,30 @@ impl Document {
         } else {
             Evaluator::new(self, context)
         };
-
         let mut main = Vec::new();
         collect_body_paragraphs(&self.document.body, &mut main);
-        evaluator.evaluate_story("main", &main);
+        evaluator.evaluate_story("main", &main)?;
 
         for (part_name, xml) in referenced_header_footer_parts(self, true) {
             if let Ok(part) = CT_HdrFtr::from_xml(&xml) {
                 let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
-                evaluator.evaluate_story(&format!("header:{part_name}"), &paragraphs);
+                evaluator.evaluate_story(&format!("header:{part_name}"), &paragraphs)?;
             }
         }
         for (part_name, xml) in referenced_header_footer_parts(self, false) {
             if let Ok(part) = CT_HdrFtr::from_xml(&xml) {
                 let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
-                evaluator.evaluate_story(&format!("footer:{part_name}"), &paragraphs);
+                evaluator.evaluate_story(&format!("footer:{part_name}"), &paragraphs)?;
             }
         }
 
         let footnotes = normal_note_paragraphs(&self.footnotes);
-        evaluator.evaluate_story("footnotes", &footnotes);
+        evaluator.evaluate_story("footnotes", &footnotes)?;
 
         for (_, xml) in relationship_parts(self, rel_types::ENDNOTES) {
             if let Ok(part) = CT_Footnotes::from_xml(&xml) {
                 let endnotes = normal_note_paragraphs(&part);
-                evaluator.evaluate_story("endnotes", &endnotes);
+                evaluator.evaluate_story("endnotes", &endnotes)?;
             }
         }
 
@@ -827,7 +816,7 @@ impl Document {
     /// leaves the receiver unchanged.
     pub fn rebuild_toc(&mut self) -> Result<TocRebuildReport> {
         let mut candidate = self.clone_for_staging();
-        candidate.flush_to_package()?;
+        candidate.prepare_staged_package()?;
         let document_xml = candidate
             .package
             .get_part(&candidate.doc_part_name)
@@ -852,7 +841,14 @@ impl Document {
             });
         }
         let bookmark_state = inspect_toc_bookmarks(&candidate.document.body, &document_xml)?;
-        let sources = discover_toc_sources(&candidate, &toc_spans, &toc_fields, &bookmark_state)?;
+        let numbering_layout = candidate.layout_deterministic()?;
+        let sources = discover_toc_sources(
+            &candidate,
+            &toc_spans,
+            &toc_fields,
+            &bookmark_state,
+            &numbering_layout,
+        )?;
         let rebuilt_toc_spans = toc_spans
             .iter()
             .zip(&toc_fields)
@@ -860,8 +856,10 @@ impl Document {
             .collect::<Vec<_>>();
         let bookmark_repairs =
             toc_crossing_bookmark_repairs(&bookmark_state, &toc_spans, &toc_fields);
-        let mut allocator = TocBookmarkAllocator::new(bookmark_state);
+        let authored_bookmark_names = candidate.identifiers.authored_bookmark_names().clone();
+        let mut allocator = TocBookmarkAllocator::new(bookmark_state, &authored_bookmark_names);
         let mut bookmark_by_paragraph = BTreeMap::<usize, TocBookmark>::new();
+        let mut bookmark_name_remap = BTreeMap::<String, String>::new();
         for source in sources.iter().flatten() {
             if !source.needs_bookmark {
                 continue;
@@ -876,25 +874,53 @@ impl Document {
             if !is_partial_boundary_source
                 && let Some(existing) = allocator.whole_paragraph_name(source.paragraph_index)
             {
+                let authored = candidate.identifiers.is_authored_bookmark(existing.0);
+                let name = if authored {
+                    let name = allocator.allocate_name()?;
+                    if name != existing.1 {
+                        bookmark_name_remap.insert(existing.1, name.clone());
+                    }
+                    name
+                } else {
+                    existing.1
+                };
                 bookmark_by_paragraph.insert(
                     source.paragraph_index,
                     TocBookmark {
                         id: existing.0,
-                        name: existing.1,
+                        name,
                         insert: false,
+                        authored,
                     },
                 );
             } else {
-                let allocated = allocator.allocate()?;
+                let allocated = allocator.allocate(&mut candidate.identifiers)?;
                 bookmark_by_paragraph.insert(
                     source.paragraph_index,
                     TocBookmark {
                         id: allocated.0,
                         name: allocated.1,
                         insert: true,
+                        authored: true,
                     },
                 );
             }
+        }
+        if !bookmark_name_remap.is_empty() {
+            let remap = BodyIdentityRemap {
+                bookmark_names: bookmark_name_remap,
+                ..Default::default()
+            };
+            let renamed_xml = patch_body_identity_attributes(&document_xml, &remap)?;
+            CT_Document::from_xml(&renamed_xml)?;
+            candidate
+                .package
+                .set_part(&candidate.doc_part_name, renamed_xml);
+            let mut renamed = reopen_staged_document(candidate)?;
+            restore_toc_bookmark_provenance(&mut renamed, &bookmark_by_paragraph);
+            let report = renamed.rebuild_toc()?;
+            self.commit_staged_mutation(renamed);
+            return Ok(report);
         }
         let bookmark_count = bookmark_by_paragraph
             .values()
@@ -1022,6 +1048,7 @@ impl Document {
             .package
             .set_part(&provisional.doc_part_name, final_xml);
         let mut completed = reopen_staged_document(provisional)?;
+        restore_toc_bookmark_provenance(&mut completed, &bookmark_by_paragraph);
         completed.invalidate_layout();
         self.commit_staged_mutation(completed);
 
@@ -1181,8 +1208,7 @@ impl Document {
             };
             let mut candidate = self.clone_for_staging();
             candidate.update_fields_with_policy(&context, true)?;
-            let bytes = candidate.to_bytes()?;
-            outputs.push(Document::from_bytes(&bytes)?);
+            outputs.push(candidate.prepare_and_reopen_staged()?);
         }
         Ok(outputs)
     }
@@ -1193,8 +1219,13 @@ impl Document {
         let mut candidates = self.mail_merge(records)?;
 
         let mut identity_state = BodyIdentityState::from_documents(&candidates)?;
+        let mut identifiers = candidates
+            .first()
+            .ok_or_else(|| Error::Other("mail merge requires at least one record".to_owned()))?
+            .identifiers
+            .clone();
         for candidate in candidates.iter_mut().skip(1) {
-            remap_body_identities(candidate, &mut identity_state)?;
+            remap_body_identities(candidate, &mut identifiers, &mut identity_state)?;
         }
         combine_mail_merge_sections(candidates)
     }
@@ -1237,8 +1268,7 @@ impl Document {
                 &mut formatter,
             )?;
             candidate.invalidate_layout();
-            let bytes = candidate.to_bytes()?;
-            outputs.push(Document::from_bytes(&bytes)?);
+            outputs.push(candidate.prepare_and_reopen_staged()?);
         }
         Ok(outputs)
     }
@@ -1254,8 +1284,13 @@ impl Document {
     ) -> Result<Document> {
         let mut candidates = self.mail_merge_rich(data, formatter)?;
         let mut identity_state = BodyIdentityState::from_documents(&candidates)?;
+        let mut identifiers = candidates
+            .first()
+            .ok_or_else(|| Error::Other("rich mail merge requires at least one record".to_owned()))?
+            .identifiers
+            .clone();
         for candidate in candidates.iter_mut().skip(1) {
-            remap_body_identities(candidate, &mut identity_state)?;
+            remap_body_identities(candidate, &mut identifiers, &mut identity_state)?;
         }
         combine_mail_merge_sections(candidates)
     }
@@ -1277,6 +1312,17 @@ impl Document {
     ) -> Result<Vec<u8>> {
         self.update_fields(context)?;
         self.to_bytes()
+    }
+}
+
+fn restore_toc_bookmark_provenance(
+    document: &mut Document,
+    bookmarks: &BTreeMap<usize, TocBookmark>,
+) {
+    for bookmark in bookmarks.values().filter(|bookmark| bookmark.authored) {
+        document
+            .identifiers
+            .restore_authored_bookmark(bookmark.id, &bookmark.name);
     }
 }
 
@@ -1316,8 +1362,7 @@ fn combine_mail_merge_sections(mut candidates: Vec<Document>) -> Result<Document
         }
     }
     combined.invalidate_layout();
-    let bytes = combined.to_bytes()?;
-    Document::from_bytes(&bytes)
+    combined.prepare_and_reopen_staged()
 }
 
 type RichFormatter<'a> = Option<
@@ -1541,11 +1586,13 @@ fn import_rich_fragment(
 ) -> Result<Vec<BodyContent>> {
     let mut fragment = Document::from_bytes(bytes)
         .map_err(|error| Error::Other(format!("invalid rich mail merge fragment: {error}")))?;
-    validate_fragment_numbering_allocation(document, &fragment)?;
+    fragment.prepare_staged_package()?;
     let mut fragment_xml = fragment.document.to_xml()?;
     let styles_changed =
         remap_fragment_style_collisions(document, &mut fragment, &mut fragment_xml)?;
-    let used_relationships = relationship_ids_in_xml(&fragment_xml);
+    let mut inserted_document = fragment.document.clone();
+    inserted_document.body.sect_pr = None;
+    let used_relationships = relationship_ids_in_xml(&inserted_document.to_xml()?)?;
     let source_rels = fragment
         .package
         .get_part_rels(&fragment.doc_part_name)
@@ -1553,34 +1600,56 @@ fn import_rich_fragment(
         .unwrap_or_default();
     let mut relationship_map = BTreeMap::new();
     let mut part_map = HashMap::new();
+    let mut imports = Vec::new();
     for relationship_id in used_relationships {
         let relationship = source_rels.get_by_id(&relationship_id).ok_or_else(|| {
             Error::Other(format!(
                 "rich mail merge fragment relationship {relationship_id} is missing"
             ))
         })?;
-        if relationship.target_mode.as_deref() == Some("External") {
+        if !crate::document::relationship_is_internal(relationship) {
             return Err(Error::Other(format!(
-                "rich mail merge fragment relationship {relationship_id} is external"
+                "rich mail merge fragment relationship {relationship_id} is non-internal"
             )));
         }
         let source_part =
             OpcPackage::resolve_rel_target(&fragment.doc_part_name, &relationship.target);
+        imports.push((relationship_id, relationship.clone(), source_part));
+    }
+    let mut closure = HashSet::new();
+    for (_, _, source_part) in &imports {
+        discover_fragment_part_closure(&fragment.package, source_part, &mut closure)?;
+    }
+    let mut closure = closure.into_iter().collect::<Vec<_>>();
+    closure.sort();
+    for source_part in closure {
+        let destination_part = document
+            .identifiers
+            .reserve_fragment_part_name(&source_part)?;
+        part_map.insert(source_part, destination_part);
+    }
+    let mut copied = HashSet::new();
+    for (relationship_id, relationship, source_part) in imports {
         let destination_part = copy_fragment_part(
             &fragment.package,
-            &mut document.package,
+            document,
             &source_part,
-            &mut part_map,
+            &part_map,
+            &mut copied,
         )?;
         let target = relative_fragment_target(&document.doc_part_name, &destination_part);
+        let owner = document.doc_part_name.clone();
         let destination_id = document
-            .package
-            .get_or_create_part_rels(&document.doc_part_name)
-            .add(&relationship.rel_type, &target);
+            .add_internal_relationship_checked(&owner, &relationship.rel_type, &target)
+            .map_err(|error| {
+                Error::Other(format!(
+                    "rich mail merge relationship allocation failed for {owner}: {error}"
+                ))
+            })?;
         relationship_map.insert(relationship_id, destination_id);
     }
     if !relationship_map.is_empty() {
-        fragment_xml = patch_relationship_ids(fragment_xml, &relationship_map);
+        fragment_xml = patch_relationship_ids(&fragment_xml, &relationship_map)?;
     }
     if styles_changed || !relationship_map.is_empty() {
         fragment
@@ -1588,55 +1657,10 @@ fn import_rich_fragment(
             .set_part(&fragment.doc_part_name, fragment_xml);
         fragment = reopen_staged_document(fragment)?;
     }
-    remap_body_identities(&mut fragment, identity_state)?;
+    remap_body_identities(&mut fragment, &mut document.identifiers, identity_state)?;
     let insert_at = document.document.body.content.len();
-    document.insert_document(insert_at, &fragment);
+    document.insert_document_content_staged(insert_at, &fragment)?;
     Ok(document.document.body.content.drain(insert_at..).collect())
-}
-
-fn validate_fragment_numbering_allocation(
-    destination: &Document,
-    fragment: &Document,
-) -> Result<()> {
-    let Some(fragment_numbering) = &fragment.numbering else {
-        return Ok(());
-    };
-    let abstract_offset = destination
-        .numbering
-        .as_ref()
-        .and_then(|numbering| {
-            numbering
-                .abstract_nums
-                .iter()
-                .map(|item| item.abstract_num_id)
-                .max()
-        })
-        .unwrap_or(0)
-        .checked_add(1)
-        .ok_or_else(|| {
-            Error::Other("rich mail merge abstract numbering ids are exhausted".to_owned())
-        })?;
-    let number_offset = destination
-        .numbering
-        .as_ref()
-        .and_then(|numbering| numbering.nums.iter().map(|item| item.num_id).max())
-        .unwrap_or(0)
-        .checked_add(1)
-        .ok_or_else(|| Error::Other("rich mail merge numbering ids are exhausted".to_owned()))?;
-    if fragment_numbering
-        .abstract_nums
-        .iter()
-        .any(|item| item.abstract_num_id.checked_add(abstract_offset).is_none())
-        || fragment_numbering.nums.iter().any(|item| {
-            item.num_id.checked_add(number_offset).is_none()
-                || item.abstract_num_id.checked_add(abstract_offset).is_none()
-        })
-    {
-        return Err(Error::Other(
-            "rich mail merge fragment numbering ids overflow the destination".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 fn remap_fragment_style_collisions(
@@ -1692,16 +1716,53 @@ fn remap_fragment_style_collisions(
         {
             style.next_style = Some(replacement.clone());
         }
+        if let Some(replacement) = style
+            .linked_style
+            .as_ref()
+            .and_then(|style_id| replacements.get(style_id))
+        {
+            style.linked_style = Some(replacement.clone());
+        }
+        for (_, raw) in &mut style.extra_xml {
+            for (old, new) in &replacements {
+                patch_word_value(raw, b"link", old, new)?;
+            }
+        }
+    }
+    if let Some(numbering) = &mut fragment.numbering {
+        for abstract_numbering in &mut numbering.abstract_nums {
+            for (_, raw) in &mut abstract_numbering.extra_xml {
+                for (old, new) in &replacements {
+                    for element in [b"styleLink".as_slice(), b"numStyleLink"] {
+                        patch_word_value(raw, element, old, new)?;
+                    }
+                }
+            }
+            for level in &mut abstract_numbering.levels {
+                if let Some(replacement) = level
+                    .p_style
+                    .as_ref()
+                    .and_then(|style_id| replacements.get(style_id))
+                {
+                    level.p_style = Some(replacement.clone());
+                }
+            }
+        }
     }
     for (old, new) in &replacements {
-        for element in [b"w:pStyle".as_slice(), b"w:rStyle", b"w:tblStyle"] {
-            patch_word_value(fragment_xml, element, old, new);
+        for element in [b"pStyle".as_slice(), b"rStyle", b"tblStyle"] {
+            patch_word_value(fragment_xml, element, old, new)?;
         }
     }
     let styles_part = fragment
         .package
         .get_part_rels(&fragment.doc_part_name)
-        .and_then(|relationships| relationships.get_by_type(rel_types::STYLES))
+        .and_then(|relationships| {
+            relationships.items.iter().find(|relationship| {
+                relationship.rel_type == rel_types::STYLES
+                    && crate::document::relationship_is_internal(relationship)
+            })
+        })
         .map(|relationship| {
             OpcPackage::resolve_rel_target(&fragment.doc_part_name, &relationship.target)
         })
@@ -1709,24 +1770,44 @@ fn remap_fragment_style_collisions(
     fragment
         .package
         .set_part(&styles_part, fragment.styles.to_xml()?);
+    if let Some(numbering) = &fragment.numbering {
+        let numbering_part = fragment
+            .package
+            .get_part_rels(&fragment.doc_part_name)
+            .and_then(|relationships| {
+                relationships.items.iter().find(|relationship| {
+                    relationship.rel_type == rel_types::NUMBERING
+                        && crate::document::relationship_is_internal(relationship)
+                })
+            })
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target(&fragment.doc_part_name, &relationship.target)
+            })
+            .ok_or_else(|| {
+                Error::Other("rich mail merge fragment has no numbering part".to_owned())
+            })?;
+        fragment
+            .package
+            .set_part(&numbering_part, numbering.to_xml()?);
+    }
     Ok(true)
 }
 
 fn remap_rich_body_content(
-    document: &Document,
+    document: &mut Document,
     content: &mut Vec<BodyContent>,
     identity_state: &mut BodyIdentityState,
 ) -> Result<()> {
     let mut occurrence = document.clone_for_staging();
     occurrence.document.body.content = std::mem::take(content);
     occurrence.document.body.sect_pr = None;
-    remap_body_identities(&mut occurrence, identity_state)?;
+    remap_body_identities(&mut occurrence, &mut document.identifiers, identity_state)?;
     *content = occurrence.document.body.content;
     Ok(())
 }
 
 fn remap_rich_rows(
-    document: &Document,
+    document: &mut Document,
     rows: &mut [RichExpandedRow],
     identity_state: &mut BodyIdentityState,
 ) -> Result<()> {
@@ -1748,129 +1829,254 @@ fn remap_rich_rows(
     Ok(())
 }
 
-fn patch_word_value(xml: &mut Vec<u8>, element: &[u8], old: &str, new: &str) {
-    let mut search = Vec::new();
-    search.push(b'<');
-    search.extend_from_slice(element);
-    search.extend_from_slice(b" w:val=\"");
-    search.extend_from_slice(old.as_bytes());
-    search.push(b'"');
-    let mut replacement = Vec::new();
-    replacement.push(b'<');
-    replacement.extend_from_slice(element);
-    replacement.extend_from_slice(b" w:val=\"");
-    replacement.extend_from_slice(new.as_bytes());
-    replacement.push(b'"');
-    let mut offset = 0;
-    while let Some(found) = find_bytes(&xml[offset..], &search) {
-        let start = offset + found;
-        xml.splice(start..start + search.len(), replacement.iter().copied());
-        offset = start + replacement.len();
+fn patch_word_value(xml: &mut Vec<u8>, element_local: &[u8], old: &str, new: &str) -> Result<()> {
+    let mut reader = NsReader::from_reader(xml.as_slice());
+    let mut buffer = Vec::new();
+    let mut edits = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!(
+                "invalid rich mail merge style reference XML: {error}"
+            ))
+        })?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(node) | Event::Empty(node) => {
+                let (namespace, local) = reader.resolver().resolve_element(node.name());
+                if namespace_is_word(&namespace)
+                    && local.as_ref() == element_local
+                    && let Some((key, value)) = resolved_element_attribute(
+                        &node,
+                        reader.resolver(),
+                        b"val",
+                        AttributeNamespace::Word,
+                    )?
+                    && value == old
+                {
+                    let Some((relative_start, relative_end)) =
+                        attribute_value_span(&xml[before..after], &key)
+                    else {
+                        return Err(Error::Other(
+                            "rich mail merge style reference attribute source was not found"
+                                .to_owned(),
+                        ));
+                    };
+                    edits.push(FieldSourceEdit {
+                        start: before + relative_start,
+                        end: before + relative_end,
+                        replacement: new.as_bytes().to_vec(),
+                    });
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
     }
+    edits.sort_by_key(|edit| edit.start);
+    for edit in edits.into_iter().rev() {
+        xml.splice(edit.start..edit.end, edit.replacement);
+    }
+    Ok(())
 }
 
-fn relationship_ids_in_xml(xml: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(xml);
+fn relationship_ids_in_xml(xml: &[u8]) -> Result<Vec<String>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
     let mut ids = Vec::new();
-    for attribute in ["r:id=\"", "r:embed=\"", "r:link=\""] {
-        let mut rest = text.as_ref();
-        while let Some(start) = rest.find(attribute) {
-            rest = &rest[start + attribute.len()..];
-            let Some(end) = rest.find('"') else {
-                break;
-            };
-            let id = rest[..end].to_owned();
-            if !ids.contains(&id) {
-                ids.push(id);
+    loop {
+        let event = reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("invalid rich mail merge relationship XML: {error}"))
+        })?;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!(
+                            "invalid rich mail merge relationship attribute: {error}"
+                        ))
+                    })?;
+                    let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                    if namespace_matches(&namespace, R_NS)
+                        && matches!(local.as_ref(), b"id" | b"embed" | b"link")
+                    {
+                        let raw = std::str::from_utf8(&attribute.value).map_err(|error| {
+                            Error::Other(format!(
+                                "invalid rich mail merge relationship id: {error}"
+                            ))
+                        })?;
+                        let id = quick_xml::escape::unescape(raw)
+                            .map_err(|error| {
+                                Error::Other(format!(
+                                    "invalid rich mail merge relationship id: {error}"
+                                ))
+                            })?
+                            .into_owned();
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
             }
-            rest = &rest[end + 1..];
+            Event::Eof => return Ok(ids),
+            _ => {}
         }
+        buffer.clear();
     }
-    ids
 }
 
-fn patch_relationship_ids(mut xml: Vec<u8>, replacements: &BTreeMap<String, String>) -> Vec<u8> {
-    for (old, new) in replacements {
-        for attribute in [b"r:id=\"".as_slice(), b"r:embed=\"", b"r:link=\""] {
-            let mut search = Vec::with_capacity(attribute.len() + old.len() + 1);
-            search.extend_from_slice(attribute);
-            search.extend_from_slice(old.as_bytes());
-            search.push(b'"');
-            let mut replacement = Vec::with_capacity(attribute.len() + new.len() + 1);
-            replacement.extend_from_slice(attribute);
-            replacement.extend_from_slice(new.as_bytes());
-            replacement.push(b'"');
-            let mut offset = 0;
-            while let Some(found) = find_bytes(&xml[offset..], &search) {
-                let start = offset + found;
-                xml.splice(start..start + search.len(), replacement.iter().copied());
-                offset = start + replacement.len();
+fn patch_relationship_ids(xml: &[u8], replacements: &BTreeMap<String, String>) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut edits = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("invalid rich mail merge relationship XML: {error}"))
+        })?;
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!(
+                            "invalid rich mail merge relationship attribute: {error}"
+                        ))
+                    })?;
+                    let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                    if !namespace_matches(&namespace, R_NS)
+                        || !matches!(local.as_ref(), b"id" | b"embed" | b"link")
+                    {
+                        continue;
+                    }
+                    let raw = std::str::from_utf8(&attribute.value).map_err(|error| {
+                        Error::Other(format!("invalid rich mail merge relationship id: {error}"))
+                    })?;
+                    let old = quick_xml::escape::unescape(raw).map_err(|error| {
+                        Error::Other(format!("invalid rich mail merge relationship id: {error}"))
+                    })?;
+                    let Some(replacement) = replacements.get(old.as_ref()) else {
+                        continue;
+                    };
+                    let Some((relative_start, relative_end)) =
+                        attribute_value_span(&xml[before..after], attribute.key.as_ref())
+                    else {
+                        return Err(Error::Other(
+                            "rich mail merge relationship attribute source was not found"
+                                .to_owned(),
+                        ));
+                    };
+                    edits.push(FieldSourceEdit {
+                        start: before + relative_start,
+                        end: before + relative_end,
+                        replacement: replacement.as_bytes().to_vec(),
+                    });
+                }
             }
+            Event::Eof => break,
+            _ => {}
         }
+        buffer.clear();
     }
-    xml
+    let mut updated = xml.to_vec();
+    edits.sort_by_key(|edit| edit.start);
+    for edit in edits.into_iter().rev() {
+        updated.splice(edit.start..edit.end, edit.replacement);
+    }
+    Ok(updated)
 }
 
 fn copy_fragment_part(
     source: &OpcPackage,
-    destination: &mut OpcPackage,
+    destination: &mut Document,
     source_part: &str,
-    part_map: &mut HashMap<String, String>,
+    part_map: &HashMap<String, String>,
+    copied: &mut HashSet<String>,
 ) -> Result<String> {
-    if let Some(mapped) = part_map.get(source_part) {
-        return Ok(mapped.clone());
+    let destination_part = part_map.get(source_part).cloned().ok_or_else(|| {
+        Error::Other(format!(
+            "rich mail merge fragment part {source_part} was not preallocated"
+        ))
+    })?;
+    if !copied.insert(source_part.to_owned()) {
+        return Ok(destination_part);
     }
     let bytes = source.get_part(source_part).ok_or_else(|| {
         Error::Other(format!(
             "rich mail merge fragment part {source_part} is missing"
         ))
     })?;
-    let destination_part = allocate_fragment_part_name(destination, source_part);
-    part_map.insert(source_part.to_owned(), destination_part.clone());
-    destination.set_part(&destination_part, bytes.to_vec());
+    destination
+        .package
+        .set_part(&destination_part, bytes.to_vec());
     if let Some(content_type) = source.content_types.content_type_for(source_part) {
         destination
+            .package
             .content_types
             .add_override(&destination_part, content_type);
+        destination
+            .identifiers
+            .register_content_type_override(&destination_part);
     }
     if let Some(relationships) = source.get_part_rels(source_part) {
-        let relationships = relationships.clone();
-        for relationship in relationships.items {
-            if relationship.target_mode.as_deref() == Some("External") {
+        let mut relationships = relationships.items.clone();
+        relationships.sort_by(|left, right| left.id.cmp(&right.id));
+        for relationship in relationships {
+            if !crate::document::relationship_is_internal(&relationship) {
                 return Err(Error::Other(format!(
-                    "rich mail merge fragment part {source_part} has an external relationship"
+                    "rich mail merge fragment part {source_part} has a non-internal relationship"
                 )));
             }
             let child_source = OpcPackage::resolve_rel_target(source_part, &relationship.target);
             let child_destination =
-                copy_fragment_part(source, destination, &child_source, part_map)?;
+                copy_fragment_part(source, destination, &child_source, part_map, copied)?;
             let target = relative_fragment_target(&destination_part, &child_destination);
+            let destination_id = destination
+                .identifiers
+                .reserve_requested_relationship_id_checked(
+                    &destination_part,
+                    &relationship.id,
+                )
+                .map_err(|error| {
+                    Error::Other(format!(
+                        "rich mail merge relationship allocation failed for {destination_part}: {error}"
+                    ))
+                })?;
             destination
+                .package
                 .get_or_create_part_rels(&destination_part)
-                .add_with_id(&relationship.id, &relationship.rel_type, &target);
+                .add_with_id(&destination_id, &relationship.rel_type, &target);
         }
     }
     Ok(destination_part)
 }
 
-fn allocate_fragment_part_name(package: &OpcPackage, source_part: &str) -> String {
-    if package.get_part(source_part).is_none() {
-        return source_part.to_owned();
+fn discover_fragment_part_closure(
+    source: &OpcPackage,
+    source_part: &str,
+    discovered: &mut HashSet<String>,
+) -> Result<()> {
+    if !discovered.insert(source_part.to_owned()) {
+        return Ok(());
     }
-    let (stem, extension) = source_part
-        .rsplit_once('.')
-        .map_or((source_part, ""), |(stem, extension)| (stem, extension));
-    for ordinal in 1u64.. {
-        let candidate = if extension.is_empty() {
-            format!("{stem}-merge-{ordinal}")
-        } else {
-            format!("{stem}-merge-{ordinal}.{extension}")
-        };
-        if package.get_part(&candidate).is_none() {
-            return candidate;
+    source.get_part(source_part).ok_or_else(|| {
+        Error::Other(format!(
+            "rich mail merge fragment part {source_part} is missing"
+        ))
+    })?;
+    if let Some(relationships) = source.get_part_rels(source_part) {
+        for relationship in &relationships.items {
+            if !crate::document::relationship_is_internal(relationship) {
+                return Err(Error::Other(format!(
+                    "rich mail merge fragment part {source_part} has a non-internal relationship"
+                )));
+            }
+            let child_source = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+            discover_fragment_part_closure(source, &child_source, discovered)?;
         }
     }
-    unreachable!("fragment part name space is unbounded")
+    Ok(())
 }
 
 fn relative_fragment_target(source_part: &str, target_part: &str) -> String {
@@ -2109,11 +2315,10 @@ fn replace_rich_run(
                     )));
                 }
                 let rel_id = document.embed_image(&image.data, &image.filename);
-                *content = RunContent::Drawing(CT_Drawing::inline(CT_Inline::new(
-                    &rel_id,
-                    image.width.to_emu(),
-                    image.height.to_emu(),
-                )));
+                let mut inline =
+                    CT_Inline::new(&rel_id, image.width.to_emu(), image.height.to_emu());
+                inline.doc_pr_id = document.identifiers.reserve_drawing_id()?;
+                *content = RunContent::Drawing(CT_Drawing::inline(inline));
             }
             Some(MailMergeValue::Fragment(_)) => {
                 return Err(Error::Other(format!(
@@ -4026,6 +4231,7 @@ fn parse_dynamic_toc_fields(
     for span in spans {
         let field = parse_dynamic_toc_field(xml, span)?;
         let mut evaluator = Evaluator::new(document, &context);
+        evaluator.ensure_numbering_layout_for_field(&field)?;
         match evaluator.evaluate_field(&field, "main", &paragraphs, span.begin_paragraph) {
             FieldOutcome::TableOfContents(toc) => output.push(Some(toc)),
             FieldOutcome::KeepStored { .. } => {
@@ -4169,6 +4375,7 @@ struct TocBookmark {
     id: i32,
     name: String,
     insert: bool,
+    authored: bool,
 }
 
 #[derive(Debug)]
@@ -4680,11 +4887,13 @@ struct TocBookmarkAllocator {
 }
 
 impl TocBookmarkAllocator {
-    fn new(state: TocBookmarkState) -> Self {
+    fn new(state: TocBookmarkState, authored_names: &HashSet<String>) -> Self {
+        let mut names = state.names;
+        names.retain(|name| !authored_names.contains(name));
         Self {
             next_id: state.max_id.checked_add(1),
             next_name: Some(1),
-            names: state.names,
+            names,
             whole_paragraphs: state.whole_paragraphs,
         }
     }
@@ -4693,10 +4902,17 @@ impl TocBookmarkAllocator {
         self.whole_paragraphs.get(&paragraph).cloned()
     }
 
-    fn allocate(&mut self) -> Result<(i32, String)> {
-        let id = self.next_id.ok_or_else(|| {
+    fn allocate(&mut self, identifiers: &mut DocumentIdentifiers) -> Result<(i32, String)> {
+        let preferred = self.next_id.ok_or_else(|| {
             Error::Other("table of contents exhausted the bookmark ID range".to_owned())
         })?;
+        let id = identifiers.reserve_preferred_bookmark_id(preferred)?;
+        let name = self.allocate_name()?;
+        self.next_id = id.checked_add(1);
+        Ok((id, name))
+    }
+
+    fn allocate_name(&mut self) -> Result<String> {
         loop {
             let suffix = self.next_name.ok_or_else(|| {
                 Error::Other("table of contents exhausted the bookmark name range".to_owned())
@@ -4704,8 +4920,7 @@ impl TocBookmarkAllocator {
             let name = format!("_Toc{suffix}");
             self.next_name = suffix.checked_add(1);
             if self.names.insert(name.clone()) {
-                self.next_id = id.checked_add(1);
-                return Ok((id, name));
+                return Ok(name);
             }
         }
     }
@@ -4719,6 +4934,7 @@ struct TocSource {
     omit_page_number: bool,
     needs_bookmark: bool,
     sequence_prefix: Option<String>,
+    numbering_prefix: Option<String>,
 }
 
 fn discover_toc_sources(
@@ -4726,6 +4942,7 @@ fn discover_toc_sources(
     spans: &[DynamicTocSpan],
     fields: &[Option<TocField>],
     bookmarks: &TocBookmarkState,
+    numbering_layout: &Arc<rdocx_layout::WordLayoutResult>,
 ) -> Result<Vec<Vec<TocSource>>> {
     let mut paragraphs = Vec::new();
     collect_body_paragraphs(&document.document.body, &mut paragraphs);
@@ -4749,6 +4966,7 @@ fn discover_toc_sources(
             .transpose()?;
         let mut sources = Vec::new();
         let mut evaluator = Evaluator::new(document, &context);
+        evaluator.numbering_layout = Some(Arc::clone(numbering_layout));
         let mut sequence_value = None;
         for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
             let paragraph_fully_owned = spans.iter().any(|span| {
@@ -4811,6 +5029,10 @@ fn discover_toc_sources(
                             omit_page_number,
                             needs_bookmark: toc.hyperlink || !omit_page_number,
                             sequence_prefix: sequence_value.clone(),
+                            numbering_prefix: toc_numbering_prefix(
+                                numbering_layout,
+                                paragraph_index,
+                            ),
                         });
                     }
                 }
@@ -4873,12 +5095,29 @@ fn discover_toc_sources(
                 omit_page_number,
                 needs_bookmark: toc.hyperlink || !omit_page_number,
                 sequence_prefix: sequence_value.clone(),
+                numbering_prefix: toc_numbering_prefix(numbering_layout, paragraph_index),
             });
         }
         sources.sort_by_key(|source| source.paragraph_index);
         all_sources.push(sources);
     }
     Ok(all_sources)
+}
+
+fn toc_numbering_prefix(
+    layout: &rdocx_layout::WordLayoutResult,
+    paragraph_index: usize,
+) -> Option<String> {
+    let numbering = layout.document_paragraph_numbering(paragraph_index)?;
+    if numbering.marker_text.is_empty() {
+        return None;
+    }
+    let suffix = match numbering.suffix {
+        ST_LvlSuffix::Tab => "\t",
+        ST_LvlSuffix::Space => " ",
+        ST_LvlSuffix::Nothing => "",
+    };
+    Some(format!("{}{suffix}", numbering.marker_text))
 }
 
 fn toc_source_position_is_owned(spans: &[DynamicTocSpan], position: TocOwnedPosition) -> bool {
@@ -5434,6 +5673,9 @@ fn render_toc_entries(
             output.push_str("\">");
         }
         output.push_str("<w:r><w:t>");
+        if let Some(prefix) = source.numbering_prefix.as_deref() {
+            output.push_str(&xml_escape_text(prefix));
+        }
         output.push_str(&xml_escape_text(&source.title));
         output.push_str("</w:t></w:r>");
         if toc.hyperlink {
@@ -5653,9 +5895,7 @@ fn append_toc_wrapper_closures(output: &mut Vec<u8>, wrappers: &[String]) {
 }
 
 fn reopen_staged_document(document: Document) -> Result<Document> {
-    let mut output = std::io::Cursor::new(Vec::new());
-    document.package.write_to(&mut output)?;
-    Document::from_bytes(output.get_ref())
+    document.reopen_prepared_staged()
 }
 
 fn deterministic_toc_page_values(document: &Document) -> Result<HashMap<String, String>> {
@@ -5780,7 +6020,7 @@ fn merge_referenced_header_footer_parts(document: &Document) -> Result<Vec<(Stri
             rel_types::FOOTER
         };
         if relationship.rel_type != relationship_type
-            || relationship.target_mode.as_deref() == Some("External")
+            || !crate::document::relationship_is_internal(relationship)
         {
             continue;
         }
@@ -5945,32 +6185,50 @@ fn collect_merge_field_name(instruction: &str, names: &mut HashSet<String>) {
 
 #[derive(Default)]
 struct BodyIdentityValues {
-    numeric_ids: Vec<String>,
+    bookmark_ids: Vec<String>,
+    content_control_ids: Vec<String>,
+    drawing_ids: Vec<String>,
+    non_visual_drawing_ids: Vec<String>,
     bookmark_names: Vec<String>,
     reference_names: Vec<String>,
 }
 
+/// Merge-local identities that are outside F-249's document allocator scope.
+///
+/// Bookmark and `wp:docPr` ids are reserved from `DocumentIdentifiers` by
+/// `remap_body_identities`. Content-control and non-visual drawing ids have
+/// distinct OOXML scopes and remain local to the rich-merge combiner.
 struct BodyIdentityState {
-    used_ids: HashSet<u32>,
+    used_content_control_ids: HashSet<u32>,
+    used_non_visual_drawing_ids: HashSet<u32>,
     used_names: HashSet<String>,
-    next_id: u32,
+    next_content_control_id: u32,
+    next_non_visual_drawing_id: u32,
     next_name: u32,
 }
 
 impl BodyIdentityState {
     fn from_documents(documents: &[Document]) -> Result<Self> {
         let mut state = Self {
-            used_ids: HashSet::new(),
+            used_content_control_ids: HashSet::new(),
+            used_non_visual_drawing_ids: HashSet::new(),
             used_names: HashSet::new(),
-            next_id: 1,
+            next_content_control_id: 1,
+            next_non_visual_drawing_id: 1,
             next_name: 1,
         };
         for document in documents {
             let xml = document.document.to_xml()?;
             let values = body_identity_values(&xml)?;
-            state.used_ids.extend(
+            state.used_content_control_ids.extend(
                 values
-                    .numeric_ids
+                    .content_control_ids
+                    .iter()
+                    .filter_map(|value| value.parse::<u32>().ok()),
+            );
+            state.used_non_visual_drawing_ids.extend(
+                values
+                    .non_visual_drawing_ids
                     .iter()
                     .filter_map(|value| value.parse::<u32>().ok()),
             );
@@ -5980,16 +6238,20 @@ impl BodyIdentityState {
         Ok(state)
     }
 
-    fn allocate_id(&mut self) -> Result<String> {
-        loop {
-            let candidate = self.next_id;
-            self.next_id = self.next_id.checked_add(1).ok_or_else(|| {
-                Error::Other("mail merge exhausted the document identity range".to_owned())
-            })?;
-            if self.used_ids.insert(candidate) {
-                return Ok(candidate.to_string());
-            }
-        }
+    fn allocate_content_control_id(&mut self) -> Result<String> {
+        allocate_merge_local_id(
+            &mut self.used_content_control_ids,
+            &mut self.next_content_control_id,
+            "content-control",
+        )
+    }
+
+    fn allocate_non_visual_drawing_id(&mut self) -> Result<String> {
+        allocate_merge_local_id(
+            &mut self.used_non_visual_drawing_ids,
+            &mut self.next_non_visual_drawing_id,
+            "non-visual drawing",
+        )
     }
 
     fn allocate_name(&mut self) -> Result<String> {
@@ -6005,19 +6267,63 @@ impl BodyIdentityState {
     }
 }
 
+fn allocate_merge_local_id(
+    occupied: &mut HashSet<u32>,
+    cursor: &mut u32,
+    category: &str,
+) -> Result<String> {
+    loop {
+        let candidate = *cursor;
+        *cursor = cursor.checked_add(1).ok_or_else(|| {
+            Error::Other(format!(
+                "mail merge exhausted the {category} identity range"
+            ))
+        })?;
+        if occupied.insert(candidate) {
+            return Ok(candidate.to_string());
+        }
+    }
+}
+
 #[derive(Default)]
 struct BodyIdentityRemap {
-    numeric_ids: BTreeMap<String, String>,
+    bookmark_ids: BTreeMap<String, String>,
+    content_control_ids: BTreeMap<String, String>,
+    drawing_ids: BTreeMap<String, String>,
+    non_visual_drawing_ids: BTreeMap<String, String>,
     bookmark_names: BTreeMap<String, String>,
 }
 
-fn remap_body_identities(document: &mut Document, state: &mut BodyIdentityState) -> Result<()> {
+fn remap_body_identities(
+    document: &mut Document,
+    identifiers: &mut DocumentIdentifiers,
+    state: &mut BodyIdentityState,
+) -> Result<()> {
     let xml = document.document.to_xml()?;
     let values = body_identity_values(&xml)?;
     let mut remap = BodyIdentityRemap::default();
-    for value in values.numeric_ids {
-        if let std::collections::btree_map::Entry::Vacant(entry) = remap.numeric_ids.entry(value) {
-            entry.insert(state.allocate_id()?);
+    for value in values.bookmark_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) = remap.bookmark_ids.entry(value) {
+            entry.insert(identifiers.reserve_bookmark_id()?.to_string());
+        }
+    }
+    for value in values.content_control_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            remap.content_control_ids.entry(value)
+        {
+            entry.insert(state.allocate_content_control_id()?);
+        }
+    }
+    for value in values.drawing_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) = remap.drawing_ids.entry(value) {
+            entry.insert(identifiers.reserve_drawing_id()?.to_string());
+        }
+    }
+    for value in values.non_visual_drawing_ids {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            remap.non_visual_drawing_ids.entry(value)
+        {
+            entry.insert(state.allocate_non_visual_drawing_id()?);
         }
     }
     for value in values.bookmark_names {
@@ -6145,7 +6451,7 @@ fn collect_body_identity_values(
         if let Some((_, value)) =
             resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Word)?
         {
-            values.numeric_ids.push(value);
+            values.bookmark_ids.push(value);
         }
         if local == b"bookmarkStart"
             && let Some((_, value)) =
@@ -6157,20 +6463,20 @@ fn collect_body_identity_values(
         if let Some((_, value)) =
             resolved_element_attribute(element, resolver, b"val", AttributeNamespace::Word)?
         {
-            values.numeric_ids.push(value);
+            values.content_control_ids.push(value);
         }
     } else if namespace_matches(&namespace, WP_NS) && local == b"docPr" {
         if let Some((_, value)) =
             resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Unbound)?
         {
-            values.numeric_ids.push(value);
+            values.drawing_ids.push(value);
         }
     } else if namespace_is_non_visual_drawing(&namespace)
         && local == b"cNvPr"
         && let Some((_, value)) =
             resolved_element_attribute(element, resolver, b"id", AttributeNamespace::Unbound)?
     {
-        values.numeric_ids.push(value);
+        values.non_visual_drawing_ids.push(value);
     }
     Ok(())
 }
@@ -6448,6 +6754,19 @@ fn patch_body_identity_attributes(xml: &[u8], remap: &BodyIdentityRemap) -> Resu
     Ok(updated)
 }
 
+pub(crate) fn patch_bookmark_ids(
+    xml: &[u8],
+    bookmark_ids: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    patch_body_identity_attributes(
+        xml,
+        &BodyIdentityRemap {
+            bookmark_ids: bookmark_ids.clone(),
+            ..Default::default()
+        },
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_body_identity_edits(
     xml: &[u8],
@@ -6471,7 +6790,7 @@ fn collect_body_identity_edits(
             resolver,
             b"id",
             AttributeNamespace::Word,
-            &remap.numeric_ids,
+            &remap.bookmark_ids,
             edits,
         )?;
         if local == b"bookmarkStart" {
@@ -6496,12 +6815,10 @@ fn collect_body_identity_edits(
             resolver,
             b"val",
             AttributeNamespace::Word,
-            &remap.numeric_ids,
+            &remap.content_control_ids,
             edits,
         )?;
-    } else if namespace.wordprocessing_drawing && local == b"docPr"
-        || namespace.non_visual_drawing && local == b"cNvPr"
-    {
+    } else if namespace.wordprocessing_drawing && local == b"docPr" {
         add_identity_attribute_edit(
             xml,
             start,
@@ -6510,7 +6827,19 @@ fn collect_body_identity_edits(
             resolver,
             b"id",
             AttributeNamespace::Unbound,
-            &remap.numeric_ids,
+            &remap.drawing_ids,
+            edits,
+        )?;
+    } else if namespace.non_visual_drawing && local == b"cNvPr" {
+        add_identity_attribute_edit(
+            xml,
+            start,
+            end,
+            element,
+            resolver,
+            b"id",
+            AttributeNamespace::Unbound,
+            &remap.non_visual_drawing_ids,
             edits,
         )?;
     }
@@ -6792,12 +7121,32 @@ struct MailMergeStoryState {
 struct Evaluator<'a> {
     document: &'a Document,
     context: &'a FieldEvaluationContext,
-    bookmarks: BTreeMap<String, String>,
+    bookmarks: BTreeMap<String, BookmarkValue>,
+    numbering_layout: Option<Arc<rdocx_layout::WordLayoutResult>>,
     results: Vec<FieldEvaluation>,
     sequences: BTreeMap<(String, String), SequenceState>,
     mail_merge_stories: BTreeMap<String, MailMergeStoryState>,
     nested_outcomes: Vec<BTreeMap<usize, FieldOutcome>>,
     missing_merge_fields_as_empty: bool,
+}
+
+struct BookmarkValue {
+    text: String,
+    paragraph_ordinal: Option<usize>,
+}
+
+fn field_needs_numbering_layout(field: &Field) -> bool {
+    let instruction = field.effective_instruction();
+    let own = unsupported_switch(&instruction).is_none()
+        && validate_instruction_shape(&instruction).is_ok()
+        && instruction.name == "REF"
+        && ["n", "r", "w"]
+            .iter()
+            .any(|name| has_switch(&instruction, name));
+    own || field
+        .effective_nested_fields_in_source_order(&instruction)
+        .into_iter()
+        .any(field_needs_numbering_layout)
 }
 
 impl<'a> Evaluator<'a> {
@@ -6806,12 +7155,21 @@ impl<'a> Evaluator<'a> {
             .bookmarks()
             .into_iter()
             .filter(|bookmark| bookmark.issue().is_none())
-            .filter_map(|bookmark| Some((bookmark.name()?.to_owned(), bookmark.text().to_owned())))
+            .filter_map(|bookmark| {
+                Some((
+                    bookmark.name()?.to_owned(),
+                    BookmarkValue {
+                        text: bookmark.text().to_owned(),
+                        paragraph_ordinal: bookmark.range().map(|range| range.start.body_index),
+                    },
+                ))
+            })
             .collect();
         Self {
             document,
             context,
             bookmarks,
+            numbering_layout: None,
             results: Vec::new(),
             sequences: BTreeMap::new(),
             mail_merge_stories: BTreeMap::new(),
@@ -6826,7 +7184,19 @@ impl<'a> Evaluator<'a> {
         evaluator
     }
 
-    fn evaluate_story(&mut self, story: &str, paragraphs: &[&CT_P]) {
+    fn evaluate_story(&mut self, story: &str, paragraphs: &[&CT_P]) -> Result<()> {
+        if self.numbering_layout.is_none()
+            && paragraphs.iter().any(|paragraph| {
+                paragraph.runs().into_iter().any(|run| {
+                    run.content.iter().any(|content| match content {
+                        RunContent::Field(field) => field_needs_numbering_layout(field),
+                        _ => false,
+                    })
+                })
+            })
+        {
+            self.numbering_layout = Some(self.document.layout_deterministic()?);
+        }
         for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
             for run in paragraph.runs() {
                 for content in &run.content {
@@ -6836,6 +7206,14 @@ impl<'a> Evaluator<'a> {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn ensure_numbering_layout_for_field(&mut self, field: &Field) -> Result<()> {
+        if self.numbering_layout.is_none() && field_needs_numbering_layout(field) {
+            self.numbering_layout = Some(self.document.layout_deterministic()?);
+        }
+        Ok(())
     }
 
     fn evaluate_field(
@@ -6885,7 +7263,7 @@ impl<'a> Evaluator<'a> {
         let outcome = match instruction.name.as_str() {
             "PAGE" | "NUMPAGES" => FieldOutcome::DeferredPagination,
             "PAGEREF" => self.evaluate_pageref(instruction),
-            "REF" => self.evaluate_ref(instruction),
+            "REF" => self.evaluate_ref(instruction, story, paragraph_index),
             "IF" => self.evaluate_if(instruction, story, paragraphs, paragraph_index),
             "SEQ" => self.evaluate_seq(instruction, story, paragraphs, paragraph_index),
             "DOCPROPERTY" => self.evaluate_docproperty(instruction),
@@ -6943,13 +7321,94 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn evaluate_ref(&self, instruction: &FieldInstruction) -> FieldOutcome {
+    fn evaluate_ref(
+        &self,
+        instruction: &FieldInstruction,
+        story: &str,
+        paragraph_index: usize,
+    ) -> FieldOutcome {
         let Some(target) = text_argument(instruction, 0) else {
             return keep("REF requires a bookmark name");
         };
         match self.bookmarks.get(target) {
-            Some(text) => FieldOutcome::Resolved(text.clone()),
+            Some(bookmark) => {
+                let numbering_switch = if has_switch(instruction, "w") {
+                    Some("full")
+                } else if has_switch(instruction, "r") {
+                    Some("relative")
+                } else if has_switch(instruction, "n") {
+                    Some("level")
+                } else {
+                    None
+                };
+                let Some(numbering_switch) = numbering_switch else {
+                    if has_switch(instruction, "p") && story == "main" {
+                        return self.ref_relative_position(bookmark, paragraph_index);
+                    }
+                    return FieldOutcome::Resolved(bookmark.text.clone());
+                };
+                let Some(numbering) = bookmark.paragraph_ordinal.and_then(|index| {
+                    self.numbering_layout
+                        .as_ref()
+                        .and_then(|layout| layout.document_paragraph_numbering(index))
+                }) else {
+                    let mut value = bookmark.text.clone();
+                    if has_switch(instruction, "p")
+                        && story == "main"
+                        && let FieldOutcome::Resolved(position) =
+                            self.ref_relative_position(bookmark, paragraph_index)
+                    {
+                        value.push(' ');
+                        value.push_str(&position);
+                    }
+                    return FieldOutcome::Resolved(value);
+                };
+                let omit_text = has_switch(instruction, "t");
+                let mut value = match numbering_switch {
+                    "level" if omit_text => numbering.number_level_without_text.clone(),
+                    "level" => numbering.number_level.clone(),
+                    "full" if omit_text => numbering.number_full_without_text.clone(),
+                    "full" => numbering.number_full.clone(),
+                    "relative" => numbering.relative_to(
+                        (story == "main")
+                            .then(|| {
+                                self.numbering_layout.as_ref().and_then(|layout| {
+                                    layout.document_paragraph_numbering(paragraph_index)
+                                })
+                            })
+                            .flatten(),
+                        omit_text,
+                    ),
+                    _ => unreachable!("known REF numbering switch"),
+                };
+                if has_switch(instruction, "p")
+                    && story == "main"
+                    && let FieldOutcome::Resolved(position) =
+                        self.ref_relative_position(bookmark, paragraph_index)
+                {
+                    value.push(' ');
+                    value.push_str(&position);
+                }
+                FieldOutcome::Resolved(value)
+            }
             None => keep(&format!("REF target {target} was not found")),
+        }
+    }
+
+    fn ref_relative_position(
+        &self,
+        bookmark: &BookmarkValue,
+        paragraph_index: usize,
+    ) -> FieldOutcome {
+        let Some(target_index) = bookmark.paragraph_ordinal else {
+            return keep("REF relative target has no paragraph position");
+        };
+        if target_index > paragraph_index {
+            FieldOutcome::Resolved("below".to_owned())
+        } else if target_index < paragraph_index {
+            FieldOutcome::Resolved("above".to_owned())
+        } else {
+            keep("REF relative target contains the field")
         }
     }
 
@@ -7720,7 +8179,7 @@ fn referenced_header_footer_parts(document: &Document, is_header: bool) -> Vec<(
                 continue;
             };
             if relationship.rel_type != relationship_type
-                || relationship.target_mode.as_deref() == Some("External")
+                || !crate::document::relationship_is_internal(relationship)
             {
                 continue;
             }
@@ -7756,7 +8215,7 @@ fn relationship_parts(document: &Document, relationship_type: &str) -> Vec<(Stri
         .items
         .iter()
         .filter(|relationship| relationship.rel_type == relationship_type)
-        .filter(|relationship| relationship.target_mode.as_deref() != Some("External"))
+        .filter(|relationship| crate::document::relationship_is_internal(relationship))
         .filter_map(|relationship| {
             let part_name =
                 OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target);
@@ -9520,7 +9979,7 @@ fn switch_text<'a>(instruction: &'a FieldInstruction, name: &str) -> Option<&'a 
 fn unsupported_switch(instruction: &FieldInstruction) -> Option<&str> {
     let allowed: &[&str] = match instruction.name.as_str() {
         "PAGE" | "NUMPAGES" => &["*", "#"],
-        "REF" => &["h", "*", "#"],
+        "REF" => &["h", "n", "r", "t", "w", "p", "*", "#"],
         "PAGEREF" => &["h", "p", "*", "#"],
         "IF" => &["*", "#"],
         "SEQ" => &["n", "c", "h", "r", "s", "*", "#"],
@@ -9585,10 +10044,10 @@ fn validate_instruction_shape(instruction: &FieldInstruction) -> std::result::Re
     }
 
     for switch in &instruction.switches {
-        let requires_text = matches!(
-            switch.name.as_str(),
-            "*" | "#" | "@" | "r" | "s" | "b" | "f"
-        ) || instruction.name == "INCLUDETEXT" && switch.name == "c";
+        let requires_text = matches!(switch.name.as_str(), "*" | "#" | "@")
+            || instruction.name == "SEQ" && matches!(switch.name.as_str(), "r" | "s")
+            || instruction.name == "MERGEFIELD" && matches!(switch.name.as_str(), "b" | "f")
+            || instruction.name == "INCLUDETEXT" && switch.name == "c";
         match (&switch.argument, requires_text) {
             (Some(FieldArgument::Text(_)), true) | (None, false) => {}
             (_, true) => {
@@ -10221,6 +10680,7 @@ fn weekday(value: FieldDateTime) -> usize {
 mod tests {
     use rdocx_oxml::document::BodyContent;
     use rdocx_oxml::properties::CT_PPr;
+    use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc};
     use rdocx_oxml::text::{CT_P, CT_R, Field, FieldSwitch, RunContent};
 
     use super::*;
@@ -10266,6 +10726,80 @@ mod tests {
             .content
             .push(BodyContent::Paragraph(paragraph));
         document
+    }
+
+    #[test]
+    fn fragment_descendant_allocation_ignores_relationship_traversal_order() {
+        let copy = |reverse: bool| {
+            let mut source = Document::new().package;
+            source.set_part("/word/media/root.bin", b"root".to_vec());
+            source.set_part("/word/media/a.bin", b"a".to_vec());
+            source.set_part("/word/media/a-merge-1.bin", b"a-merge-1".to_vec());
+            for part in [
+                "/word/media/root.bin",
+                "/word/media/a.bin",
+                "/word/media/a-merge-1.bin",
+            ] {
+                source
+                    .content_types
+                    .add_override(part, "application/octet-stream");
+            }
+            let relationships = source.get_or_create_part_rels("/word/media/root.bin");
+            let items = if reverse {
+                [("rId2", "a-merge-1.bin"), ("rId1", "a.bin")]
+            } else {
+                [("rId1", "a.bin"), ("rId2", "a-merge-1.bin")]
+            };
+            for (id, target) in items {
+                relationships.add_with_id(id, "urn:rdocx:test:child", target);
+            }
+
+            let mut seed = Document::new();
+            seed.package
+                .set_part("/word/media/a.bin", b"occupied".to_vec());
+            seed.package
+                .content_types
+                .add_override("/word/media/a.bin", "application/octet-stream");
+            let mut seed_bytes = std::io::Cursor::new(Vec::new());
+            seed.package.write_to(&mut seed_bytes).unwrap();
+            let mut destination = Document::from_bytes(seed_bytes.get_ref()).unwrap();
+
+            let mut closure = HashSet::new();
+            discover_fragment_part_closure(&source, "/word/media/root.bin", &mut closure).unwrap();
+            let mut closure = closure.into_iter().collect::<Vec<_>>();
+            closure.sort();
+            let mut part_map = HashMap::new();
+            for source_part in closure {
+                let destination_part = destination
+                    .identifiers
+                    .reserve_fragment_part_name(&source_part)
+                    .unwrap();
+                part_map.insert(source_part, destination_part);
+            }
+            copy_fragment_part(
+                &source,
+                &mut destination,
+                "/word/media/root.bin",
+                &part_map,
+                &mut HashSet::new(),
+            )
+            .unwrap();
+            let mut output = std::io::Cursor::new(Vec::new());
+            destination.package.write_to(&mut output).unwrap();
+            (part_map, output.into_inner())
+        };
+
+        let forward = copy(false);
+        let reverse = copy(true);
+        assert_eq!(forward, reverse);
+        assert_eq!(
+            forward.0.get("/word/media/a.bin").unwrap(),
+            "/word/media/a-merge-2.bin"
+        );
+        assert_eq!(
+            forward.0.get("/word/media/a-merge-1.bin").unwrap(),
+            "/word/media/a-merge-1.bin"
+        );
     }
 
     #[test]
@@ -10439,8 +10973,8 @@ mod tests {
         };
         let paragraphs = [paragraph];
         let mut evaluator = Evaluator::new(&document, &context);
-        evaluator.evaluate_story("main", &paragraphs);
-        evaluator.evaluate_story("header:one", &paragraphs);
+        evaluator.evaluate_story("main", &paragraphs).unwrap();
+        evaluator.evaluate_story("header:one", &paragraphs).unwrap();
         assert_eq!(
             evaluator.results[0].outcome, evaluator.results[5].outcome,
             "each story must start from the explicit record context"
@@ -11389,8 +11923,8 @@ mod tests {
         let paragraphs = [paragraph];
         let story_context = FieldEvaluationContext::default();
         let mut evaluator = Evaluator::new(&story_document, &story_context);
-        evaluator.evaluate_story("header:one", &paragraphs);
-        evaluator.evaluate_story("footer:one", &paragraphs);
+        evaluator.evaluate_story("header:one", &paragraphs).unwrap();
+        evaluator.evaluate_story("footer:one", &paragraphs).unwrap();
         assert_eq!(
             evaluator
                 .results
@@ -11468,11 +12002,17 @@ mod tests {
     #[test]
     fn styleref_searches_the_approved_direction_and_scope() {
         let mut document = Document::new();
-        document.add_style(style::StyleBuilder::paragraph("Heading1", "Heading 1"));
+        document
+            .set_style(style::StyleBuilder::paragraph("Heading1", "Heading 1"))
+            .unwrap();
+        let definition = document
+            .add_numbering_definition(&[crate::ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
         let mut source = CT_P::new();
         source.properties = Some(CT_PPr {
             style_id: Some("Heading1".to_owned()),
-            num_id: Some(7),
+            num_id: Some(instance),
             num_ilvl: Some(0),
             ..Default::default()
         });
@@ -11517,6 +12057,466 @@ mod tests {
                 .unwrap()[0]
                 .outcome,
             FieldOutcome::Resolved("numbered heading".to_owned())
+        );
+    }
+
+    #[test]
+    fn ref_numbering_switches_use_the_authoritative_layout_counter() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[crate::ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        assert!(
+            document
+                .add_paragraph("numbered target")
+                .set_numbering(instance, 0)
+        );
+        document
+            .add_bookmark(
+                "target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut paragraph = CT_P::new();
+        for instruction in [
+            r"REF target \n",
+            r"REF target \r",
+            r"REF target \w \t",
+            r"REF target \n \p",
+        ] {
+            paragraph.runs.push(CT_R {
+                properties: None,
+                content: vec![RunContent::Field(Field::new(instruction, "stored"))],
+                extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            });
+        }
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|result| result.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("1 above".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn fields_without_numbering_switches_do_not_build_numbering_layout() {
+        let document = Document::new();
+        let context = FieldEvaluationContext::default();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new("AUTHOR", "stored"))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        let paragraphs = [&paragraph];
+        let mut evaluator = Evaluator::new(&document, &context);
+
+        evaluator.evaluate_story("main", &paragraphs).unwrap();
+
+        assert!(evaluator.numbering_layout.is_none());
+
+        let mut nested = Field::new("TOC", "stored");
+        nested
+            .instruction
+            .arguments
+            .push(FieldArgument::Nested(Box::new(Field::new(
+                r"REF target \n",
+                "stored",
+            ))));
+        evaluator
+            .ensure_numbering_layout_for_field(&nested)
+            .unwrap();
+        assert!(evaluator.numbering_layout.is_some());
+    }
+
+    #[test]
+    fn numbered_ref_uses_flattened_bookmark_paths_inside_and_after_a_table() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[crate::ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+
+        let table_xml = format!(
+            r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="{instance}"/></w:numPr></w:pPr><w:bookmarkStart w:id="7" w:name="target_in_table"/><w:r><w:t>table item</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>"#
+        );
+        let mut reader = quick_xml::Reader::from_str(&table_xml);
+        reader.config_mut().trim_text(true);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) if matches_local_name(element.name().as_ref(), b"p") => {
+                    break;
+                }
+                Ok(Event::Eof) => panic!("table bookmark paragraph was missing"),
+                Ok(_) => {}
+                Err(error) => panic!("table bookmark paragraph failed to parse: {error}"),
+            }
+            buffer.clear();
+        }
+        let table_paragraph = CT_P::from_xml(&mut reader).unwrap();
+        let mut cell = CT_Tc::new();
+        *cell.paragraphs_mut()[0] = table_paragraph;
+        let mut row = CT_Row::new();
+        row.cells.push(cell);
+        let mut table = CT_Tbl::new();
+        table.rows.push(row);
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+        assert!(
+            document
+                .add_paragraph("numbered target")
+                .set_numbering(instance, 0)
+        );
+        document
+            .add_bookmark(
+                "target_after_table",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 1,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 1,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut field_paragraph = CT_P::new();
+        field_paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF target_in_table \n",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        field_paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF target_after_table \n",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(field_paragraph));
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|field| field.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("2".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ref_switches_match_the_word_16_112_numbering_record() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[
+                crate::ListLevel::decimal().level_text("Section %1."),
+                crate::ListLevel::decimal().level_text("%1.%2."),
+                crate::ListLevel::decimal().level_text("Section %1.%2.%3."),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for (text, level) in [("Body", 0), ("Table", 1), ("Deep", 2)] {
+            assert!(document.add_paragraph(text).set_numbering(instance, level));
+        }
+        document
+            .add_bookmark(
+                "deep",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut paragraph = CT_P::new();
+        for instruction in [
+            r"REF deep \n",
+            r"REF deep \n \t",
+            r"REF deep \r",
+            r"REF deep \w",
+            r"REF deep \w \t",
+            r"REF deep \n \p",
+            r"REF deep \p",
+        ] {
+            paragraph.runs.push(CT_R {
+                properties: None,
+                content: vec![RunContent::Field(Field::new(instruction, "stored"))],
+                extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            });
+        }
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|result| result.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("Section 1.1.1".to_owned()),
+                FieldOutcome::Resolved("1.1.1".to_owned()),
+                FieldOutcome::Resolved("Section 1.1.1".to_owned()),
+                FieldOutcome::Resolved("Section 1.1.1".to_owned()),
+                FieldOutcome::Resolved("1.1.1".to_owned()),
+                FieldOutcome::Resolved("Section 1.1.1 above".to_owned()),
+                FieldOutcome::Resolved("above".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ref_relative_number_keeps_level_text_and_position_fallback() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[
+                crate::ListLevel::decimal().level_text("Section %1."),
+                crate::ListLevel::decimal().level_text("%1.%2."),
+                crate::ListLevel::decimal().level_text("Section %1.%2.%3."),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for (text, level) in [("Root", 0), ("Branch", 1), ("Target", 2)] {
+            assert!(document.add_paragraph(text).set_numbering(instance, level));
+        }
+        document
+            .add_bookmark(
+                "numbered_target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut relative = CT_P::new();
+        relative.properties = Some(CT_PPr {
+            num_id: Some(instance),
+            num_ilvl: Some(2),
+            ..CT_PPr::default()
+        });
+        relative.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF numbered_target \r",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(relative));
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()[0]
+                .outcome,
+            FieldOutcome::Resolved("Section 1.1.1".to_owned())
+        );
+
+        let mut plain = Document::new();
+        plain.add_paragraph("Plain target");
+        plain
+            .add_bookmark(
+                "plain_target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut fallback = CT_P::new();
+        fallback.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF plain_target \n \p",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        plain
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(fallback));
+        assert_eq!(
+            plain
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()[0]
+                .outcome,
+            FieldOutcome::Resolved("Plain target above".to_owned())
+        );
+    }
+
+    #[test]
+    fn ref_n_r_and_w_apply_level_relative_and_full_context_rules() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[
+                crate::ListLevel::decimal().level_text("%1."),
+                crate::ListLevel::decimal().level_text("%1.%2."),
+                crate::ListLevel::decimal().level_text("%3."),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for index in 1..=4 {
+            assert!(
+                document
+                    .add_paragraph(&format!("Root {index}"))
+                    .set_numbering(instance, 0)
+            );
+        }
+        for index in 1..=3 {
+            assert!(
+                document
+                    .add_paragraph(&format!("Branch {index}"))
+                    .set_numbering(instance, 1)
+            );
+        }
+        let mut field_paragraph = CT_P::new();
+        field_paragraph.properties = Some(CT_PPr {
+            num_id: Some(instance),
+            num_ilvl: Some(2),
+            ..CT_PPr::default()
+        });
+        for instruction in [
+            r"REF later_target \n",
+            r"REF later_target \r",
+            r"REF later_target \w",
+        ] {
+            field_paragraph.runs.push(CT_R {
+                properties: None,
+                content: vec![RunContent::Field(Field::new(instruction, "stored"))],
+                extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            });
+        }
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(field_paragraph));
+        for index in 4..=5 {
+            assert!(
+                document
+                    .add_paragraph(&format!("Branch {index}"))
+                    .set_numbering(instance, 1)
+            );
+        }
+        assert!(
+            document
+                .add_paragraph("Target precursor")
+                .set_numbering(instance, 2)
+        );
+        assert!(document.add_paragraph("Target").set_numbering(instance, 2));
+        document
+            .add_bookmark(
+                "later_target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 11,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 11,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|field| field.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("2".to_owned()),
+                FieldOutcome::Resolved("4.5.2".to_owned()),
+                FieldOutcome::Resolved("4.5.2".to_owned()),
+            ]
         );
     }
 
@@ -11629,10 +12629,14 @@ mod tests {
         let paragraphs = [paragraph];
         let context = FieldEvaluationContext::default();
         let mut evaluator = Evaluator::new(&document, &context);
-        evaluator
-            .bookmarks
-            .insert("Multi".to_owned(), "first\nsecond".to_owned());
-        evaluator.evaluate_story("main", &paragraphs);
+        evaluator.bookmarks.insert(
+            "Multi".to_owned(),
+            BookmarkValue {
+                text: "first\nsecond".to_owned(),
+                paragraph_ordinal: None,
+            },
+        );
+        evaluator.evaluate_story("main", &paragraphs).unwrap();
         assert_eq!(
             evaluator.results[0].outcome,
             FieldOutcome::Resolved("yes".to_owned())

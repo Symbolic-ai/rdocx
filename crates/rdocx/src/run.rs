@@ -972,7 +972,7 @@ mod tests {
             r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
             r#"xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" "#,
             r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
-            r#"<wp:inline><wp:extent cx="10" cy="20"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:link="rId7"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
+            r#"<wp:inline><wp:extent cx="10" cy="20"/><wp:docPr id="1" name="Linked"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:link="rId7"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#,
         ));
         let linked_run = RunRef { inner: &linked_run };
         let linked_items = linked_run.items().collect::<Vec<_>>();
@@ -1004,7 +1004,7 @@ mod tests {
             r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
             r#"xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" "#,
             r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
-            r#"<wp:anchor><wps:wsp><wps:spPr><a:blipFill><a:blip r:embed="rIdFill"/></a:blipFill></wps:spPr></wps:wsp></wp:anchor></w:drawing>"#,
+            r#"<wp:anchor><wp:docPr id="1" name="Shape"/><wps:wsp><wps:spPr><a:blipFill><a:blip r:embed="rIdFill"/></a:blipFill></wps:spPr></wps:wsp></wp:anchor></w:drawing>"#,
         ));
         let filled_shape = DrawingRef {
             inner: filled_shape

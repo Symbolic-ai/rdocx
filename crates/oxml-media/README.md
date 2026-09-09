@@ -1,7 +1,14 @@
 # oxml-media
 
-Dependency-free image and audio or video container detection, collision-safe
-naming, MIME validation, and intrinsic image sizing for OOXML packages.
+Identify OOXML media safely, derive intrinsic image sizing, and allocate
+collision-free package part names without dependencies.
+
+## Capabilities
+
+- Magic-byte and filename identification for common image formats.
+- Native sizing for PNG, JPEG, GIF, BMP, and WebP.
+- Parameter-free MIME token validation and sequential media naming.
+- Limited MP3, RIFF WAVE, and ISO base media signature checks.
 
 ## Use it when
 
@@ -11,7 +18,9 @@ without decoding the complete payload.
 
 ## Relationship
 
-DOCX and PPTX package facades use these helpers before adding media parts and relationships.
+DOCX and PPTX package facades use these helpers before adding media parts and
+relationships. This crate identifies containers and metadata. It does not
+decode media or identify codecs.
 
 ## Example
 

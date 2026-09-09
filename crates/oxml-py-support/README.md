@@ -1,6 +1,14 @@
 # oxml-py-support
 
-Internal Rust support for content paths, revision tracking, units, and errors shared by the Python bindings.
+Keep Python binding behavior consistent with shared content paths,
+stale-handle detection, units, and errors.
+
+## Capabilities
+
+- Typed document content path segments.
+- Revision capture and validation for stale element handles.
+- Shared stale-element errors.
+- EMU, inch, centimetre, millimetre, point, and twip conversions.
 
 ## Use it when
 
@@ -8,7 +16,9 @@ Use this crate only while implementing `rdocx-py` or `rpptx-py`. It is not publi
 
 ## Relationship
 
-The two PyO3 binding crates use it to keep Python-visible navigation and revision semantics aligned.
+The two PyO3 binding crates use it to keep Python-visible navigation and
+revision semantics aligned. This crate contains shared Rust support, not the
+PyO3 bindings or a user-facing Python package.
 
 ## Example
 

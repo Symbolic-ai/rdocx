@@ -242,9 +242,9 @@ impl Document {
         validate_revision_timestamp(timestamp)?;
         validate_comparison_options(options)?;
         let mut original = self.clone_for_staging();
-        original.flush_to_package()?;
+        original.prepare_staged_package()?;
         let mut edited = edited.clone_for_staging();
-        edited.flush_to_package()?;
+        edited.prepare_staged_package()?;
         let original_stories = story_parts_with_options(&original, options)?;
         let edited_stories = story_parts_with_options(&edited, options)?;
         if original_stories != edited_stories {
@@ -449,13 +449,9 @@ fn story_parts_with_options(
                     rel_types::FOOTER
                 };
                 if relationship.rel_type != expected_type
-                    || relationship.target_mode.as_deref() == Some("External")
+                    || !crate::document::relationship_is_internal(relationship)
                 {
-                    return Err(Error::Other(format!(
-                        "{} reference {} has an invalid relationship target",
-                        kind.label(),
-                        reference.rel_id
-                    )));
+                    continue;
                 }
                 let part_name =
                     OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target);
@@ -486,11 +482,8 @@ fn story_parts_with_options(
                 if relationship.rel_type != relationship_type {
                     continue;
                 }
-                if relationship.target_mode.as_deref() == Some("External") {
-                    return Err(Error::Other(format!(
-                        "{} story has an external relationship target",
-                        kind.label()
-                    )));
+                if !crate::document::relationship_is_internal(relationship) {
+                    continue;
                 }
                 let part_name =
                     OpcPackage::resolve_rel_target(&document.doc_part_name, &relationship.target);
@@ -1439,9 +1432,7 @@ fn normal_note_owner(xml: &str) -> Result<bool> {
 }
 
 pub(crate) fn reopen_staged(candidate: Document) -> Result<Document> {
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    candidate.package.write_to(&mut bytes)?;
-    Document::from_bytes(bytes.get_ref())
+    candidate.reopen_prepared_staged()
 }
 
 type NormalizedPackage = (Vec<String>, Vec<(ComparisonStoryKind, String, Vec<String>)>);
@@ -2990,24 +2981,36 @@ fn paragraph_properties_xml(
     };
     current.sect_pr = None;
     current.change = None;
-    let (original_numbering_xml, original_revision_xml, original_revision_positions) = original
+    let (
+        original_numbering_xml,
+        original_numbering_positions,
+        original_numbering_position,
+        original_revision_xml,
+        original_revision_positions,
+    ) = original
         .properties
         .as_ref()
         .map(|properties| {
             (
                 properties.numbering_revision_xml.clone(),
+                properties.numbering_revision_xml_positions.clone(),
+                properties.numbering_revision_position,
                 properties.revision_xml.clone(),
                 properties.revision_xml_positions.clone(),
             )
         })
         .unwrap_or_default();
     if current.numbering_revision_xml != original_numbering_xml
+        || current.numbering_revision_xml_positions != original_numbering_positions
+        || current.numbering_revision_position != original_numbering_position
         || current.revision_xml != original_revision_xml
         || current.revision_xml_positions != original_revision_positions
     {
         formatting_diagnostic(diagnostics, location.to_owned());
     }
     current.numbering_revision_xml = original_numbering_xml;
+    current.numbering_revision_xml_positions = original_numbering_positions;
+    current.numbering_revision_position = original_numbering_position;
     current.revision_xml = original_revision_xml;
     current.revision_xml_positions = original_revision_positions;
     let needs_owner = changed || !tracked_section.is_empty() || original.properties.is_some();
@@ -3040,8 +3043,12 @@ fn paragraph_properties_xml(
 fn modeled_paragraph_properties(properties: Option<&CT_PPr>) -> Option<CT_PPr> {
     properties.cloned().map(|mut properties| {
         properties.sect_pr = None;
+        properties.num_ilvl_raw = None;
+        properties.num_id_raw = None;
         properties.numbering_revision = None;
         properties.numbering_revision_xml.clear();
+        properties.numbering_revision_xml_positions.clear();
+        properties.numbering_revision_position = None;
         properties.change = None;
         properties.revision_xml.clear();
         properties.revision_xml_positions.clear();
@@ -4731,8 +4738,12 @@ fn paragraph_formatting(paragraph: &CT_P) -> Option<CT_PPr> {
     paragraph.properties.clone().map(|mut properties| {
         properties.num_id = None;
         properties.num_ilvl = None;
+        properties.num_id_raw = None;
+        properties.num_ilvl_raw = None;
         properties.numbering_revision = None;
         properties.numbering_revision_xml.clear();
+        properties.numbering_revision_xml_positions.clear();
+        properties.numbering_revision_position = None;
         properties.change = None;
         properties.revision_xml.clear();
         properties

@@ -207,18 +207,18 @@ bytes remain in the ZIP package.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | DOCX-001 | package | DOCX open, save, and byte serialization | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | Y | Y | Y | complete | implementation:`crates/rdocx/src/document.rs:1955` | - |
 | DOCX-002 | package | bounded and encrypted package input and output | Y | Y | Y | NA | Y | package | Y | Y | NA | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:1962` | - |
-| DOCX-003 | package | blank Word-compatible package profiles | P | Y | P | NA | P | package | P | P | P | P | B | B | B | partial | boundary:F-243 | F-243 |
-| DOCX-004 | package | DOCM, DOTX, and DOTM identity and output selection | N | Y | P | NA | Y | package | Y | Y | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:1999` | F-243 |
-| DOCX-005 | properties | core document properties | P | Y | P | P | Y | package | NA | NA | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4355` | F-244 |
-| DOCX-006 | properties | application and custom properties | N | Y | N | N | PV | package | NA | NA | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |
-| DOCX-007 | properties | document variables, compatibility facts, and defaults | N | P | N | N | PV | package | P | P | N | P | B | B | B | unsupported | boundary:F-244 | F-244 |
+| DOCX-003 | package | blank Word-compatible package profiles | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:2057` | - |
+| DOCX-004 | package | DOCM, DOTX, and DOTM identity and output selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs:2064` | - |
+| DOCX-005 | properties | core document properties | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
+| DOCX-006 | properties | application and custom properties | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
+| DOCX-007 | properties | document variables, compatibility facts, and defaults | Y | Y | Y | Y | Y | package | P | P | Y | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs` | F-270 |
 | DOCX-008 | conformance | public and private authoring conformance gate | Y | Y | NA | NA | Y | all | Y | Y | Y | Y | B | B | Y | complete | implementation:`scripts/docx_authoring_conformance.py:388` | - |
-| DOCX-009 | theme-font | themes and theme selection | N | Y | N | N | PV | package | Y | Y | P | P | B | B | B | partial | boundary:F-245 | F-245 |
-| DOCX-010 | theme-font | font table and licensed embedded fonts | N | P | N | N | PV | package | P | P | N | P | B | B | B | partial | boundary:F-245 | F-245 |
-| DOCX-011 | styles | paragraph, character, and table style graphs | P | Y | P | N | Y | package | Y | Y | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4082` | F-246 |
-| DOCX-012 | numbering | complete numbering levels and instances | P | P | P | N | P | package | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3945` | F-247 |
-| DOCX-013 | numbering | style-linked counters, restarts, TOC, and REF | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-248 | F-248 |
-| DOCX-014 | package | deterministic identifiers across owned parts | P | Y | P | NA | P | package | NA | NA | P | P | B | B | B | partial | boundary:F-249 | F-249 |
+| DOCX-009 | theme-font | themes and theme selection | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
+| DOCX-010 | theme-font | font table and licensed embedded fonts | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
+| DOCX-011 | styles | paragraph, character, and table style graphs | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
+| DOCX-012 | numbering | numbering level and instance package model | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
+| DOCX-013 | numbering | style-linked counters, restarts, TOC, and REF | Y | Y | Y | Y | Y | all | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs`,implementation:`crates/rdocx-layout/src/style_resolver.rs`,implementation:`crates/rdocx/src/field.rs` | - |
+| DOCX-014 | package | deterministic identifiers across owned parts | Y | Y | Y | NA | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-015 | sections | ordered section lookup, insertion, mutation, and removal | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4233` | F-250 |
 | DOCX-016 | sections | page geometry and ordinary section properties | P | Y | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4247` | F-251 |
 | DOCX-017 | stories | per-section default, first, and even headers and footers | P | P | P | N | P | related | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:3369` | F-252 |

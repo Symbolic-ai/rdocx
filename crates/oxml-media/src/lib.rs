@@ -69,10 +69,14 @@ fn media_index(name: &str, directory: &str, stem: &str) -> Option<usize> {
     } else {
         name_directory
     };
-    if name_directory != directory {
+    if !name_directory.eq_ignore_ascii_case(directory) {
         return None;
     }
-    let suffix = filename.strip_prefix(stem)?;
+    let prefix = filename.get(..stem.len())?;
+    if !prefix.eq_ignore_ascii_case(stem) {
+        return None;
+    }
+    let suffix = &filename[stem.len()..];
     let (digits, extension) = suffix.split_once('.')?;
     if digits.is_empty()
         || extension.is_empty()
@@ -1210,6 +1214,16 @@ mod tests {
             let mut namer = MediaNamer::scan("/word/media", "image", existing.iter().copied());
             assert_eq!(namer.next_part_name("png"), *expected);
         }
+
+        let mut case_variant = MediaNamer::scan(
+            "/word/embeddings",
+            "Workbook",
+            ["/WORD/EMBEDDINGS/WORKBOOK7.XLSX"].into_iter(),
+        );
+        assert_eq!(
+            case_variant.next_part_name("xlsx"),
+            "/word/embeddings/Workbook8.xlsx"
+        );
     }
 
     #[test]

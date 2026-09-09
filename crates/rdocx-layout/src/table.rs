@@ -1,8 +1,11 @@
 //! Table layout: column widths, cell content, merge handling.
 
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
+use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblBorders, CT_TblGrid, CT_Tc, ST_VerticalJc, VMerge};
+use rdocx_oxml::table::{
+    CT_Row, CT_Tbl, CT_TblBorders, CT_TblGrid, CT_TblPr, CT_Tc, ST_VerticalJc, VMerge,
+};
 
 use crate::WordStory;
 use crate::block::{
@@ -278,13 +281,31 @@ fn layout_table_inner(
     story: &WordStory,
     path: &[usize],
 ) -> Result<(TableBlock, TableSemantics)> {
+    let direct_width = tbl
+        .properties
+        .as_ref()
+        .is_some_and(|properties| properties.width.is_some());
+    let direct_alignment = tbl
+        .properties
+        .as_ref()
+        .is_some_and(|properties| properties.jc.is_some());
+    let mut resolved_table = tbl.clone();
+    let mut resolved_properties = resolve_base_table_properties(tbl, styles);
+    if direct_width {
+        resolved_properties.width = None;
+    }
+    if direct_alignment {
+        resolved_properties.jc = None;
+    }
+    resolved_table.properties = Some(resolved_properties);
+    let tbl = &resolved_table;
     let source_rows = layout_table_rows(tbl, path);
     // 1. Compute column widths
     let col_widths = compute_column_widths(tbl.grid.as_ref(), available_width, tbl, path);
     let table_width: f64 = col_widths.iter().sum();
 
     // Table indent
-    let table_indent = tbl
+    let authored_indent = tbl
         .properties
         .as_ref()
         .and_then(|p| p.indent.as_ref())
@@ -296,6 +317,11 @@ fn layout_table_inner(
             }
         })
         .unwrap_or(0.0);
+    let table_indent = match tbl.properties.as_ref().and_then(|properties| properties.jc) {
+        Some(ST_Jc::Center) => ((available_width - table_width) / 2.0).max(0.0),
+        Some(ST_Jc::Right | ST_Jc::End) => (available_width - table_width).max(0.0),
+        _ => authored_indent,
+    };
 
     // Direct table borders win. Table-style borders are the fallback.
     let table_borders = tbl
@@ -583,6 +609,104 @@ fn layout_table_inner(
     ))
 }
 
+fn resolve_base_table_properties(table: &CT_Tbl, styles: &CT_Styles) -> CT_TblPr {
+    let direct = table.properties.as_ref();
+    let selected_style_id = direct
+        .and_then(|properties| properties.style_id.as_deref())
+        .or_else(|| {
+            styles
+                .get_default(rdocx_oxml::styles::StyleType::Table)
+                .map(|style| style.style_id.as_str())
+        });
+    let mut chain = Vec::new();
+    let mut current = selected_style_id;
+    let mut visited = std::collections::HashSet::new();
+    while let Some(style_id) = current.filter(|style_id| visited.insert(*style_id)) {
+        let Some(style) = styles.get_by_id(style_id) else {
+            break;
+        };
+        chain.push(style);
+        current = style.based_on.as_deref();
+    }
+
+    let mut resolved = CT_TblPr {
+        style_id: selected_style_id.map(str::to_owned),
+        ..CT_TblPr::default()
+    };
+    for style in chain.into_iter().rev() {
+        if let Some(properties) = &style.table_properties {
+            overlay_table_properties(&mut resolved, properties);
+        }
+    }
+    if let Some(properties) = direct {
+        overlay_table_properties(&mut resolved, properties);
+    }
+    resolved
+}
+
+fn overlay_table_properties(target: &mut CT_TblPr, source: &CT_TblPr) {
+    if source.style_id.is_some() {
+        target.style_id.clone_from(&source.style_id);
+    }
+    if source.width.is_some() {
+        target.width.clone_from(&source.width);
+    }
+    if source.jc.is_some() {
+        target.jc = source.jc;
+    }
+    if let Some(borders) = &source.borders {
+        overlay_borders(&mut target.borders, borders);
+    }
+    if let Some(margins) = &source.cell_margin {
+        let target = target.cell_margin.get_or_insert_default();
+        if margins.top.is_some() {
+            target.top = margins.top;
+        }
+        if margins.bottom.is_some() {
+            target.bottom = margins.bottom;
+        }
+        if margins.left.is_some() {
+            target.left = margins.left;
+        }
+        if margins.right.is_some() {
+            target.right = margins.right;
+        }
+    }
+    if source.layout.is_some() {
+        target.layout.clone_from(&source.layout);
+    }
+    if source.indent.is_some() {
+        target.indent.clone_from(&source.indent);
+    }
+    if source.shading.is_some() {
+        target.shading.clone_from(&source.shading);
+    }
+    if let Some(look) = &source.look {
+        let target = target.look.get_or_insert_default();
+        if look.val.is_some() {
+            target.val.clone_from(&look.val);
+        }
+        if look.first_row.is_some() {
+            target.first_row = look.first_row;
+        }
+        if look.last_row.is_some() {
+            target.last_row = look.last_row;
+        }
+        if look.first_column.is_some() {
+            target.first_column = look.first_column;
+        }
+        if look.last_column.is_some() {
+            target.last_column = look.last_column;
+        }
+        if look.no_h_band.is_some() {
+            target.no_h_band = look.no_h_band;
+        }
+        if look.no_v_band.is_some() {
+            target.no_v_band = look.no_v_band;
+        }
+    }
+}
+
 /// Compute column widths from CT_TblGrid, shrinking to the available width if
 /// the declared grid overflows it.
 ///
@@ -595,6 +719,17 @@ fn compute_column_widths(
     table: &CT_Tbl,
     path: &[usize],
 ) -> Vec<f64> {
+    let requested_width = table
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.width.as_ref())
+        .and_then(|width| match width.width_type.as_str() {
+            "dxa" if width.w > 0 => Some(width.w as f64 / 20.0),
+            "pct" if width.w > 0 => Some(available_width * width.w as f64 / 5000.0),
+            _ => None,
+        })
+        .map(|width| width.min(available_width));
+    let target_width = requested_width.unwrap_or(available_width);
     match grid {
         Some(g) if !g.columns.is_empty() => {
             let widths: Vec<f64> = g.columns.iter().map(|c| c.width.to_pt()).collect();
@@ -602,10 +737,10 @@ fn compute_column_widths(
             if total < 0.01 {
                 // All zero widths — distribute equally based on column count
                 let n = g.columns.len();
-                vec![available_width / n as f64; n]
-            } else if total > available_width + 1.0 {
-                // Overflows the text column: scale down so it fits the page.
-                let scale = available_width / total;
+                vec![target_width / n as f64; n]
+            } else if total > target_width + 1.0 || requested_width.is_some() {
+                // Honor an explicit table width, or shrink an overflowing grid.
+                let scale = target_width / total;
                 widths.iter().map(|w| w * scale).collect()
             } else {
                 widths
@@ -628,7 +763,7 @@ fn compute_column_widths(
                 })
                 .unwrap_or(1)
                 .max(1);
-            vec![available_width / num_cols as f64; num_cols]
+            vec![target_width / num_cols as f64; num_cols]
         }
     }
 }
@@ -826,6 +961,11 @@ fn resolve_table_style_cell(
         .properties
         .as_ref()
         .and_then(|p| p.style_id.as_deref())
+        .or_else(|| {
+            styles
+                .get_default(rdocx_oxml::styles::StyleType::Table)
+                .map(|style| style.style_id.as_str())
+        })
     else {
         return ResolvedTableCellStyle::default();
     };
@@ -1035,7 +1175,8 @@ fn overlay_borders(target: &mut Option<CT_TblBorders>, source: &CT_TblBorders) {
 mod tests {
     use super::*;
     use rdocx_oxml::table::{
-        CT_Row, CT_TblGrid, CT_TblGridCol, CT_TblLook, CT_TblPr, CT_Tc, CT_TcPr, CT_TrPr,
+        CT_Row, CT_TblCellMar, CT_TblGrid, CT_TblGridCol, CT_TblLook, CT_TblPr, CT_TblWidth, CT_Tc,
+        CT_TcPr, CT_TrPr,
     };
     use rdocx_oxml::units::Twips;
 
@@ -1459,5 +1600,77 @@ mod tests {
             header_borders.left.as_ref().unwrap().color.as_deref(),
             Some("AA0000")
         );
+    }
+
+    #[test]
+    fn table_without_an_explicit_style_uses_the_authored_default() {
+        let styles = CT_Styles::from_xml(
+            format!(
+                r#"<w:styles xmlns:w="{}"><w:style w:type="table" w:styleId="CorpusTable" w:default="1"><w:tblPr><w:shd w:val="clear" w:fill="D9EAF7"/></w:tblPr></w:style></w:styles>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let resolved = resolve_table_style_cell(&CT_Tbl::new(), &styles, 0, 0, 1, 1, None, None);
+        assert_eq!(
+            resolved
+                .shading
+                .as_ref()
+                .and_then(|shading| shading.fill.as_deref()),
+            Some("D9EAF7")
+        );
+
+        let styles = CT_Styles::from_xml(
+            format!(
+                r#"<w:styles xmlns:w="{}"><w:style w:type="table" w:styleId="Sized" w:default="1"><w:tblPr><w:tblW w:w="2000" w:type="dxa"/><w:jc w:val="center"/><w:tblCellMar><w:left w:w="200" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let mut table = CT_Tbl::new();
+        table.grid = Some(CT_TblGrid {
+            columns: vec![CT_TblGridCol { width: Twips(4000) }],
+            ..CT_TblGrid::default()
+        });
+        let mut row = CT_Row::new();
+        row.cells.push(CT_Tc::new());
+        table.rows.push(row);
+        let laid_out = layout_with_styles(&table, 300.0, &styles);
+        assert!((laid_out.table_width - 100.0).abs() < 0.01);
+        assert!((laid_out.table_indent - 100.0).abs() < 0.01);
+        assert!((laid_out.rows[0].cells[0].margin_left - 10.0).abs() < 0.01);
+        assert!((laid_out.rows[0].cells[0].margin_right - 5.0).abs() < 0.01);
+
+        table.properties = Some(CT_TblPr {
+            width: Some(CT_TblWidth::dxa(3000)),
+            jc: Some(ST_Jc::Left),
+            indent: Some(CT_TblWidth::dxa(400)),
+            cell_margin: Some(CT_TblCellMar {
+                left: Some(Twips(40)),
+                ..CT_TblCellMar::default()
+            }),
+            ..CT_TblPr::default()
+        });
+        let overlaid = layout_with_styles(&table, 300.0, &styles);
+        assert!((overlaid.table_width - 200.0).abs() < 0.01);
+        assert!((overlaid.table_indent - 20.0).abs() < 0.01);
+        assert!((overlaid.rows[0].cells[0].margin_left - 2.0).abs() < 0.01);
+        assert!((overlaid.rows[0].cells[0].margin_right - 5.0).abs() < 0.01);
+
+        let styles = CT_Styles::from_xml(
+            format!(
+                r#"<w:styles xmlns:w="{}"><w:style w:type="table" w:styleId="Base"><w:tblPr><w:tblLook w:firstRow="1" w:noHBand="1"/></w:tblPr></w:style><w:style w:type="table" w:styleId="Derived" w:default="1"><w:basedOn w:val="Base"/><w:tblPr><w:tblLook w:lastRow="1"/></w:tblPr></w:style></w:styles>"#,
+                rdocx_oxml::namespace::W_NS
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let inherited = resolve_base_table_properties(&CT_Tbl::new(), &styles);
+        let look = inherited.look.unwrap();
+        assert_eq!(look.first_row, Some(true));
+        assert_eq!(look.last_row, Some(true));
+        assert_eq!(look.no_h_band, Some(true));
     }
 }

@@ -9,10 +9,11 @@ use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::xml::{local_name, matches_local_name};
 use oxml_core::xml_text::{decode_plain, resolve_entity};
 use oxml_drawing::color::{
-    ColorChoice, ColorMap, ColorMapSlot, ResolvedColor, RgbColor, ThemeColorSlot,
-    apply_color_transforms, resolve_color,
+    ColorChoice, ColorMap, ColorMapSlot, ResolvedColor, ThemeColorSlot, apply_color_transforms,
+    resolve_color,
 };
-use oxml_drawing::fill::Fill;
+use oxml_drawing::fill::{Fill, SolidFill};
+use oxml_drawing::line::CT_LineProperties;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::shape_props::{CT_ShapeProperties, ShapePropertiesError};
 use oxml_drawing::text::{CT_TextBody, CT_TextCharacterProperties, TextError};
@@ -24,6 +25,8 @@ use oxml_layout::{
 use oxml_sml::{Column, Workbook};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
+
+pub use oxml_drawing::color::RgbColor;
 
 /// The transitional ChartML namespace used by OOXML packages.
 pub const C_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
@@ -133,11 +136,14 @@ pub enum ChartKind {
 }
 
 /// Data used to author one chart and its editable workbook.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChartData {
     pub categories: Vec<String>,
     pub series: Vec<(String, Vec<f64>)>,
     pub number_format: Option<String>,
+    pub category_axis_title: Option<String>,
+    pub value_axis_title: Option<String>,
+    pub palette: Vec<RgbColor>,
 }
 
 /// Authors one ChartML part and its editable workbook from one validated source.
@@ -210,6 +216,7 @@ pub fn authored_chart_parts(
         });
         chart_series.push(series);
     }
+    apply_palette(kind, data, &mut chart_series);
 
     let category_axis_id = AxisId::new(48_650_112).map_err(invalid_authoring_value)?;
     let value_axis_id = AxisId::new(48_672_768).map_err(invalid_authoring_value)?;
@@ -222,41 +229,50 @@ pub fn authored_chart_parts(
                 chart_series,
                 axis_ids,
             ),
-            category_value_axes(category_axis_id, value_axis_id),
+            category_value_axes(category_axis_id, value_axis_id, data)?,
         ),
         ChartKind::Line => (
             Plot::line(Grouping::Standard, chart_series, axis_ids),
-            category_value_axes(category_axis_id, value_axis_id),
+            category_value_axes(category_axis_id, value_axis_id, data)?,
         ),
         ChartKind::Pie => (Plot::pie(chart_series), Vec::new()),
         ChartKind::Doughnut => (Plot::doughnut(chart_series), Vec::new()),
         ChartKind::Area => (
             Plot::area(Grouping::Standard, chart_series, axis_ids),
-            category_value_axes(category_axis_id, value_axis_id),
+            category_value_axes(category_axis_id, value_axis_id, data)?,
         ),
         ChartKind::Scatter => (
             Plot::scatter(ScatterStyle::LineMarker, chart_series, axis_ids),
-            vec![
-                Axis::new(
-                    AxisKind::Value,
-                    category_axis_id,
-                    AxisPosition::Bottom,
-                    value_axis_id,
-                ),
-                Axis::new(
-                    AxisKind::Value,
-                    value_axis_id,
-                    AxisPosition::Left,
-                    category_axis_id,
-                ),
-            ],
+            authored_axes(
+                [
+                    Axis::new(
+                        AxisKind::Value,
+                        category_axis_id,
+                        AxisPosition::Bottom,
+                        value_axis_id,
+                    ),
+                    Axis::new(
+                        AxisKind::Value,
+                        value_axis_id,
+                        AxisPosition::Left,
+                        category_axis_id,
+                    ),
+                ],
+                data,
+            )?,
         ),
         ChartKind::Radar => (
             Plot::radar(RadarStyle::Standard, chart_series, axis_ids),
-            category_value_axes(category_axis_id, value_axis_id),
+            category_value_axes(category_axis_id, value_axis_id, data)?,
         ),
     };
-    let plot = plot.map_err(invalid_authoring_value)?;
+    let mut plot = plot.map_err(invalid_authoring_value)?;
+    if let Plot::Pie { data_labels, .. } | Plot::Doughnut { data_labels, .. } = &mut plot {
+        *data_labels = Some(CT_DLbls {
+            show_percent: true,
+            ..CT_DLbls::default()
+        });
+    }
     let plot_area = CT_PlotArea::new(vec![plot], axes).map_err(invalid_authoring_value)?;
     let chart_shell = format!(
         r#"<c:chartSpace xmlns:c="{C_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><c:chart><c:plotArea/></c:chart><c:externalData r:id="{workbook_relationship_id}"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>"#,
@@ -264,7 +280,9 @@ pub fn authored_chart_parts(
     let mut chart_space = CT_ChartSpace::from_xml(chart_shell.as_bytes())?;
     chart_space.chart.auto_title_deleted = true;
     chart_space.chart.plot_area = plot_area;
-    chart_space.chart.legend = (data.series.len() > 1).then(CT_Legend::default);
+    chart_space.chart.legend = (data.series.len() > 1
+        || matches!(kind, ChartKind::Pie | ChartKind::Doughnut))
+    .then(CT_Legend::default);
     let chart_xml = chart_space.to_xml()?;
     let workbook_bytes = workbook.to_xlsx_bytes().map_err(invalid_authoring_value)?;
     Ok((chart_xml, workbook_bytes))
@@ -322,11 +340,69 @@ fn invalid_authoring_value(error: impl fmt::Display) -> ChartError {
     }
 }
 
-fn category_value_axes(category: AxisId, value: AxisId) -> Vec<Axis> {
-    vec![
-        Axis::new(AxisKind::Category, category, AxisPosition::Bottom, value),
-        Axis::new(AxisKind::Value, value, AxisPosition::Left, category),
-    ]
+fn category_value_axes(category: AxisId, value: AxisId, data: &ChartData) -> Result<Vec<Axis>> {
+    authored_axes(
+        [
+            Axis::new(AxisKind::Category, category, AxisPosition::Bottom, value),
+            Axis::new(AxisKind::Value, value, AxisPosition::Left, category),
+        ],
+        data,
+    )
+}
+
+fn authored_axes(mut axes: [Axis; 2], data: &ChartData) -> Result<Vec<Axis>> {
+    for axis in &mut axes {
+        axis.set_deleted(false);
+    }
+    axes[0].title = data
+        .category_axis_title
+        .as_deref()
+        .map(CT_Title::plain_text);
+    axes[1].title = data.value_axis_title.as_deref().map(CT_Title::plain_text);
+    axes[1].number_format = data
+        .number_format
+        .as_ref()
+        .map(|format| NumberFormat::new(format.clone(), false))
+        .transpose()?;
+    Ok(axes.into())
+}
+
+fn apply_palette(kind: ChartKind, data: &ChartData, series: &mut [Series]) {
+    if data.palette.is_empty() {
+        return;
+    }
+    for (index, item) in series.iter_mut().enumerate() {
+        item.sp_pr = Some(series_shape(kind, data.palette[index % data.palette.len()]));
+    }
+    if matches!(kind, ChartKind::Bar | ChartKind::Pie | ChartKind::Doughnut) && series.len() == 1 {
+        series[0].authored_data_points = data
+            .categories
+            .iter()
+            .enumerate()
+            .map(|(index, _)| DataPoint {
+                index: index as u32,
+                sp_pr: series_shape(kind, data.palette[index % data.palette.len()]),
+            })
+            .collect();
+    }
+}
+
+fn series_shape(kind: ChartKind, color: RgbColor) -> CT_ShapeProperties {
+    let mut solid = SolidFill::default();
+    solid.color = Some(ColorChoice::srgb(color));
+    let fill = Fill::Solid(solid);
+    let mut properties = CT_ShapeProperties::default();
+    if matches!(
+        kind,
+        ChartKind::Line | ChartKind::Scatter | ChartKind::Radar
+    ) {
+        let mut line = CT_LineProperties::default();
+        line.fill = Some(fill);
+        properties.line = Some(line);
+    } else {
+        properties.fill = Some(fill);
+    }
+    properties
 }
 
 fn spreadsheet_column_name(mut index: usize) -> String {
@@ -3859,6 +3935,7 @@ struct ReferenceMarkup {
     cache_attributes: XmlAttributes,
     cache_children: OrderedRawChildren,
     format_code: Option<TextMarkup>,
+    format_code_omitted: bool,
     point_count: ScalarMarkup,
     declared_point_count: Option<u32>,
     point_indexes: Vec<u32>,
@@ -3972,9 +4049,7 @@ impl NumericData {
 
     fn from_xml_with_namespaces(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
         let parsed = parse_reference(xml, b"numRef", b"numCache", true, inherited)?;
-        let format_code = parsed
-            .format_code
-            .ok_or_else(|| ChartError::MissingElement("c:formatCode".to_owned()))?;
+        let format_code = parsed.format_code.unwrap_or_else(|| "General".to_owned());
         let mut values = Vec::with_capacity(parsed.values.len());
         for value in parsed.values {
             let number = value.parse::<f64>().map_err(|_| ChartError::InvalidValue {
@@ -4041,6 +4116,26 @@ pub enum AxisData {
     Numeric(NumericData),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct DataPoint {
+    index: u32,
+    sp_pr: CT_ShapeProperties,
+}
+
+impl DataPoint {
+    fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        writer
+            .write_event(Event::Start(BytesStart::new("c:dPt")))
+            .map_err(OxmlError::from)?;
+        write_scalar(writer, "c:idx", &self.index.to_string(), None)?;
+        self.sp_pr.write_xml_as(writer, "c:spPr")?;
+        writer
+            .write_event(Event::End(BytesEnd::new("c:dPt")))
+            .map_err(OxmlError::from)?;
+        Ok(())
+    }
+}
+
 /// The common formula-backed payload of one ChartML series.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Series {
@@ -4052,6 +4147,7 @@ pub struct Series {
     pub bubble_size: Option<NumericData>,
     pub sp_pr: Option<CT_ShapeProperties>,
     pub data_labels: Option<CT_DLbls>,
+    authored_data_points: Vec<DataPoint>,
     index_markup: ScalarMarkup,
     order_markup: ScalarMarkup,
     name_markup: Option<WrapperMarkup>,
@@ -4079,6 +4175,7 @@ impl Series {
             bubble_size: None,
             sp_pr: None,
             data_labels: None,
+            authored_data_points: Vec::new(),
             index_markup: ScalarMarkup::default(),
             order_markup: ScalarMarkup::default(),
             name_markup: None,
@@ -4260,6 +4357,9 @@ impl Series {
             properties.write_xml_as(&mut writer, "c:spPr")?;
         }
         emit_raw(&mut writer, self.raw_children.at(4))?;
+        for point in &self.authored_data_points {
+            point.write_xml(&mut writer)?;
+        }
         if let Some(labels) = &self.data_labels {
             labels.write_xml(&mut writer, false)?;
         }
@@ -4518,6 +4618,7 @@ impl SeriesParseState {
             bubble_size,
             sp_pr: self.sp_pr,
             data_labels: self.data_labels,
+            authored_data_points: Vec::new(),
             index_markup,
             order_markup,
             name_markup,
@@ -4654,6 +4755,7 @@ fn parse_reference(
                                 cache_attributes: cache_markup.raw_attributes,
                                 cache_children: cache_markup.raw_children,
                                 format_code: cache_markup.format_code,
+                                format_code_omitted: cache_markup.format_code_omitted,
                                 point_count: cache_markup.point_count,
                                 declared_point_count: cache_markup.declared_point_count,
                                 point_indexes: cache_markup.point_indexes,
@@ -4701,6 +4803,7 @@ struct CacheMarkup {
     raw_attributes: XmlAttributes,
     raw_children: OrderedRawChildren,
     format_code: Option<TextMarkup>,
+    format_code_omitted: bool,
     point_count: ScalarMarkup,
     declared_point_count: Option<u32>,
     point_indexes: Vec<u32>,
@@ -4866,9 +4969,7 @@ impl CacheParseState {
             .format_code
             .map(|(value, markup)| (Some(value), Some(markup)))
             .unwrap_or((None, None));
-        if self.numeric && format_code.is_none() {
-            return Err(ChartError::MissingElement("c:formatCode".to_owned()));
-        }
+        let format_code_omitted = self.numeric && format_code.is_none();
         Ok((
             format_code,
             values,
@@ -4879,6 +4980,7 @@ impl CacheParseState {
                     self.point_base + point_markup.len(),
                 ),
                 format_code: format_markup,
+                format_code_omitted,
                 point_count: point_count_markup,
                 declared_point_count: Some(declared),
                 point_indexes,
@@ -5236,16 +5338,18 @@ fn write_numeric_cache(
         .write_event(Event::Start(start))
         .map_err(OxmlError::from)?;
     emit_raw(writer, markup.cache_children.at(0))?;
-    let default_format_markup = TextMarkup::default();
-    write_text(
-        writer,
-        "c:formatCode",
-        &data.format_code,
-        markup
-            .format_code
-            .as_ref()
-            .unwrap_or(&default_format_markup),
-    )?;
+    if !markup.format_code_omitted || data.format_code != "General" {
+        let default_format_markup = TextMarkup::default();
+        write_text(
+            writer,
+            "c:formatCode",
+            &data.format_code,
+            markup
+                .format_code
+                .as_ref()
+                .unwrap_or(&default_format_markup),
+        )?;
+    }
     emit_raw(writer, markup.cache_children.at(1))?;
     write_scalar(
         writer,
@@ -6420,9 +6524,10 @@ impl DispBlanksAs {
     }
 }
 
-/// A chart title shell whose current children remain opaque until later stories.
+/// A chart title with plain-text authoring and preserved unsupported children.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CT_Title {
+    text: Option<CT_TextBody>,
     raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
@@ -6573,6 +6678,12 @@ impl Axis {
             namespace_declarations: Vec::new(),
             raw_children: OrderedRawChildren::default(),
         }
+    }
+
+    /// Sets axis visibility and writes the explicit ChartML deletion flag.
+    pub fn set_deleted(&mut self, deleted: bool) {
+        self.deleted = deleted;
+        self.delete_markup.get_or_insert_with(ScalarMarkup::default);
     }
 
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
@@ -8007,16 +8118,48 @@ fn parse_bool_lexical(element: &str, attribute: &str, value: &str) -> Result<boo
 }
 
 impl CT_Title {
+    fn plain_text(text: &str) -> Self {
+        let mut body = CT_TextBody::new();
+        body.set_text(text);
+        Self {
+            text: Some(body),
+            ..Self::default()
+        }
+    }
+
     fn from_xml(xml: &[u8]) -> Result<Self> {
         let (raw_attributes, raw_children) = parse_raw_shell(xml, b"title", "c:title")?;
         Ok(Self {
+            text: None,
             raw_attributes,
             raw_children,
         })
     }
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        write_raw_shell(writer, "c:title", &self.raw_attributes, &self.raw_children)
+        if self.text.is_none() {
+            return write_raw_shell(writer, "c:title", &self.raw_attributes, &self.raw_children);
+        }
+        let mut start = BytesStart::new("c:title");
+        push_attributes(&mut start, &self.raw_attributes);
+        writer
+            .write_event(Event::Start(start))
+            .map_err(OxmlError::from)?;
+        emit_raw(writer, self.raw_children.at(0))?;
+        writer
+            .write_event(Event::Start(BytesStart::new("c:tx")))
+            .map_err(OxmlError::from)?;
+        if let Some(text) = &self.text {
+            text.write_xml_as(writer, "c:rich")?;
+        }
+        writer
+            .write_event(Event::End(BytesEnd::new("c:tx")))
+            .map_err(OxmlError::from)?;
+        emit_raw(writer, self.raw_children.at(1))?;
+        writer
+            .write_event(Event::End(BytesEnd::new("c:title")))
+            .map_err(OxmlError::from)?;
+        Ok(())
     }
 
     pub fn raw_children(&self) -> &OrderedRawChildren {
@@ -8137,11 +8280,21 @@ impl CT_PlotArea {
 
     /// Creates a supported single-family plot area with owned axes.
     pub fn new(plots: Vec<Plot>, axes: Vec<Axis>) -> Result<Self> {
+        let plot_markup = plots
+            .iter()
+            .map(|plot| {
+                let mut markup = PlotMarkup::default();
+                if matches!(plot, Plot::Doughnut { .. }) {
+                    markup.hole_size = Some(ScalarMarkup::default());
+                }
+                markup
+            })
+            .collect();
         let plot_area = Self {
             raw_attributes: Vec::new(),
             raw_children: OrderedRawChildren::default(),
             namespace_bindings: chart_namespace_defaults(),
-            plot_markup: vec![PlotMarkup::default(); plots.len()],
+            plot_markup,
             plots: Some(plots),
             axes,
         };
@@ -10905,11 +11058,11 @@ mod tests {
 
     use super::{
         A_NS, Axis, AxisData, AxisId, AxisKind, AxisPosition, BarDirection, BarGrouping, C_NS,
-        CT_ChartSpace, CT_DLbls, CT_ShapeProperties, CT_TextBody, ChartGeometry, DataLabelPosition,
-        DispBlanksAs, Domain, Grouping, NumberFormat, NumericData, Orientation, Plot, R_NS,
-        ScatterStyle, Series, StringRef, TickLabelPosition, TickMark, capture_event, local_name,
-        matches_local_name, nice_number_scale, render_chart as render_chart_with_theme,
-        render_geometry as render_geometry_with_theme,
+        CT_ChartSpace, CT_DLbls, CT_ShapeProperties, CT_TextBody, ChartData, ChartGeometry,
+        ChartKind, DataLabelPosition, DispBlanksAs, Domain, Grouping, NumberFormat, NumericData,
+        Orientation, Plot, R_NS, ScatterStyle, Series, StringRef, TickLabelPosition, TickMark,
+        authored_chart_parts, capture_event, local_name, matches_local_name, nice_number_scale,
+        render_chart as render_chart_with_theme, render_geometry as render_geometry_with_theme,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -10919,6 +11072,73 @@ mod tests {
     const PDFTOTEXT_VERSION: &str = "pdftotext version 26.01.0";
     const PDFTOPPM_VERSION: &str = "pdftoppm version 26.01.0";
     const PLOT_RENDER_NORMALIZED_MAE_THRESHOLD: f64 = 0.0;
+
+    #[test]
+    fn authored_charts_emit_portable_viewer_defaults() {
+        let data = ChartData {
+            categories: vec!["August".to_owned(), "September".to_owned()],
+            series: vec![("Price".to_owned(), vec![12.5, 19.2])],
+            number_format: Some(r"0.##\%".to_owned()),
+            category_axis_title: Some("Month".to_owned()),
+            value_axis_title: Some("Change".to_owned()),
+            palette: vec![
+                RgbColor::parse("2B6FE3").unwrap(),
+                RgbColor::parse("F0761F").unwrap(),
+            ],
+        };
+        let (line, _) = authored_chart_parts(ChartKind::Line, &data, "rId1").unwrap();
+        let line = std::str::from_utf8(&line).unwrap();
+        assert_eq!(line.matches(r#"<c:delete val="0"/>"#).count(), 2);
+        assert!(line.contains(r#"<c:numFmt formatCode="0.##\%" sourceLinked="0"/>"#));
+        assert!(line.contains("<a:t>Month</a:t>"));
+        assert!(line.contains("<a:t>Change</a:t>"));
+        assert!(line.contains(r#"<a:srgbClr val="2B6FE3"/>"#));
+        for axis in line.split("<c:crossAx").take(2) {
+            let scaling = axis.rfind("<c:scaling").unwrap();
+            let deleted = axis.rfind("<c:delete").unwrap();
+            let position = axis.rfind("<c:axPos").unwrap();
+            assert!(scaling < deleted && deleted < position);
+        }
+
+        for kind in [ChartKind::Bar, ChartKind::Pie, ChartKind::Doughnut] {
+            let (chart, _) = authored_chart_parts(kind, &data, "rId1").unwrap();
+            let chart = std::str::from_utf8(&chart).unwrap();
+            if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) {
+                assert!(chart.contains("<c:legend"));
+                assert!(chart.contains(r#"<c:showPercent val="1"/>"#));
+            }
+            if kind == ChartKind::Doughnut {
+                assert!(chart.contains(r#"<c:holeSize val="50"/>"#));
+            }
+            assert_eq!(chart.matches("<c:dPt>").count(), 2);
+            assert!(chart.contains(
+                r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="2B6FE3"/>"#
+            ));
+            assert!(chart.contains(
+                r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="F0761F"/>"#
+            ));
+
+            let parsed = CT_ChartSpace::from_xml(chart.as_bytes()).unwrap();
+            let rewritten = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+            assert_eq!(rewritten.matches("<c:dPt>").count(), 2);
+            assert!(rewritten.contains(r#"<a:srgbClr val="2B6FE3"/>"#));
+            assert!(rewritten.contains(r#"<a:srgbClr val="F0761F"/>"#));
+        }
+    }
+
+    #[test]
+    fn optional_numeric_cache_format_remains_omitted() {
+        let xml = br#"<c:numRef xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:f>Sheet1!$B$2:$B$3</c:f><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>12.5</c:v></c:pt><c:pt idx="1"><c:v>19.2</c:v></c:pt></c:numCache></c:numRef>"#;
+        let mut parsed = NumericData::from_xml(xml).unwrap();
+        assert_eq!(parsed.format_code, "General");
+        let written = parsed.to_xml().unwrap();
+        assert!(!String::from_utf8_lossy(&written).contains("formatCode"));
+        assert_eq!(NumericData::from_xml(&written).unwrap(), parsed);
+
+        parsed.format_code = "0.00".to_owned();
+        let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(written.contains("<c:formatCode>0.00</c:formatCode>"));
+    }
 
     fn render_geometry(chart: &super::CT_Chart, bounds: Rect) -> super::Result<ChartGeometry> {
         render_geometry_with_theme(

@@ -1,10 +1,20 @@
 # oxml-layout
 
-Backend-neutral layout frames, paths, paints, text fragments, font discovery, and deterministic bundled fonts.
+Represent fully laid-out pages in a backend-neutral form ready for PDF or
+raster rendering.
+
+## Capabilities
+
+- Page frames with positioned text, images, lines, rectangles, and paths.
+- Transforms, paints, effects, links, outlines, and logical structure.
+- Font discovery, shaping, metrics, and deterministic bundled fonts.
+- Multilingual line breaking, bidirectional text, tabs, and inline items.
 
 ## Use it when
 
-Use this crate when producing or consuming positioned layout output independently of DOCX or PPTX. Most applications should use a document facade and renderer instead.
+Use this crate as the interchange layer between a format-specific layout engine
+and an output backend. It does not parse DOCX or PPTX and does not perform
+their format-specific pagination.
 
 ## Relationship
 

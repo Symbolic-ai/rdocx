@@ -157,7 +157,7 @@ pub(crate) fn render(document: &mut Document, data: &Value) -> Result<usize> {
         .iter()
         .map(|(literal, sentinel)| (*literal, sentinel.as_str()))
         .collect::<Vec<_>>();
-    let replaced = candidate.apply_template_pairs(&pairs);
+    let replaced = candidate.apply_template_pairs(&pairs)?;
     if replaced != external_count {
         return Err(Error::Other(format!(
             "template changed while staging: discovered {external_count} tags but replaced {replaced}"
@@ -170,7 +170,7 @@ pub(crate) fn render(document: &mut Document, data: &Value) -> Result<usize> {
         .iter()
         .map(|replacement| (replacement.sentinel.as_str(), replacement.value.as_str()))
         .collect::<Vec<_>>();
-    let restored = candidate.apply_template_pairs(&restoration);
+    let restored = candidate.apply_template_pairs(&restoration)?;
     let expected_restored = sentinels
         .pending
         .iter()

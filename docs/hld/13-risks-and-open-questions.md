@@ -76,15 +76,24 @@ it. Wrong here means subtly wrong fonts, positions and colours on real
 templates, which users notice and cannot describe.
 
 *Mitigation*: M9 is a standalone milestone with visual differential tests and a
-table of sampled theme-colour resolutions asserted to exact RGB.
+table of sampled theme-colour resolutions asserted to exact RGB. Word style
+graphs are validated for type-compatible inheritance, cycle freedom,
+reciprocal links, legal next styles, and one default per style type before a
+mutation publishes. Paragraph, character, and table default resolution has
+focused deterministic render coverage. Effective numbering resolution applies
+style inheritance, concrete replacement formatting, base-level start and
+restart controls, and counter projection once, then shares that result with
+visible markers, TOC rebuild, and REF fields.
 
 ### R5, schema child ordering
 
 Diffuse, because it touches every writer, and violations are silent until
 PowerPoint refuses the file.
 
-*Mitigation*: `OrderedRawChildren`, plus the corpus-wide "opens without repair"
-gate at M8 and M11.
+*Mitigation*: `OrderedRawChildren`, typed numbering children with explicit XSD
+ranks, ordered `w:numPr` overlays that retain producer attributes and children,
+focused `CT_Lvl` and `CT_NumLvl` order assertions, plus the corpus-wide
+"opens without repair" gate at M8 and M11.
 
 ### R6, raw-XML preservation against relationship remapping
 
@@ -93,7 +102,10 @@ what makes deep copy dangerous, because `r:id` attributes hide inside preserved
 blobs.
 
 *Mitigation*: `rewrite_rel_ids`, and `add_slide` synthesising rather than
-deep-copying so the common path never needs it.
+deep-copying so the common path never needs it. The Word facade scans
+relationship definitions by owner and identifier definitions by expanded XML
+name before it allocates. Authored DrawingML is remapped only on staged typed
+state, while imported raw owners and their identifiers remain unchanged.
 
 ### R7, scope
 
@@ -179,6 +191,31 @@ owner across F-243 through F-310 rather than several stories exposing
 uncoordinated XML fragments. Conformance tests inspect every owned part, reopen
 through `Document`, compare fresh layout, and require authored public-API
 content to report no unexplained unmodeled properties.
+
+The Word facade's private document identifier owner reserves related part,
+relationship, content-type, and XML identities together. Final-order
+canonicalization runs on a staged clone, so a collision or exhausted range
+cannot publish half of a package invariant.
+
+Style graph mutations use the same rule. Adding or updating one side of a
+legal paragraph and character link updates the reciprocal edge in the staged
+candidate. Missing targets, incompatible types, duplicate defaults, cycles,
+and live references abort before the document changes.
+
+Numbering graph mutations use staged definition and instance values. They
+preserve and expose imported paragraph-style links.
+`link_style_to_numbering` and `unlink_style_from_numbering` clone the complete
+document, validate both graphs and the exact reciprocal tuple, update the
+numbering-level link and style numbering properties together, serialize the
+candidate, and publish once. Failure leaves both parts and allocation state
+unchanged.
+
+Visible counters are keyed by concrete `numId` and level. This makes a new
+instance independent even when it shares an abstract definition. Microsoft
+Word 16.112.3 continues one captured shared-definition sequence across distinct
+instances, so that behavior is an intentional documented divergence. The
+pinned differential uses separate abstract definitions where both systems
+agree, and a focused regression guards the approved concrete-instance rule.
 
 ## Assumptions that would invalidate the plan if wrong
 

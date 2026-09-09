@@ -116,6 +116,13 @@ these fields. These are intentional pre-1.0 source breaks for the next stable
 family. Established `TextSegment` construction and layout entrypoints retain
 their existing shapes.
 
+The shared native `ChartData` input includes optional category-axis and
+value-axis titles plus a typed `Vec<RgbColor>` palette. `oxml-chart`, `rdocx`,
+and `rpptx` re-export the same `RgbColor`. `ChartData::default()` supplies empty
+optional styling fields for callers using update syntax. The added fields are
+an intentional pre-1.0 struct-literal break and add no Python, WASM, or CLI
+chart entrypoints.
+
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
 deterministic layouts live in separate
 `Mutex<Option<Arc<WordLayoutResult>>>` caches. One private normal-font engine
@@ -219,13 +226,41 @@ inheritance outside the limited ABI.
 
 The public `rdocx` facade is the common source for native, Python, WASM, and
 CLI consumers. Custom lists are created with `Document::add_list_definition`
-from up to nine `ListLevel` values. Each value selects a `ListNumberFormat` and
-an optional start number. Later slice entries are ignored because Word exposes
-exactly nine levels. Paragraph numbering stores an explicit list ID and a
-zero-based level from 0 through 8. Its in-place setters return `false` without
-mutation for a larger value. `Document::set_list_level` can redefine an
-existing level without rebuilding the document. A rejected redefinition is
-side-effect free.
+from up to nine `ListLevel` values. Each value can select any standard
+`ListNumberFormat` plus start, level text, suffix, alignment, indentation,
+marker run properties, legal numbering, restart, template code, and tentative
+state. The compatibility method still ignores entries after Word's ninth
+level. Paragraph numbering stores an explicit list ID and a zero-based level
+from 0 through 8. Its in-place setters return `false` without mutation for a
+larger value. `Document::set_list_level` can redefine an existing level without
+rebuilding the document. A rejected redefinition is side-effect free.
+
+Native Rust also exposes owned `NumberingDefinition`, `NumberingInstance`, and
+`NumberingLevelOverride` values plus fallible inspect, create, update, remove,
+and whole-graph validation operations. These operations preserve imported
+style links but do not mutate them independently.
+`Document::link_style_to_numbering` and
+`Document::unlink_style_from_numbering` are additive pre-1.0 native Rust APIs.
+They atomically mutate the paragraph style and effective numbering level for
+one exact style, `numId`, and level tuple. Python, WASM, and CLI bindings gain
+no numbering graph authoring surface.
+
+F-248 also adds public fields to the pre-1.0 native Rust projections.
+`ResolvedNumbering` exposes `number_current`, `number_level`,
+`number_level_without_text`, `number_level_has_ancestor`, `number_full`,
+`number_full_without_text`,
+`number_context`, `number_suffixes_without_text`, `num_id`, and the hidden
+`relative_to` method. `CT_PPr` exposes
+`num_ilvl_raw`, `num_id_raw`, `num_pr_extra_attributes`, `num_pr_extra_xml`,
+`numbering_revision_xml_positions`, and `numbering_revision_position` so typed
+numbering edits can retain exact producer XML. `NumberingState` exposes
+`restart_after_section_break`, and `CT_Numbering` exposes
+`restarts_after_section_break`. These additions can break exhaustive struct
+literals in pre-1.0 Rust consumers. They add no Python, WASM, or CLI surface.
+`WordLayoutResult` also exposes `paragraph_numbering`,
+`document_paragraph_numbering`, and `document_body_paragraph_numbering` as
+result-local native Rust numbering lookups. The latter two remain hidden from
+generated documentation but are still additive public Rust APIs.
 
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
 `Document::package_class` reads the exact main-part override.
@@ -236,6 +271,51 @@ provide bounded strict Flat OPC interchange through the same `Document` and
 `OpcPackage` owners. These are additive pre-1.0 native APIs. Python, WASM, and
 CLI bindings preserve opened class identity through their existing saves but
 gain no selector or Flat OPC entry point.
+
+Native Rust also exposes the additive pre-1.0 `WordCreationProfile` enum and
+`Document::new_with_profile`. `Minimal(WordPackageClass)` preserves the compact
+source-built graph. `WordCompatible(WordPackageClass)` owns the standard blank
+support parts, and `Document::new()` selects its DOCX form. Macro-capable
+profiles select package identity without manufacturing executable content.
+Python, WASM, and CLI construction continues through `Document::new()` and
+therefore receives the compatible DOCX default without a new selector surface.
+
+Native Rust re-exports `StyleType`. `StyleBuilder` authors paragraph,
+character, and table styles with inheritance, reciprocal links, next styles,
+UI flags, base properties, and conditional table regions. `add_style` is
+fallible in the pre-1.0 API. `set_style`, `remove_style`,
+`set_default_style`, and `validate_style_graph` use the same `Result` boundary.
+Builder clear operations remove optional links, UI metadata, base properties,
+and conditional regions during a staged update.
+Python, WASM, and CLI retain style package and render behavior without new
+style mutation entry points.
+
+Native Rust re-exports `CT_OfficeStyleSheet` and adds the concrete
+`FontDefinition`, `EmbeddedFont`, `EmbeddedFontKind`, and
+`FontEmbeddingLicense` values. `Document::set_theme`, `theme`,
+`set_language_defaults`, `fonts`, `set_font`, `remove_font`, `embed_font`, and
+`remove_embedded_font` form the additive pre-1.0 authoring surface. Embedding
+requires caller bytes, an explicit authorization value, a nonempty exact
+license identity without XML-normalized whitespace, and a valid OOXML font
+key. Python, WASM, and CLI gain no new binding in this story.
+
+Native Rust re-exports `CoreProperties`, `AppProperties`, `CustomProperty`,
+`CustomPropertyValue`, `Twips`, and the bounded settings value types. `Document`
+provides borrowed readers, staged setters, selective removals, and whole-part
+removals for these property families. Document variables and compatibility
+settings use stable string keys. Default tab stop retains exact integer twips.
+Python, WASM, and CLI receive preserved package behavior but do not gain new
+entry points.
+
+Native Word mutations share one private document identifier owner. Existing
+method signatures stay unchanged, but fallible operations can report imported,
+preserved, overflow, and pending-collision errors before publication. Save and
+byte serialization use a staged clone and assign authored relationship,
+bookmark, comment, drawing, numbering, part, and content-type identities in
+final recursive document order. `CT_Inline` and `CT_Anchor` expose their parsed
+`doc_pr_id` on the pre-1.0 Rust model so callers no longer receive an invented
+constant for a drawing. Python, WASM, and CLI gain the deterministic behavior
+through the native facade without adding binding methods.
 
 `Document::rebuild_toc()` is an additive pre-1.0 native Rust operation. It
 updates only supported existing main-story TOC fields with deterministic
@@ -814,16 +894,22 @@ intentional pre-1.0 Rust source breaks. Consumers that inspect positioned
 elements handle the existing multilingual variant for both Word and
 Presentation results.
 
-The next stable Rust family includes the numbering preservation model.
-`CT_Lvl`, `CT_AbstractNum`, `CT_Num`, and `CT_Numbering` expose raw XML state so
+The stable Rust numbering family includes complete standard number-format
+enums and the numbering preservation model. `CT_Lvl`, `CT_AbstractNum`,
+`CT_NumLvl`, `CT_Num`, and `CT_Numbering` expose typed and raw XML state so
 producer extensions survive typed mutations. `ST_NumberFormat::Other(String)`
-retains producer-defined tokens, so the enum is no longer `Copy` and `to_str`
-borrows its value. Full struct literals written against the prior pre-1.0 API
-must add the preservation fields, or callers should use the existing
-constructors. These are intentional pre-1.0 source breaks. Python, WASM, and
-CLI consumers continue through the package-preserving facade and do not
-construct these low-level structs. Existing Python import error mapping uses
-the generic `RdocxError` exception and gains no new exception type.
+retains producer-defined tokens, so the enum is not `Copy` and `to_str` borrows
+its value. Completing the exhaustive `ListNumberFormat` enum and extending
+`ListLevel` require exhaustive matches and full struct literals to be updated.
+Owned format tokens and level properties remove the former `Copy`
+implementations from both public types. `NumberingDefinition::levels` uses
+explicit `NumberingDefinitionLevel` entries so sparse imported `w:ilvl` values
+remain addressable. Full low-level struct literals must add the preservation
+fields or use the existing constructors. These are intentional pre-1.0 source
+breaks. Python, WASM, and CLI consumers continue through the
+package-preserving facade and do not construct these low-level structs.
+Existing Python import error mapping uses the generic `RdocxError` exception
+and gains no new exception type.
 
 The same intentional low-level pre-1.0 boundary includes retained document
 background children, linked drawing relationship ids, numbering style and

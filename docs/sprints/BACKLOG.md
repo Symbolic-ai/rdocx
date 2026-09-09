@@ -38,10 +38,10 @@ regenerated, never hand-edited.
 | M20, Fidelity at scale                         | 7  | 7 | 0 | 0  |
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
-| M23, From-scratch business documents           | 24 | 3 | 0 | 21 |
+| M23, From-scratch business documents           | 24 | 10 | 0 | 14 |
 | M24, Modern DOCX authoring completeness        | 47 | 0 | 0 | 47 |
-| X, Cross-cutting (opportunistic)            | 89 | 85 | 0 | 0  |
-| **Total** | **407** | **314** | **0** | **89** |
+| X, Cross-cutting (opportunistic)            | 92 | 88 | 0 | 0  |
+| **Total** | **410** | **324** | **0** | **82** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -455,13 +455,13 @@ regenerated, never hand-edited.
 | F-240 | Modern DOCX completeness audit and private corpus matrix | S70 | L | done |
 | F-241 | Public authoring conformance harness | S70 | L | done |
 | F-242 | Root README product and capability overview | S70 | M | done |
-| F-243 | Word-compatible fresh package profiles | S71 | L | pending |
-| F-244 | Corpus settings and document properties | S71 | L | pending |
-| F-245 | Corpus themes, font tables, and embedded fonts | S71 | L | pending |
-| F-246 | Corpus style authoring | S71 | L | pending |
-| F-247 | Complete numbering level and instance model | S71 | L | pending |
-| F-248 | Style-linked numbering, counters, TOC, and REF | S71 | L | pending |
-| F-249 | Deterministic package identifier allocation | S71 | M | pending |
+| F-243 | Word-compatible fresh package profiles | S71 | L | done |
+| F-244 | Corpus settings and document properties | S71 | L | done |
+| F-245 | Corpus themes, font tables, and embedded fonts | S71 | L | done |
+| F-246 | Corpus style authoring | S71 | L | done |
+| F-247 | Complete numbering level and instance model | S71 | L | done |
+| F-248 | Style-linked numbering, counters, TOC, and REF | S71 | L | done |
+| F-249 | Deterministic package identifier allocation | S71 | M | done |
 | F-250 | Ordered mutable section facade | S72 | L | pending |
 | F-251 | Complete section and page geometry | S72 | L | pending |
 | F-252 | Rich per-section headers and footers | S72 | L | pending |
@@ -626,4 +626,7 @@ regenerated, never hand-edited.
 | F-X084 | Narrow note-part paragraph cache invalidation | S70 | M | done |
 | F-X085 | Memoize restart body identities once per layout | S70 | M | done |
 | F-X086 | Provenance-safe restart after body-length changes | S70 | L | done |
+| F-X087 | Portable authored Word charts from PR 71 | S71 | L | done |
+| F-X088 | Verify and close Issue 69 after S70 fixes | S71 | S | done |
+| F-X089 | Capability-led README family | S71 | L | done |
 <!-- AUTOGEN:backlog-MX END -->

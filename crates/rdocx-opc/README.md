@@ -1,8 +1,16 @@
 # rdocx-opc
 
-`rdocx-opc` is a deprecated compatibility shim for the shared
-[`oxml-opc`](https://docs.rs/oxml-opc) package layer. Existing code can keep
-its old imports while migrating.
+`rdocx-opc` keeps existing Word package code compiling while it moves to
+[`oxml-opc`](https://docs.rs/oxml-opc). Every public item is an exact re-export,
+so migration changes the dependency and import path without changing package
+behavior.
+
+## Capabilities
+
+- Exact `oxml-opc` re-exports under the former crate name.
+- Existing `OpcPackage` imports continue to compile.
+- No added Word-specific package policy or forwarding layer.
+- A direct migration path for applications moving to the shared crate.
 
 ## Use it when
 

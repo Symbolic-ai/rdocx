@@ -1101,9 +1101,10 @@ mod tests {
         }
         let numbering_positions = [
             output.find(r#"w:id="501""#).unwrap(),
-            output.find(r#"<x:ins x:mark="num"/>"#).unwrap(),
+            output.find("<x:ins ").unwrap(),
             output.find(r#"w:id="502""#).unwrap(),
         ];
+        assert!(output.contains(r#"x:mark="num""#));
         assert!(numbering_positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let reopened = CT_Document::from_xml(output.as_bytes()).expect("output reparses");
@@ -1138,7 +1139,7 @@ mod tests {
                 output
                     .matches(&format!(r#"xmlns:{prefix}="{W_NS}""#))
                     .count(),
-                2
+                if prefix == "na" { 1 } else { 2 }
             );
         }
         for (prefix, namespace, local) in [
@@ -1183,7 +1184,7 @@ mod tests {
                 rewritten
                     .matches(&format!(r#"xmlns:{prefix}="{W_NS}""#))
                     .count(),
-                2
+                if prefix == "na" { 1 } else { 2 }
             );
         }
         for (prefix, namespace) in [

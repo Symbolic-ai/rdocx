@@ -1344,10 +1344,20 @@ business-document corpus.
 | F-247 | Complete numbering level and instance model | L |
 | F-248 | Style-linked numbering, counters, TOC, and REF | L |
 | F-249 | Deterministic package identifier allocation | M |
+| F-X087 | Portable authored Word charts from PR 71 | L |
+| F-X088 | Verify and close Issue 69 after S70 fixes | S |
+| F-X089 | Capability-led README family | L |
 
 F-243 and F-249 establish package identity before dependent parts are authored.
 F-245 precedes effective styles. F-247 precedes the two-sided style linkage and
 numbering consumers in F-248.
+
+F-X087 through F-X089 are user-approved scope exceptions that raise S71 from
+the usual maximum of seven F-IDs to ten. F-X087 hardens Kevin Brown's PR 71 on
+the sprint branch after F-245 and F-249. F-X088 verifies the completed S70
+Issue 69 mechanisms and closes the issue with contributor credit and reviewed
+evidence. F-X089 restores capability-led product and crate messaging while
+retaining compiled examples, package evidence, and honest boundaries.
 
 #### Sprint S72, Sections, stories, and content ownership
 

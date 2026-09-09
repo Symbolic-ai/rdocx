@@ -9,6 +9,7 @@ pub mod comments_extended;
 pub mod content_control;
 pub mod document;
 pub mod drawing;
+pub mod font_table;
 pub mod footnotes;
 pub mod glossary;
 pub mod header_footer;
@@ -33,7 +34,7 @@ pub use borders::{CT_BorderEdge, CT_PBdr, CT_TabStop, CT_Tabs};
 pub use content_control::{CT_DataBinding, CT_Sdt, CT_SdtPr, SdtContent, SdtType};
 pub use document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
 pub use math::{CT_OMath, CT_OMathPara, MathArgument, MathExpression, MathProperties, OfficeMath};
-pub use numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_Numbering, ST_NumberFormat};
+pub use numbering::{CT_AbstractNum, CT_Lvl, CT_Num, CT_NumLvl, CT_Numbering, ST_NumberFormat};
 pub use properties::{CT_PPr, CT_RPr};
 pub use revision::{CT_Revision, RevisionContent, RevisionKind};
 pub use shared::{

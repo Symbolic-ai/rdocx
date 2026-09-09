@@ -1,8 +1,16 @@
 # rdocx-layout
 
-`rdocx-layout` converts an assembled Word `LayoutInput` into positioned page
-frames. It owns DOCX style resolution, line breaking, table layout, and
-pagination.
+`rdocx-layout` turns semantic Word content into positioned pages. It resolves
+styles and numbering, shapes text, lays out tables and notes, paginates
+sections, and retains source provenance.
+
+## Capabilities
+
+- Word style, numbering, field, and paragraph resolution.
+- Line breaking, tables, footnotes, endnotes, sections, and pagination.
+- Deterministic bundled fonts plus system, embedded, and caller fonts.
+- Page-reference lookup and Word source provenance.
+- Shared `oxml-layout` output for downstream backends.
 
 ## Use it when
 
@@ -13,7 +21,8 @@ methods on [`rdocx::Document`](https://docs.rs/rdocx) instead.
 ## Relationship
 
 This crate converts Word-specific semantic input into the shared positioned
-model from `oxml-layout`. PDF and raster backends consume that model.
+model from `oxml-layout`. PDF and raster backends consume that model. It does
+not emit PDF or pixels itself.
 
 ## Example
 

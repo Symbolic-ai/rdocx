@@ -2254,10 +2254,11 @@ requirements match manifests, and every capability claim maps to the approved
 matrix.
 
 ### F-243, Word-compatible fresh package profiles (L)
-Extend `Document::new()` with deterministic DOCX, DOCM, DOTX, and DOTM creation
-profiles that own all required parts, content types, relationships, and package
-metadata without copying a template. Minimal output remains available as an
-explicit profile.
+`Document::new()` creates a deterministic Word-compatible DOCX package.
+`Document::new_with_profile` selects minimal or Word-compatible DOCX, DOCM,
+DOTX, and DOTM graphs that own their declared parts, content types,
+relationships, and package metadata without copying a template. Macro-capable
+profiles do not invent VBA, and minimal output remains explicit.
 **Depends on**: F-240.
 **Test gate**: round-trip. Each profile saves, reopens with the same identity,
 and passes strict package validation and the pinned no-repair check.
@@ -2265,17 +2266,22 @@ and passes strict package validation and the pinned no-repair check.
 ### F-244, Corpus settings and document properties (L)
 Author the settings, core properties, application properties, custom
 properties, document variables, compatibility facts, and defaults required by
-the private corpus. Values are typed, deterministic, and removable through the
-public facade.
-**Depends on**: F-243.
+the private corpus. The bounded settings set is compatibility settings, default
+tab stop, character spacing control, document variables, and theme font
+languages. Values are typed, deterministic, and removable through the public
+facade. Core, application, and custom properties use relationship-resolved
+package parts with selective custom-property and whole-part removal.
+**Depends on**: F-243, F-249.
 **Test gate**: round-trip. Every authored value survives save and reopen, and
 removal deletes only its owned package content.
 
 ### F-245, Corpus themes, font tables, and embedded fonts (L)
-Create and select the theme, font table, language defaults, font relationships,
-and licensed embedded-font parts required by the private documents. Font
-embedding remains caller-authorized and preserves exact licensing metadata.
-**Depends on**: F-243.
+The native facade creates and selects the shared DrawingML theme, language
+defaults, font-table records, font relationships, and licensed embedded-font
+parts required by the private documents. Font embedding accepts caller bytes
+only after explicit authorization, preserves the exact license identity, and
+uses the caller's OOXML font key for deterministic obfuscation and layout.
+**Depends on**: F-243, F-249.
 **Test gate**: differential. Public-authored theme and font resolution matches
 the pinned Word references in deterministic layout without system-font input.
 
@@ -2284,39 +2290,62 @@ Create, update, remove, and resolve the paragraph, character, and table styles
 used by the private corpus, including defaults, inheritance, linked and next
 styles, and conditional table regions. Style references are validated before a
 transaction publishes.
+The native facade uses fallible create, update, default-selection, removal, and
+validation operations over one staged style graph. Parser and serializer
+support includes the style UI and locking flags in schema order while retaining
+unmodelled XML.
 **Depends on**: F-243, F-245.
 **Test gate**: differential. The source-built style graph resolves to the same
 effective formatting and visible output as the sanitized Word oracle.
 
 ### F-247, Complete numbering level and instance model (L)
 Model and author full numbering levels and instances, including level text,
-paragraph-style links, suffix, alignment, indentation, marker properties,
-legal numbering, restart controls, level overrides, and start overrides. The
-public format type accepts the complete standard set, including `none`, without
-requiring raw XML.
-**Depends on**: F-243.
+suffix, alignment, indentation, marker properties, legal numbering, restart
+controls, level overrides, and start overrides. Imported paragraph-style links
+are typed, inspectable, and preserved. Their two-sided mutation belongs to
+F-248. The public format type accepts the complete standard set, including
+`none`, without requiring raw XML. Definition and instance CRUD validates the
+complete candidate graph before publishing.
+**Depends on**: F-243, F-249.
 **Test gate**: round-trip. Every typed level and override survives save and
 reopen with schema-correct order and reports no unmodeled properties when
 created solely through the public API.
 
 ### F-248, Style-linked numbering, counters, TOC, and REF (L)
-Provide one transactional operation that writes both the numbering-level style
-link and the style's numbering properties. Counter behavior covers independent
-instances, continuation, restarts, table cells, sections, suppression through
-`numId` zero, numbered TOC entries, and numbering-aware REF switches.
+The native facade provides atomic link and unlink operations that write the
+numbering-level style link and the style's numbering properties together.
+Result-local counters are keyed by concrete instance and level and cover
+continuation, overrides, restarts, table cells, sections, suppression through
+`numId` zero, numbered TOC entries, and numbering-aware REF switches. Distinct
+concrete instances start independently, including when they share an abstract
+definition. This is an intentional divergence from the captured Word 16.112.3
+shared-definition behavior.
 **Depends on**: F-246, F-247.
 **Test gate**: differential. Three-level numbered headings inside and outside
-tables match Word in body text, TOC entries, cross-references, and restart
-behavior.
+tables match Word 16.112.3 in body text, TOC entries, cross-references, and
+restart behavior. Twenty-seven exact Word records and three normalized TOC
+records are the semantic authority. The two-page 150 DPI Word PDF oracle
+requires at most one pixel of raster dimension difference, at least 0.95 paired
+ink coverage, at most 0.08 normalized ink bounding-edge delta, at most 0.27
+total variation across a 32-region ink distribution, and at most 0.04 row or
+column projection distance on every page. A synthetic five percent shift must
+exceed the projection threshold. The recorded minimum coverage is 0.983131.
+The recorded maximum edge delta is 0.062144, the maximum distribution delta is
+0.257661, and the maximum projection distance is 0.038314. The recorded minimum
+synthetic-shift distance is 0.049960.
 
 ### F-249, Deterministic package identifier allocation (M)
-Centralize deterministic allocation for relationships, bookmarks, comments,
-drawings, numbering definitions, numbering instances, parts, and content types.
-Allocation follows document order and detects imported or preserved collisions
-before mutation.
+The Word facade owns deterministic allocation for relationships, bookmarks,
+comments, drawings, numbering definitions, numbering instances, parts, and
+content types. Category scopes remain independent, relationships are scoped by
+source part, and allocation follows final recursive document order. Package
+open rejects duplicate normalized part names, content-type identities,
+relationship identifiers, and typed or preserved XML definitions. Mutations
+and serialization publish only a complete staged candidate.
 **Depends on**: F-243.
 **Test gate**: regression. Equivalent construction orders produce the declared
-stable identifiers and repeated saves are byte-identical.
+stable identifiers, repeated saves are byte-identical, and collision or
+overflow failures are atomic.
 
 ### F-250, Ordered mutable section facade (L)
 Expose every section in document order with stable lookup, insertion, removal,
@@ -4530,6 +4559,109 @@ equal source paths, keeps only contiguous prefix page identity, and fails if the
 full-pagination veto is restored or stale tail provenance is reused. Enter,
 adjacent merge, and multi-block selection deletion carry the same bounded and
 exact sourced contract.
+
+### F-X087, Portable authored Word charts from PR 71 (L)
+
+Integrate Kevin Brown's PR 71 contribution as a hardened S71 scope exception.
+Authored Word charts remain editable across Microsoft Word and Apple Pages
+without image flattening. Typed axis titles, explicit visible axes, value-axis
+number formats, generic RGB palettes, category-point colours, pie and doughnut
+legends, percentage labels, explicit doughnut holes, and optional numeric-cache
+format omission serialize in schema order. A chart gains a
+relationship-owned Office theme only when no valid theme exists. A related
+theme is valid only when its target exists, has the theme content type, and
+parses as a DrawingML theme.
+
+The Word mutation stages the complete `Document`, typed theme state, package,
+and deterministic identifier owner before one commit. `RgbColor` is re-exported
+through `oxml-chart`, `rdocx`, and `rpptx`. Preserve Kevin Brown's contribution
+credit and do not import the PR's stale S65 ledgers or its now-occupied F-X077
+identity.
+
+**Depends on**: F-158, F-245, F-249.
+**Test gate**: differential. At the reviewed S71 implementation SHA,
+source-built line, bar, pie, and doughnut documents save and reopen with exact
+chart and editable-workbook semantics. The candidate has SHA-256
+`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`.
+Microsoft Word 16.112.3 build
+16.112.26083020 opens the exact candidate without repair. Pages Creator Studio
+15.1.1 build 7044.0.273 renders the authored axes, colours, legend, percentages,
+and doughnut shape, then exports a DOCX whose chart and workbook data remain
+exact across all four editable workbooks. Each run records the export digest,
+while the gate compares parsed semantics because Pages recalculates manual
+chart layout coordinates and drawing extents between exports.
+Malformed correctly typed themes fail or are replaced on a staged candidate
+without changing retained source bytes. The hash harness remains unchanged at
+49 of 49.
+
+### F-X088, Verify and close Issue 69 after S70 fixes (S)
+
+Verify the live Issue 69 report against the three completed S70 fixes and close
+the issue only after their combined evidence passes on the reviewed S71 SHA.
+F-X084 owns note-reference-aware paragraph cache invalidation. F-X085 owns the
+once-per-layout restart identity memo. F-X086 owns provenance-safe restart for
+insert, delete, Enter, merge, and selection-delete body-length changes. Preserve
+`@emptinessform`'s report and offered commits
+`4777a74167495a5116289e1f905dfd9ad4dbe807`,
+`eff0ea0c28b5eaf08180b09b58e0c0f486b7433b`,
+`9e48bc86876c294b8daa314e577e84b6fcd7ac97`, and
+`c8315b92857c951146fc866cd044b214194a09a8` in the next stable release
+contribution inventory.
+
+The closure evidence credits the reporter, links the six focused regressions,
+states that v0.13.1 remains affected, and says the fixes will ship in the next
+stable release without promising a date. The reporter fork contains no
+committed timing harness. The qualified temporary reconstruction uses exact
+v0.13.1 and S71 source archives, release mode, deterministic bundled fonts, the
+reported 700 four-line paragraph and 3 by 3 table workload, a 63-page prime,
+three positions, warmup, and alternating measured rounds. It reports min and
+median times plus paragraph-cache and page-layout work, and distinguishes direct
+engine model mutation on macOS from the reporter's Windows editor environment.
+
+**Depends on**: F-X084, F-X085, F-X086.
+**Test gate**: regression, passed at reviewed S71 SHA
+`667416b1b54968b1524d57232c44f73a175fd27a`. All six focused
+deterministic-font regressions passed, the complete workspace gate passed, and
+the 49-entry hash harness remained unchanged. F-X084 through F-X086 are present
+on S71 and absent from v0.13.1. In the 21-sample-per-operation timing
+comparison, all S71 medians are at most 22.269 milliseconds. Footnote insertion
+falls from a 48.157 millisecond v0.13.1 median to 14.688 milliseconds on S71,
+and footnote deletion falls from 52.845 to 22.269 milliseconds. Both note edits
+change from zero paragraph-cache hits and 700 builds to 699 hits and one build.
+The authenticated evidence credits `@emptinessform`, preserves all four offered
+commits, records the environment caveats, and states that the fixes will be in
+the next stable release without a date. Issue 69 is closed as completed at
+<https://github.com/tensorbee/rdocx/issues/69#issuecomment-5592205748>.
+
+### F-X089, Capability-led README family (L)
+
+The root README is the product front page and every crate-local README uses the
+same outcome-first treatment. The root page leads with the complete native
+document workflow, a seven-row implemented-outcome summary, working examples,
+and a dated, evidence-backed comparison with relevant Rust and cross-language
+alternatives. Exact property boundaries remain available through the canonical
+capability matrix without leading with internal delivery classifications or
+sprint state.
+
+Each of the 26 crate-local documents explains the result its consumer can
+achieve, at least three implemented capabilities, when to choose it, its place
+in the workspace, and one checked example in the consumer's language or command
+surface. Deprecated shims and unpublished support crates remain labelled
+accurately, but status warnings do not replace the value proposition. Claims
+come from current public APIs, package metadata, compiled examples, and
+reviewed official comparison sources. Volatile popularity, price, size,
+memory, and speed claims remain excluded unless a dated reproducible
+measurement is checked into the repository.
+
+**Depends on**: F-242, F-X009.
+**Test gate**: regression. `python3 scripts/readme_doctests.py` compiles all 23
+Rust examples across the 21 Rust-library READMEs, validates the CLI, Python, and
+JavaScript snippets, checks versions and local links for all 27 package
+documents, verifies the capability-led section contract, resolves the approved
+official comparison sources in focused network mode, rejects extra rows,
+duplicate evidence, or a broadened uniqueness conclusion, binds security claims
+to default-off Cargo features, and proves every one of the 22 publishable
+archives contains its byte-identical declared README.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

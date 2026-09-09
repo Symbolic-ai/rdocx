@@ -5399,13 +5399,12 @@ mod tests {
     fn odt_writer_honors_direct_numbering_cancellation() {
         let mut document = Document::new();
         let list = document.add_list_definition(&[ListLevel::bullet()]);
-        document.add_style(
-            crate::StyleBuilder::paragraph("Numbered", "Numbered").paragraph_properties(CT_PPr {
-                num_id: Some(list),
-                num_ilvl: Some(0),
-                ..Default::default()
-            }),
-        );
+        document
+            .add_style(crate::StyleBuilder::paragraph("Numbered", "Numbered"))
+            .unwrap();
+        document
+            .link_style_to_numbering("Numbered", list, 0)
+            .unwrap();
         let mut paragraph = document.add_paragraph("not a list");
         paragraph.set_style("Numbered");
         paragraph.set_numbering(0, 0);
@@ -6291,14 +6290,16 @@ mod tests {
     #[test]
     fn odt_writer_diagnoses_direct_and_inherited_distributed_alignment() {
         let mut document = Document::new();
-        document.add_style(
-            crate::StyleBuilder::paragraph("Distributed", "Distributed").paragraph_properties(
-                CT_PPr {
-                    jc: Some(ST_Jc::Distribute),
-                    ..Default::default()
-                },
-            ),
-        );
+        document
+            .add_style(
+                crate::StyleBuilder::paragraph("Distributed", "Distributed").paragraph_properties(
+                    CT_PPr {
+                        jc: Some(ST_Jc::Distribute),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .unwrap();
         document.add_paragraph("direct");
         let BodyContent::Paragraph(direct) = &mut document.document.body.content[0] else {
             unreachable!();
@@ -6370,26 +6371,31 @@ mod tests {
     #[test]
     fn odt_writer_materializes_effective_formatting_and_whitespace() {
         let mut document = Document::new();
-        document.add_style(
-            crate::StyleBuilder::paragraph("WriterStyle", "Writer Style").run_properties(CT_RPr {
-                font_ascii: Some("Liberation Serif".to_owned()),
-                font_hansi: Some("Liberation Serif".to_owned()),
-                font_east_asia: Some("Liberation Serif".to_owned()),
-                font_cs: Some("Liberation Serif".to_owned()),
-                bold: Some(true),
-                sz: Some(rdocx_oxml::units::HalfPoint::from_pt(13.0)),
-                sz_cs: Some(rdocx_oxml::units::HalfPoint::from_pt(13.0)),
-                ..Default::default()
-            }),
-        );
-        document.add_style(
-            crate::StyleBuilder::character("WriterCharacter", "Writer Character").run_properties(
-                CT_RPr {
-                    italic: Some(true),
-                    ..Default::default()
-                },
-            ),
-        );
+        document
+            .add_style(
+                crate::StyleBuilder::paragraph("WriterStyle", "Writer Style").run_properties(
+                    CT_RPr {
+                        font_ascii: Some("Liberation Serif".to_owned()),
+                        font_hansi: Some("Liberation Serif".to_owned()),
+                        font_east_asia: Some("Liberation Serif".to_owned()),
+                        font_cs: Some("Liberation Serif".to_owned()),
+                        bold: Some(true),
+                        sz: Some(rdocx_oxml::units::HalfPoint::from_pt(13.0)),
+                        sz_cs: Some(rdocx_oxml::units::HalfPoint::from_pt(13.0)),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .unwrap();
+        document
+            .add_style(
+                crate::StyleBuilder::character("WriterCharacter", "Writer Character")
+                    .run_properties(CT_RPr {
+                        italic: Some(true),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
         let mut paragraph = document.add_paragraph("");
         paragraph.set_style("WriterStyle");
         paragraph.set_alignment(Alignment::Center);
@@ -6616,16 +6622,17 @@ mod tests {
         assert_eq!(reopened.paragraph(0).unwrap().numbering().unwrap().1, 8);
 
         let mut inherited = Document::new();
-        let inherited_list = inherited.add_list_definition(&[ListLevel::decimal()]);
-        inherited.add_style(
-            crate::StyleBuilder::paragraph("InheritedList", "Inherited List").paragraph_properties(
-                CT_PPr {
-                    num_id: Some(inherited_list),
-                    num_ilvl: Some(1),
-                    ..Default::default()
-                },
-            ),
-        );
+        let inherited_list =
+            inherited.add_list_definition(&[ListLevel::decimal(), ListLevel::decimal()]);
+        inherited
+            .add_style(crate::StyleBuilder::paragraph(
+                "InheritedList",
+                "Inherited List",
+            ))
+            .unwrap();
+        inherited
+            .link_style_to_numbering("InheritedList", inherited_list, 1)
+            .unwrap();
         inherited
             .add_paragraph("styled list")
             .set_style("InheritedList");
@@ -6712,21 +6719,23 @@ mod tests {
     #[test]
     fn odt_writer_reports_inherited_losses_and_normalizes_crlf() {
         let mut document = Document::new();
-        document.add_style(
-            crate::StyleBuilder::paragraph("LossyStyle", "Lossy Style")
-                .paragraph_properties(CT_PPr {
-                    keep_next: Some(true),
-                    ..Default::default()
-                })
-                .run_properties(CT_RPr {
-                    font_ascii: Some("Liberation Serif".to_owned()),
-                    font_hansi: Some("Liberation Serif".to_owned()),
-                    font_east_asia: Some("Liberation Serif".to_owned()),
-                    font_cs: Some("Liberation Serif".to_owned()),
-                    caps: Some(true),
-                    ..Default::default()
-                }),
-        );
+        document
+            .add_style(
+                crate::StyleBuilder::paragraph("LossyStyle", "Lossy Style")
+                    .paragraph_properties(CT_PPr {
+                        keep_next: Some(true),
+                        ..Default::default()
+                    })
+                    .run_properties(CT_RPr {
+                        font_ascii: Some("Liberation Serif".to_owned()),
+                        font_hansi: Some("Liberation Serif".to_owned()),
+                        font_east_asia: Some("Liberation Serif".to_owned()),
+                        font_cs: Some("Liberation Serif".to_owned()),
+                        caps: Some(true),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
         let mut paragraph = document.add_paragraph("a\r\nb\rc\n");
         paragraph.set_style("LossyStyle");
 

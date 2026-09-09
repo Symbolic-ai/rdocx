@@ -1,5 +1,6 @@
 //! Word document settings and document-protection metadata.
 
+use oxml_core::Twips;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
@@ -137,11 +138,58 @@ pub struct DocumentVariable {
     pub value: String,
 }
 
+/// One `w:compatSetting` entry from the document compatibility settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompatibilitySetting {
+    pub name: String,
+    pub uri: String,
+    pub value: String,
+}
+
+/// Document-wide character spacing compression behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterSpacingControl {
+    DoNotCompress,
+    CompressPunctuation,
+    CompressPunctuationAndJapaneseKana,
+}
+
+impl CharacterSpacingControl {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "doNotCompress" => Some(Self::DoNotCompress),
+            "compressPunctuation" => Some(Self::CompressPunctuation),
+            "compressPunctuationAndJapaneseKana" => Some(Self::CompressPunctuationAndJapaneseKana),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DoNotCompress => "doNotCompress",
+            Self::CompressPunctuation => "compressPunctuation",
+            Self::CompressPunctuationAndJapaneseKana => "compressPunctuationAndJapaneseKana",
+        }
+    }
+}
+
+/// Default document theme languages from `w:themeFontLang`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ThemeFontLanguage {
+    pub latin: Option<String>,
+    pub east_asia: Option<String>,
+    pub bidi: Option<String>,
+}
+
 /// The typed contents of a Word settings part.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CT_Settings {
     document_protection: Option<DocumentProtection>,
     document_variables: Vec<DocumentVariable>,
+    compatibility_settings: Vec<CompatibilitySetting>,
+    default_tab_stop: Option<Twips>,
+    character_spacing_control: Option<CharacterSpacingControl>,
+    theme_font_language: Option<ThemeFontLanguage>,
     automatic_hyphenation: Option<bool>,
     math_properties: Option<MathProperties>,
     /// Parsed parts keep their complete producer bytes as the serialization
@@ -163,12 +211,21 @@ impl CT_Settings {
         let mut protection = None;
         let mut protection_count = 0usize;
         let mut document_variables = Vec::new();
+        let mut compatibility_settings = Vec::new();
+        let mut default_tab_stop = None;
+        let mut default_tab_stop_count = 0usize;
+        let mut character_spacing_control = None;
+        let mut character_spacing_control_count = 0usize;
+        let mut theme_font_language = None;
+        let mut theme_font_language_count = 0usize;
         let mut automatic_hyphenation = None;
         let mut automatic_hyphenation_count = 0usize;
         let mut math_properties = None;
         let mut math_properties_count = 0usize;
         let mut doc_vars_depth = None;
         let mut doc_vars_prefixes = Vec::new();
+        let mut compat_depth = None;
+        let mut compat_prefixes = Vec::new();
         let mut saw_root = false;
         let mut depth = 0usize;
         let mut buffer = Vec::new();
@@ -178,6 +235,8 @@ impl CT_Settings {
                 Event::Start(element) => {
                     let inherited = if doc_vars_depth.is_some() {
                         &doc_vars_prefixes
+                    } else if compat_depth.is_some() {
+                        &compat_prefixes
                     } else {
                         &root_prefixes
                     };
@@ -221,6 +280,36 @@ impl CT_Settings {
                             automatic_hyphenation_count += 1;
                             automatic_hyphenation = parse_toggle(&element, &prefixes)?;
                         } else if depth == 1
+                            && is_word_element(
+                                element.name().as_ref(),
+                                b"defaultTabStop",
+                                &prefixes,
+                            )
+                        {
+                            default_tab_stop_count += 1;
+                            default_tab_stop = parse_twips(&element, &prefixes);
+                        } else if depth == 1
+                            && is_word_element(
+                                element.name().as_ref(),
+                                b"characterSpacingControl",
+                                &prefixes,
+                            )
+                        {
+                            character_spacing_control_count += 1;
+                            character_spacing_control =
+                                parse_character_spacing(&element, &prefixes);
+                        } else if depth == 1
+                            && is_word_element(element.name().as_ref(), b"themeFontLang", &prefixes)
+                        {
+                            theme_font_language_count += 1;
+                            theme_font_language =
+                                Some(parse_theme_font_language(&element, &prefixes)?);
+                        } else if depth == 1
+                            && is_word_element(element.name().as_ref(), b"compat", &prefixes)
+                        {
+                            compat_depth = Some(depth + 1);
+                            compat_prefixes = prefixes.clone();
+                        } else if depth == 1
                             && is_word_element(element.name().as_ref(), b"docVars", &prefixes)
                         {
                             doc_vars_depth = Some(depth + 1);
@@ -230,6 +319,11 @@ impl CT_Settings {
                             && let Some(variable) = parse_document_variable(&element, &prefixes)
                         {
                             document_variables.push(variable);
+                        } else if compat_depth == Some(depth)
+                            && is_word_element(element.name().as_ref(), b"compatSetting", &prefixes)
+                            && let Some(setting) = parse_compatibility_setting(&element, &prefixes)
+                        {
+                            compatibility_settings.push(setting);
                         }
                         depth += 1;
                     }
@@ -237,6 +331,8 @@ impl CT_Settings {
                 Event::Empty(element) => {
                     let inherited = if doc_vars_depth.is_some() {
                         &doc_vars_prefixes
+                    } else if compat_depth.is_some() {
+                        &compat_prefixes
                     } else {
                         &root_prefixes
                     };
@@ -269,17 +365,45 @@ impl CT_Settings {
                     {
                         automatic_hyphenation_count += 1;
                         automatic_hyphenation = parse_toggle(&element, &prefixes)?;
+                    } else if depth == 1
+                        && is_word_element(element.name().as_ref(), b"defaultTabStop", &prefixes)
+                    {
+                        default_tab_stop_count += 1;
+                        default_tab_stop = parse_twips(&element, &prefixes);
+                    } else if depth == 1
+                        && is_word_element(
+                            element.name().as_ref(),
+                            b"characterSpacingControl",
+                            &prefixes,
+                        )
+                    {
+                        character_spacing_control_count += 1;
+                        character_spacing_control = parse_character_spacing(&element, &prefixes);
+                    } else if depth == 1
+                        && is_word_element(element.name().as_ref(), b"themeFontLang", &prefixes)
+                    {
+                        theme_font_language_count += 1;
+                        theme_font_language = Some(parse_theme_font_language(&element, &prefixes)?);
                     } else if doc_vars_depth == Some(depth)
                         && is_word_element(element.name().as_ref(), b"docVar", &prefixes)
                         && let Some(variable) = parse_document_variable(&element, &prefixes)
                     {
                         document_variables.push(variable);
+                    } else if compat_depth == Some(depth)
+                        && is_word_element(element.name().as_ref(), b"compatSetting", &prefixes)
+                        && let Some(setting) = parse_compatibility_setting(&element, &prefixes)
+                    {
+                        compatibility_settings.push(setting);
                     }
                 }
                 Event::End(_) if depth > 0 => {
                     if doc_vars_depth == Some(depth) {
                         doc_vars_depth = None;
                         doc_vars_prefixes.clear();
+                    }
+                    if compat_depth == Some(depth) {
+                        compat_depth = None;
+                        compat_prefixes.clear();
                     }
                     depth -= 1;
                 }
@@ -301,9 +425,22 @@ impl CT_Settings {
         if math_properties_count != 1 {
             math_properties = None;
         }
+        if default_tab_stop_count != 1 {
+            default_tab_stop = None;
+        }
+        if character_spacing_control_count != 1 {
+            character_spacing_control = None;
+        }
+        if theme_font_language_count != 1 {
+            theme_font_language = None;
+        }
         Ok(Self {
             document_protection: protection,
             document_variables,
+            compatibility_settings,
+            default_tab_stop,
+            character_spacing_control,
+            theme_font_language,
             automatic_hyphenation,
             math_properties,
             source_xml: Some(xml.to_vec()),
@@ -318,6 +455,200 @@ impl CT_Settings {
     /// Return every valid document variable in package order.
     pub fn document_variables(&self) -> &[DocumentVariable] {
         &self.document_variables
+    }
+
+    pub fn document_variable(&self, name: &str) -> Option<&str> {
+        self.document_variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .map(|variable| variable.value.as_str())
+    }
+
+    pub fn set_document_variable(&mut self, name: String, value: String) -> Result<()> {
+        if let Some(index) = self
+            .document_variables
+            .iter()
+            .position(|variable| variable.name == name)
+        {
+            self.document_variables[index].value = value;
+            let mut occurrence = 0usize;
+            self.document_variables.retain(|variable| {
+                if variable.name != name {
+                    return true;
+                }
+                occurrence += 1;
+                occurrence == 1
+            });
+        } else {
+            self.document_variables
+                .push(DocumentVariable { name, value });
+        }
+        if let Some(source) = &self.source_xml {
+            self.source_xml = Some(rewrite_group_setting(
+                source,
+                b"docVars",
+                b"docVar",
+                write_document_variables(&self.document_variables)?,
+            )?);
+        }
+        Ok(())
+    }
+
+    pub fn remove_document_variable(&mut self, name: &str) -> Result<Option<DocumentVariable>> {
+        let Some(removed) = self
+            .document_variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        self.document_variables
+            .retain(|variable| variable.name != name);
+        if let Some(source) = &self.source_xml {
+            self.source_xml = Some(rewrite_group_setting(
+                source,
+                b"docVars",
+                b"docVar",
+                write_document_variables(&self.document_variables)?,
+            )?);
+        }
+        Ok(Some(removed))
+    }
+
+    pub fn compatibility_settings(&self) -> &[CompatibilitySetting] {
+        &self.compatibility_settings
+    }
+
+    pub fn set_compatibility_setting(&mut self, setting: CompatibilitySetting) -> Result<()> {
+        if let Some(index) = self
+            .compatibility_settings
+            .iter()
+            .position(|existing| existing.name == setting.name && existing.uri == setting.uri)
+        {
+            self.compatibility_settings[index] = setting.clone();
+            let mut occurrence = 0usize;
+            self.compatibility_settings.retain(|existing| {
+                if existing.name != setting.name || existing.uri != setting.uri {
+                    return true;
+                }
+                occurrence += 1;
+                occurrence == 1
+            });
+        } else {
+            self.compatibility_settings.push(setting);
+        }
+        if let Some(source) = &self.source_xml {
+            self.source_xml = Some(rewrite_group_setting(
+                source,
+                b"compat",
+                b"compatSetting",
+                write_compatibility_settings(&self.compatibility_settings)?,
+            )?);
+        }
+        Ok(())
+    }
+
+    pub fn remove_compatibility_setting(
+        &mut self,
+        name: &str,
+        uri: &str,
+    ) -> Result<Option<CompatibilitySetting>> {
+        let Some(removed) = self
+            .compatibility_settings
+            .iter()
+            .find(|setting| setting.name == name && setting.uri == uri)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        self.compatibility_settings
+            .retain(|setting| setting.name != name || setting.uri != uri);
+        if let Some(source) = &self.source_xml {
+            self.source_xml = Some(rewrite_group_setting(
+                source,
+                b"compat",
+                b"compatSetting",
+                write_compatibility_settings(&self.compatibility_settings)?,
+            )?);
+        }
+        Ok(Some(removed))
+    }
+
+    pub fn default_tab_stop(&self) -> Option<Twips> {
+        self.default_tab_stop
+    }
+
+    pub fn set_default_tab_stop(&mut self, value: Twips) -> Result<()> {
+        if value.0 < 0 {
+            return Err(OxmlError::InvalidValue(
+                "default tab stop must be non-negative twips".to_owned(),
+            ));
+        }
+        let replacement = write_valued_setting("w:defaultTabStop", &value.0.to_string())?;
+        self.rewrite_scalar(b"defaultTabStop", replacement)?;
+        self.default_tab_stop = Some(value);
+        Ok(())
+    }
+
+    pub fn remove_default_tab_stop(&mut self) -> Result<Option<Twips>> {
+        let removed = self.default_tab_stop.take();
+        self.rewrite_scalar(b"defaultTabStop", Vec::new())?;
+        Ok(removed)
+    }
+
+    pub fn character_spacing_control(&self) -> Option<CharacterSpacingControl> {
+        self.character_spacing_control
+    }
+
+    pub fn set_character_spacing_control(&mut self, value: CharacterSpacingControl) -> Result<()> {
+        let replacement = write_valued_setting("w:characterSpacingControl", value.as_str())?;
+        self.rewrite_scalar(b"characterSpacingControl", replacement)?;
+        self.character_spacing_control = Some(value);
+        Ok(())
+    }
+
+    pub fn remove_character_spacing_control(&mut self) -> Result<Option<CharacterSpacingControl>> {
+        let removed = self.character_spacing_control.take();
+        self.rewrite_scalar(b"characterSpacingControl", Vec::new())?;
+        Ok(removed)
+    }
+
+    pub fn theme_font_language(&self) -> Option<&ThemeFontLanguage> {
+        self.theme_font_language.as_ref()
+    }
+
+    /// Return whether the model has no typed or retained settings content.
+    pub fn is_empty(&self) -> bool {
+        self.document_protection.is_none()
+            && self.document_variables.is_empty()
+            && self.compatibility_settings.is_empty()
+            && self.default_tab_stop.is_none()
+            && self.character_spacing_control.is_none()
+            && self.theme_font_language.is_none()
+            && self.automatic_hyphenation.is_none()
+            && self.math_properties.is_none()
+            && self.source_xml.is_none()
+    }
+
+    pub fn set_theme_font_language(&mut self, value: ThemeFontLanguage) -> Result<()> {
+        let replacement = write_theme_font_language(&value)?;
+        self.rewrite_scalar(b"themeFontLang", replacement)?;
+        self.theme_font_language = Some(value);
+        Ok(())
+    }
+
+    pub fn remove_theme_font_language(&mut self) -> Result<Option<ThemeFontLanguage>> {
+        let removed = self.theme_font_language.take();
+        self.rewrite_scalar(b"themeFontLang", Vec::new())?;
+        Ok(removed)
+    }
+
+    fn rewrite_scalar(&mut self, local: &[u8], replacement: Vec<u8>) -> Result<()> {
+        if let Some(source) = &self.source_xml {
+            self.source_xml = Some(rewrite_top_level_setting(source, local, &replacement)?);
+        }
+        Ok(())
     }
 
     /// Return whether Word automatic hyphenation is enabled.
@@ -371,11 +702,42 @@ impl CT_Settings {
         if let Some(protection) = &self.document_protection {
             write_document_protection(&mut writer, protection)?;
         }
+        if let Some(value) = self.default_tab_stop {
+            writer.get_mut().extend_from_slice(&write_valued_setting(
+                "w:defaultTabStop",
+                &value.0.to_string(),
+            )?);
+        }
         if let Some(enabled) = self.automatic_hyphenation {
             write_toggle(&mut writer, "w:autoHyphenation", enabled)?;
         }
+        if let Some(value) = self.character_spacing_control {
+            writer.get_mut().extend_from_slice(&write_valued_setting(
+                "w:characterSpacingControl",
+                value.as_str(),
+            )?);
+        }
+        if !self.compatibility_settings.is_empty() {
+            writer.write_event(Event::Start(BytesStart::new("w:compat")))?;
+            writer
+                .get_mut()
+                .extend_from_slice(&write_compatibility_settings(&self.compatibility_settings)?);
+            writer.write_event(Event::End(BytesEnd::new("w:compat")))?;
+        }
+        if !self.document_variables.is_empty() {
+            writer.write_event(Event::Start(BytesStart::new("w:docVars")))?;
+            writer
+                .get_mut()
+                .extend_from_slice(&write_document_variables(&self.document_variables)?);
+            writer.write_event(Event::End(BytesEnd::new("w:docVars")))?;
+        }
         if let Some(properties) = &self.math_properties {
             properties.write_xml(&mut writer)?;
+        }
+        if let Some(language) = &self.theme_font_language {
+            writer
+                .get_mut()
+                .extend_from_slice(&write_theme_font_language(language)?);
         }
         writer.write_event(Event::End(BytesEnd::new("w:settings")))?;
         Ok(writer.into_inner())
@@ -386,6 +748,430 @@ fn capture_empty_element(element: &BytesStart<'_>) -> Result<Vec<u8>> {
     let mut raw = Vec::new();
     Writer::new(&mut raw).write_event(Event::Empty(element.to_owned().into_owned()))?;
     Ok(raw)
+}
+
+fn parse_twips(element: &BytesStart<'_>, prefixes: &[String]) -> Option<Twips> {
+    word_attribute(element, b"val", prefixes)
+        .ok()
+        .flatten()?
+        .parse::<i32>()
+        .ok()
+        .filter(|value| *value >= 0)
+        .map(Twips)
+}
+
+fn parse_character_spacing(
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Option<CharacterSpacingControl> {
+    CharacterSpacingControl::parse(&word_attribute(element, b"val", prefixes).ok().flatten()?)
+}
+
+fn parse_theme_font_language(
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<ThemeFontLanguage> {
+    Ok(ThemeFontLanguage {
+        latin: word_attribute(element, b"val", prefixes)?,
+        east_asia: word_attribute(element, b"eastAsia", prefixes)?,
+        bidi: word_attribute(element, b"bidi", prefixes)?,
+    })
+}
+
+fn parse_compatibility_setting(
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Option<CompatibilitySetting> {
+    Some(CompatibilitySetting {
+        name: word_attribute(element, b"name", prefixes).ok().flatten()?,
+        uri: word_attribute(element, b"uri", prefixes).ok().flatten()?,
+        value: word_attribute(element, b"val", prefixes).ok().flatten()?,
+    })
+}
+
+fn write_valued_setting(name: &str, value: &str) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    let mut element = BytesStart::new(name);
+    element.push_attribute(("w:val", value));
+    writer.write_event(Event::Empty(element))?;
+    Ok(writer.into_inner())
+}
+
+fn write_theme_font_language(language: &ThemeFontLanguage) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    let mut element = BytesStart::new("w:themeFontLang");
+    if let Some(value) = &language.latin {
+        element.push_attribute(("w:val", value.as_str()));
+    }
+    if let Some(value) = &language.east_asia {
+        element.push_attribute(("w:eastAsia", value.as_str()));
+    }
+    if let Some(value) = &language.bidi {
+        element.push_attribute(("w:bidi", value.as_str()));
+    }
+    writer.write_event(Event::Empty(element))?;
+    Ok(writer.into_inner())
+}
+
+fn write_document_variables(variables: &[DocumentVariable]) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    for variable in variables {
+        let mut element = BytesStart::new("w:docVar");
+        element.push_attribute(("w:name", variable.name.as_str()));
+        element.push_attribute(("w:val", variable.value.as_str()));
+        writer.write_event(Event::Empty(element))?;
+    }
+    Ok(writer.into_inner())
+}
+
+fn write_compatibility_settings(settings: &[CompatibilitySetting]) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    for setting in settings {
+        let mut element = BytesStart::new("w:compatSetting");
+        element.push_attribute(("w:name", setting.name.as_str()));
+        element.push_attribute(("w:uri", setting.uri.as_str()));
+        element.push_attribute(("w:val", setting.value.as_str()));
+        writer.write_event(Event::Empty(element))?;
+    }
+    Ok(writer.into_inner())
+}
+
+fn rewrite_group_setting(
+    source: &[u8],
+    group_local: &[u8],
+    child_local: &[u8],
+    modeled_children: Vec<u8>,
+) -> Result<Vec<u8>> {
+    let existing = find_top_level_settings(source, group_local)?;
+    let replacement = if existing.is_empty() {
+        if modeled_children.is_empty() {
+            Vec::new()
+        } else {
+            let group_name = format!("w:{}", String::from_utf8_lossy(group_local));
+            let mut writer = Writer::new(Vec::new());
+            writer.write_event(Event::Start(BytesStart::new(&group_name)))?;
+            writer.get_mut().extend_from_slice(&modeled_children);
+            writer.write_event(Event::End(BytesEnd::new(&group_name)))?;
+            writer.into_inner()
+        }
+    } else {
+        let mut replacement = Vec::new();
+        for (index, (raw, inherited_prefixes)) in existing.into_iter().enumerate() {
+            replacement.extend_from_slice(&rewrite_group_children(
+                &raw,
+                child_local,
+                if index == 0 { &modeled_children } else { &[] },
+                &inherited_prefixes,
+            )?);
+        }
+        replacement
+    };
+    rewrite_top_level_setting(source, group_local, &replacement)
+}
+
+fn find_top_level_settings(source: &[u8], local: &[u8]) -> Result<Vec<(Vec<u8>, Vec<String>)>> {
+    let mut reader = Reader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut root_prefixes = Vec::new();
+    let mut matches = Vec::new();
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if depth == 0 => {
+                root_prefixes = word_prefixes_at(&element, &[])?;
+                depth = 1;
+            }
+            Event::Start(element) if depth == 1 => {
+                let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                if is_word_element(element.name().as_ref(), local, &prefixes) {
+                    matches.push((
+                        capture_element(&mut reader, &element)?,
+                        root_prefixes.clone(),
+                    ));
+                } else {
+                    depth += 1;
+                }
+            }
+            Event::Empty(element) if depth == 1 => {
+                let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                if is_word_element(element.name().as_ref(), local, &prefixes) {
+                    matches.push((capture_empty_element(&element)?, root_prefixes.clone()));
+                }
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => return Ok(matches),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn rewrite_group_children(
+    raw: &[u8],
+    child_local: &[u8],
+    modeled: &[u8],
+    inherited_prefixes: &[String],
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::with_capacity(raw.len() + modeled.len()));
+    let mut prefixes = Vec::new();
+    let mut depth = 0usize;
+    let mut inserted = false;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if depth == 0 => {
+                prefixes = word_prefixes_at(&element, inherited_prefixes)?;
+                writer.write_event(Event::Start(element.into_owned()))?;
+                depth = 1;
+            }
+            Event::Empty(element) if depth == 0 => {
+                let name = std::str::from_utf8(element.name().as_ref())?.to_owned();
+                writer.write_event(Event::Start(element.into_owned()))?;
+                writer.get_mut().extend_from_slice(modeled);
+                writer.write_event(Event::End(BytesEnd::new(name)))?;
+                inserted = true;
+            }
+            Event::Start(element) if depth == 1 => {
+                let child_prefixes = word_prefixes_at(&element, &prefixes)?;
+                if is_word_element(element.name().as_ref(), child_local, &child_prefixes) {
+                    if !inserted {
+                        writer.get_mut().extend_from_slice(modeled);
+                        inserted = true;
+                    }
+                    capture_element(&mut reader, &element)?;
+                } else {
+                    writer.write_event(Event::Start(element.into_owned()))?;
+                    depth += 1;
+                }
+            }
+            Event::Empty(element) if depth == 1 => {
+                let child_prefixes = word_prefixes_at(&element, &prefixes)?;
+                if is_word_element(element.name().as_ref(), child_local, &child_prefixes) {
+                    if !inserted {
+                        writer.get_mut().extend_from_slice(modeled);
+                        inserted = true;
+                    }
+                } else {
+                    writer.write_event(Event::Empty(element.into_owned()))?;
+                }
+            }
+            Event::End(element) if depth == 1 => {
+                if !inserted {
+                    writer.get_mut().extend_from_slice(modeled);
+                }
+                writer.write_event(Event::End(element.into_owned()))?;
+                depth = 0;
+            }
+            Event::Start(element) => {
+                writer.write_event(Event::Start(element.into_owned()))?;
+                depth += 1;
+            }
+            Event::End(element) => {
+                writer.write_event(Event::End(element.into_owned()))?;
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            event => writer.write_event(event.into_owned())?,
+        }
+        buffer.clear();
+    }
+    Ok(writer.into_inner())
+}
+
+fn rewrite_top_level_setting(source: &[u8], local: &[u8], replacement: &[u8]) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(source);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::with_capacity(source.len() + replacement.len()));
+    let mut root_prefixes = Vec::new();
+    let mut depth = 0usize;
+    let mut inserted = false;
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if depth == 0 => {
+                root_prefixes = word_prefixes_at(&element, &[])?;
+                let mut root = element.into_owned();
+                ensure_fixed_word_prefix(&mut root)?;
+                writer.write_event(Event::Start(root))?;
+                depth = 1;
+            }
+            Event::Empty(element) if depth == 0 => {
+                let root_name = std::str::from_utf8(element.name().as_ref())?.to_owned();
+                let mut root = element.into_owned();
+                ensure_fixed_word_prefix(&mut root)?;
+                writer.write_event(Event::Start(root))?;
+                writer.get_mut().extend_from_slice(replacement);
+                writer.write_event(Event::End(BytesEnd::new(root_name)))?;
+                inserted = true;
+            }
+            Event::Start(element) if depth == 1 => {
+                let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                if is_word_element(element.name().as_ref(), local, &prefixes) {
+                    if !inserted {
+                        writer.get_mut().extend_from_slice(replacement);
+                        inserted = true;
+                    }
+                    capture_element(&mut reader, &element)?;
+                } else {
+                    if !inserted && setting_follows(local, &element, &prefixes) {
+                        writer.get_mut().extend_from_slice(replacement);
+                        inserted = true;
+                    }
+                    writer.write_event(Event::Start(element.into_owned()))?;
+                    depth += 1;
+                }
+            }
+            Event::Empty(element) if depth == 1 => {
+                let prefixes = word_prefixes_at(&element, &root_prefixes)?;
+                if is_word_element(element.name().as_ref(), local, &prefixes) {
+                    if !inserted {
+                        writer.get_mut().extend_from_slice(replacement);
+                        inserted = true;
+                    }
+                } else {
+                    if !inserted && setting_follows(local, &element, &prefixes) {
+                        writer.get_mut().extend_from_slice(replacement);
+                        inserted = true;
+                    }
+                    writer.write_event(Event::Empty(element.into_owned()))?;
+                }
+            }
+            Event::End(element) if depth == 1 => {
+                if !inserted {
+                    writer.get_mut().extend_from_slice(replacement);
+                }
+                writer.write_event(Event::End(element.into_owned()))?;
+                depth = 0;
+            }
+            Event::Start(element) => {
+                writer.write_event(Event::Start(element.into_owned()))?;
+                depth += 1;
+            }
+            Event::End(element) => {
+                writer.write_event(Event::End(element.into_owned()))?;
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            event => writer.write_event(event.into_owned())?,
+        }
+        buffer.clear();
+    }
+    Ok(writer.into_inner())
+}
+
+fn setting_follows(local: &[u8], element: &BytesStart<'_>, prefixes: &[String]) -> bool {
+    const ORDER: &[&[u8]] = &[
+        b"writeProtection",
+        b"view",
+        b"zoom",
+        b"removePersonalInformation",
+        b"removeDateAndTime",
+        b"doNotDisplayPageBoundaries",
+        b"displayBackgroundShape",
+        b"printPostScriptOverText",
+        b"printFractionalCharacterWidth",
+        b"printFormsData",
+        b"embedTrueTypeFonts",
+        b"embedSystemFonts",
+        b"saveSubsetFonts",
+        b"saveFormsData",
+        b"mirrorMargins",
+        b"alignBordersAndEdges",
+        b"bordersDoNotSurroundHeader",
+        b"bordersDoNotSurroundFooter",
+        b"gutterAtTop",
+        b"hideSpellingErrors",
+        b"hideGrammaticalErrors",
+        b"activeWritingStyle",
+        b"proofState",
+        b"formsDesign",
+        b"attachedTemplate",
+        b"linkStyles",
+        b"stylePaneFormatFilter",
+        b"stylePaneSortMethod",
+        b"documentType",
+        b"mailMerge",
+        b"revisionView",
+        b"trackRevisions",
+        b"doNotTrackMoves",
+        b"doNotTrackFormatting",
+        b"documentProtection",
+        b"autoFormatOverride",
+        b"styleLockTheme",
+        b"styleLockQFSet",
+        b"defaultTabStop",
+        b"autoHyphenation",
+        b"consecutiveHyphenLimit",
+        b"hyphenationZone",
+        b"doNotHyphenateCaps",
+        b"showEnvelope",
+        b"summaryLength",
+        b"clickAndTypeStyle",
+        b"defaultTableStyle",
+        b"evenAndOddHeaders",
+        b"bookFoldRevPrinting",
+        b"bookFoldPrinting",
+        b"bookFoldPrintingSheets",
+        b"drawingGridHorizontalSpacing",
+        b"drawingGridVerticalSpacing",
+        b"displayHorizontalDrawingGridEvery",
+        b"displayVerticalDrawingGridEvery",
+        b"doNotUseMarginsForDrawingGridOrigin",
+        b"drawingGridHorizontalOrigin",
+        b"drawingGridVerticalOrigin",
+        b"doNotShadeFormData",
+        b"noPunctuationKerning",
+        b"characterSpacingControl",
+        b"printTwoOnOne",
+        b"strictFirstAndLastChars",
+        b"noLineBreaksAfter",
+        b"noLineBreaksBefore",
+        b"savePreviewPicture",
+        b"doNotValidateAgainstSchema",
+        b"saveInvalidXml",
+        b"ignoreMixedContent",
+        b"alwaysShowPlaceholderText",
+        b"doNotDemarcateInvalidXml",
+        b"saveXmlDataOnly",
+        b"useXSLTWhenSaving",
+        b"saveThroughXslt",
+        b"showXMLTags",
+        b"alwaysMergeEmptyNamespace",
+        b"updateFields",
+        b"hdrShapeDefaults",
+        b"footnotePr",
+        b"endnotePr",
+        b"compat",
+        b"docVars",
+        b"rsids",
+        b"mathPr",
+        b"attachedSchema",
+        b"themeFontLang",
+        b"clrSchemeMapping",
+        b"doNotIncludeSubdocsInStats",
+        b"doNotAutoCompressPictures",
+        b"forceUpgrade",
+        b"captions",
+        b"readModeInkLockDown",
+        b"smartTagType",
+        b"schemaLibrary",
+        b"shapeDefaults",
+        b"doNotEmbedSmartTags",
+        b"decimalSymbol",
+        b"listSeparator",
+    ];
+    let Some(target_index) = ORDER.iter().position(|candidate| *candidate == local) else {
+        return false;
+    };
+    ORDER
+        .iter()
+        .enumerate()
+        .skip(target_index + 1)
+        .any(|(_, candidate)| is_word_element(element.name().as_ref(), candidate, prefixes))
 }
 
 fn rewrite_math_properties(source: &[u8], properties: &MathProperties) -> Result<Vec<u8>> {
@@ -895,6 +1681,10 @@ mod tests {
                 salt: Some("SALT".to_owned()),
             }),
             document_variables: Vec::new(),
+            compatibility_settings: Vec::new(),
+            default_tab_stop: None,
+            character_spacing_control: None,
+            theme_font_language: None,
             automatic_hyphenation: None,
             math_properties: None,
             source_xml: None,

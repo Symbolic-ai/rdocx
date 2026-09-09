@@ -34,13 +34,19 @@ MAX_EXPANDED_BYTES = 256 * 1024 * 1024
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-WORD_DOCUMENT_CONTENT_TYPE = (
-    "application/vnd.openxmlformats-officedocument."
-    "wordprocessingml.document.main+xml"
-)
+WORD_MAIN_CONTENT_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument."
+    "wordprocessingml.document.main+xml",
+    "docm": "application/vnd.ms-word.document.macroEnabled.main+xml",
+    "dotx": "application/vnd.openxmlformats-officedocument."
+    "wordprocessingml.template.main+xml",
+    "dotm": "application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
+}
 PRIVATE_SKIP = "private conformance: skipped (local inputs unavailable)"
 
-PUBLIC_CONSUMER_SOURCE = r'''use rdocx::{BodyItemRef, Document};
+PUBLIC_CONSUMER_SOURCE = r'''use rdocx::{
+    BodyItemRef, Document, WordCreationProfile, WordPackageClass,
+};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -52,6 +58,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("unexpected input argument".into());
     }
     fs::create_dir_all(&output)?;
+
+    for (extension, class) in [
+        ("docx", WordPackageClass::Document),
+        ("docm", WordPackageClass::MacroEnabledDocument),
+        ("dotx", WordPackageClass::Template),
+        ("dotm", WordPackageClass::MacroEnabledTemplate),
+    ] {
+        let path = output.join(format!("profile.{extension}"));
+        let mut profile = Document::new_with_profile(
+            WordCreationProfile::WordCompatible(class),
+        );
+        profile.save(&path)?;
+        if Document::open(&path)?.package_class()? != class {
+            return Err(format!("{extension} profile changed package class").into());
+        }
+    }
 
     let authored_path = output.join("authored.docx");
     let reopened_path = output.join("reopened.docx");
@@ -282,7 +304,7 @@ def validate_document_order(members: dict[str, bytes]) -> None:
 
 
 def normalized_package_graph(
-    path: Path,
+    path: Path, expected_main_content_type: str = WORD_MAIN_CONTENT_TYPES["docx"],
 ) -> tuple[
     tuple[tuple[str, str], ...],
     tuple[tuple[str, str, str, str, str], ...],
@@ -291,9 +313,105 @@ def normalized_package_graph(
     types = content_type_map(members)
     relationships = relationship_records(members)
     validate_document_order(members)
-    if types.get("/word/document.xml") != WORD_DOCUMENT_CONTENT_TYPE:
+    if types.get("/word/document.xml") != expected_main_content_type:
         raise ConformanceError("main document content type is invalid")
     return tuple(sorted(types.items())), relationships
+
+
+def validate_word_compatible_profile(path: Path, extension: str) -> None:
+    members = package_members(path)
+    expected_members = {
+        "[Content_Types].xml",
+        "_rels/.rels",
+        "docProps/app.xml",
+        "docProps/core.xml",
+        "word/_rels/document.xml.rels",
+        "word/document.xml",
+        "word/fontTable.xml",
+        "word/settings.xml",
+        "word/styles.xml",
+        "word/theme/theme1.xml",
+    }
+    if set(members) != expected_members:
+        raise ConformanceError("fresh profile part inventory is incomplete")
+    content_types, relationships = normalized_package_graph(
+        path, WORD_MAIN_CONTENT_TYPES[extension]
+    )
+    required_content_types = {
+        "/docProps/app.xml": "application/vnd.openxmlformats-officedocument."
+        "extended-properties+xml",
+        "/docProps/core.xml": "application/vnd.openxmlformats-package."
+        "core-properties+xml",
+        "/word/fontTable.xml": "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.fontTable+xml",
+        "/word/settings.xml": "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.settings+xml",
+        "/word/styles.xml": "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.styles+xml",
+        "/word/theme/theme1.xml": "application/vnd.openxmlformats-officedocument."
+        "theme+xml",
+    }
+    mapped = dict(content_types)
+    if any(mapped.get(part) != kind for part, kind in required_content_types.items()):
+        raise ConformanceError("fresh profile content types are incomplete")
+    expected_relationships = {
+        (
+            "_rels/.rels",
+            "rId1",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+            "word/document.xml",
+            "",
+        ),
+        (
+            "_rels/.rels",
+            "rId2",
+            "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties",
+            "docProps/core.xml",
+            "",
+        ),
+        (
+            "_rels/.rels",
+            "rId3",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties",
+            "docProps/app.xml",
+            "",
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            "rId0",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles",
+            "styles.xml",
+            "",
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            "rdocxSettings",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings",
+            "settings.xml",
+            "",
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            "rdocxTheme",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme",
+            "theme/theme1.xml",
+            "",
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            "rdocxFontTable",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable",
+            "fontTable.xml",
+            "",
+        ),
+    }
+    if set(relationships) != expected_relationships:
+        raise ConformanceError("fresh profile relationship graph is incomplete")
+    core = members["docProps/core.xml"]
+    if b"dcterms:created" in core or b"dcterms:modified" in core:
+        raise ConformanceError("fresh profile invented timestamps")
+    if any(b"vbaProject" in data for data in members.values()):
+        raise ConformanceError("fresh profile invented a VBA project")
 
 
 def assert_preserved_opaque_parts(before: Path, after: Path) -> None:
@@ -417,6 +535,11 @@ def run_public() -> None:
         for path in (authored, reopened, first_png, second_png, output / "report.txt"):
             if not path.is_file() or path.stat().st_size == 0:
                 raise ConformanceError("public consumer evidence is incomplete")
+        for extension in WORD_MAIN_CONTENT_TYPES:
+            profile = output / f"profile.{extension}"
+            if not profile.is_file() or profile.stat().st_size == 0:
+                raise ConformanceError("public profile evidence is incomplete")
+            validate_word_compatible_profile(profile, extension)
         if normalized_package_graph(authored) != normalized_package_graph(reopened):
             raise ConformanceError("save and reopen changed the normalized package graph")
         assert_preserved_opaque_parts(authored, reopened)

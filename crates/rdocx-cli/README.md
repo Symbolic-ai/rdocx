@@ -1,7 +1,15 @@
 # rdocx-cli
 
-`rdocx-cli` is the command-line interface for inspecting, extracting,
-converting, comparing, replacing, validating, and rendering DOCX files.
+`rdocx-cli` turns DOCX files into inspectable and scriptable shell artifacts.
+It extracts content, reports structure, validates packages, applies changes,
+and produces fixed or flow output without an Office host.
+
+## Capabilities
+
+- Human-readable or JSON structure and metadata inspection.
+- Text extraction across body paragraphs and table cells.
+- PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
+- Page-range rendering, literal replacement, diffing, and validation verdicts.
 
 ## Use it when
 

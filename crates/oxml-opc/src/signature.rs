@@ -15,7 +15,6 @@ use sha2::{Digest, Sha256};
 use x509_cert::Certificate;
 use x509_cert::der::Decode;
 
-use crate::content_types::ContentTypes;
 use crate::error::{OpcError, Result};
 use crate::package::OpcPackage;
 use crate::relationship::{Relationship, Relationships, rel_types};
@@ -33,12 +32,6 @@ const SIGNATURE_ORIGIN_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-package.digital-signature-origin";
 const SIGNATURE_XML_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml";
-
-#[derive(Debug, Clone)]
-pub(crate) struct SignatureSource {
-    pub(crate) content_types_xml: Vec<u8>,
-    pub(crate) content_types: ContentTypes,
-}
 
 /// The signer identity embedded in an X.509 certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +155,7 @@ pub(crate) fn create_signature(
     private_key_pkcs8_der: &[u8],
     certificate_der: &[u8],
 ) -> Result<SignatureReport> {
+    package.validate_graph()?;
     let certificate = Certificate::from_der(certificate_der)
         .map_err(|error| OpcError::InvalidSigningCertificate(error.to_string()))?;
     let subject_public_key_info = certificate.tbs_certificate().subject_public_key_info();
@@ -266,7 +260,7 @@ fn create_manifest(package: &OpcPackage) -> Result<String> {
     let mut part_names: Vec<&String> = package
         .parts
         .keys()
-        .filter(|part_name| !infrastructure.contains(*part_name))
+        .filter(|part_name| !infrastructure.contains(&crate::package::part_identity(part_name)))
         .collect();
     part_names.sort();
     for part_name in part_names {
@@ -309,7 +303,7 @@ fn validate_relationship_source(package: &OpcPackage, source: &str) -> Result<()
         && !source
             .split('/')
             .any(|segment| matches!(segment, "." | ".."));
-    if normalized && package.parts.contains_key(source) {
+    if normalized && package.contains_part(source) {
         return Ok(());
     }
     Err(OpcError::SignatureCreationFailed(format!(
@@ -514,7 +508,8 @@ fn allocate_numbered_part(
         .chain(package.part_rels.keys())
         .chain(package.content_types.overrides.keys())
     {
-        let Some(number) = part_name
+        let lowercase = part_name.to_ascii_lowercase();
+        let Some(number) = lowercase
             .strip_prefix(&prefix)
             .and_then(|value| value.strip_suffix(&suffix))
             .and_then(|value| value.parse::<usize>().ok())
@@ -541,18 +536,24 @@ fn allocate_numbered_part(
 }
 
 fn part_name_occupied(package: &OpcPackage, name: &str) -> bool {
-    package.parts.contains_key(name)
-        || package.part_rels.contains_key(name)
-        || package.content_types.overrides.contains_key(name)
+    package.contains_part(name)
+        || package.get_part_rels(name).is_some()
+        || package.content_types.contains_override(name)
 }
 
 pub(crate) fn verify_signatures(package: &OpcPackage) -> Result<Vec<SignatureReport>> {
     let mut signature_parts = discover_signature_parts(package)?;
-    let discovered: HashSet<String> = signature_parts.iter().cloned().collect();
+    let discovered: HashSet<String> = signature_parts
+        .iter()
+        .map(|name| crate::package::part_identity(name))
+        .collect();
     let mut orphaned: Vec<String> = package
         .parts
         .keys()
-        .filter(|name| is_signature_xml_part(name) && !discovered.contains(*name))
+        .filter(|name| {
+            is_signature_xml_part(name)
+                && !discovered.contains(&crate::package::part_identity(name))
+        })
         .cloned()
         .collect();
     orphaned.sort();
@@ -560,7 +561,7 @@ pub(crate) fn verify_signatures(package: &OpcPackage) -> Result<Vec<SignatureRep
 
     let mut reports = Vec::with_capacity(signature_parts.len() + orphaned.len());
     for part_name in signature_parts {
-        let xml = package.parts.get(&part_name).ok_or_else(|| {
+        let xml = package.get_part(&part_name).ok_or_else(|| {
             OpcError::InvalidSignatureXml(format!("missing signature part {part_name}"))
         })?;
         reports.push(verify_signature_part(package, &part_name, xml)?);
@@ -581,7 +582,7 @@ fn discover_signature_parts(package: &OpcPackage) -> Result<Vec<String>> {
     let origins = package
         .package_rels
         .get_all_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN);
-    let mut parts = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
     for origin in origins {
         if is_external(origin) {
             return Err(OpcError::InvalidSignatureXml(format!(
@@ -590,12 +591,13 @@ fn discover_signature_parts(package: &OpcPackage) -> Result<Vec<String>> {
             )));
         }
         let origin_part = OpcPackage::resolve_rel_target("/", &origin.target);
-        if !package.parts.contains_key(&origin_part) {
+        let Some(stored_origin) = package.stored_part_name(&origin_part) else {
             return Err(OpcError::InvalidSignatureXml(format!(
                 "signature origin target is missing: {origin_part}"
             )));
-        }
-        let origin_rels = package.part_rels.get(&origin_part).ok_or_else(|| {
+        };
+        let origin_part = stored_origin.to_owned();
+        let origin_rels = package.get_part_rels(&origin_part).ok_or_else(|| {
             OpcError::InvalidSignatureXml(format!(
                 "signature origin has no relationships: {origin_part}"
             ))
@@ -607,8 +609,14 @@ fn discover_signature_parts(package: &OpcPackage) -> Result<Vec<String>> {
                     signature.id
                 )));
             }
-            let part_name = OpcPackage::resolve_rel_target(&origin_part, &signature.target);
-            if parts.contains(&part_name) {
+            let target = OpcPackage::resolve_rel_target(&origin_part, &signature.target);
+            let part_name = package
+                .stored_part_name(&target)
+                .unwrap_or(&target)
+                .to_owned();
+            if parts.iter().any(|existing| {
+                crate::package::part_identity(existing) == crate::package::part_identity(&part_name)
+            }) {
                 return Err(OpcError::InvalidSignatureXml(format!(
                     "duplicate signature target {part_name}"
                 )));
@@ -845,14 +853,23 @@ fn apply_reference(
     if !reference.transforms.is_empty() {
         return Err(unsupported("part transform chain", &reference.uri));
     }
-    let bytes = if part_name == "/[Content_Types].xml" {
+    let is_content_types = part_name.eq_ignore_ascii_case("/[Content_Types].xml");
+    let bytes = if is_content_types {
         Some(content_types_bytes(package)?)
     } else {
-        package.parts.get(&part_name).cloned()
+        package.get_part(&part_name).map(<[u8]>::to_vec)
     };
     match bytes {
         Some(bytes) => {
-            covered_parts.insert(part_name);
+            let covered_name = if is_content_types {
+                "/[Content_Types].xml".to_owned()
+            } else {
+                package
+                    .stored_part_name(&part_name)
+                    .unwrap_or(&part_name)
+                    .to_owned()
+            };
+            covered_parts.insert(covered_name);
             Ok(Some(bytes))
         }
         None => {
@@ -914,7 +931,7 @@ fn relationship_transform(
             }
             [relationship] => {
                 let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
-                if !package.parts.contains_key(&target) {
+                if !package.contains_part(&target) {
                     issues.push(SignatureIssue::MissingRelationshipTarget {
                         source_part: source_part.to_string(),
                         relationship_id: id.clone(),
@@ -991,7 +1008,7 @@ fn add_uncovered_issues(
     let mut parts: Vec<&String> = package
         .parts
         .keys()
-        .filter(|name| !infrastructure.contains(*name))
+        .filter(|name| !infrastructure.contains(&crate::package::part_identity(name)))
         .collect();
     parts.sort();
     for part_name in parts {
@@ -1025,13 +1042,14 @@ fn signature_infrastructure_parts(package: &OpcPackage) -> BTreeSet<String> {
             continue;
         }
         let origin_part = OpcPackage::resolve_rel_target("/", &origin.target);
-        parts.insert(origin_part.clone());
-        if let Some(relationships) = package.part_rels.get(&origin_part) {
+        if let Some(stored_origin) = package.stored_part_name(&origin_part) {
+            parts.insert(crate::package::part_identity(stored_origin));
+        }
+        if let Some(relationships) = package.get_part_rels(&origin_part) {
             for signature in relationships.get_all_by_type(rel_types::DIGITAL_SIGNATURE) {
                 if !is_external(signature) {
-                    parts.insert(OpcPackage::resolve_rel_target(
-                        &origin_part,
-                        &signature.target,
+                    parts.insert(crate::package::part_identity(
+                        &OpcPackage::resolve_rel_target(&origin_part, &signature.target),
                     ));
                 }
             }
@@ -1070,29 +1088,33 @@ fn add_uncovered_relationships(
 }
 
 pub(crate) fn content_types_bytes(package: &OpcPackage) -> Result<Vec<u8>> {
-    if let Some(source) = &package.signature_source
-        && source.content_types == package.content_types
-    {
-        return Ok(source.content_types_xml.clone());
-    }
-    package.content_types.to_xml()
+    package.content_types_bytes()
 }
 
 fn relationships_for_uri<'a>(
     package: &'a OpcPackage,
     part_name: &str,
 ) -> Option<(String, &'a Relationships)> {
-    if part_name == "/_rels/.rels" {
+    if part_name.eq_ignore_ascii_case("/_rels/.rels") {
         return Some(("/".to_string(), &package.package_rels));
     }
     let marker = "/_rels/";
-    let marker_index = part_name.rfind(marker)?;
-    let filename = part_name
-        .get(marker_index + marker.len()..)?
-        .strip_suffix(".rels")?;
+    let lowercase = part_name.to_ascii_lowercase();
+    let marker_index = lowercase.rfind(marker)?;
+    let tail = part_name.get(marker_index + marker.len()..)?;
+    if !tail.to_ascii_lowercase().ends_with(".rels") {
+        return None;
+    }
+    let filename = tail.get(..tail.len().checked_sub(".rels".len())?)?;
     let directory = &part_name[..marker_index + 1];
     let source = format!("{directory}{filename}");
-    package.part_rels.get(&source).map(|rels| (source, rels))
+    let stored_source = package
+        .stored_part_rels_owner(&source)
+        .unwrap_or(&source)
+        .to_owned();
+    package
+        .get_part_rels(&stored_source)
+        .map(|relationships| (stored_source, relationships))
 }
 
 fn reference_part_name(uri: &str) -> Result<String> {
@@ -1576,11 +1598,15 @@ fn is_external(relationship: &Relationship) -> bool {
 }
 
 fn is_signature_part(name: &str) -> bool {
-    name.starts_with("/_xmlsignatures/")
+    name.get(.."/_xmlsignatures/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("/_xmlsignatures/"))
 }
 
 fn is_signature_xml_part(name: &str) -> bool {
-    is_signature_part(name) && name.ends_with(".xml")
+    is_signature_part(name)
+        && name
+            .get(name.len().saturating_sub(4)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".xml"))
 }
 
 fn is_coverage_issue(issue: &SignatureIssue) -> bool {
@@ -1816,7 +1842,16 @@ mod tests {
             target: "word/document.xml".to_string(),
             target_mode: None,
         });
-        assert_signing_failure_is_atomic(&mut duplicate);
+        let before = duplicate.clone();
+        assert!(
+            duplicate
+                .sign(&test_private_key(), &test_certificate())
+                .is_err()
+        );
+        assert_eq!(duplicate.parts, before.parts);
+        assert_eq!(duplicate.content_types, before.content_types);
+        assert_eq!(duplicate.package_rels.items, before.package_rels.items);
+        assert_eq!(duplicate.part_rels.len(), before.part_rels.len());
 
         let mut orphan = unsigned_package();
         orphan
@@ -1971,7 +2006,7 @@ mod tests {
         package.set_part("/a.xml", Vec::new());
         package.set_part("/b.xml", Vec::new());
         let relationships = Relationships::from_xml(
-            br#"<Relationships><Relationship Id="rId2" Type="urn:b" Target="b.xml"/><Relationship Id="rId1" Type="urn:a" Target="a.xml"/></Relationships>"#,
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="urn:b" Target="b.xml"/><Relationship Id="rId1" Type="urn:a" Target="a.xml"/></Relationships>"#,
         )
         .unwrap();
         let mut covered = BTreeSet::new();
@@ -1993,10 +2028,19 @@ mod tests {
         );
         assert!(issues.is_empty());
 
-        let duplicate = Relationships::from_xml(
-            br#"<Relationships><Relationship Id="rId1" Type="urn:a" Target="a.xml"/><Relationship Id="rId1" Type="urn:b" Target="b.xml"/></Relationships>"#,
-        )
-        .unwrap();
+        let mut duplicate = Relationships::new();
+        duplicate.items.push(Relationship {
+            id: "rId1".to_owned(),
+            rel_type: "urn:a".to_owned(),
+            target: "a.xml".to_owned(),
+            target_mode: None,
+        });
+        duplicate.items.push(Relationship {
+            id: "rId1".to_owned(),
+            rel_type: "urn:b".to_owned(),
+            target: "b.xml".to_owned(),
+            target_mode: None,
+        });
         let mut duplicate_issues = Vec::new();
         assert!(
             relationship_transform(
@@ -2015,7 +2059,7 @@ mod tests {
         ));
 
         let external = Relationships::from_xml(
-            br#"<Relationships><Relationship Id="rId1" Type="urn:a" Target="https://example.invalid" TargetMode="External"/></Relationships>"#,
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="urn:a" Target="https://example.invalid" TargetMode="External"/></Relationships>"#,
         )
         .unwrap();
         let mut external_issues = Vec::new();
@@ -2086,6 +2130,37 @@ mod tests {
         );
         assert!(relocated_report.cryptographically_valid);
         assert!(relocated_report.coverage_complete);
+    }
+
+    #[test]
+    fn signature_discovery_references_and_coverage_resolve_case_equivalent_parts() {
+        let mut package = signed_package("ds");
+        for (original, case_variant) in [
+            ("/word/document.xml", "/WORD/DOCUMENT.XML"),
+            ("/_xmlsignatures/origin.sigs", "/_XMLSIGNATURES/ORIGIN.SIGS"),
+            ("/_xmlsignatures/sig1.xml", "/_XMLSIGNATURES/SIG1.XML"),
+        ] {
+            let bytes = package.parts.remove(original).unwrap();
+            package.parts.insert(case_variant.to_owned(), bytes);
+        }
+        let origin_relationships = package
+            .part_rels
+            .remove("/_xmlsignatures/origin.sigs")
+            .unwrap();
+        package.part_rels.insert(
+            "/_XMLSIGNATURES/ORIGIN.SIGS".to_owned(),
+            origin_relationships,
+        );
+
+        let report = package.verify_signatures().unwrap().remove(0);
+        assert_eq!(report.signature_part, "/_XMLSIGNATURES/SIG1.XML");
+        assert!(report.cryptographically_valid, "{:?}", report.issues);
+        assert!(report.coverage_complete, "{:?}", report.issues);
+        assert!(
+            report
+                .covered_parts
+                .contains(&"/WORD/DOCUMENT.XML".to_owned())
+        );
     }
 
     #[test]

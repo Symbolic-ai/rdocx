@@ -17,9 +17,33 @@ Fully in memory. Every part is decompressed at open. Part names are normalised
 to a leading slash. This design is already format-neutral and is carried over
 essentially unchanged from `rdocx-opc`.
 
+Archive entry identity is checked after path normalization and before the
+entry map is populated. Two ZIP entries that resolve to one normalized,
+ASCII-case-insensitive part name are invalid. Duplicate default extensions and
+override part names in `[Content_Types].xml` are also invalid, so map construction never hides a
+package collision. Default extension and override part-name identities compare
+ASCII case-insensitively in parsing and API lookup. Package part get, set,
+contains, and remove operations, relationship-owner lookup, required Word and
+PowerPoint part resolution, and digital-signature discovery and coverage use
+the same identity. The first authored spelling remains the serialized key.
+Direct mutation of the public maps remains supported, with deterministic lookup
+if callers create an invalid case conflict. Serialization rejects that conflict
+before writing output. Every loaded package retains unchanged producer
+content-types bytes and element order regardless of enabled features.
+
+Relationship XML rejects duplicate `Id` values during parsing and before
+serialization. Package serialization validates content-type identity, part
+identity, relationship-owner identity, every relationship-id scope, and output
+ZIP entry identity before opening or truncating a destination path.
+
 **Saves are deterministic.** Both `part_rels` and `parts` are emitted in sorted
 key order, so writing the same package twice produces byte-identical output.
 That property is load-bearing for the round-trip corpus and must not regress.
+The Word facade preserves relationship identities captured when a package is
+opened. Relationships added to the current graph afterward are authored state,
+including internal theme and other typed edges that have no modeled `r:id`.
+They join deterministic semantic ordering by relationship type and normalized
+target. Unknown and external authored edges retain their target and mode.
 
 Modern presentation package identity is the main presentation part's exact
 content type. `oxml-opc` names the ordinary presentation, macro-enabled
@@ -35,6 +59,25 @@ override for DOCX, DOCM, DOTX, or DOTM. Extension defaults, external targets,
 unsafe targets, duplicate relationships, and unknown types fail closed. An
 output class conversion changes only that override on a staged clone and uses
 the existing signature invalidation path.
+
+Fresh Word construction has two explicit completeness profiles. The minimal
+profile owns only the main document and styles graph. The Word-compatible
+profile also owns settings, the Office theme, the font table, core properties,
+and application properties with exact content types and internal
+relationships. `Document::new()` selects Word-compatible DOCX. DOCM and DOTM
+declare macro-capable main-part identity without inventing a VBA project. Empty
+core properties omit created and modified timestamps, so equivalent fresh
+constructions remain byte-identical.
+
+Theme and font authoring retain the relationship-resolved targets already in a
+package. A missing theme or font table receives one collision-safe part,
+content-type override, and internal main-document relationship on the staged
+candidate. Embedded faces are obfuscated with the caller-provided OOXML font
+key and live below a font-table-owned internal `font` relationship. Replacing a
+face reuses its relationship and part only when both are exclusively
+referenced. Shared producer relationships or parts remain intact while the
+replacement receives a new package edge. Removing a face removes its owned
+part only when no remaining internal package relationship targets it.
 
 Flat OPC is a private Word facade codec over `OpcPackage`. Import first applies
 the shared strict XML 1.0 lexical gate, then resolves expanded package names,
@@ -135,8 +178,11 @@ impl ContentTypes {
 }
 ```
 
-The docx presets become a short private helper in `crates/rdocx/src/document.rs`,
-and the pptx presets one in `crates/rpptx/src/package.rs`.
+The Word presets remain private package helpers in
+`crates/rdocx/src/document.rs`. The public `WordCreationProfile` chooses the
+minimal or Word-compatible graph, while `WordPackageClass` supplies the exact
+main-part content type. The PowerPoint presets remain in
+`crates/rpptx/src/package.rs`.
 
 Rejected alternatives, recorded so they are not revisited: a `PackageKind` enum
 forces the leaf crate to carry every format's content-type table and grows a
@@ -198,6 +244,8 @@ document. The relationship must be internal, its normalized target must not
 escape the package root, the part must exist, and its override must use the
 Word glossary content type. Duplicate, external, traversal-shaped, missing,
 wrong-type, and malformed-root graphs fail before document mutation.
+Building-block replacement enters the canonical staged preparation and
+provenance-reconciling reopen path before publication.
 
 Both facades resolve core properties through the package-level
 `CORE_PROPERTIES` relationship and retain its normalized target. Immutable
@@ -209,6 +257,13 @@ relationship. If that conventional part name is already occupied without the
 core-properties relationship, serialization returns an error before changing
 the package.
 
+The Word facade applies the same package-level ownership rule to application
+and custom properties. New property families reserve collision-safe part and
+relationship identities before publishing typed state. Removing a whole
+family deletes only its resolved part, exact package relationship, and exact
+content-type override. Removing the final custom property prunes that graph
+only when the facade created it. Producer-owned empty parts remain present.
+
 The Word facade owns external hyperlink relationships at the document part
 boundary. `Document::add_hyperlink_relationship` allocates the relationship,
 and `Paragraph::add_hyperlink` writes a schema-ordered `w:hyperlink` that
@@ -216,22 +271,42 @@ references it. The same paragraph writer emits explicit hard breaks as run
 content. Both operations use the existing package-preserving save path, so
 unmodelled parts and relationships remain intact.
 
-Numbering state is also fail-closed at this boundary. Updating a known list
-level marks the existing numbering model for serialization. Rejecting an
-unknown list identifier or an invalid level does not create an empty numbering
-part, relationship, or content-type entry. Numbering parsers retain namespace
-declarations and compatibility attributes from modelled containers. Unknown
-level children use their `CT_Lvl` schema slots, while abstract-definition,
-instance, and root children keep insertion-aware boundaries. Mutating or adding
-a definition therefore preserves producer extensions, identifiers, templates,
-and level overrides verbatim. Identifier allocation uses the next value after
-the maximum when available and the first unoccupied value when the maximum is
-`u32::MAX`.
+Numbering state is also fail-closed at this boundary. Definition and instance
+create, update, and remove operations run on a staged candidate. They validate
+the complete numbering graph, including level ranges, placeholders, unique
+identifiers, override ownership, style references, and live paragraph
+references, before package mutation. Rejecting an invalid operation does not
+create a numbering part, relationship, content-type entry, or consumed
+identifier.
 
-Producer-defined `w:numFmt` values remain typed as their original token rather
-than being substituted with decimal numbering. Numbering serialization writes
-that token back unchanged. Layout and text exporters emit no marker for a
-format whose rendering semantics are unknown.
+Paragraph-style numbering links are one cross-part transaction. The facade
+writes the style's `w:numPr` and the effective definition or replacement
+level's `w:pStyle` on a staged document, validates both style and numbering
+graphs, serializes the candidate, and then publishes it. Unlinking requires the
+same exact style, instance, and level tuple and removes both edges together.
+
+Numbering parsers retain namespace declarations and compatibility attributes
+from modelled containers. Unknown level and override children use their schema
+slots, while abstract-definition, instance, and root children keep
+insertion-aware boundaries. Typed mutation therefore preserves producer
+extensions and unchanged imported overrides byte for byte. `CT_Lvl` and
+`CT_NumLvl` serialize their standard children in schema sequence. Identifier
+allocation uses the next value after the maximum when available and the first
+unoccupied value when the maximum is `u32::MAX`.
+
+Paragraph properties retain imported `w:numPr` leaves and unmodelled children
+in their original namespace and schema positions. Typed `w:ilvl` and `w:numId`
+updates remain before retained `w:numberingChange` and insertion properties.
+Self-closing `w:numPr` carriers copy any inherited namespace binding required
+by a retained root attribute onto the serialized carrier.
+An unchanged plain numeric leaf may use the typed serializer's indentation,
+while malformed or extended source leaves remain byte-exact.
+
+Every standard `w:numFmt` token has a typed representation. Producer-defined
+values remain typed as their original token rather than being substituted with
+decimal numbering. Numbering serialization writes either form back unchanged.
+Layout and text exporters emit no marker for a format whose rendering
+semantics are not implemented.
 
 The main document reader retains root, body, and modeled-owner namespace facts
 that preserved raw descendants depend on. Save replays those declarations on
@@ -313,6 +388,22 @@ defaults without a settings relationship allocates a collision-safe settings
 part and adds the relationship and content type through the existing package
 path.
 
+The bounded settings authoring surface also projects document variables,
+compatibility settings, default tab stop in integer twips, character spacing
+control, and theme font languages. Reads accept in-scope Word namespace
+aliases. Each mutation replaces only its modeled child or repeated child set,
+uses fixed `w:` prefixes for new XML, and inserts at the schema position.
+Unmodeled children inside `w:compat` and `w:docVars`, plus every unrelated
+top-level settings child, retain their bytes and namespace context.
+
+The font-table reader accepts any in-scope Word and relationship namespace
+prefixes. It models font names, alternate names, family, pitch, and the four
+embedded-face slots. New XML uses fixed `w:`, `r:`, `rdocx:`, and `mc:`
+prefixes in schema order. The root merges producer MCE tokens and declares
+`rdocx` ignorable. Producer attributes and unmodeled children remain in their
+original relative slots. The `rdocx:` attributes retain the caller's explicit
+authorization fact and exact license identity across save and reopen.
+
 Watermark authoring follows the document-to-header graph rather than assuming
 conventional header names. The facade materializes a missing default, first, or
 enabled even header only at the first section that needs that same-type variant.
@@ -321,6 +412,14 @@ blank override. Each image relationship belongs to its owning header part, and
 its target is relative to that part even when a producer uses a custom header
 path. Settings values controlling even headers are namespace checked and XML
 decoded before selection.
+
+Header and footer text replacement retains the section-reference kind through
+enumeration, load, and save. A referenced relationship is eligible only when it
+is internal and has the exact header or footer type implied by that reference.
+Cross-type relationships and unrelated parts with header-shaped XML remain
+untouched and cannot shadow a later valid relationship. Text, raw XML, image,
+and background-image setters apply the same eligibility rule before reusing a
+referenced part. An ineligible slot receives a fresh collision-safe part name.
 
 An authored watermark owns only a VML shape whose expanded name is `v:shape`
 and whose unqualified id is `rdocx-watermark`. Replacement patches that exact
@@ -389,8 +488,20 @@ requested directory and stem, including `usize::MAX`, and ignores missing,
 signed, zero, nonnumeric and unrelated suffixes. Ordinary packages allocate
 `1 + max(existing suffix)`. At the finite boundary, checked increment wraps
 from `usize::MAX` to 1 and skips every occupied parsed suffix until a free
-positive number is found. Both facades use this allocator, so allocation never
-creates `image0` or overwrites an existing numbered image part.
+positive number is found. The presentation facade uses this format-neutral
+allocator. The Word facade applies the same suffix rule through its document
+identifier owner so media, charts, workbooks, comment parts, and content-type
+entries are reserved with their related identifiers as one candidate. Neither
+facade creates `image0` or overwrites an existing numbered image part.
+
+Word relationship identifiers are independent per source part. New owners
+retain the established `rId0` first allocation, while an occupied owner
+continues after its greatest numeric identifier and avoids nonnumeric producer
+identities. Bookmark and comment identifiers start at zero. Drawing and
+numbering-instance identifiers start at one, and abstract-numbering identifiers
+start at zero. Imported definitions are scanned by expanded XML name, including
+the unqualified `id` attribute on `wp:docPr`. Duplicate definitions, exhausted
+ranges, and pending collisions fail before a staged candidate is published.
 
 Canonical part layouts:
 
@@ -424,10 +535,17 @@ unrelated part merely because the conventional comment path exists.
 Word chart assembly follows the same independent suffix rule as PowerPoint.
 The document relationship targets `/word/charts/chartN.xml`, and that chart's
 package relationship targets `/word/embeddings/WorkbookN.xlsx`. Both parts and
-their content-type overrides are staged with the drawing on cloned package and
+their content-type overrides are staged with the drawing on complete typed
 document state. The mutation becomes visible only after the typed ChartML,
-SpreadsheetML workbook, relationships, content types, and structured drawing
-all serialize successfully.
+SpreadsheetML workbook, relationships, content types, structured drawing,
+theme projection, and shared identifier owner all validate.
+
+An authored Word chart requires one effective internal document-theme edge.
+Its target must exist, carry the exact theme content type, and parse as a
+DrawingML theme. A valid related theme is reused. Otherwise the facade stages
+the Office default under a collision-safe `/word/theme/themeN.xml` name and
+retargets the ineffective theme edge or allocates a new one. Source theme bytes
+remain unchanged, and preserved charts do not synthesize themes.
 
 ## Media
 
@@ -588,6 +706,13 @@ helper. Both byte writers stage, serialize, and reopen their output before it
 is returned or published. Flat OPC import constructs the complete package and
 validates its Word class before a `Document` becomes observable.
 
+Fresh Word-compatible construction validates the complete staged graph before
+the `Document` becomes observable. The validator requires the exact owned part
+and content-type inventory, one relationship of every required type, no extra
+relationship scope, normalized internal targets, and an existing target for
+every internal edge. Public conformance then serializes and reopens all four
+classes and compares normalized package semantics.
+
 PDF conversion has the same publication boundary. It builds a fresh candidate,
 adds every source page in order, serializes, reopens, validates, and only then
 returns `PdfImportResult`. Mixed effective page sizes, malformed graphs, active
@@ -656,6 +781,13 @@ shading, and paragraph projections drive layout, while unrelated producer
 children remain at their schema positions. Unchanged projections reuse the
 preserved subtree. A typed mutation writes one canonical modeled child in
 `CT_Style` sequence order and reinserts unmodelled direct children once.
+
+The style projection also owns `link`, automatic redefinition, visibility,
+gallery priority, quick-format, and locking values. Readers accept any prefix
+bound to the WordprocessingML namespace. Writers emit the fixed `w` prefix and
+place these children between `next` and property groups in schema order. A
+facade update retains unmodelled style, paragraph, run, table, and conditional
+region XML while applying modeled changes.
 
 The default-off `oxml-opc/agile-encryption` feature reads and writes
 password-protected OOXML packages. Readers parse the CFB `EncryptionInfo` and

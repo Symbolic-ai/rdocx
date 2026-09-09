@@ -95,7 +95,11 @@ fn export_all(dir: &Path, name: &str, mut doc: Document) {
 // 1. FEATURE SHOWCASE — Updated to cover ALL library features
 // =============================================================================
 fn generate_feature_showcase(_samples_dir: &Path) -> Document {
-    let mut doc = Document::new();
+    // This fixture keeps the compact graph so the output-stability harness
+    // remains focused on authored document XML and deterministic rendering.
+    let mut doc = Document::new_with_profile(rdocx::WordCreationProfile::Minimal(
+        rdocx::WordPackageClass::Document,
+    ));
 
     // ── Page Setup & Metadata ──
     doc.set_page_size(Length::inches(8.5), Length::inches(11.0));
@@ -624,7 +628,8 @@ fn generate_feature_showcase(_samples_dir: &Path) -> Document {
                 color: Some("C45911".to_string()),
                 ..Default::default()
             }),
-    );
+    )
+    .unwrap();
     doc.add_paragraph("This paragraph uses a custom style: bold orange text on yellow background.")
         .style("CustomHighlight");
 
@@ -781,7 +786,8 @@ fn generate_proposal(_samples_dir: &Path) -> Document {
                 color: Some("1B2A4A".to_string()),
                 ..Default::default()
             }),
-    );
+    )
+    .unwrap();
 
     // ── Cover Page ──
     for _ in 0..4 {

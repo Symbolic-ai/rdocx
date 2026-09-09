@@ -211,6 +211,44 @@ decoys still fail closed. The complete `rdocx-oxml` and `rdocx` suites, public
 package dry runs, archive ceiling, and unchanged 49-entry hash harness complete
 the gate.
 
+The numbering package-model gate enumerates every standard number format and
+round-trips every public level property through `Document`. It separately
+checks typed start and replacement-level overrides, `CT_Lvl` and `CT_NumLvl`
+schema order, clean public-authored diagnostics, whole-graph atomic rejection,
+style-link inspection, and byte-exact producer-extension retention across a
+modeled update. The complete `rdocx-oxml` and `rdocx` suites, public package dry
+runs, archive ceiling, and unchanged 49-entry hash harness complete the gate.
+
+The style-linked numbering differential uses a source-built document and pins
+Microsoft Word 16.112.3 build 16.112.26083020 on macOS 26.6.2 build 25G83 with
+the `en-GB` locale. Twenty-seven exact Word records cover three levels across
+body paragraphs and table cells, concrete-instance continuation, a new
+instance, section restart, and REF `\n`, `\r`, `\w`, `\t`, and `\p` output.
+The REF records include same-parent and different-parent relative context.
+Three normalized TOC records cover numbered headings in the body and a table.
+Focused tests separately cover replacement-level restart, ordinary level
+restart, legal numbering, and `numId` zero suppression. A mixed Unicode
+level-text probe uses `章节 %1 - Part %2)` and requires Word and rdocx to produce
+`1-1)` for the text-suppressed full and level-aware forms.
+
+The ignored render oracle exports the source-built document to PDF from Word
+and rasterizes it with `pdftoppm` 26.01.0 at 150 DPI. rdocx renders its pages
+directly at the same resolution in deterministic font mode. The two-page gate
+requires at most one pixel of raster dimension difference, at least 0.95 paired
+ink coverage, at most 0.08 normalized ink bounding-edge delta, at most 0.27
+total variation across a 32-region ink distribution, and at most 0.04 row or
+column projection distance on every page. A synthetic five percent row or
+column shift must exceed the projection threshold. The recorded minimum
+coverage is 0.983131. The recorded maximum edge delta is 0.062144, the maximum
+distribution delta is 0.257661, and the maximum projection distance is
+0.038314. The recorded minimum synthetic-shift distance is 0.049960. Exact
+object-model records remain the text authority because global SSIM is unstable
+for sparse text pages. The public differential uses separate abstract
+definitions for independent instances. A focused regression records the
+intentional contract that distinct concrete `numId` values start independent
+counters even when they share one abstract definition, while this pinned Word
+build continues the shared definition across those instances.
+
 The legacy horizontal-rule reader regression classifies canonical, aliased,
 default, locally shadowed, and ancestor-bound Word, VML, and Office names by
 expanded namespace URI. Its negative matrix keeps false, numeric, missing,
@@ -409,6 +447,38 @@ discovery and layout.
 An alias-prefixed self-closing paragraph-property element retains exact producer
 attributes. An end-marker content control retains modeled identity, binding,
 type, end properties, and ordered raw property slots after save and reopen.
+
+Word identifier allocation has a source-built regression gate. Two documents
+created through different request orders must produce identical complete DOCX
+bytes and the declared relationship, bookmark, comment, drawing, numbering,
+part, and content-type identities in final recursive document order. Repeated
+save and reopen must not advance allocation. Collision cases cover per-owner
+relationships, bookmarks, comments, `wp:docPr`, abstract numbering, numbering
+instances, content-type keys, and normalized ZIP part names. Namespace aliases
+are accepted only through their expanded names, unrelated categories remain
+independent, overflow is atomic, and imported raw owners retain exact bytes.
+Content-type cases include `png` against `PNG` and case variants of a full part
+name. They require linear case-insensitive duplicate detection, deterministic
+lookup for directly mutated invalid public maps, serialization rejection of
+those conflicts, and exact unchanged producer bytes and order under default and
+all-feature builds. ZIP entries, package parts, and resolved relationship
+targets reserve case-insensitive part identities while retaining producer
+spelling. Mutation-history cases include building-block replacement. Header and
+footer cases reject cross-type or unrelated header-shaped relationship targets
+for text, raw XML, image, and background-image setter families.
+Current-graph relationship cases add an unreferenced theme edge after chart
+authoring and require chart `rId1` followed by theme `rId2`. A producer theme
+captured on package open keeps its original id, while unknown internal and
+external authored edges retain their targets and modes under deterministic
+ordering. The SHA-bound F-159 Word candidate remains unchanged.
+Opaque relationship coverage places a late direct relationship behind a raw
+body attribute and allocates a modeled relationship in both opposite orders.
+The raw bytes and raw relationship id remain fixed while the modeled edge
+canonicalizes identically. OPC coverage also exercises mixed-case special ZIP
+parts and relationship owners, case-equivalent get, set, contains, and remove
+operations, Word and PowerPoint main-part reopen, signature discovery and
+coverage, duplicate relationship ids, direct part-map conflicts, and a sentinel
+destination that remains unchanged after pre-serialization validation fails.
 
 The RTF reader differential records Microsoft Word 16.104 build
 16.104.25121423 as the oracle. Its checked input is source-encoded RTF that
@@ -649,6 +719,30 @@ unrelated part and relationship stability, malformed XML rejection, external
 workbook rejection, nested ZIP limits, and atomic residual-scan failure. The
 native-only API is absent from Python, WASM, and CLI wrappers. No sample invokes
 redaction, so all 49 hash entries remain unchanged.
+
+The portable authored-chart gate constructs line, bar, pie, and doughnut
+documents through the public Word API. Focused regressions check axis titles,
+explicit visibility, value-axis formats, series and indexed point colours,
+one-series legends, percentage labels, the doughnut hole, exact workbook data,
+complete staged identifiers, typed theme reuse, collision handling, malformed
+theme replacement, failure atomicity, and save/reopen preservation. A facade
+test proves that `oxml-chart`, `rdocx`, and `rpptx` expose the same `RgbColor`.
+
+The ignored external oracle generates the exact
+`54faeec0d56767577afa014564d56571c46d00df11c73baaa38889999a39b3f9`
+candidate in code. Microsoft Word 16.112.3 build 16.112.26083020 must open it
+without repair. Pages Creator Studio 15.1.1 build 7044.0.273 must render the
+declared axes, colours, percentages, legend, and doughnut shape, then export
+DOCX bytes whose ChartML and relationship-owned workbooks retain the source
+semantics across all four editable workbooks. The test opens the candidate
+through macOS LaunchServices before AppleScript export so Pages receives the
+sandbox-scoped file URL. Each run records the exported
+DOCX digest. That digest is not a fixed expectation because Pages recalculates
+manual chart layout coordinates and drawing extents between exports. The gate
+compares the parsed chart and workbook semantics instead of producer bytes.
+This gate hardens Kevin Brown's PR 71 contribution without importing its stale
+delivery records. No standard sample authors a chart, so all 49 hash entries
+remain unchanged.
 
 The watermark golden gate builds a five-page document in code, renders with
 bundled fonts, and compares the exact PNG-byte digest for every page. It also
@@ -1360,6 +1454,10 @@ required-private entry modes. The two evidence paths are:
    modeled reopen state, unsupported-content diagnostics, unmodeled-part
    preservation, and repeated deterministic 150 DPI output. A base package,
    raw XML injection, private OXML facade, or prebuilt document fails the gate.
+   The same consumer source-builds Word-compatible DOCX, DOCM, DOTX, and DOTM
+   profiles. Each profile must retain its exact main-part identity, complete
+   normalized support graph, deterministic relationship identities, omitted
+   fresh timestamps, and absence of a synthesized VBA project.
 2. Local required-corpus mode builds the five target documents through their
    Rust generators and compares them with the configured private references.
    Missing input, unexpected input count, a digest change, or missing evidence
@@ -1377,6 +1475,48 @@ P1 through P5 aliases to exact local digests, page expectations, and tool
 identities. Tracked-path and staged-path scans reject private document formats
 without echoing a path or digest. Feature-level tests remain authoritative when
 byte identity is not a valid expectation.
+
+The feature-level property gate authors core, application, and custom
+properties plus the bounded settings defaults through public APIs. It saves and
+reopens every typed value, proves selective removal leaves unrelated graphs
+intact, and compares two equivalent fresh outputs byte for byte.
+
+Settings mutation fixtures bind the Word namespace through aliases and place
+foreign subtrees before, inside, and after modeled settings. They assert exact
+foreign subtree bytes after mutation and assert the schema order of default tab
+stop, character spacing control, compatibility settings, document variables,
+and theme font language.
+
+The theme and font feature gate authors a shared DrawingML theme, language
+defaults, descriptive font records, and an explicitly licensed caller font
+through public `rdocx` APIs. Save and reopen must return the same typed values,
+font key, license identity, relationships, and original font bytes. Rejected
+authorization, missing license identity, and XML-normalized identity whitespace
+must leave package bytes unchanged. XML syntax in an accepted identity returns
+unchanged after reopen. An aliased-prefix producer font table keeps foreign
+children and relationship attributes in schema order after a modeled edit,
+including merged MCE ignorable tokens. Equivalent construction and repeated
+saves are byte-identical. The differential check pins Microsoft Word
+16.104 build 16.104.25121423 and LibreOffice 26.2.5.2 build
+cd7284b4cbbfeb507e630c1aac019f4157393acb, then compares deterministic pixels
+for the publicly authored embedded face against the bundled oracle face.
+
+The style feature gate authors paragraph, character, and table defaults,
+based-on inheritance, reciprocal links, next styles, UI flags, and conditional
+table regions through the public facade. Atomic regressions reject missing and
+wrong-type targets, duplicate defaults, and inheritance cycles with unchanged
+document bytes. Update and removal cases retain producer XML exactly. The
+differential pins Microsoft Word 16.104 build 16.104.25121423 and LibreOffice
+26.2.5.2 build cd7284b4cbbfeb507e630c1aac019f4157393acb. The sanitized Word record
+must match normalized effective properties and deterministic 150 DPI bytes
+with a zero-byte difference threshold. The pinned LibreOffice build must save,
+reopen, and retain the valid graph, reciprocal links, and effective formatting.
+
+The fresh-profile round-trip gate adds an unrelated unmodelled XML part and
+package relationship before reopen and repeat-save. The part bytes and
+relationship identity must survive exactly. The optional repair gate is pinned
+to Microsoft Word 16.104 build 16.104.25121423 and records whether that local
+GUI check ran.
 
 F-263 closes M23 only when all five generators pass local required-corpus mode,
 the synthetic public suite passes in CI, opening and saving requires no repair,
@@ -1871,26 +2011,40 @@ extensions, invalid range rejection and no partial output. Process ID and an
 atomic counter isolate temporary workspaces across concurrent runs.
 
 All 27 workspace packages explicitly declare one distinct README. The root
-README is the high-level `rdocx` guide. Its three Rust examples cover blank
-authoring, read and mutation, and render and export. Its major-category claims
-carry stable IDs and classifications from the 85-row modern DOCX capability
-matrix. The comparison table accepts only the reviewed official evidence for
-python-docx, docx-rs, docx4j, and Aspose.Words, and makes no volatile
-performance, popularity, price, or footprint claims. Each crate-local document
-states the package purpose, direct-use guidance, adjacent package relationship,
+README is the high-level `rdocx` guide. It leads with the complete native
+document workflow and a seven-row implemented-outcome summary before examples,
+installation, alternatives, or boundaries. Its three Rust examples cover blank
+authoring, read and mutation, and render and export. The detailed property
+boundary remains in the modern DOCX capability matrix rather than a status
+table on the product front page. The dated comparison accepts only reviewed
+official evidence for rdocx, python-docx, docx-rs, docx4j, and Aspose.Words.
+`ND` means not documented in that evidence, and no row makes a volatile
+performance, popularity, price, or footprint claim.
+
+Each crate-local document leads with an outcome and at least three implemented
+capabilities, then states direct-use guidance, adjacent package relationships,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
 The compatibility shims direct users to their shared replacements. Internal
-binding and WASM crates state that they are not crates.io packages.
+binding and WASM crates state that they are not crates.io packages. The
+presentation Python binding does not claim rendering, `rpptx-render` owns
+layout lowering rather than fixed output, and `rpptx-oxml` promises part-level
+serialization rather than complete-package preservation.
 
 `scripts/readme_doctests.py` validates the exact package-to-README inventory,
 the documented CLI argument names, Python and JavaScript surface names,
-deterministic feature guidance, and matching dependency and import names. It
+deterministic feature guidance, scoped WASM build and import names, and
+default-off encryption and signature features. It
 derives the root dependency and CLI requirements from Cargo metadata, checks
-every root local path and Markdown anchor, and rejects a capability ID or
-classification that differs from the canonical matrix. Comparison evidence is
-an exact official-URL allowlist. Its focused `--check-official-links` mode
-resolves those sources during implementation review, while default CI remains
-network-independent. It builds the applicable libraries with locked
+every local path and Markdown anchor from all 27 source locations, and rejects
+root narrative, section-order, workflow-claim, crate-audience, or boundary
+drift. The root outcome gate also checks the canonical matrix classifications
+that support package I/O, encrypted package I/O, preservation, and permanent
+non-goals. Comparison evidence has exact official-URL use counts, exact row
+claims, and one exact date-bounded uniqueness conclusion. Its focused
+`--check-official-links` mode resolves those sources during implementation
+review, while default CI remains network-independent. Mutation tests remove or
+reorder the narrative sections, alter a workflow row, restore rejected crate
+claims, and break non-root links. It builds the applicable libraries with locked
 dependencies and Cargo JSON
 messages, locates each emitted rlib from one package build graph, and invokes
 rustdoc with the 2024 edition, warnings denied, the dependency search path, and
@@ -1978,7 +2132,36 @@ under sole owner `mantissaman (Atul Sharma)`, immutable annotated tag `v0.13.1`
 at reviewed SHA `c391d12422c288be5db314bad8338dd08bb47d9a`, byte-identical
 GitHub release notes, incubating-family exclusion, and unpublished binding and
 WASM carriers. Its selected contribution inventory is empty, so no external
-notification was required. Issue 69 remains a separate performance follow-up.
+notification was required. Issue 69 is addressed by the completed S70 F-X084
+through F-X086 mechanisms. F-X088 verified those fixes together at reviewed
+S71 SHA `667416b1b54968b1524d57232c44f73a175fd27a`. All six focused
+deterministic-font regressions and the complete gate passed, including 49 of 49
+unchanged hash entries. The authenticated evidence comment credits
+`@emptinessform`. The reporter fork does not contain a committed timing harness,
+so closure evidence uses a temporary direct-engine reconstruction. It matches
+the reported 700 four-line paragraphs, one 3 by 3 table every 50 paragraphs,
+63-page prime, three body positions, warm cache, release mode, and deterministic
+bundled fonts. Seven alternating measured rounds after warmup produce 21
+samples per operation and build on one Apple M5 Max macOS 26.6.2 environment
+with rustc 1.97.1. S71 min and median times in milliseconds are 13.832 and
+15.310 for typing, 14.213 and 14.688 for footnote insertion, 19.928 and 22.269
+for footnote deletion, 13.549 and 13.978 for Enter, 13.389 and 14.159 for merge,
+and 13.360 and 13.956 for selection deletion. The corresponding v0.13.1
+footnote medians are 48.157 and 52.845 milliseconds. Note insertion and deletion
+change from zero paragraph-cache hits and 700 builds on v0.13.1 to 699 hits and
+one build on S71. Direct model mutation on macOS excludes the reporter's
+Windows editor and UI overhead, and page-layout invocations remain the full
+output page count in both builds for this table workload.
+
+The authenticated correctness and timing evidence states that v0.13.1 remains
+affected while the fixes will be included in the next stable release without a
+promised date. Issue 69 is closed as completed at
+<https://github.com/tensorbee/rdocx/issues/69#issuecomment-5592205748>. The next
+stable release contribution inventory retains Issue 69 and offered commits
+`4777a74167495a5116289e1f905dfd9ad4dbe807`,
+`eff0ea0c28b5eaf08180b09b58e0c0f486b7433b`,
+`9e48bc86876c294b8daa314e577e84b6fcd7ac97`, and
+`c8315b92857c951146fc866cd044b214194a09a8`.
 The failed stable 0.11.0 release gate is not a passing family gate. Its
 annotated tag targets reviewed SHA
 `25350d000ed7ed96bf4f6e371f01f8fbc8e2cec4`, and its preparation, full

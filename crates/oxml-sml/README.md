@@ -1,8 +1,14 @@
 # oxml-sml
 
-`oxml-sml` writes the deliberately minimal SpreadsheetML workbooks embedded
-behind editable OOXML charts. It supports one worksheet, text and numeric
-columns, shared strings, and one number format per numeric column.
+`oxml-sml` builds deterministic one-sheet XLSX workbooks for editable OOXML
+chart data.
+
+## Capabilities
+
+- Text and numeric columns with headers and shared strings.
+- Optional number formats for numeric columns.
+- Spreadsheet limits and finite-number validation.
+- Formula ranges for chart series and deterministic XLSX package writing.
 
 ## Use it when
 

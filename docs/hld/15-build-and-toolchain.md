@@ -42,6 +42,12 @@ process snapshot. Document-embedded fonts remain explicit layout inputs, so
 they are deterministic too. Caller-font construction starts from an empty
 database and likewise cannot observe bundled or system fonts.
 
+Word font authoring takes bytes directly from the caller and stores the
+obfuscated bytes as document package parts. The font-table relationship and
+OOXML font key are the only source for deterministic deobfuscation. The font
+record name becomes the layout alias for the loaded face before bundled
+fallback. No authoring or render path discovers a host font for embedding.
+
 `Engine::new_deterministic()` and `layout_document_deterministic()` carry that
 database through layout. The public facade exposes
 `Document::render_page_to_png_deterministic()`,
@@ -278,6 +284,12 @@ Oracle-only fonts under `scripts/oracle-fonts/` are test infrastructure. They
 are absent from every crate include list and generated archive. The static CJK
 fixture therefore changes neither the 24-font `oxml-layout` package inventory
 nor its archive size contract.
+
+Caller-authorized embedded fonts are runtime document parts, not workspace
+assets. Their exact license identity travels in the document font table and
+does not alter any crate include list, bundled-font license file, or published
+archive inventory. Package dry-runs therefore retain the existing 10 MiB
+archive ceiling.
 
 A separate crate-local packaging rule applies to
 `crates/rpptx/assets/default.pptx`. **An asset must live under its own crate's
@@ -638,22 +650,28 @@ failures.
 **Workspace package READMEs in the docs job.** Every one of the 27 workspace
 packages explicitly declares one distinct README. The root file is the
 high-level `rdocx` guide. It has exactly three compiling Rust examples and a
-major-category summary whose stable capability IDs and classifications match
-the modern DOCX matrix. Its alternatives table is bounded to reviewed official
-functional, licence, runtime, and host-dependency evidence. The other 26
-packages use focused crate-local files.
-The documents describe purpose, direct use, neighbouring package boundaries,
-publication status, and an example suited to the actual consumer surface. The
-three deprecated shims direct new consumers to `oxml-opc`, `oxml-pdf`, and
-`oxml-chart`.
+seven-row implemented-workflow summary backed by the modern DOCX matrix. It
+does not lead with capability classifications, the backlog, or sprint state.
+Its dated alternatives table is bounded to exact reviewed official sources and
+claims for rdocx, python-docx, docx-rs, docx4j, and Aspose.Words. The other 26
+packages use focused crate-local files. Each leads with an outcome and at least
+three implemented capabilities before direct-use guidance, neighbouring
+package boundaries, publication status, and an example suited to the actual
+consumer surface. The three deprecated shims direct new consumers to
+`oxml-opc`, `oxml-pdf`, and `oxml-chart`.
 
 After the workspace documentation build, `scripts/readme_doctests.py` checks
 the exact 27-package inventory, validates Rust, shell, Python, and JavaScript
 snippets, derives root stable-family versions from Cargo metadata, checks local
-paths and anchors, and rejects matrix or comparison-evidence drift. Its focused
-network mode resolves the approved official comparison sources during review,
-not in default CI. It compiles 23 Rust examples across the 21 Rust-library
-READMEs. It discovers each primary and companion rlib from one Cargo build
+paths and anchors from every README location, and rejects root narrative,
+workflow-claim, section-order, crate-boundary, or comparison-evidence drift.
+It requires scoped WASM build commands to match the documented package imports
+and binds advertised encryption and signing to named default-off Cargo
+features. Mutation coverage removes required narrative pieces, adds comparison
+rows or duplicate evidence, broadens the dated uniqueness conclusion, and
+breaks crate-local links. Its focused network mode resolves the approved official comparison
+sources during review, not in default CI. It compiles 23 Rust examples across
+the 21 Rust-library READMEs. It discovers each primary and companion rlib from one Cargo build
 graph and passes
 them to rustdoc with the repository edition, dependency search path, matching
 external crate bindings, and warnings denied.

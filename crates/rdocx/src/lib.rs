@@ -51,9 +51,12 @@ pub use comparison::{
 };
 pub use content_control::ContentControlRef;
 pub use document::{
-    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, ImageInfo, IssueSeverity, LinkInfo,
-    ListLevel, ListLevelSuffix, ListNumberFormat, NumberingFormat, NumberingLevel, OutlineNode,
-    RenderOptions, UnsupportedXmlRef, WordPackageClass,
+    AccessibilityIssue, BodyContentRef, BodyItemRef, Document, EmbeddedFont, EmbeddedFontKind,
+    FontDefinition, FontEmbeddingLicense, ImageInfo, IssueSeverity, LinkInfo, ListLevel,
+    ListLevelRestart, ListLevelSuffix, ListNumberFormat, NumberingDefinition,
+    NumberingDefinitionLevel, NumberingFormat, NumberingInstance, NumberingLevel,
+    NumberingLevelOverride, OutlineNode, RenderOptions, UnsupportedXmlRef, WordCreationProfile,
+    WordPackageClass,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
@@ -75,8 +78,12 @@ pub use math::{
     equation_to_latex, equation_to_mathml,
 };
 pub use odt::{OdtDiagnostic, OdtReadResult, OdtWriteResult};
-pub use oxml_chart::{ChartData, ChartKind};
-pub use oxml_core::Length;
+pub use oxml_chart::{ChartData, ChartKind, RgbColor};
+pub use oxml_core::app_properties::AppProperties;
+pub use oxml_core::core_properties::CoreProperties;
+pub use oxml_core::custom_properties::{CustomProperty, CustomPropertyValue};
+pub use oxml_core::{Length, Twips};
+pub use oxml_drawing::theme::CT_OfficeStyleSheet;
 pub use oxml_opc::PackageReadLimits;
 #[cfg(feature = "digital-signatures")]
 pub use oxml_opc::{
@@ -96,8 +103,10 @@ pub use rdocx_oxml::math::{
     MathSubSuperscript, MatrixBaseJustification, OfficeMath,
 };
 pub use rdocx_oxml::settings::{
-    CryptAlgorithmClass, CryptAlgorithmType, CryptProviderType, DocumentProtection, ProtectionMode,
+    CharacterSpacingControl, CompatibilitySetting, CryptAlgorithmClass, CryptAlgorithmType,
+    CryptProviderType, DocumentProtection, ProtectionMode, ThemeFontLanguage,
 };
+pub use rdocx_oxml::styles::StyleType;
 pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};

@@ -18,8 +18,8 @@ use rdocx::{
     HyperlinkRef, Length, ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText,
     MailMergeImage, MailMergeRecord, MailMergeValue, ParagraphItemRef, ParagraphRef, RasterFormat,
     RasterOptions, RasterOutput, RenderOptions, RevisionView, RunItemRef, RunPosition, RunRange,
-    RunRef, StyleBuilder, TableRef, TcField, TocEntrySelection, TocField, TocRebuildReport,
-    UnsupportedXmlRef,
+    RunRef, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
+    TocRebuildReport, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
 use rdocx_oxml::CT_Document;
 use rdocx_oxml::document::{BodyContent, CT_Body};
@@ -929,6 +929,43 @@ const WORD_REVISION_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423"
 const WORD_FIELD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_DENSE_FORM_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_COMPARISON_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_F248_ORACLE: &str = "Microsoft Word 16.112.3 build 16.112.26083020";
+const WORD_F248_ENVIRONMENT: &str =
+    "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f248-numbering-records-v2";
+const WORD_F248_RECORDS: &[&str] = &[
+    "marker | F248_BODY_L0 | Section 1.",
+    "marker | F248_TABLE_L1 | 1.1.",
+    "marker | F248_BODY_L2 | Section 1.1.1.",
+    "marker | F248_FIRST_CONT | Section 2.",
+    "marker | F248_SECOND_NEW | Section 1.",
+    "marker | F248_FIRST_RESUME | Section 3.",
+    "marker | F248_RESTART_BEFORE | R1.",
+    "marker | F248_FIRST_AFTER_BREAK | Section 4.",
+    "marker | F248_RESTART_AFTER | R1.",
+    "marker | F248_DELIMITER_L0 | 章节 1)",
+    "marker | F248_DELIMITER_L1 | 章节 1 - Part 1)",
+    "field | F248_REF_N | Section 1.1.1",
+    "field | F248_REF_N_T | 1.1.1",
+    "field | F248_REF_R | Section 1.1.1",
+    "field | F248_REF_W | Section 1.1.1",
+    "field | F248_REF_W_T | 1.1.1",
+    "field | F248_REF_N_P | Section 1.1.1 above",
+    "field | F248_REF_P | above",
+    "field | F248_DELIMITER_N | 章节 1 - Part 1)",
+    "field | F248_DELIMITER_N_T | 1-1)",
+    "field | F248_DELIMITER_W_T | 1-1)",
+    "field | F248_CONTEXT_DIFFERENT_N | Clause 2",
+    "field | F248_CONTEXT_DIFFERENT_R | 4.5.Clause 2",
+    "field | F248_CONTEXT_DIFFERENT_R_T | 4.5.2",
+    "field | F248_CONTEXT_N | Clause 2",
+    "field | F248_CONTEXT_R | Clause 2",
+    "field | F248_CONTEXT_W | 4.5.Clause 2",
+];
+const WORD_F248_TOC_RECORDS: &[&str] = &[
+    "TOC1 | Section 1. | Body | 1",
+    "TOC2 | 1.1. | Table | 1",
+    "TOC3 | Section 1.1.1. | Deep | 1",
+];
 const WORD_COMPARISON_ENVIRONMENT: &str = "locale=en-US; normalization=revision-records-v1";
 const WORD_FIELD_ORACLE_ENVIRONMENT: &str =
     "locale=en-US; calendar=Gregorian; decimal=.; grouping=,; timezone=UTC";
@@ -996,7 +1033,10 @@ fn toc_entry_signatures(xml: &str) -> Vec<(String, String, Option<String>, Optio
                         if let rdocx_oxml::text::RunContent::Field(field) = content
                             && field.instruction.name == "PAGEREF"
                         {
-                            display.push_str(&field.cached_result);
+                            let displayed_page = format!("\t{}", field.cached_result);
+                            if !display.ends_with(&displayed_page) {
+                                display.push_str(&field.cached_result);
+                            }
                             page_target =
                                 field.instruction.arguments.first().and_then(|argument| {
                                     let rdocx_oxml::text::FieldArgument::Text(value) = argument
@@ -1018,6 +1058,26 @@ fn toc_entry_signatures(xml: &str) -> Vec<(String, String, Option<String>, Optio
                     page_target,
                 )
             })
+        })
+        .collect()
+}
+
+fn f248_toc_records(xml: &str) -> Vec<String> {
+    toc_entry_signatures(xml)
+        .into_iter()
+        .map(|(display, style, _, _)| {
+            let (content, page) = display
+                .rsplit_once('\t')
+                .expect("F-248 TOC entry has a page separator");
+            let title = ["Body", "Table", "Deep"]
+                .into_iter()
+                .find(|title| content.ends_with(title))
+                .expect("F-248 TOC entry has a known title");
+            let marker = content
+                .strip_suffix(title)
+                .unwrap()
+                .trim_end_matches([' ', '\t']);
+            format!("{style} | {marker} | {title} | {page}")
         })
         .collect()
 }
@@ -1462,6 +1522,88 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
 }
 
 #[test]
+fn numbered_toc_entries_reuse_the_visible_layout_marker() {
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Overview</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let definition = document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Heading1", instance, 0)
+        .unwrap();
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+    assert_eq!(
+        toc_entry_signatures(&document_xml(&mut document))[0].0,
+        "1.\tOverview\t1"
+    );
+}
+
+#[test]
+fn toc_bookmark_ids_names_and_references_follow_final_heading_order() {
+    let source = |reference: &str, headings: &str| {
+        wrap_word_body(&format!(
+            r#"
+            <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+            <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+            <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+            <w:p><w:fldSimple w:instr="REF {reference}"><w:r><w:t>reference</w:t></w:r></w:fldSimple></w:p>
+            {headings}
+            "#
+        ))
+    };
+    let later =
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Later</w:t></w:r></w:p>"#;
+    let earlier =
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Earlier</w:t></w:r></w:p>"#;
+
+    let mut history = document_with_field_parts(&source("_Toc1", later), None, None);
+    history.rebuild_toc().unwrap();
+    let later_index = history.content_count() - 1;
+    history
+        .insert_paragraph(later_index, "Earlier")
+        .style("Heading1");
+    history.rebuild_toc().unwrap();
+
+    let final_headings = format!("{earlier}{later}");
+    let mut final_order = document_with_field_parts(&source("_Toc2", &final_headings), None, None);
+    final_order.rebuild_toc().unwrap();
+
+    let history_xml = document_xml(&mut history);
+    let final_xml = document_xml(&mut final_order);
+    let bookmark_pairs = |xml: &str| {
+        xml.match_indices("<w:bookmarkStart")
+            .map(|(start, _)| {
+                let element = &xml[start..start + xml[start..].find("/>").unwrap()];
+                let value = |attribute: &str| {
+                    let prefix = format!(r#"{attribute}=""#);
+                    let value = &element[element.find(&prefix).unwrap() + prefix.len()..];
+                    value[..value.find('"').unwrap()].to_owned()
+                };
+                (value("w:id"), value("w:name"))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(history_xml, final_xml);
+    assert_eq!(bookmark_pairs(&history_xml), bookmark_pairs(&final_xml));
+    assert_eq!(
+        bookmark_pairs(&history_xml),
+        [
+            ("1".to_owned(), "_Toc1".to_owned()),
+            ("2".to_owned(), "_Toc2".to_owned())
+        ]
+    );
+    assert!(history_xml.contains(r#"w:instr="REF _Toc2""#));
+    assert_eq!(history.to_bytes().unwrap(), final_order.to_bytes().unwrap());
+}
+
+#[test]
 fn toc_rebuild_uses_final_deterministic_page_targets() {
     let body = r#"
         <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-1" \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
@@ -1664,6 +1806,23 @@ fn toc_bookmark_allocation_uses_the_final_id_lazily() {
     assert!(
         document_xml(&mut document).contains(&format!("w:id=\"{}\" w:name=\"_Toc1\"", i32::MAX))
     );
+}
+
+#[test]
+fn toc_bookmark_reservation_failure_is_atomic() {
+    let toc = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p><w:p><w:r><w:t>old</w:t></w:r></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let body = format!(
+        r#"{toc}<w:p><w:bookmarkStart w:id="{}" w:name="prior"/><w:r><w:t>Prior</w:t></w:r><w:bookmarkEnd w:id="{}"/></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>"#,
+        i32::MAX,
+        i32::MAX
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    let before = document_xml(&mut document);
+
+    let error = document.rebuild_toc().unwrap_err();
+
+    assert!(error.to_string().contains("bookmark ID range"), "{error}");
+    assert_eq!(document_xml(&mut document), before);
 }
 
 #[test]
@@ -5909,46 +6068,58 @@ fn empty_modeled_controls_and_numeric_references_report_visible_content_accurate
 }
 
 #[test]
-fn producer_defined_number_formats_survive_save_and_reopen() {
-    let document_xml = wrap_word_body(
-        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
-    );
-    let numbering_xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="chicago"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#;
-    let mut seed = Document::new();
-    let mut package =
-        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
-    package.set_part("/word/document.xml", document_xml.into_bytes());
-    package.set_part("/word/numbering.xml", numbering_xml.to_vec());
-    package.content_types.add_override(
-        "/word/numbering.xml",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
-    );
-    package.get_or_create_part_rels("/word/document.xml").add(
-        oxml_opc::relationship::rel_types::NUMBERING,
-        "numbering.xml",
-    );
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    package.write_to(&mut bytes).unwrap();
+fn unrendered_number_formats_survive_without_decimal_coercion() {
+    for (format, expected_bullet, expect_rtf_diagnostic) in [
+        ("producerFormat", None, true),
+        ("chicago", Some(false), false),
+    ] {
+        let document_xml = wrap_word_body(
+            r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"#,
+        );
+        let numbering_xml = format!(
+            r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="{format}"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#
+        );
+        let mut seed = Document::new();
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        package.set_part("/word/numbering.xml", numbering_xml.into_bytes());
+        package.content_types.add_override(
+            "/word/numbering.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+        );
+        package.get_or_create_part_rels("/word/document.xml").add(
+            oxml_opc::relationship::rel_types::NUMBERING,
+            "numbering.xml",
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
 
-    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
-    assert_eq!(document.numbering_is_bullet(1), None);
-    assert!(!document.to_html_fragment().contains("<ol>"));
-    assert!(!document.to_markdown().contains("1. item"));
-    assert!(
-        document
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert_eq!(document.numbering_is_bullet(1), expected_bullet);
+        let html = document.to_html_fragment();
+        assert!(!html.contains("<ol>"));
+        assert!(!html.contains("<ul>"));
+        let markdown = document.to_markdown();
+        assert!(!markdown.contains("1. item"));
+        assert!(!markdown.contains("- item"));
+        let has_rtf_diagnostic = document
             .to_rtf_bytes()
             .unwrap()
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.message.contains("numbering format"))
-    );
+            .any(|diagnostic| diagnostic.message.contains("numbering format"));
+        assert_eq!(has_rtf_diagnostic, expect_rtf_diagnostic);
 
-    let saved = document.to_bytes().unwrap();
-    let reopened = Document::from_bytes(&saved).unwrap();
-    assert_eq!(reopened.numbering_is_bullet(1), None);
-    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
-    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
-    assert!(numbering.contains(r#"<w:numFmt w:val="chicago"/>"#));
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.numbering_is_bullet(1), expected_bullet);
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let numbering =
+            std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+        assert!(numbering.contains(&format!(r#"<w:numFmt w:val="{format}"/>"#)));
+    }
 }
 
 #[test]
@@ -10776,6 +10947,821 @@ fn capture_full_story_comparison_word_records() {
     );
 }
 
+fn f248_numbering_oracle_source() -> Vec<u8> {
+    let mut source = Document::new();
+    for (style_id, name) in [
+        ("F248Heading1", "Numbered Heading 1"),
+        ("F248Heading2", "Numbered Heading 2"),
+        ("F248Heading3", "Numbered Heading 3"),
+    ] {
+        source
+            .add_style(StyleBuilder::paragraph(style_id, name))
+            .unwrap();
+    }
+    let levels = [
+        ListLevel::decimal().level_text("Section %1."),
+        ListLevel::decimal().level_text("%1.%2."),
+        ListLevel::decimal().level_text("Section %1.%2.%3."),
+    ];
+    let definition = source.add_numbering_definition(&levels).unwrap();
+    let first = source.add_numbering_instance(definition, &[]).unwrap();
+    let second_definition = source.add_numbering_definition(&levels).unwrap();
+    let second = source
+        .add_numbering_instance(second_definition, &[])
+        .unwrap();
+    for (style_id, level) in [
+        ("F248Heading1", 0),
+        ("F248Heading2", 1),
+        ("F248Heading3", 2),
+    ] {
+        source
+            .link_style_to_numbering(style_id, first, level)
+            .unwrap();
+    }
+    let restart_definition = source
+        .add_numbering_definition(&[ListLevel::decimal().level_text("R%1.")])
+        .unwrap();
+    let restart = source
+        .add_numbering_instance(restart_definition, &[])
+        .unwrap();
+    let delimiter_definition = source
+        .add_numbering_definition(&[
+            ListLevel::decimal().level_text("章节 %1)"),
+            ListLevel::decimal().level_text("章节 %1 - Part %2)"),
+        ])
+        .unwrap();
+    let delimiter = source
+        .add_numbering_instance(delimiter_definition, &[])
+        .unwrap();
+    let context_definition = source
+        .add_numbering_definition(&[
+            ListLevel::decimal().level_text("%1."),
+            ListLevel::decimal().level_text("%1.%2."),
+            ListLevel::decimal().level_text("Clause %3."),
+        ])
+        .unwrap();
+    let context = source
+        .add_numbering_instance(context_definition, &[])
+        .unwrap();
+
+    let numbered = |bookmark_id: u32,
+                    bookmark: &str,
+                    text: &str,
+                    style: Option<&str>,
+                    num_id: Option<u32>,
+                    level: u32| {
+        let properties = match (style, num_id) {
+            (Some(style), _) => format!(r#"<w:pStyle w:val="{style}"/>"#),
+            (None, Some(num_id)) => format!(
+                r#"<w:numPr><w:ilvl w:val="{level}"/><w:numId w:val="{num_id}"/></w:numPr>"#
+            ),
+            (None, None) => String::new(),
+        };
+        format!(
+            r#"<w:p><w:pPr>{properties}</w:pPr><w:bookmarkStart w:id="{bookmark_id}" w:name="{bookmark}"/><w:r><w:t>{text}</w:t></w:r><w:bookmarkEnd w:id="{bookmark_id}"/></w:p>"#
+        )
+    };
+    let field = |bookmark_id: u32, bookmark: &str, instruction: &str| {
+        let instruction = instruction
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        format!(
+            r#"<w:p><w:bookmarkStart w:id="{bookmark_id}" w:name="{bookmark}"/><w:fldSimple w:instr="{instruction}"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="{bookmark_id}"/></w:p>"#
+        )
+    };
+    let context_fields = format!(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="{context}"/></w:numPr></w:pPr>
+        <w:bookmarkStart w:id="60" w:name="F248_CONTEXT_N"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \n"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="60"/>
+        <w:bookmarkStart w:id="61" w:name="F248_CONTEXT_R"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \r"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="61"/>
+        <w:bookmarkStart w:id="62" w:name="F248_CONTEXT_W"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \w"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="62"/>
+        </w:p>"#
+    );
+    let context_different_fields = format!(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="{context}"/></w:numPr></w:pPr>
+        <w:bookmarkStart w:id="64" w:name="F248_CONTEXT_DIFFERENT_N"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \n"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="64"/>
+        <w:bookmarkStart w:id="65" w:name="F248_CONTEXT_DIFFERENT_R"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \r"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="65"/>
+        <w:bookmarkStart w:id="66" w:name="F248_CONTEXT_DIFFERENT_R_T"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \r \t"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="66"/>
+        </w:p>"#
+    );
+    let context_body = format!(
+        r#"{}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {context_different_fields}
+        {}
+        {}
+        {}
+        {}
+        {context_fields}"#,
+        numbered(
+            40,
+            "F248_CONTEXT_ROOT_1",
+            "Context root 1",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            41,
+            "F248_CONTEXT_ROOT_2",
+            "Context root 2",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            42,
+            "F248_CONTEXT_ROOT_3",
+            "Context root 3",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            43,
+            "F248_CONTEXT_ROOT_4",
+            "Context root 4",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            44,
+            "F248_CONTEXT_BRANCH_1",
+            "Context branch 1",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            45,
+            "F248_CONTEXT_BRANCH_2",
+            "Context branch 2",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            46,
+            "F248_CONTEXT_BRANCH_3",
+            "Context branch 3",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            47,
+            "F248_CONTEXT_BRANCH_4",
+            "Context branch 4",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            48,
+            "F248_CONTEXT_BRANCH_5",
+            "Context branch 5",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            49,
+            "F248_CONTEXT_PRECURSOR",
+            "Context precursor",
+            None,
+            Some(context),
+            2
+        ),
+        numbered(
+            63,
+            "F248_CONTEXT_TARGET",
+            "Context target",
+            None,
+            Some(context),
+            2
+        ),
+    );
+    let body = format!(
+        r#"
+        {}
+        <w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/>{}</w:tc></w:tr></w:tbl>
+        {}
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \t "Numbered Heading 1,1,Numbered Heading 2,2,Numbered Heading 3,3"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale toc</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        {}
+        {}
+        {}
+        {}
+        <w:p><w:pPr><w:sectPr><w:type w:val="continuous"/><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr><w:r><w:t>section break</w:t></w:r></w:p>
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {context_body}
+        <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+        "#,
+        numbered(1, "F248_BODY_L0", "Body", Some("F248Heading1"), None, 0),
+        numbered(2, "F248_TABLE_L1", "Table", Some("F248Heading2"), None, 1),
+        numbered(3, "F248_BODY_L2", "Deep", Some("F248Heading3"), None, 2),
+        numbered(
+            4,
+            "F248_FIRST_CONT",
+            "First continuation",
+            None,
+            Some(first),
+            0
+        ),
+        numbered(5, "F248_SECOND_NEW", "Second new", None, Some(second), 0),
+        numbered(
+            6,
+            "F248_FIRST_RESUME",
+            "First resumed",
+            None,
+            Some(first),
+            0
+        ),
+        numbered(
+            7,
+            "F248_RESTART_BEFORE",
+            "Restart before",
+            None,
+            Some(restart),
+            0
+        ),
+        numbered(
+            8,
+            "F248_FIRST_AFTER_BREAK",
+            "First after break",
+            None,
+            Some(first),
+            0
+        ),
+        numbered(
+            9,
+            "F248_RESTART_AFTER",
+            "Restart after",
+            None,
+            Some(restart),
+            0
+        ),
+        field(20, "F248_REF_N", r"REF F248_BODY_L2 \n"),
+        field(21, "F248_REF_N_T", r"REF F248_BODY_L2 \n \t"),
+        field(22, "F248_REF_R", r"REF F248_BODY_L2 \r"),
+        field(23, "F248_REF_W", r"REF F248_BODY_L2 \w"),
+        field(24, "F248_REF_W_T", r"REF F248_BODY_L2 \w \t"),
+        field(25, "F248_REF_N_P", r"REF F248_BODY_L2 \n \p"),
+        field(26, "F248_REF_P", r"REF F248_BODY_L2 \p"),
+        numbered(
+            27,
+            "F248_DELIMITER_L0",
+            "Delimiter root",
+            None,
+            Some(delimiter),
+            0
+        ),
+        numbered(
+            28,
+            "F248_DELIMITER_L1",
+            "Delimiter target",
+            None,
+            Some(delimiter),
+            1
+        ),
+        field(29, "F248_DELIMITER_N", r"REF F248_DELIMITER_L1 \n"),
+        field(30, "F248_DELIMITER_N_T", r"REF F248_DELIMITER_L1 \n \t",),
+        field(31, "F248_DELIMITER_W_T", r"REF F248_DELIMITER_L1 \w \t",),
+    );
+    let document_xml = wrap_word_body(&body);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    package.set_part("/word/document.xml", document_xml.into_bytes());
+    let numbering_xml =
+        String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec())
+            .unwrap()
+            .replacen(
+                "<w:numbering",
+                "<w:numbering xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"",
+                1,
+            );
+    let definition_start = format!(r#"<w:abstractNum w:abstractNumId="{restart_definition}""#);
+    let numbered_restart = format!(
+        r#"<w:abstractNum w15:restartNumberingAfterBreak="1" w:abstractNumId="{restart_definition}""#
+    );
+    assert!(numbering_xml.contains(&definition_start));
+    package.set_part(
+        "/word/numbering.xml",
+        numbering_xml
+            .replacen(&definition_start, &numbered_restart, 1)
+            .into_bytes(),
+    );
+    assert!(
+        rdocx_oxml::numbering::CT_Numbering::from_xml(
+            package.get_part("/word/numbering.xml").unwrap()
+        )
+        .unwrap()
+        .restarts_after_section_break(restart)
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    bytes.into_inner()
+}
+
+fn f248_rdocx_records(document: &mut Document) -> Vec<String> {
+    let layout = document.layout_deterministic().unwrap();
+    let marker = |name: &str, value: &str| format!("marker | {name} | {value}");
+    let body_marker = |body_index| {
+        layout
+            .document_body_paragraph_numbering(body_index)
+            .map(|numbering| numbering.marker_text.as_str())
+            .unwrap()
+    };
+    let mut records = vec![
+        marker("F248_BODY_L0", body_marker(0)),
+        marker(
+            "F248_TABLE_L1",
+            layout
+                .document_paragraph_numbering(1)
+                .map(|numbering| numbering.marker_text.as_str())
+                .unwrap(),
+        ),
+        marker("F248_BODY_L2", body_marker(2)),
+        marker("F248_FIRST_CONT", body_marker(6)),
+        marker("F248_SECOND_NEW", body_marker(7)),
+        marker("F248_FIRST_RESUME", body_marker(8)),
+        marker("F248_RESTART_BEFORE", body_marker(9)),
+        marker("F248_FIRST_AFTER_BREAK", body_marker(11)),
+        marker("F248_RESTART_AFTER", body_marker(12)),
+        marker("F248_DELIMITER_L0", body_marker(20)),
+        marker("F248_DELIMITER_L1", body_marker(21)),
+    ];
+    let field_names = [
+        "F248_REF_N",
+        "F248_REF_N_T",
+        "F248_REF_R",
+        "F248_REF_W",
+        "F248_REF_W_T",
+        "F248_REF_N_P",
+        "F248_REF_P",
+        "F248_DELIMITER_N",
+        "F248_DELIMITER_N_T",
+        "F248_DELIMITER_W_T",
+        "F248_CONTEXT_DIFFERENT_N",
+        "F248_CONTEXT_DIFFERENT_R",
+        "F248_CONTEXT_DIFFERENT_R_T",
+        "F248_CONTEXT_N",
+        "F248_CONTEXT_R",
+        "F248_CONTEXT_W",
+    ];
+    let fields = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap()
+        .into_iter()
+        .filter(|field| field.instruction.trim_start().starts_with("REF "))
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), field_names.len());
+    records.extend(fields.into_iter().zip(field_names).map(|(field, name)| {
+        let FieldOutcome::Resolved(value) = field.outcome else {
+            panic!("F-248 field {name} did not resolve")
+        };
+        format!("field | {name} | {value}")
+    }));
+    records
+}
+
+#[test]
+fn three_level_style_linked_numbering_matches_pinned_word() {
+    assert_eq!(
+        WORD_F248_ORACLE,
+        "Microsoft Word 16.112.3 build 16.112.26083020"
+    );
+    assert_eq!(
+        WORD_F248_ENVIRONMENT,
+        "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f248-numbering-records-v2"
+    );
+
+    let mut document = Document::from_bytes(&f248_numbering_oracle_source()).unwrap();
+    assert_eq!(
+        f248_rdocx_records(&mut document)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        WORD_F248_RECORDS
+    );
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+    assert_eq!(
+        f248_toc_records(&document_xml(&mut document)),
+        WORD_F248_TOC_RECORDS
+    );
+    document
+        .update_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    let visible_layout = document.layout_deterministic().unwrap();
+    let mut visible_text = String::new();
+    for page in &visible_layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                visible_text.push_str(&run.text);
+            }
+        });
+    }
+    for expected in ["Section 1.1.1 above", "1-1)", "4.5.2", "4.5.Clause 2"] {
+        assert!(
+            visible_text.contains(expected),
+            "{expected}: {visible_text}"
+        );
+    }
+    assert_eq!(visible_text.matches("above").count(), 2, "{visible_text}");
+    assert_eq!(
+        visible_text.matches("Clause 2").count(),
+        6,
+        "{visible_text}"
+    );
+}
+
+#[test]
+#[ignore = "requires installed Microsoft Word 16.112.3 GUI automation"]
+fn capture_f248_word_16_112_numbering_records() {
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let version = Command::new("/usr/libexec/PlistBuddy")
+        .args([
+            "-c",
+            "Print:CFBundleShortVersionString",
+            "/Applications/Microsoft Word.app/Contents/Info.plist",
+        ])
+        .output()
+        .expect("read Word version");
+    let build = Command::new("/usr/libexec/PlistBuddy")
+        .args([
+            "-c",
+            "Print:CFBundleVersion",
+            "/Applications/Microsoft Word.app/Contents/Info.plist",
+        ])
+        .output()
+        .expect("read Word build");
+    assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "16.112.3");
+    assert_eq!(
+        String::from_utf8_lossy(&build.stdout).trim(),
+        "16.112.26083020"
+    );
+    assert_eq!(
+        WORD_F248_ORACLE,
+        "Microsoft Word 16.112.3 build 16.112.26083020"
+    );
+    assert_eq!(
+        WORD_F248_ENVIRONMENT,
+        "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f248-numbering-records-v2"
+    );
+
+    let source_bytes = f248_numbering_oracle_source();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    let directory = std::path::Path::new(
+        "/Users/atulsharma/Library/Containers/com.microsoft.Word/Data/Documents/rdocx-f248-word-oracle",
+    )
+    .join(format!("{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("create F-248 Word oracle directory");
+    let input_path = directory.join("f248-source.docx");
+    let output_path = directory.join("f248-word-updated.docx");
+    let pdf_path = directory.join("f248-word-render.pdf");
+    std::fs::write(&input_path, &source_bytes).expect("write F-248 Word source");
+
+    let script = format!(
+        r#"with timeout of 60 seconds
+tell application "Microsoft Word"
+open file name "{}" read only false add to recent files false
+set f248Doc to document 1
+repeat with toc_object in (get tables of contents of f248Doc)
+update toc_object
+end repeat
+repeat with field_object in (get fields of f248Doc)
+update field field_object
+end repeat
+save as f248Doc file name "{}" file format format document default add to recent files false
+set f248Doc to active document
+set recordSeparator to "<F248-RECORD>"
+set unitSeparator to "<F248-VALUE>"
+set captureRecords to {{}}
+set markerNames to {{"F248_BODY_L0", "F248_TABLE_L1", "F248_BODY_L2", "F248_FIRST_CONT", "F248_SECOND_NEW", "F248_FIRST_RESUME", "F248_RESTART_BEFORE", "F248_FIRST_AFTER_BREAK", "F248_RESTART_AFTER", "F248_DELIMITER_L0", "F248_DELIMITER_L1"}}
+repeat with recordName in markerNames
+try
+set namedBookmark to get bookmark (contents of recordName) of f248Doc
+set bookmarkStart to get start of bookmark of namedBookmark
+set bookmarkEnd to get end of bookmark of namedBookmark
+set sourceRange to create range f248Doc start bookmarkStart end bookmarkEnd
+set sourceListFormat to get list format of sourceRange
+set markerText to get list string of sourceListFormat
+set end of captureRecords to "marker" & unitSeparator & (recordName as text) & unitSeparator & markerText
+on error errorMessage
+error "marker " & (contents of recordName) & ": " & errorMessage
+end try
+end repeat
+set fieldNames to {{"F248_REF_N", "F248_REF_N_T", "F248_REF_R", "F248_REF_W", "F248_REF_W_T", "F248_REF_N_P", "F248_REF_P", "F248_DELIMITER_N", "F248_DELIMITER_N_T", "F248_DELIMITER_W_T", "F248_CONTEXT_DIFFERENT_N", "F248_CONTEXT_DIFFERENT_R", "F248_CONTEXT_DIFFERENT_R_T", "F248_CONTEXT_N", "F248_CONTEXT_R", "F248_CONTEXT_W"}}
+repeat with recordName in fieldNames
+try
+set namedBookmark to get bookmark (contents of recordName) of f248Doc
+set bookmarkStart to get start of bookmark of namedBookmark
+set bookmarkEnd to get end of bookmark of namedBookmark
+set resultRange to create range f248Doc start bookmarkStart end bookmarkEnd
+set resultText to get content of resultRange
+set end of captureRecords to "field" & unitSeparator & (recordName as text) & unitSeparator & resultText
+on error errorMessage
+error "field " & (contents of recordName) & ": " & errorMessage
+end try
+end repeat
+set AppleScript's text item delimiters to recordSeparator
+set capturedText to captureRecords as text
+save as f248Doc file name "{}" file format format PDF add to recent files false
+close f248Doc saving no
+return capturedText
+end tell
+end timeout"#,
+        input_path.display(),
+        output_path.display(),
+        pdf_path.display(),
+    );
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("run F-248 Word automation");
+    assert!(
+        output.status.success(),
+        "F-248 Word capture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = String::from_utf8_lossy(&output.stdout)
+        .replace("<F248-RECORD>", "\n")
+        .replace("<F248-VALUE>", " | ");
+    println!("F-248 Word records\n{records}");
+    assert_eq!(
+        records
+            .lines()
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>(),
+        WORD_F248_RECORDS
+    );
+    let word_bytes = std::fs::read(&output_path).expect("read F-248 Word output");
+    let word_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&word_bytes)).unwrap();
+    let word_toc = toc_entry_signatures(&word_part_xml(&word_package, "/word/document.xml"));
+    println!("F-248 Word TOC: {word_toc:#?}");
+    assert_eq!(
+        f248_toc_records(&word_part_xml(&word_package, "/word/document.xml")),
+        WORD_F248_TOC_RECORDS
+    );
+
+    const RASTER_DPI: f64 = 150.0;
+    const MINIMUM_INK_COVERAGE_RATIO: f64 = 0.95;
+    const MAXIMUM_INK_EDGE_DELTA_RATIO: f64 = 0.08;
+    const MAXIMUM_INK_DISTRIBUTION_DELTA: f64 = 0.27;
+    const MAXIMUM_PROJECTION_DISTANCE: f64 = 0.04;
+    const MAXIMUM_RASTER_DIMENSION_DELTA: usize = 1;
+    const PDFTOPPM_ORACLE: &str = "pdftoppm version 26.01.0";
+    let pdftoppm_version = Command::new("pdftoppm")
+        .arg("-v")
+        .output()
+        .expect("read pinned PDF rasterizer version");
+    assert!(pdftoppm_version.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&pdftoppm_version.stderr)
+            .lines()
+            .next(),
+        Some(PDFTOPPM_ORACLE)
+    );
+    let mut subject = Document::from_bytes(&source_bytes).expect("open F-248 rdocx subject");
+    subject.rebuild_toc().expect("rebuild F-248 subject TOC");
+    subject
+        .update_fields(&FieldEvaluationContext::default())
+        .expect("update F-248 subject REF fields");
+    let oracle = Document::from_bytes(&word_bytes).expect("open F-248 Word render oracle");
+    let subject_pages = subject
+        .layout_deterministic()
+        .expect("layout F-248 rdocx subject")
+        .layout
+        .pages
+        .len();
+    let oracle_pages = oracle
+        .layout_deterministic()
+        .expect("layout F-248 Word oracle")
+        .layout
+        .pages
+        .len();
+    assert_eq!(subject_pages, oracle_pages);
+    let oracle_prefix = directory.join("f248-word-render");
+    let rasterized = Command::new("pdftoppm")
+        .args(["-png", "-r"])
+        .arg(RASTER_DPI.to_string())
+        .arg(&pdf_path)
+        .arg(&oracle_prefix)
+        .output()
+        .expect("rasterize F-248 Word PDF");
+    assert!(
+        rasterized.status.success(),
+        "F-248 Word PDF rasterization failed: {}",
+        String::from_utf8_lossy(&rasterized.stderr)
+    );
+    let metrics_script = r#"from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[3])
+from golden_png_harness import decode_png
+from pptx_ssim_harness import composite_luminance
+records = []
+for path in sys.argv[1:3]:
+    width, height, rgba = decode_png(Path(path))
+    luminance = composite_luminance(rgba)
+    ink = [index for index, value in enumerate(luminance) if value < 245]
+    xs = [index % width for index in ink]
+    ys = [index // width for index in ink]
+    grid = []
+    rows = [sum(luminance[y * width + x] < 245 for x in range(width)) for y in range(height)]
+    columns = [sum(luminance[y * width + x] < 245 for y in range(height)) for x in range(width)]
+    for row in range(8):
+        top = row * height // 8
+        bottom = (row + 1) * height // 8
+        for column in range(4):
+            left = column * width // 4
+            right = (column + 1) * width // 4
+            grid.append(sum(
+                luminance[y * width + x] < 245
+                for y in range(top, bottom)
+                for x in range(left, right)
+            ))
+    records.append((rows, columns))
+    print(width, height, len(ink), min(xs), min(ys), max(xs), max(ys), *grid)
+def normalized_emd(first, second):
+    length = max(len(first), len(second))
+    first = first + [0] * (length - len(first))
+    second = second + [0] * (length - len(second))
+    first_total = sum(first)
+    second_total = sum(second)
+    first_cumulative = 0.0
+    second_cumulative = 0.0
+    distance = 0.0
+    for first_value, second_value in zip(first, second):
+        first_cumulative += first_value / first_total
+        second_cumulative += second_value / second_total
+        distance += abs(first_cumulative - second_cumulative)
+    return distance / length
+def shifted(profile):
+    distance = max(1, round(len(profile) * 0.05))
+    return [0] * distance + profile[:-distance]
+subject_rows, subject_columns = records[0]
+oracle_rows, oracle_columns = records[1]
+scale = 1_000_000_000
+print(
+    round(normalized_emd(subject_rows, oracle_rows) * scale),
+    round(normalized_emd(subject_columns, oracle_columns) * scale),
+    round(normalized_emd(subject_rows, shifted(subject_rows)) * scale),
+    round(normalized_emd(subject_columns, shifted(subject_columns)) * scale),
+)"#;
+    let mut ink_coverage_ratios = Vec::with_capacity(subject_pages);
+    let mut ink_edge_delta_ratios = Vec::with_capacity(subject_pages);
+    let mut ink_distribution_deltas = Vec::with_capacity(subject_pages);
+    let mut row_projection_distances = Vec::with_capacity(subject_pages);
+    let mut column_projection_distances = Vec::with_capacity(subject_pages);
+    let mut shifted_row_distances = Vec::with_capacity(subject_pages);
+    let mut shifted_column_distances = Vec::with_capacity(subject_pages);
+    for page_index in 0..subject_pages {
+        let subject_png = subject
+            .render_page_to_png_deterministic(page_index, RASTER_DPI)
+            .expect("render F-248 rdocx subject")
+            .expect("F-248 subject page exists");
+        let subject_png_path = directory.join(format!("f248-rdocx-render-{}.png", page_index + 1));
+        let oracle_png_path = directory.join(format!("f248-word-render-{}.png", page_index + 1));
+        std::fs::write(&subject_png_path, subject_png).expect("write F-248 rdocx raster");
+        assert!(oracle_png_path.is_file(), "missing Word PDF raster page");
+        let metrics = Command::new("python3")
+            .args(["-c", metrics_script])
+            .arg(&subject_png_path)
+            .arg(&oracle_png_path)
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts"))
+            .output()
+            .expect("measure F-248 Word raster");
+        assert!(
+            metrics.status.success(),
+            "F-248 Word raster measurement failed: {}",
+            String::from_utf8_lossy(&metrics.stderr)
+        );
+        let values = String::from_utf8_lossy(&metrics.stdout)
+            .split_whitespace()
+            .map(|value| value.parse::<usize>().expect("F-248 raster metric"))
+            .collect::<Vec<_>>();
+        const METRIC_VALUES: usize = 7 + 8 * 4;
+        assert_eq!(
+            values.len(),
+            METRIC_VALUES * 2 + 4,
+            "two raster records, an 8 by 4 ink grid, and projection distances"
+        );
+        let subject_metrics = &values[..METRIC_VALUES];
+        let oracle_metrics = &values[METRIC_VALUES..METRIC_VALUES * 2];
+        assert!(
+            subject_metrics[0].abs_diff(oracle_metrics[0]) <= MAXIMUM_RASTER_DIMENSION_DELTA
+                && subject_metrics[1].abs_diff(oracle_metrics[1]) <= MAXIMUM_RASTER_DIMENSION_DELTA,
+            "F-248 raster dimensions differ beyond {MAXIMUM_RASTER_DIMENSION_DELTA} pixel: subject={}x{}, oracle={}x{}",
+            subject_metrics[0],
+            subject_metrics[1],
+            oracle_metrics[0],
+            oracle_metrics[1]
+        );
+        let coverage = subject_metrics[2].min(oracle_metrics[2]) as f64
+            / subject_metrics[2].max(oracle_metrics[2]) as f64;
+        let horizontal = [3usize, 5]
+            .into_iter()
+            .map(|index| subject_metrics[index].abs_diff(oracle_metrics[index]) as f64)
+            .fold(0.0, f64::max)
+            / subject_metrics[0].max(oracle_metrics[0]) as f64;
+        let vertical = [4usize, 6]
+            .into_iter()
+            .map(|index| subject_metrics[index].abs_diff(oracle_metrics[index]) as f64)
+            .fold(0.0, f64::max)
+            / subject_metrics[1].max(oracle_metrics[1]) as f64;
+        ink_coverage_ratios.push(coverage);
+        ink_edge_delta_ratios.push(horizontal.max(vertical));
+        let distribution_delta = subject_metrics[7..]
+            .iter()
+            .zip(&oracle_metrics[7..])
+            .map(|(subject, oracle)| {
+                (*subject as f64 / subject_metrics[2] as f64
+                    - *oracle as f64 / oracle_metrics[2] as f64)
+                    .abs()
+            })
+            .sum::<f64>()
+            / 2.0;
+        ink_distribution_deltas.push(distribution_delta);
+        let projection = &values[METRIC_VALUES * 2..];
+        row_projection_distances.push(projection[0] as f64 / 1_000_000_000.0);
+        column_projection_distances.push(projection[1] as f64 / 1_000_000_000.0);
+        shifted_row_distances.push(projection[2] as f64 / 1_000_000_000.0);
+        shifted_column_distances.push(projection[3] as f64 / 1_000_000_000.0);
+    }
+    assert!(
+        !directory
+            .join(format!("f248-word-render-{}.png", subject_pages + 1))
+            .exists(),
+        "Word PDF has more pages than the deterministic rdocx render"
+    );
+    let minimum_ink_coverage = ink_coverage_ratios.iter().copied().fold(1.0, f64::min);
+    let maximum_ink_edge_delta = ink_edge_delta_ratios.iter().copied().fold(0.0, f64::max);
+    let maximum_ink_distribution_delta =
+        ink_distribution_deltas.iter().copied().fold(0.0, f64::max);
+    let maximum_projection_distance = row_projection_distances
+        .iter()
+        .chain(&column_projection_distances)
+        .copied()
+        .fold(0.0, f64::max);
+    let minimum_shifted_projection_distance = shifted_row_distances
+        .iter()
+        .chain(&shifted_column_distances)
+        .copied()
+        .fold(1.0, f64::min);
+    println!(
+        "F-248 Word raster: dpi={RASTER_DPI}, pages={subject_pages}, dimension_delta_threshold={MAXIMUM_RASTER_DIMENSION_DELTA}px, ink_coverage={ink_coverage_ratios:?}, minimum_coverage={minimum_ink_coverage:.6}, coverage_threshold={MINIMUM_INK_COVERAGE_RATIO:.2}, ink_edge_delta={ink_edge_delta_ratios:?}, maximum_edge_delta={maximum_ink_edge_delta:.6}, edge_threshold={MAXIMUM_INK_EDGE_DELTA_RATIO:.2}, ink_distribution_delta={ink_distribution_deltas:?}, maximum_distribution_delta={maximum_ink_distribution_delta:.6}, distribution_threshold={MAXIMUM_INK_DISTRIBUTION_DELTA:.2}, row_projection_distance={row_projection_distances:?}, column_projection_distance={column_projection_distances:?}, maximum_projection_distance={maximum_projection_distance:.6}, projection_threshold={MAXIMUM_PROJECTION_DISTANCE:.2}, shifted_row_distance={shifted_row_distances:?}, shifted_column_distance={shifted_column_distances:?}, minimum_shifted_projection_distance={minimum_shifted_projection_distance:.6}, rasterizer={PDFTOPPM_ORACLE}"
+    );
+    assert!(
+        minimum_ink_coverage >= MINIMUM_INK_COVERAGE_RATIO,
+        "F-248 Word raster ink coverage {minimum_ink_coverage:.6} fell below {MINIMUM_INK_COVERAGE_RATIO:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        maximum_ink_edge_delta <= MAXIMUM_INK_EDGE_DELTA_RATIO,
+        "F-248 Word raster ink edge delta {maximum_ink_edge_delta:.6} exceeded {MAXIMUM_INK_EDGE_DELTA_RATIO:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        maximum_ink_distribution_delta <= MAXIMUM_INK_DISTRIBUTION_DELTA,
+        "F-248 Word raster ink distribution delta {maximum_ink_distribution_delta:.6} exceeded {MAXIMUM_INK_DISTRIBUTION_DELTA:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        maximum_projection_distance <= MAXIMUM_PROJECTION_DISTANCE,
+        "F-248 Word raster projection distance {maximum_projection_distance:.6} exceeded {MAXIMUM_PROJECTION_DISTANCE:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        minimum_shifted_projection_distance > MAXIMUM_PROJECTION_DISTANCE,
+        "F-248 raster gate did not reject a synthetic 5 percent geometry shift: {minimum_shifted_projection_distance:.6}"
+    );
+}
+
 #[test]
 fn full_story_comparison_matches_pinned_word_records() {
     assert_eq!(
@@ -12513,6 +13499,7 @@ fn redaction_removes_chart_cache_and_embedded_workbook_traces() {
                 categories: vec!["secret north".to_owned(), "public".to_owned()],
                 series: vec![("secret revenue".to_owned(), vec![12.5, 19.0])],
                 number_format: None,
+                ..ChartData::default()
             },
         )
         .unwrap();
@@ -12531,6 +13518,7 @@ fn redaction_removes_chart_cache_and_embedded_workbook_traces() {
                 categories: vec!["north".to_owned(), "south".to_owned()],
                 series: vec![("revenue".to_owned(), vec![12.5, 19.0])],
                 number_format: None,
+                ..ChartData::default()
             },
         )
         .unwrap();
@@ -12609,6 +13597,7 @@ fn redaction_failure_is_atomic() {
                 categories: vec!["secret".to_owned()],
                 series: vec![("public".to_owned(), vec![1.0])],
                 number_format: None,
+                ..ChartData::default()
             },
         )
         .unwrap();
@@ -12976,9 +13965,21 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
         <w:sectPr/>
     "#;
     let mut document = document_with_content_controls(&wrap_word_body(body));
-    document.add_style(StyleBuilder::paragraph("Collision", "Destination style"));
+    document
+        .add_style(StyleBuilder::paragraph("Collision", "Destination style"))
+        .unwrap();
     let mut fragment = Document::new();
-    fragment.add_style(StyleBuilder::paragraph("Collision", "Fragment style"));
+    fragment
+        .add_style(StyleBuilder::character(
+            "CollisionChar",
+            "Fragment character style",
+        ))
+        .unwrap();
+    fragment
+        .add_style(
+            StyleBuilder::paragraph("Collision", "Fragment style").linked_style("CollisionChar"),
+        )
+        .unwrap();
     fragment.add_paragraph("fragment text").style("Collision");
     let fragment_num_id = fragment.add_list_definition(&[ListLevel::decimal()]);
     fragment
@@ -12993,6 +13994,39 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     let mut fragment_package =
         oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(fragment.to_bytes().unwrap()))
             .unwrap();
+    let styles_xml = String::from_utf8(
+        fragment_package
+            .get_part("/word/styles.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replacen(
+        r#"<w:link w:val="CollisionChar"/>"#,
+        r#"<s:link xmlns:s="http://schemas.openxmlformats.org/wordprocessingml/2006/main" s:val='CollisionChar'/>"#,
+        1,
+    );
+    assert!(styles_xml.contains("s:val='CollisionChar'"));
+    fragment_package.set_part("/word/styles.xml", styles_xml.into_bytes());
+    let mut numbering_xml = String::from_utf8(
+        fragment_package
+            .get_part("/word/numbering.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replacen(
+        r#"<w:numFmt w:val="decimal"/>"#,
+        r#"<w:numFmt w:val="decimal"/><w:pStyle w:val="Collision"/>"#,
+        1,
+    );
+    let abstract_start = numbering_xml.find("<w:abstractNum ").unwrap();
+    let abstract_open_end = abstract_start + numbering_xml[abstract_start..].find('>').unwrap() + 1;
+    numbering_xml.insert_str(
+        abstract_open_end,
+        r#"<n:styleLink xmlns:n="http://schemas.openxmlformats.org/wordprocessingml/2006/main" n:val='Collision'/><n:numStyleLink xmlns:n="http://schemas.openxmlformats.org/wordprocessingml/2006/main" n:val='Collision'/>"#,
+    );
+    fragment_package.set_part("/word/numbering.xml", numbering_xml.into_bytes());
     let fragment_image = fragment_package
         .get_part_rels("/word/document.xml")
         .unwrap()
@@ -13012,6 +14046,12 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     fragment_package
         .get_or_create_part_rels(&fragment_image_part)
         .add("urn:rdocx:test:fragment-payload", "fragment-payload.bin");
+    let discarded_header_relationship = fragment_package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_external(
+            oxml_opc::relationship::rel_types::HEADER,
+            "https://example.invalid/discarded-header",
+        );
     let fragment_xml = String::from_utf8(
         fragment_package
             .get_part("/word/document.xml")
@@ -13022,7 +14062,15 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     .replace(
         "<w:body>",
         r#"<w:body><w:p><w:bookmarkStart w:id="7" w:name="fragmentMark"/><w:hyperlink w:anchor="fragmentMark"><w:r><w:t>linked</w:t></w:r></w:hyperlink><w:bookmarkEnd w:id="7"/></w:p><w:sdt><w:sdtPr><w:id w:val="11"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
-    );
+    )
+    .replace(
+        "<w:sectPr>",
+        &format!(
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="{discarded_header_relationship}"/>"#
+        ),
+    )
+    .replace("xmlns:r=", "xmlns:rel=")
+    .replace("r:", "rel:");
     fragment_package.set_part("/word/document.xml", fragment_xml.into_bytes());
     let mut fragment_output = std::io::Cursor::new(Vec::new());
     fragment_package.write_to(&mut fragment_output).unwrap();
@@ -13069,6 +14117,14 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
         .filter(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
         .count();
     assert_eq!(image_relationships, 3);
+    assert!(
+        package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .all(|relationship| relationship.rel_type != oxml_opc::relationship::rel_types::HEADER)
+    );
     let payload_parts = package
         .parts
         .iter()
@@ -13105,6 +14161,7 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     let hyperlink_anchors = attribute_values(r#"w:anchor=""#);
     let content_control_ids = attribute_values(r#"<w:id w:val=""#);
     let drawing_ids = attribute_values(r#"wp:docPr id=""#);
+    let non_visual_drawing_ids = attribute_values(r#"pic:cNvPr id=""#);
     assert_eq!(bookmark_ids.len(), 2, "{xml}");
     assert_ne!(bookmark_ids[0], bookmark_ids[1], "{xml}");
     assert_eq!(bookmark_names.len(), 2, "{xml}");
@@ -13113,6 +14170,17 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     assert_ne!(content_control_ids[0], content_control_ids[1], "{xml}");
     assert_eq!(drawing_ids.len(), 3, "{xml}");
     assert_eq!(drawing_ids.iter().collect::<HashSet<_>>().len(), 3, "{xml}");
+    assert_eq!(
+        non_visual_drawing_ids.iter().collect::<HashSet<_>>().len(),
+        non_visual_drawing_ids.len(),
+        "{xml}"
+    );
+    assert!(
+        content_control_ids
+            .iter()
+            .any(|id| drawing_ids.contains(id)),
+        "content-control and wp:docPr ids are separate scopes: {xml}"
+    );
     assert_eq!(xml.matches(">controlled<").count(), 2, "{xml}");
     let fragment_numbering = output
         .paragraphs()
@@ -13126,6 +14194,43 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
     assert!(output.style("CollisionMerge1").is_some());
     assert!(output.style("CollisionMerge2").is_some());
     assert_eq!(
+        output.style("CollisionMerge1").unwrap().linked_style(),
+        Some("CollisionChar")
+    );
+    assert_eq!(
+        output.style("CollisionChar").unwrap().linked_style(),
+        Some("CollisionMerge1")
+    );
+    assert_eq!(
+        output.style("CollisionMerge2").unwrap().linked_style(),
+        Some("CollisionCharMerge1")
+    );
+    assert_eq!(
+        output.style("CollisionCharMerge1").unwrap().linked_style(),
+        Some("CollisionMerge2")
+    );
+    output.validate_style_graph().unwrap();
+    let styles_xml =
+        String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(
+        styles_xml
+            .matches(&format!(
+                r#"<s:link xmlns:s="{W_NS}" s:val='CollisionChar'/>"#
+            ))
+            .count(),
+        1,
+        "{styles_xml}"
+    );
+    assert_eq!(
+        styles_xml
+            .matches(&format!(
+                r#"<s:link xmlns:s="{W_NS}" s:val="CollisionCharMerge1"/>"#
+            ))
+            .count(),
+        1,
+        "{styles_xml}"
+    );
+    assert_eq!(
         xml.matches(r#"<w:pStyle w:val="CollisionMerge1"/>"#)
             .count(),
         1,
@@ -13137,6 +14242,42 @@ fn rich_merge_imports_images_and_fragments_without_relationship_or_identity_coll
         1,
         "{xml}"
     );
+    let numbering_xml =
+        String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(
+        numbering_xml
+            .matches(r#"<w:pStyle w:val="CollisionMerge1"/>"#)
+            .count(),
+        1,
+        "{numbering_xml}"
+    );
+    assert_eq!(
+        numbering_xml
+            .matches(r#"<w:pStyle w:val="CollisionMerge2"/>"#)
+            .count(),
+        1,
+        "{numbering_xml}"
+    );
+    for element in ["styleLink", "numStyleLink"] {
+        assert_eq!(
+            numbering_xml
+                .matches(&format!(
+                    "<n:{element} xmlns:n=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" n:val='CollisionMerge1'"
+                ))
+                .count(),
+            1,
+            "{numbering_xml}"
+        );
+        assert_eq!(
+            numbering_xml
+                .matches(&format!(
+                    "<n:{element} xmlns:n=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" n:val='CollisionMerge2'"
+                ))
+                .count(),
+            1,
+            "{numbering_xml}"
+        );
+    }
 }
 
 #[test]
@@ -13331,6 +14472,25 @@ fn invalid_rich_merge_input_leaves_the_template_and_outputs_uncommitted() {
     assert_atomic_error(
         document_with_content_controls(&wrap_word_body(scalar_body)),
         one_value("Value", MailMergeValue::Fragment(linked_fragment(true))),
+    );
+
+    let mut conflicting_default = Document::new();
+    conflicting_default
+        .add_style(StyleBuilder::paragraph("SourceDefault", "Source Default"))
+        .unwrap();
+    conflicting_default
+        .set_default_style(StyleType::Paragraph, "SourceDefault")
+        .unwrap();
+    conflicting_default
+        .add_paragraph("source default")
+        .style("SourceDefault");
+    conflicting_default.validate_style_graph().unwrap();
+    assert_atomic_error(
+        document_with_content_controls(&wrap_word_body(scalar_body)),
+        one_value(
+            "Value",
+            MailMergeValue::Fragment(conflicting_default.to_bytes().unwrap()),
+        ),
     );
 
     let inline_fragment_body = r#"<w:p><w:r><w:t>prefix</w:t></w:r><w:fldSimple w:instr="MERGEFIELD Value"><w:r><w:t>stored</w:t></w:r></w:fldSimple></w:p><w:sectPr/>"#;
@@ -15332,17 +16492,25 @@ fn unsafe_or_malformed_word_embedded_graphs_fail_closed_without_mutation() {
         });
     let mut invalid_reachability =
         Document::from_bytes(&f236_package_bytes(invalid_reachability)).unwrap();
-    let before = invalid_reachability.to_bytes().unwrap();
-    assert!(
-        invalid_reachability
-            .remove_embedded_content(
-                "/word/document.xml",
-                "ole-rel",
-                EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
-            )
-            .is_err()
+    invalid_reachability
+        .remove_embedded_content(
+            "/word/document.xml",
+            "ole-rel",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    let package = f249_package(&invalid_reachability.to_bytes().unwrap());
+    assert!(!package.parts.contains_key("/word/embeddings/object1.bin"));
+    assert_eq!(
+        package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .get_by_id("invalid-reachability")
+            .unwrap()
+            .target_mode
+            .as_deref(),
+        Some("ProducerDefined")
     );
-    assert_eq!(invalid_reachability.to_bytes().unwrap(), before);
 
     let mut invalid_run_owner = f236_embedded_package(false);
     let invalid_run_owner_xml =
@@ -15462,12 +16630,12 @@ fn unsafe_or_malformed_word_embedded_graphs_fail_closed_without_mutation() {
             target: "embeddings/object1.bin".to_owned(),
             target_mode: None,
         });
-    assert!(
-        Document::from_bytes(&f236_package_bytes(duplicate_identity))
-            .unwrap()
-            .embedded_content()
-            .is_err()
-    );
+    let mut output = std::io::Cursor::new(Vec::new());
+    assert!(matches!(
+        duplicate_identity.write_to(&mut output),
+        Err(oxml_opc::OpcError::InvalidRelationship)
+    ));
+    assert!(output.into_inner().is_empty());
 
     let mut ambiguous_owner = f236_embedded_package(false);
     let xml = String::from_utf8(
@@ -18633,4 +19801,514 @@ fn f236_open_package(bytes: &[u8]) -> oxml_opc::OpcPackage {
 
 fn f236_hex(bytes: [u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn f249_package(bytes: &[u8]) -> oxml_opc::OpcPackage {
+    oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap()
+}
+
+fn f249_assert_mutation_history(label: &str, mut build: impl FnMut(bool) -> Document) {
+    let mut before = build(true);
+    let before = before.to_bytes().unwrap();
+    let mut after = build(false);
+    let after = after.to_bytes().unwrap();
+    assert_eq!(before, after, "{label} changed final-order package bytes");
+
+    let package = f249_package(&before);
+    assert!(package.part_rels.values().all(|relationships| {
+        relationships
+            .items
+            .iter()
+            .all(|relationship| !relationship.id.starts_with("rdocxDeferred"))
+    }));
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    for relationship_type in [
+        oxml_opc::relationship::rel_types::STYLES,
+        oxml_opc::relationship::rel_types::NUMBERING,
+    ] {
+        let relationship = relationships
+            .items
+            .iter()
+            .find(|relationship| relationship.rel_type == relationship_type)
+            .unwrap_or_else(|| panic!("{label} is missing {relationship_type}"));
+        assert!(
+            relationship
+                .id
+                .strip_prefix("rId")
+                .is_some_and(|suffix| suffix.parse::<u32>().is_ok()),
+            "{label} retained nonnumeric bundle id {}",
+            relationship.id
+        );
+    }
+}
+
+fn f249_minimal_document(text: &str) -> Document {
+    let mut document =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    document.add_paragraph(text);
+    document
+}
+
+fn f249_minimal_toc_document() -> Document {
+    let mut seed = f249_minimal_document("Heading");
+    seed.paragraph_mut(0).unwrap().style("Heading1");
+    let mut package = f249_package(&seed.to_bytes().unwrap());
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let toc = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p><w:p><w:r><w:t>stale</w:t></w:r></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    package.set_part(
+        "/word/document.xml",
+        xml.replacen("<w:body>", &format!("<w:body>{toc}"), 1)
+            .into_bytes(),
+    );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+fn f249_minimal_embedded_document() -> Document {
+    let mut seed = f249_minimal_document("embedded");
+    let mut package = f249_package(&seed.to_bytes().unwrap());
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let owner = r#"<w:p xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:r><w:object><v:shape id="opaque"/><o:OLEObject q:id="ole-rel" ProgID="opaque"/></w:object></w:r></w:p>"#;
+    package.set_part(
+        "/word/document.xml",
+        xml.replacen("</w:body>", &format!("{owner}</w:body>"), 1)
+            .into_bytes(),
+    );
+    package.set_part("/word/embeddings/object1.bin", b"before".to_vec());
+    package.content_types.add_override(
+        "/word/embeddings/object1.bin",
+        "application/vnd.openxmlformats-officedocument.oleObject",
+    );
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "ole-rel",
+            oxml_opc::relationship::rel_types::OLE_OBJECT,
+            "embeddings/object1.bin",
+        );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+fn f249_minimal_building_block_document() -> Document {
+    let mut seed = f249_minimal_document("building block");
+    let mut package = f249_package(&seed.to_bytes().unwrap());
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "glossary-rel",
+            oxml_opc::relationship::rel_types::GLOSSARY_DOCUMENT,
+            "glossary/document.xml",
+        );
+    package.content_types.add_override(
+        "/word/glossary/document.xml",
+        oxml_opc::content_types::WORD_GLOSSARY,
+    );
+    package.set_part(
+        "/word/glossary/document.xml",
+        format!(
+            r#"<w:glossaryDocument xmlns:w="{W_NS}"><w:docParts><w:docPart><w:docPartPr><w:name w:val="entry"/></w:docPartPr><w:docPartBody><w:p><w:r><w:t>body</w:t></w:r></w:p></w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#
+        )
+        .into_bytes(),
+    );
+    Document::from_bytes(&f236_package_bytes(package)).unwrap()
+}
+
+fn f249_open_error(label: &str, package: oxml_opc::OpcPackage) -> String {
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let bytes = output.into_inner();
+    let parsed = f249_package(&bytes);
+    Document::from_bytes(&bytes)
+        .err()
+        .unwrap_or_else(|| {
+            panic!(
+                "{label} collision package must fail to open: {:?}",
+                parsed.part_rels
+            )
+        })
+        .to_string()
+}
+
+fn f249_equivalent_document(reverse: bool) -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_paragraph("second");
+    document.add_paragraph("third");
+    document.add_paragraph("fourth");
+    let range = |body_index| RunRange {
+        start: RunPosition {
+            body_index,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index,
+            run_index: 1,
+        },
+    };
+
+    let (red_image, blue_image) = if reverse {
+        let blue = document.embed_image(b"blue-image", "blue.png");
+        let red = document.embed_image(b"red-image", "red.png");
+        (red, blue)
+    } else {
+        let red = document.embed_image(b"red-image", "red.png");
+        let blue = document.embed_image(b"blue-image", "blue.png");
+        (red, blue)
+    };
+    let (bullet, decimal) = if reverse {
+        let decimal = document.add_list_definition(&[ListLevel::decimal()]);
+        let bullet = document.add_list_definition(&[ListLevel::bullet()]);
+        (bullet, decimal)
+    } else {
+        let bullet = document.add_list_definition(&[ListLevel::bullet()]);
+        let decimal = document.add_list_definition(&[ListLevel::decimal()]);
+        (bullet, decimal)
+    };
+    if reverse {
+        document.add_bookmark("Second", range(1)).unwrap();
+        document.add_bookmark("First", range(0)).unwrap();
+        document
+            .add_comment(range(3), "Author", Some("A"), "Second comment")
+            .unwrap();
+        document
+            .add_comment(range(2), "Author", Some("A"), "First comment")
+            .unwrap();
+    } else {
+        document.add_bookmark("First", range(0)).unwrap();
+        document.add_bookmark("Second", range(1)).unwrap();
+        document
+            .add_comment(range(2), "Author", Some("A"), "First comment")
+            .unwrap();
+        document
+            .add_comment(range(3), "Author", Some("A"), "Second comment")
+            .unwrap();
+    }
+    document.add_paragraph("bullet").set_numbering(bullet, 0);
+    document.add_paragraph("decimal").set_numbering(decimal, 0);
+    let mut table = document.add_table(1, 2);
+    table
+        .cell(0, 0)
+        .unwrap()
+        .add_picture(&red_image, Length::inches(1.0), Length::inches(1.0));
+    table
+        .cell(0, 1)
+        .unwrap()
+        .add_picture(&blue_image, Length::inches(1.0), Length::inches(1.0));
+    document
+}
+
+#[test]
+fn equivalent_construction_orders_allocate_declared_stable_identifiers() {
+    let left = f249_equivalent_document(false).to_bytes().unwrap();
+    let right = f249_equivalent_document(true).to_bytes().unwrap();
+    if left != right {
+        let left_package = f249_package(&left);
+        let right_package = f249_package(&right);
+        let mut different = left_package
+            .parts
+            .iter()
+            .filter_map(|(name, bytes)| {
+                (right_package.get_part(name) != Some(bytes)).then_some(name.as_str())
+            })
+            .collect::<Vec<_>>();
+        if left_package.package_rels.items != right_package.package_rels.items {
+            different.push("/_rels/.rels");
+        }
+        for (owner, relationships) in &left_package.part_rels {
+            if right_package
+                .get_part_rels(owner)
+                .is_none_or(|right| right.items != relationships.items)
+            {
+                different.push(owner);
+            }
+        }
+        panic!(
+            "equivalent packages differ in {different:?}\nLEFT DOC\n{}\nRIGHT DOC\n{}\nLEFT COMMENTS\n{}\nRIGHT COMMENTS\n{}",
+            String::from_utf8_lossy(left_package.get_part("/word/document.xml").unwrap()),
+            String::from_utf8_lossy(right_package.get_part("/word/document.xml").unwrap()),
+            String::from_utf8_lossy(left_package.get_part("/word/comments.xml").unwrap()),
+            String::from_utf8_lossy(right_package.get_part("/word/comments.xml").unwrap())
+        );
+    }
+
+    let package = f249_package(&left);
+    let document_xml =
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let comments_xml =
+        std::str::from_utf8(package.get_part("/word/comments.xml").unwrap()).unwrap();
+    let numbering_xml =
+        std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(
+        document_xml.contains(r#"<w:bookmarkStart w:id="0""#),
+        "{document_xml}"
+    );
+    assert!(
+        document_xml.contains(r#"<w:bookmarkStart w:id="1""#),
+        "{document_xml}"
+    );
+    assert!(
+        document_xml.contains(r#"<wp:docPr id="1""#),
+        "{document_xml}"
+    );
+    assert!(
+        document_xml.contains(r#"<wp:docPr id="2""#),
+        "{document_xml}"
+    );
+    assert!(comments_xml.contains(r#"w:id="0""#), "{comments_xml}");
+    assert!(comments_xml.contains(r#"w:id="1""#), "{comments_xml}");
+    assert!(comments_xml.find("First comment") < comments_xml.find("Second comment"));
+    assert!(
+        numbering_xml.contains(r#"<w:abstractNum w:abstractNumId="0""#),
+        "{numbering_xml}"
+    );
+    assert!(
+        numbering_xml.contains(r#"<w:abstractNum w:abstractNumId="1""#),
+        "{numbering_xml}"
+    );
+    assert!(
+        numbering_xml.contains(r#"<w:num w:numId="1""#),
+        "{numbering_xml}"
+    );
+    assert!(
+        numbering_xml.contains(r#"<w:num w:numId="2""#),
+        "{numbering_xml}"
+    );
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let images = relationships
+        .items
+        .iter()
+        .filter(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .map(|relationship| (relationship.id.as_str(), relationship.target.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        images,
+        [("rId1", "media/image1.png"), ("rId2", "media/image2.png")]
+    );
+    assert_eq!(
+        package.get_part("/word/media/image1.png"),
+        Some(b"red-image".as_slice())
+    );
+    assert_eq!(
+        package.get_part("/word/media/image2.png"),
+        Some(b"blue-image".as_slice())
+    );
+    assert_eq!(
+        package
+            .content_types
+            .defaults
+            .get("png")
+            .map(String::as_str),
+        Some("image/png")
+    );
+}
+
+#[test]
+fn repeated_saves_are_byte_identical_after_allocation() {
+    let mut document = f249_equivalent_document(false);
+    let first = document.to_bytes().unwrap();
+    let second = document.to_bytes().unwrap();
+    assert_eq!(first, second);
+    let mut reopened = Document::from_bytes(&first).unwrap();
+    let reopened_bytes = reopened.to_bytes().unwrap();
+    if first != reopened_bytes {
+        let left = f249_package(&first);
+        let right = f249_package(&reopened_bytes);
+        let mut names = left
+            .parts
+            .keys()
+            .chain(right.parts.keys())
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        let different = names
+            .into_iter()
+            .filter(|name| left.get_part(name) != right.get_part(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        panic!(
+            "reopened package differs in {different:?}\nFIRST:\n{}\nREOPENED:\n{}",
+            String::from_utf8_lossy(left.get_part("/word/document.xml").unwrap()),
+            String::from_utf8_lossy(right.get_part("/word/document.xml").unwrap())
+        );
+    }
+}
+
+#[test]
+fn internal_reopen_mutations_preserve_minimal_bundle_history() {
+    f249_assert_mutation_history("comparison", |list_before| {
+        let mut original = f249_minimal_document("original");
+        let mut edited = f249_minimal_document("edited");
+        if list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+            edited.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+            .compare(&edited, "Ada", "2026-09-07T09:00:00Z")
+            .unwrap();
+        if !list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+    });
+
+    f249_assert_mutation_history("revision", |list_before| {
+        let mut original = f249_minimal_document("original");
+        let mut edited = f249_minimal_document("edited");
+        if list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+            edited.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+            .compare(&edited, "Ada", "2026-09-07T09:00:00Z")
+            .unwrap();
+        assert!(original.accept_all().unwrap() > 0);
+        if !list_before {
+            original.add_list_definition(&[ListLevel::decimal()]);
+        }
+        original
+    });
+
+    f249_assert_mutation_history("redaction", |list_before| {
+        let mut document = f249_minimal_document("secret");
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        assert_eq!(document.redact_text("secret").unwrap().total(), 1);
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+
+    f249_assert_mutation_history("TOC rebuild", |list_before| {
+        let mut document = f249_minimal_toc_document();
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+
+    f249_assert_mutation_history("embedded replacement", |list_before| {
+        let mut document = f249_minimal_embedded_document();
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+            .replace_embedded_content(
+                "/word/document.xml",
+                "ole-rel",
+                b"after",
+                EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+            )
+            .unwrap();
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+
+    f249_assert_mutation_history("building block replacement", |list_before| {
+        let mut document = f249_minimal_building_block_document();
+        if list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        let mut replacement = document.building_blocks().unwrap()[0].block.clone();
+        replacement.name = "replacement".to_owned();
+        document
+            .replace_building_block("/word/glossary/document.xml", 0, replacement)
+            .unwrap();
+        if !list_before {
+            document.add_list_definition(&[ListLevel::decimal()]);
+        }
+        document
+    });
+}
+
+#[test]
+fn imported_and_preserved_collisions_fail_before_mutation() {
+    let mut document = f249_equivalent_document(false);
+    let bytes = document.to_bytes().unwrap();
+
+    let mut relationship_collision = f249_package(&bytes);
+    let duplicate = relationship_collision
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .clone();
+    relationship_collision
+        .get_or_create_part_rels("/word/document.xml")
+        .items
+        .push(duplicate);
+    let mut output = std::io::Cursor::new(Vec::new());
+    assert!(matches!(
+        relationship_collision.write_to(&mut output),
+        Err(oxml_opc::OpcError::InvalidRelationship)
+    ));
+    assert!(output.into_inner().is_empty());
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(r#"<wp:docPr id="2""#, r#"<wp:docPr id="1""#, 1);
+    assert_ne!(xml, collided, "second drawing id must be present");
+    package.set_part("/word/document.xml", collided.into_bytes());
+    let error = f249_open_error("drawing", package);
+    assert!(error.contains("duplicate drawing id 1"), "{error}");
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(
+        r#"<w:bookmarkStart w:id="1""#,
+        r#"<w:bookmarkStart w:id="0""#,
+        1,
+    );
+    assert_ne!(xml, collided, "second bookmark id must be present");
+    package.set_part("/word/document.xml", collided.into_bytes());
+    let error = f249_open_error("bookmark", package);
+    assert!(error.contains("duplicate bookmark id 0"), "{error}");
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/comments.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(r#"w:id="1""#, r#"w:id="0""#, 1);
+    assert_ne!(xml, collided, "second comment id must be present");
+    package.set_part("/word/comments.xml", collided.into_bytes());
+    let error = f249_open_error("comment", package);
+    assert!(error.contains("duplicate comment id 0"), "{error}");
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(
+        r#"<w:abstractNum w:abstractNumId="1""#,
+        r#"<w:abstractNum w:abstractNumId="0""#,
+        1,
+    );
+    assert_ne!(
+        xml, collided,
+        "second abstract numbering id must be present"
+    );
+    package.set_part("/word/numbering.xml", collided.into_bytes());
+    let error = f249_open_error("abstract numbering", package);
+    assert!(
+        error.contains("duplicate abstract numbering id 0"),
+        "{error}"
+    );
+
+    let mut package = f249_package(&bytes);
+    let xml = String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    let collided = xml.replacen(r#"<w:num w:numId="2""#, r#"<w:num w:numId="1""#, 1);
+    assert_ne!(
+        xml, collided,
+        "second numbering instance id must be present"
+    );
+    package.set_part("/word/numbering.xml", collided.into_bytes());
+    let error = f249_open_error("numbering instance", package);
+    assert!(
+        error.contains("duplicate numbering instance id 1"),
+        "{error}"
+    );
 }
