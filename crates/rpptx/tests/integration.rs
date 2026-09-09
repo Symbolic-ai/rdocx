@@ -2796,7 +2796,7 @@ fn unsupported_smartart_algorithms_and_parts_remain_byte_preserved_after_unrelat
 fn smartart_rendering_uses_producing_scope_and_updates_after_node_edit() {
     if !pinned_smartart_resources_available() {
         eprintln!(
-            "authentic SmartArt rendering skipped because pinned PowerPoint resources are absent"
+            "authentic SmartArt rendering skipped because pinned PowerPoint resources are absent or hash-mismatched"
         );
         return;
     }
@@ -2985,7 +2985,7 @@ fn assert_smartart_frame_clip(
 fn supported_native_smartart_ignores_a_malformed_optional_cached_drawing() {
     if !pinned_smartart_resources_available() {
         eprintln!(
-            "authentic SmartArt cached-drawing regression skipped because pinned PowerPoint resources are absent"
+            "authentic SmartArt cached-drawing regression skipped because pinned PowerPoint resources are absent or hash-mismatched"
         );
         return;
     }
@@ -3394,18 +3394,25 @@ const SMARTART_COLOR_RESOURCE: (&str, &str) = (
 );
 
 fn pinned_smartart_resources_available() -> bool {
-    [
-        SMARTART_STYLE_RESOURCE.0,
-        SMARTART_COLOR_RESOURCE.0,
-        "lo/list1.glo",
-        "lo/hierarchy1.glo",
-        "lo/cycle1.glo",
-        "lo/circlerelationship.glo",
-        "lo/matrix1.glo",
-        "lo/pyramid1.glo",
-    ]
-    .iter()
-    .all(|relative| Path::new(SMARTART_RESOURCE_ROOT).join(relative).is_file())
+    let resources = [
+        SMARTART_STYLE_RESOURCE,
+        SMARTART_COLOR_RESOURCE,
+        smartart_layout_resource("list"),
+        smartart_layout_resource("hierarchy"),
+        smartart_layout_resource("cycle"),
+        smartart_layout_resource("relationship"),
+        smartart_layout_resource("matrix"),
+        smartart_layout_resource("pyramid"),
+    ];
+    smartart_resources_match(Path::new(SMARTART_RESOURCE_ROOT), &resources)
+}
+
+fn smartart_resources_match(root: &Path, resources: &[(&str, &str)]) -> bool {
+    resources.iter().all(|(relative, expected_sha256)| {
+        fs::read(root.join(relative))
+            .map(|bytes| sha256_bytes(&bytes) == *expected_sha256)
+            .unwrap_or(false)
+    })
 }
 
 fn smartart_layout_resource(family: &str) -> (&'static str, &'static str) {
@@ -3448,6 +3455,37 @@ fn read_pinned_smartart_resource(relative: &str, expected_sha256: &str) -> Vec<u
         path.display()
     );
     bytes
+}
+
+#[test]
+fn smartart_resource_availability_requires_exact_pinned_bytes() {
+    let root = std::env::temp_dir().join(format!(
+        "rpptx-smartart-resource-pin-{}",
+        std::process::id()
+    ));
+    if root.exists() {
+        fs::remove_dir_all(&root).unwrap();
+    }
+    fs::create_dir(&root).unwrap();
+    let bytes = b"pinned SmartArt resource";
+    fs::write(root.join("resource.glo"), bytes).unwrap();
+    let expected_sha256 = sha256_bytes(bytes);
+
+    assert!(smartart_resources_match(
+        &root,
+        &[("resource.glo", &expected_sha256)]
+    ));
+    fs::write(root.join("resource.glo"), b"drifted SmartArt resource").unwrap();
+    assert!(!smartart_resources_match(
+        &root,
+        &[("resource.glo", &expected_sha256)]
+    ));
+    assert!(!smartart_resources_match(
+        &root,
+        &[("missing.glo", &expected_sha256)]
+    ));
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 fn authentic_smartart_data_model(family: &str) -> Vec<u8> {
@@ -4204,7 +4242,7 @@ fn generate_smartart_renderer_ceiling_controls() {
 fn smartart_differential_rejects_geometry_and_pixel_perturbations() {
     if !pinned_smartart_resources_available() {
         eprintln!(
-            "SmartArt differential sensitivity skipped because pinned PowerPoint resources are absent"
+            "SmartArt differential sensitivity skipped because pinned PowerPoint resources are absent or hash-mismatched"
         );
         return;
     }
@@ -15938,7 +15976,7 @@ fn timeline_fixture_bytes() -> Vec<u8> {
 fn smartart_oracle_sources_preserve_the_valid_default_presentation_graph() {
     if !pinned_smartart_resources_available() {
         eprintln!(
-            "authentic SmartArt source structure skipped because pinned PowerPoint resources are absent"
+            "authentic SmartArt source structure skipped because pinned PowerPoint resources are absent or hash-mismatched"
         );
         return;
     }
