@@ -12559,3 +12559,49 @@ checks.
 **Notes for future sessions.** Keep style ids type-compatible across based-on,
 link, and next edges. Preserve unmodelled XML and lexical producer details, and
 invalidate layout exactly once after a complete valid graph is published.
+
+### F-247, Complete numbering level and instance model
+
+**Sprint.** S71
+**Completed.** 2026-09-09
+**Size.** L, estimated 4 days, actual 1 day
+
+**What was built.** The public Word facade now creates, inspects, updates,
+removes, and validates complete numbering definitions and instances. Numbering
+levels cover the standard format set, marker text, style links, suffixes,
+alignment, indentation, marker run properties, legal numbering, restart
+controls, and typed instance overrides.
+
+**Non-obvious choices.** Every mutation validates the complete candidate graph
+before publishing package or typed state. Producer-defined formats and
+unmodelled XML retain their original bytes and sequence positions. HTML,
+Markdown, EPUB, and RTF exporters diagnose standard formats they cannot render
+instead of silently coercing them to decimal markers.
+
+**Deviations from the design plan.** None. Nine microscope passes closed graph,
+namespace, preservation, schema-order, export, and regression gaps. Pass 9
+reported zero defects, zero smells, and zero nitpicks.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`,
+`docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`,
+`docs/hld/08-rendering-spec.md`, `docs/hld/10-bindings-spec.md`,
+`docs/hld/12-testing-strategy.md`, `docs/hld/13-risks-and-open-questions.md`,
+and `docs/hld/14-development-backlog.md`.
+
+**Tests.** `all_public_numbering_level_properties_survive_reopen`,
+`numbering_instances_and_overrides_round_trip_in_schema_order`,
+`public_authored_numbering_reports_no_unmodeled_properties`,
+`invalid_numbering_mutation_is_atomic`, and
+`imported_numbering_extensions_remain_byte_identical` passed. The round-trip
+gate was proven mutation-sensitive. The integrated `/verify --full` gate passed
+at `d07a8bb35811ca344dc4b685ba25485178ff323f` with pinned LibreOffice 26.2.5.2,
+Poppler 26.01.0, and uv 0.10.2 riders. The normal-user ODP permission regression
+passed separately. All 22 publishable crates verified from clean archives, and
+the largest archive was 4,603,514 bytes against the 10 MiB limit.
+
+**Hash harness.** Unchanged, 49 of 49.
+
+**Notes for future sessions.** Keep definition, instance, style, and related
+story references inside one atomic validation boundary. Preserve producer XML
+verbatim, and never invent render semantics for a typed format that an exporter
+does not support.

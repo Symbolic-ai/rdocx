@@ -409,6 +409,7 @@ defended.
 | F-245 | S71 | L | 4 | 2 | 2026-09-08 | Added public theme and font-table authoring, licensed embedded-font ownership, and deterministic authored-font layout resolution |
 | F-244 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic settings plus core, application, and custom property authoring with deterministic removal and raw XML preservation |
 | F-246 | S71 | L | 4 | 2 | 2026-09-08 | Added atomic paragraph, character, and table style graphs with effective resolution and pinned Word formatting parity |
+| F-247 | S71 | L | 4 | 1 | 2026-09-09 | Added complete numbering definitions, levels, instances, and overrides with atomic graph validation, exact XML preservation, and non-coercing export behavior |
 
 ## Velocity
 
