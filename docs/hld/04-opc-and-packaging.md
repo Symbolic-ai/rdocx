@@ -279,6 +279,12 @@ references, before package mutation. Rejecting an invalid operation does not
 create a numbering part, relationship, content-type entry, or consumed
 identifier.
 
+Paragraph-style numbering links are one cross-part transaction. The facade
+writes the style's `w:numPr` and the effective definition or replacement
+level's `w:pStyle` on a staged document, validates both style and numbering
+graphs, serializes the candidate, and then publishes it. Unlinking requires the
+same exact style, instance, and level tuple and removes both edges together.
+
 Numbering parsers retain namespace declarations and compatibility attributes
 from modelled containers. Unknown level and override children use their schema
 slots, while abstract-definition, instance, and root children keep
@@ -287,6 +293,14 @@ extensions and unchanged imported overrides byte for byte. `CT_Lvl` and
 `CT_NumLvl` serialize their standard children in schema sequence. Identifier
 allocation uses the next value after the maximum when available and the first
 unoccupied value when the maximum is `u32::MAX`.
+
+Paragraph properties retain imported `w:numPr` leaves and unmodelled children
+in their original namespace and schema positions. Typed `w:ilvl` and `w:numId`
+updates remain before retained `w:numberingChange` and insertion properties.
+Self-closing `w:numPr` carriers copy any inherited namespace binding required
+by a retained root attribute onto the serialized carrier.
+An unchanged plain numeric leaf may use the typed serializer's indentation,
+while malformed or extended source leaves remain byte-exact.
 
 Every standard `w:numFmt` token has a typed representation. Producer-defined
 values remain typed as their original token rather than being substituted with

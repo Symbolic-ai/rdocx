@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use oxml_core::Length;
 use oxml_core::custom_properties::CustomPropertyValue;
@@ -18,6 +19,7 @@ use rdocx_oxml::drawing::{CT_Drawing, CT_Inline};
 use rdocx_oxml::footnotes::{CT_Footnotes, NoteType};
 use rdocx_oxml::header_footer::CT_HdrFtr;
 use rdocx_oxml::namespace::{R_NS, W_NS, matches_local_name};
+use rdocx_oxml::numbering::ST_LvlSuffix;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::shared::ST_SectionType;
@@ -772,31 +774,30 @@ impl Document {
         } else {
             Evaluator::new(self, context)
         };
-
         let mut main = Vec::new();
         collect_body_paragraphs(&self.document.body, &mut main);
-        evaluator.evaluate_story("main", &main);
+        evaluator.evaluate_story("main", &main)?;
 
         for (part_name, xml) in referenced_header_footer_parts(self, true) {
             if let Ok(part) = CT_HdrFtr::from_xml(&xml) {
                 let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
-                evaluator.evaluate_story(&format!("header:{part_name}"), &paragraphs);
+                evaluator.evaluate_story(&format!("header:{part_name}"), &paragraphs)?;
             }
         }
         for (part_name, xml) in referenced_header_footer_parts(self, false) {
             if let Ok(part) = CT_HdrFtr::from_xml(&xml) {
                 let paragraphs = part.paragraphs.iter().collect::<Vec<_>>();
-                evaluator.evaluate_story(&format!("footer:{part_name}"), &paragraphs);
+                evaluator.evaluate_story(&format!("footer:{part_name}"), &paragraphs)?;
             }
         }
 
         let footnotes = normal_note_paragraphs(&self.footnotes);
-        evaluator.evaluate_story("footnotes", &footnotes);
+        evaluator.evaluate_story("footnotes", &footnotes)?;
 
         for (_, xml) in relationship_parts(self, rel_types::ENDNOTES) {
             if let Ok(part) = CT_Footnotes::from_xml(&xml) {
                 let endnotes = normal_note_paragraphs(&part);
-                evaluator.evaluate_story("endnotes", &endnotes);
+                evaluator.evaluate_story("endnotes", &endnotes)?;
             }
         }
 
@@ -840,7 +841,14 @@ impl Document {
             });
         }
         let bookmark_state = inspect_toc_bookmarks(&candidate.document.body, &document_xml)?;
-        let sources = discover_toc_sources(&candidate, &toc_spans, &toc_fields, &bookmark_state)?;
+        let numbering_layout = candidate.layout_deterministic()?;
+        let sources = discover_toc_sources(
+            &candidate,
+            &toc_spans,
+            &toc_fields,
+            &bookmark_state,
+            &numbering_layout,
+        )?;
         let rebuilt_toc_spans = toc_spans
             .iter()
             .zip(&toc_fields)
@@ -4223,6 +4231,7 @@ fn parse_dynamic_toc_fields(
     for span in spans {
         let field = parse_dynamic_toc_field(xml, span)?;
         let mut evaluator = Evaluator::new(document, &context);
+        evaluator.ensure_numbering_layout_for_field(&field)?;
         match evaluator.evaluate_field(&field, "main", &paragraphs, span.begin_paragraph) {
             FieldOutcome::TableOfContents(toc) => output.push(Some(toc)),
             FieldOutcome::KeepStored { .. } => {
@@ -4925,6 +4934,7 @@ struct TocSource {
     omit_page_number: bool,
     needs_bookmark: bool,
     sequence_prefix: Option<String>,
+    numbering_prefix: Option<String>,
 }
 
 fn discover_toc_sources(
@@ -4932,6 +4942,7 @@ fn discover_toc_sources(
     spans: &[DynamicTocSpan],
     fields: &[Option<TocField>],
     bookmarks: &TocBookmarkState,
+    numbering_layout: &Arc<rdocx_layout::WordLayoutResult>,
 ) -> Result<Vec<Vec<TocSource>>> {
     let mut paragraphs = Vec::new();
     collect_body_paragraphs(&document.document.body, &mut paragraphs);
@@ -4955,6 +4966,7 @@ fn discover_toc_sources(
             .transpose()?;
         let mut sources = Vec::new();
         let mut evaluator = Evaluator::new(document, &context);
+        evaluator.numbering_layout = Some(Arc::clone(numbering_layout));
         let mut sequence_value = None;
         for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
             let paragraph_fully_owned = spans.iter().any(|span| {
@@ -5017,6 +5029,10 @@ fn discover_toc_sources(
                             omit_page_number,
                             needs_bookmark: toc.hyperlink || !omit_page_number,
                             sequence_prefix: sequence_value.clone(),
+                            numbering_prefix: toc_numbering_prefix(
+                                numbering_layout,
+                                paragraph_index,
+                            ),
                         });
                     }
                 }
@@ -5079,12 +5095,29 @@ fn discover_toc_sources(
                 omit_page_number,
                 needs_bookmark: toc.hyperlink || !omit_page_number,
                 sequence_prefix: sequence_value.clone(),
+                numbering_prefix: toc_numbering_prefix(numbering_layout, paragraph_index),
             });
         }
         sources.sort_by_key(|source| source.paragraph_index);
         all_sources.push(sources);
     }
     Ok(all_sources)
+}
+
+fn toc_numbering_prefix(
+    layout: &rdocx_layout::WordLayoutResult,
+    paragraph_index: usize,
+) -> Option<String> {
+    let numbering = layout.document_paragraph_numbering(paragraph_index)?;
+    if numbering.marker_text.is_empty() {
+        return None;
+    }
+    let suffix = match numbering.suffix {
+        ST_LvlSuffix::Tab => "\t",
+        ST_LvlSuffix::Space => " ",
+        ST_LvlSuffix::Nothing => "",
+    };
+    Some(format!("{}{suffix}", numbering.marker_text))
 }
 
 fn toc_source_position_is_owned(spans: &[DynamicTocSpan], position: TocOwnedPosition) -> bool {
@@ -5640,6 +5673,9 @@ fn render_toc_entries(
             output.push_str("\">");
         }
         output.push_str("<w:r><w:t>");
+        if let Some(prefix) = source.numbering_prefix.as_deref() {
+            output.push_str(&xml_escape_text(prefix));
+        }
         output.push_str(&xml_escape_text(&source.title));
         output.push_str("</w:t></w:r>");
         if toc.hyperlink {
@@ -7085,12 +7121,32 @@ struct MailMergeStoryState {
 struct Evaluator<'a> {
     document: &'a Document,
     context: &'a FieldEvaluationContext,
-    bookmarks: BTreeMap<String, String>,
+    bookmarks: BTreeMap<String, BookmarkValue>,
+    numbering_layout: Option<Arc<rdocx_layout::WordLayoutResult>>,
     results: Vec<FieldEvaluation>,
     sequences: BTreeMap<(String, String), SequenceState>,
     mail_merge_stories: BTreeMap<String, MailMergeStoryState>,
     nested_outcomes: Vec<BTreeMap<usize, FieldOutcome>>,
     missing_merge_fields_as_empty: bool,
+}
+
+struct BookmarkValue {
+    text: String,
+    paragraph_ordinal: Option<usize>,
+}
+
+fn field_needs_numbering_layout(field: &Field) -> bool {
+    let instruction = field.effective_instruction();
+    let own = unsupported_switch(&instruction).is_none()
+        && validate_instruction_shape(&instruction).is_ok()
+        && instruction.name == "REF"
+        && ["n", "r", "w"]
+            .iter()
+            .any(|name| has_switch(&instruction, name));
+    own || field
+        .effective_nested_fields_in_source_order(&instruction)
+        .into_iter()
+        .any(field_needs_numbering_layout)
 }
 
 impl<'a> Evaluator<'a> {
@@ -7099,12 +7155,21 @@ impl<'a> Evaluator<'a> {
             .bookmarks()
             .into_iter()
             .filter(|bookmark| bookmark.issue().is_none())
-            .filter_map(|bookmark| Some((bookmark.name()?.to_owned(), bookmark.text().to_owned())))
+            .filter_map(|bookmark| {
+                Some((
+                    bookmark.name()?.to_owned(),
+                    BookmarkValue {
+                        text: bookmark.text().to_owned(),
+                        paragraph_ordinal: bookmark.range().map(|range| range.start.body_index),
+                    },
+                ))
+            })
             .collect();
         Self {
             document,
             context,
             bookmarks,
+            numbering_layout: None,
             results: Vec::new(),
             sequences: BTreeMap::new(),
             mail_merge_stories: BTreeMap::new(),
@@ -7119,7 +7184,19 @@ impl<'a> Evaluator<'a> {
         evaluator
     }
 
-    fn evaluate_story(&mut self, story: &str, paragraphs: &[&CT_P]) {
+    fn evaluate_story(&mut self, story: &str, paragraphs: &[&CT_P]) -> Result<()> {
+        if self.numbering_layout.is_none()
+            && paragraphs.iter().any(|paragraph| {
+                paragraph.runs().into_iter().any(|run| {
+                    run.content.iter().any(|content| match content {
+                        RunContent::Field(field) => field_needs_numbering_layout(field),
+                        _ => false,
+                    })
+                })
+            })
+        {
+            self.numbering_layout = Some(self.document.layout_deterministic()?);
+        }
         for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
             for run in paragraph.runs() {
                 for content in &run.content {
@@ -7129,6 +7206,14 @@ impl<'a> Evaluator<'a> {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn ensure_numbering_layout_for_field(&mut self, field: &Field) -> Result<()> {
+        if self.numbering_layout.is_none() && field_needs_numbering_layout(field) {
+            self.numbering_layout = Some(self.document.layout_deterministic()?);
+        }
+        Ok(())
     }
 
     fn evaluate_field(
@@ -7178,7 +7263,7 @@ impl<'a> Evaluator<'a> {
         let outcome = match instruction.name.as_str() {
             "PAGE" | "NUMPAGES" => FieldOutcome::DeferredPagination,
             "PAGEREF" => self.evaluate_pageref(instruction),
-            "REF" => self.evaluate_ref(instruction),
+            "REF" => self.evaluate_ref(instruction, story, paragraph_index),
             "IF" => self.evaluate_if(instruction, story, paragraphs, paragraph_index),
             "SEQ" => self.evaluate_seq(instruction, story, paragraphs, paragraph_index),
             "DOCPROPERTY" => self.evaluate_docproperty(instruction),
@@ -7236,13 +7321,94 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn evaluate_ref(&self, instruction: &FieldInstruction) -> FieldOutcome {
+    fn evaluate_ref(
+        &self,
+        instruction: &FieldInstruction,
+        story: &str,
+        paragraph_index: usize,
+    ) -> FieldOutcome {
         let Some(target) = text_argument(instruction, 0) else {
             return keep("REF requires a bookmark name");
         };
         match self.bookmarks.get(target) {
-            Some(text) => FieldOutcome::Resolved(text.clone()),
+            Some(bookmark) => {
+                let numbering_switch = if has_switch(instruction, "w") {
+                    Some("full")
+                } else if has_switch(instruction, "r") {
+                    Some("relative")
+                } else if has_switch(instruction, "n") {
+                    Some("level")
+                } else {
+                    None
+                };
+                let Some(numbering_switch) = numbering_switch else {
+                    if has_switch(instruction, "p") && story == "main" {
+                        return self.ref_relative_position(bookmark, paragraph_index);
+                    }
+                    return FieldOutcome::Resolved(bookmark.text.clone());
+                };
+                let Some(numbering) = bookmark.paragraph_ordinal.and_then(|index| {
+                    self.numbering_layout
+                        .as_ref()
+                        .and_then(|layout| layout.document_paragraph_numbering(index))
+                }) else {
+                    let mut value = bookmark.text.clone();
+                    if has_switch(instruction, "p")
+                        && story == "main"
+                        && let FieldOutcome::Resolved(position) =
+                            self.ref_relative_position(bookmark, paragraph_index)
+                    {
+                        value.push(' ');
+                        value.push_str(&position);
+                    }
+                    return FieldOutcome::Resolved(value);
+                };
+                let omit_text = has_switch(instruction, "t");
+                let mut value = match numbering_switch {
+                    "level" if omit_text => numbering.number_level_without_text.clone(),
+                    "level" => numbering.number_level.clone(),
+                    "full" if omit_text => numbering.number_full_without_text.clone(),
+                    "full" => numbering.number_full.clone(),
+                    "relative" => numbering.relative_to(
+                        (story == "main")
+                            .then(|| {
+                                self.numbering_layout.as_ref().and_then(|layout| {
+                                    layout.document_paragraph_numbering(paragraph_index)
+                                })
+                            })
+                            .flatten(),
+                        omit_text,
+                    ),
+                    _ => unreachable!("known REF numbering switch"),
+                };
+                if has_switch(instruction, "p")
+                    && story == "main"
+                    && let FieldOutcome::Resolved(position) =
+                        self.ref_relative_position(bookmark, paragraph_index)
+                {
+                    value.push(' ');
+                    value.push_str(&position);
+                }
+                FieldOutcome::Resolved(value)
+            }
             None => keep(&format!("REF target {target} was not found")),
+        }
+    }
+
+    fn ref_relative_position(
+        &self,
+        bookmark: &BookmarkValue,
+        paragraph_index: usize,
+    ) -> FieldOutcome {
+        let Some(target_index) = bookmark.paragraph_ordinal else {
+            return keep("REF relative target has no paragraph position");
+        };
+        if target_index > paragraph_index {
+            FieldOutcome::Resolved("below".to_owned())
+        } else if target_index < paragraph_index {
+            FieldOutcome::Resolved("above".to_owned())
+        } else {
+            keep("REF relative target contains the field")
         }
     }
 
@@ -9813,7 +9979,7 @@ fn switch_text<'a>(instruction: &'a FieldInstruction, name: &str) -> Option<&'a 
 fn unsupported_switch(instruction: &FieldInstruction) -> Option<&str> {
     let allowed: &[&str] = match instruction.name.as_str() {
         "PAGE" | "NUMPAGES" => &["*", "#"],
-        "REF" => &["h", "*", "#"],
+        "REF" => &["h", "n", "r", "t", "w", "p", "*", "#"],
         "PAGEREF" => &["h", "p", "*", "#"],
         "IF" => &["*", "#"],
         "SEQ" => &["n", "c", "h", "r", "s", "*", "#"],
@@ -9878,10 +10044,10 @@ fn validate_instruction_shape(instruction: &FieldInstruction) -> std::result::Re
     }
 
     for switch in &instruction.switches {
-        let requires_text = matches!(
-            switch.name.as_str(),
-            "*" | "#" | "@" | "r" | "s" | "b" | "f"
-        ) || instruction.name == "INCLUDETEXT" && switch.name == "c";
+        let requires_text = matches!(switch.name.as_str(), "*" | "#" | "@")
+            || instruction.name == "SEQ" && matches!(switch.name.as_str(), "r" | "s")
+            || instruction.name == "MERGEFIELD" && matches!(switch.name.as_str(), "b" | "f")
+            || instruction.name == "INCLUDETEXT" && switch.name == "c";
         match (&switch.argument, requires_text) {
             (Some(FieldArgument::Text(_)), true) | (None, false) => {}
             (_, true) => {
@@ -10514,6 +10680,7 @@ fn weekday(value: FieldDateTime) -> usize {
 mod tests {
     use rdocx_oxml::document::BodyContent;
     use rdocx_oxml::properties::CT_PPr;
+    use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc};
     use rdocx_oxml::text::{CT_P, CT_R, Field, FieldSwitch, RunContent};
 
     use super::*;
@@ -10806,8 +10973,8 @@ mod tests {
         };
         let paragraphs = [paragraph];
         let mut evaluator = Evaluator::new(&document, &context);
-        evaluator.evaluate_story("main", &paragraphs);
-        evaluator.evaluate_story("header:one", &paragraphs);
+        evaluator.evaluate_story("main", &paragraphs).unwrap();
+        evaluator.evaluate_story("header:one", &paragraphs).unwrap();
         assert_eq!(
             evaluator.results[0].outcome, evaluator.results[5].outcome,
             "each story must start from the explicit record context"
@@ -11756,8 +11923,8 @@ mod tests {
         let paragraphs = [paragraph];
         let story_context = FieldEvaluationContext::default();
         let mut evaluator = Evaluator::new(&story_document, &story_context);
-        evaluator.evaluate_story("header:one", &paragraphs);
-        evaluator.evaluate_story("footer:one", &paragraphs);
+        evaluator.evaluate_story("header:one", &paragraphs).unwrap();
+        evaluator.evaluate_story("footer:one", &paragraphs).unwrap();
         assert_eq!(
             evaluator
                 .results
@@ -11838,10 +12005,14 @@ mod tests {
         document
             .set_style(style::StyleBuilder::paragraph("Heading1", "Heading 1"))
             .unwrap();
+        let definition = document
+            .add_numbering_definition(&[crate::ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
         let mut source = CT_P::new();
         source.properties = Some(CT_PPr {
             style_id: Some("Heading1".to_owned()),
-            num_id: Some(7),
+            num_id: Some(instance),
             num_ilvl: Some(0),
             ..Default::default()
         });
@@ -11886,6 +12057,466 @@ mod tests {
                 .unwrap()[0]
                 .outcome,
             FieldOutcome::Resolved("numbered heading".to_owned())
+        );
+    }
+
+    #[test]
+    fn ref_numbering_switches_use_the_authoritative_layout_counter() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[crate::ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        assert!(
+            document
+                .add_paragraph("numbered target")
+                .set_numbering(instance, 0)
+        );
+        document
+            .add_bookmark(
+                "target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut paragraph = CT_P::new();
+        for instruction in [
+            r"REF target \n",
+            r"REF target \r",
+            r"REF target \w \t",
+            r"REF target \n \p",
+        ] {
+            paragraph.runs.push(CT_R {
+                properties: None,
+                content: vec![RunContent::Field(Field::new(instruction, "stored"))],
+                extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            });
+        }
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|result| result.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("1 above".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn fields_without_numbering_switches_do_not_build_numbering_layout() {
+        let document = Document::new();
+        let context = FieldEvaluationContext::default();
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new("AUTHOR", "stored"))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        let paragraphs = [&paragraph];
+        let mut evaluator = Evaluator::new(&document, &context);
+
+        evaluator.evaluate_story("main", &paragraphs).unwrap();
+
+        assert!(evaluator.numbering_layout.is_none());
+
+        let mut nested = Field::new("TOC", "stored");
+        nested
+            .instruction
+            .arguments
+            .push(FieldArgument::Nested(Box::new(Field::new(
+                r"REF target \n",
+                "stored",
+            ))));
+        evaluator
+            .ensure_numbering_layout_for_field(&nested)
+            .unwrap();
+        assert!(evaluator.numbering_layout.is_some());
+    }
+
+    #[test]
+    fn numbered_ref_uses_flattened_bookmark_paths_inside_and_after_a_table() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[crate::ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+
+        let table_xml = format!(
+            r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="{instance}"/></w:numPr></w:pPr><w:bookmarkStart w:id="7" w:name="target_in_table"/><w:r><w:t>table item</w:t></w:r><w:bookmarkEnd w:id="7"/></w:p>"#
+        );
+        let mut reader = quick_xml::Reader::from_str(&table_xml);
+        reader.config_mut().trim_text(true);
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) if matches_local_name(element.name().as_ref(), b"p") => {
+                    break;
+                }
+                Ok(Event::Eof) => panic!("table bookmark paragraph was missing"),
+                Ok(_) => {}
+                Err(error) => panic!("table bookmark paragraph failed to parse: {error}"),
+            }
+            buffer.clear();
+        }
+        let table_paragraph = CT_P::from_xml(&mut reader).unwrap();
+        let mut cell = CT_Tc::new();
+        *cell.paragraphs_mut()[0] = table_paragraph;
+        let mut row = CT_Row::new();
+        row.cells.push(cell);
+        let mut table = CT_Tbl::new();
+        table.rows.push(row);
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(table));
+        assert!(
+            document
+                .add_paragraph("numbered target")
+                .set_numbering(instance, 0)
+        );
+        document
+            .add_bookmark(
+                "target_after_table",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 1,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 1,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut field_paragraph = CT_P::new();
+        field_paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF target_in_table \n",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        field_paragraph.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF target_after_table \n",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(field_paragraph));
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|field| field.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("1".to_owned()),
+                FieldOutcome::Resolved("2".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ref_switches_match_the_word_16_112_numbering_record() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[
+                crate::ListLevel::decimal().level_text("Section %1."),
+                crate::ListLevel::decimal().level_text("%1.%2."),
+                crate::ListLevel::decimal().level_text("Section %1.%2.%3."),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for (text, level) in [("Body", 0), ("Table", 1), ("Deep", 2)] {
+            assert!(document.add_paragraph(text).set_numbering(instance, level));
+        }
+        document
+            .add_bookmark(
+                "deep",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut paragraph = CT_P::new();
+        for instruction in [
+            r"REF deep \n",
+            r"REF deep \n \t",
+            r"REF deep \r",
+            r"REF deep \w",
+            r"REF deep \w \t",
+            r"REF deep \n \p",
+            r"REF deep \p",
+        ] {
+            paragraph.runs.push(CT_R {
+                properties: None,
+                content: vec![RunContent::Field(Field::new(instruction, "stored"))],
+                extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            });
+        }
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|result| result.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("Section 1.1.1".to_owned()),
+                FieldOutcome::Resolved("1.1.1".to_owned()),
+                FieldOutcome::Resolved("Section 1.1.1".to_owned()),
+                FieldOutcome::Resolved("Section 1.1.1".to_owned()),
+                FieldOutcome::Resolved("1.1.1".to_owned()),
+                FieldOutcome::Resolved("Section 1.1.1 above".to_owned()),
+                FieldOutcome::Resolved("above".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ref_relative_number_keeps_level_text_and_position_fallback() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[
+                crate::ListLevel::decimal().level_text("Section %1."),
+                crate::ListLevel::decimal().level_text("%1.%2."),
+                crate::ListLevel::decimal().level_text("Section %1.%2.%3."),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for (text, level) in [("Root", 0), ("Branch", 1), ("Target", 2)] {
+            assert!(document.add_paragraph(text).set_numbering(instance, level));
+        }
+        document
+            .add_bookmark(
+                "numbered_target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 2,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut relative = CT_P::new();
+        relative.properties = Some(CT_PPr {
+            num_id: Some(instance),
+            num_ilvl: Some(2),
+            ..CT_PPr::default()
+        });
+        relative.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF numbered_target \r",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(relative));
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()[0]
+                .outcome,
+            FieldOutcome::Resolved("Section 1.1.1".to_owned())
+        );
+
+        let mut plain = Document::new();
+        plain.add_paragraph("Plain target");
+        plain
+            .add_bookmark(
+                "plain_target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut fallback = CT_P::new();
+        fallback.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF plain_target \n \p",
+                "stored",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        plain
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(fallback));
+        assert_eq!(
+            plain
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()[0]
+                .outcome,
+            FieldOutcome::Resolved("Plain target above".to_owned())
+        );
+    }
+
+    #[test]
+    fn ref_n_r_and_w_apply_level_relative_and_full_context_rules() {
+        let mut document = Document::new();
+        let definition = document
+            .add_numbering_definition(&[
+                crate::ListLevel::decimal().level_text("%1."),
+                crate::ListLevel::decimal().level_text("%1.%2."),
+                crate::ListLevel::decimal().level_text("%3."),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for index in 1..=4 {
+            assert!(
+                document
+                    .add_paragraph(&format!("Root {index}"))
+                    .set_numbering(instance, 0)
+            );
+        }
+        for index in 1..=3 {
+            assert!(
+                document
+                    .add_paragraph(&format!("Branch {index}"))
+                    .set_numbering(instance, 1)
+            );
+        }
+        let mut field_paragraph = CT_P::new();
+        field_paragraph.properties = Some(CT_PPr {
+            num_id: Some(instance),
+            num_ilvl: Some(2),
+            ..CT_PPr::default()
+        });
+        for instruction in [
+            r"REF later_target \n",
+            r"REF later_target \r",
+            r"REF later_target \w",
+        ] {
+            field_paragraph.runs.push(CT_R {
+                properties: None,
+                content: vec![RunContent::Field(Field::new(instruction, "stored"))],
+                extra_xml: Vec::new(),
+                extra_xml_positions: Vec::new(),
+                alt_drawings: Vec::new(),
+            });
+        }
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(field_paragraph));
+        for index in 4..=5 {
+            assert!(
+                document
+                    .add_paragraph(&format!("Branch {index}"))
+                    .set_numbering(instance, 1)
+            );
+        }
+        assert!(
+            document
+                .add_paragraph("Target precursor")
+                .set_numbering(instance, 2)
+        );
+        assert!(document.add_paragraph("Target").set_numbering(instance, 2));
+        document
+            .add_bookmark(
+                "later_target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 11,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 11,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .into_iter()
+                .map(|field| field.outcome)
+                .collect::<Vec<_>>(),
+            [
+                FieldOutcome::Resolved("2".to_owned()),
+                FieldOutcome::Resolved("4.5.2".to_owned()),
+                FieldOutcome::Resolved("4.5.2".to_owned()),
+            ]
         );
     }
 
@@ -11998,10 +12629,14 @@ mod tests {
         let paragraphs = [paragraph];
         let context = FieldEvaluationContext::default();
         let mut evaluator = Evaluator::new(&document, &context);
-        evaluator
-            .bookmarks
-            .insert("Multi".to_owned(), "first\nsecond".to_owned());
-        evaluator.evaluate_story("main", &paragraphs);
+        evaluator.bookmarks.insert(
+            "Multi".to_owned(),
+            BookmarkValue {
+                text: "first\nsecond".to_owned(),
+                paragraph_ordinal: None,
+            },
+        );
+        evaluator.evaluate_story("main", &paragraphs).unwrap();
         assert_eq!(
             evaluator.results[0].outcome,
             FieldOutcome::Resolved("yes".to_owned())

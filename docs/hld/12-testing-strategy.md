@@ -219,6 +219,36 @@ style-link inspection, and byte-exact producer-extension retention across a
 modeled update. The complete `rdocx-oxml` and `rdocx` suites, public package dry
 runs, archive ceiling, and unchanged 49-entry hash harness complete the gate.
 
+The style-linked numbering differential uses a source-built document and pins
+Microsoft Word 16.112.3 build 16.112.26083020 on macOS 26.6.2 build 25G83 with
+the `en-GB` locale. Twenty-seven exact Word records cover three levels across
+body paragraphs and table cells, concrete-instance continuation, a new
+instance, section restart, and REF `\n`, `\r`, `\w`, `\t`, and `\p` output.
+The REF records include same-parent and different-parent relative context.
+Three normalized TOC records cover numbered headings in the body and a table.
+Focused tests separately cover replacement-level restart, ordinary level
+restart, legal numbering, and `numId` zero suppression. A mixed Unicode
+level-text probe uses `章节 %1 - Part %2)` and requires Word and rdocx to produce
+`1-1)` for the text-suppressed full and level-aware forms.
+
+The ignored render oracle exports the source-built document to PDF from Word
+and rasterizes it with `pdftoppm` 26.01.0 at 150 DPI. rdocx renders its pages
+directly at the same resolution in deterministic font mode. The two-page gate
+requires at most one pixel of raster dimension difference, at least 0.95 paired
+ink coverage, at most 0.08 normalized ink bounding-edge delta, at most 0.27
+total variation across a 32-region ink distribution, and at most 0.04 row or
+column projection distance on every page. A synthetic five percent row or
+column shift must exceed the projection threshold. The recorded minimum
+coverage is 0.983131. The recorded maximum edge delta is 0.062144, the maximum
+distribution delta is 0.257661, and the maximum projection distance is
+0.038314. The recorded minimum synthetic-shift distance is 0.049960. Exact
+object-model records remain the text authority because global SSIM is unstable
+for sparse text pages. The public differential uses separate abstract
+definitions for independent instances. A focused regression records the
+intentional contract that distinct concrete `numId` values start independent
+counters even when they share one abstract definition, while this pinned Word
+build continues the shared definition across those instances.
+
 The legacy horizontal-rule reader regression classifies canonical, aliased,
 default, locally shadowed, and ancestor-bound Word, VML, and Office names by
 expanded namespace URI. Its negative matrix keeps false, numeric, missing,

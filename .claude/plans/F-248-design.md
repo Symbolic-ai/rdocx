@@ -1,6 +1,6 @@
 # F-248, Style-linked numbering, counters, TOC, and REF
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-246, F-247
@@ -104,14 +104,14 @@ paths are opt-in, and existing field output must remain stable.
 
 ## Implementation checklist
 
-- [ ] Add atomic link and unlink facade operations.
-- [ ] Validate both style and numbering graph sides before publish.
-- [ ] Complete instance, continuation, restart, and suppression counters.
-- [ ] Carry counter state through table cells and sections in document order.
-- [ ] Feed resolved markers into numbered TOC and REF field materialization.
-- [ ] Add deterministic differential, round-trip, and failure coverage.
-- [ ] Run the full gate and every routed rider.
-- [ ] Update exactly the listed HLD files.
+- [x] Add atomic link and unlink facade operations.
+- [x] Validate both style and numbering graph sides before publish.
+- [x] Complete instance, continuation, restart, and suppression counters.
+- [x] Carry counter state through table cells and sections in document order.
+- [x] Feed resolved markers into numbered TOC and REF field materialization.
+- [x] Add deterministic differential, round-trip, and failure coverage.
+- [x] Run the full gate and every routed rider.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

@@ -238,9 +238,29 @@ rebuilding the document. A rejected redefinition is side-effect free.
 Native Rust also exposes owned `NumberingDefinition`, `NumberingInstance`, and
 `NumberingLevelOverride` values plus fallible inspect, create, update, remove,
 and whole-graph validation operations. These operations preserve imported
-style links but do not mutate them independently. F-248 owns the two-sided
-style-link operation. Python, WASM, and CLI bindings gain no numbering graph
-authoring surface.
+style links but do not mutate them independently.
+`Document::link_style_to_numbering` and
+`Document::unlink_style_from_numbering` are additive pre-1.0 native Rust APIs.
+They atomically mutate the paragraph style and effective numbering level for
+one exact style, `numId`, and level tuple. Python, WASM, and CLI bindings gain
+no numbering graph authoring surface.
+
+F-248 also adds public fields to the pre-1.0 native Rust projections.
+`ResolvedNumbering` exposes `number_current`, `number_level`,
+`number_level_without_text`, `number_level_has_ancestor`, `number_full`,
+`number_full_without_text`,
+`number_context`, `number_suffixes_without_text`, `num_id`, and the hidden
+`relative_to` method. `CT_PPr` exposes
+`num_ilvl_raw`, `num_id_raw`, `num_pr_extra_attributes`, `num_pr_extra_xml`,
+`numbering_revision_xml_positions`, and `numbering_revision_position` so typed
+numbering edits can retain exact producer XML. `NumberingState` exposes
+`restart_after_section_break`, and `CT_Numbering` exposes
+`restarts_after_section_break`. These additions can break exhaustive struct
+literals in pre-1.0 Rust consumers. They add no Python, WASM, or CLI surface.
+`WordLayoutResult` also exposes `paragraph_numbering`,
+`document_paragraph_numbering`, and `document_body_paragraph_numbering` as
+result-local native Rust numbering lookups. The latter two remain hidden from
+generated documentation but are still additive public Rust APIs.
 
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
 `Document::package_class` reads the exact main-part override.

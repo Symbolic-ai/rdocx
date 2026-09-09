@@ -2981,24 +2981,36 @@ fn paragraph_properties_xml(
     };
     current.sect_pr = None;
     current.change = None;
-    let (original_numbering_xml, original_revision_xml, original_revision_positions) = original
+    let (
+        original_numbering_xml,
+        original_numbering_positions,
+        original_numbering_position,
+        original_revision_xml,
+        original_revision_positions,
+    ) = original
         .properties
         .as_ref()
         .map(|properties| {
             (
                 properties.numbering_revision_xml.clone(),
+                properties.numbering_revision_xml_positions.clone(),
+                properties.numbering_revision_position,
                 properties.revision_xml.clone(),
                 properties.revision_xml_positions.clone(),
             )
         })
         .unwrap_or_default();
     if current.numbering_revision_xml != original_numbering_xml
+        || current.numbering_revision_xml_positions != original_numbering_positions
+        || current.numbering_revision_position != original_numbering_position
         || current.revision_xml != original_revision_xml
         || current.revision_xml_positions != original_revision_positions
     {
         formatting_diagnostic(diagnostics, location.to_owned());
     }
     current.numbering_revision_xml = original_numbering_xml;
+    current.numbering_revision_xml_positions = original_numbering_positions;
+    current.numbering_revision_position = original_numbering_position;
     current.revision_xml = original_revision_xml;
     current.revision_xml_positions = original_revision_positions;
     let needs_owner = changed || !tracked_section.is_empty() || original.properties.is_some();
@@ -3031,8 +3043,12 @@ fn paragraph_properties_xml(
 fn modeled_paragraph_properties(properties: Option<&CT_PPr>) -> Option<CT_PPr> {
     properties.cloned().map(|mut properties| {
         properties.sect_pr = None;
+        properties.num_ilvl_raw = None;
+        properties.num_id_raw = None;
         properties.numbering_revision = None;
         properties.numbering_revision_xml.clear();
+        properties.numbering_revision_xml_positions.clear();
+        properties.numbering_revision_position = None;
         properties.change = None;
         properties.revision_xml.clear();
         properties.revision_xml_positions.clear();
@@ -4722,8 +4738,12 @@ fn paragraph_formatting(paragraph: &CT_P) -> Option<CT_PPr> {
     paragraph.properties.clone().map(|mut properties| {
         properties.num_id = None;
         properties.num_ilvl = None;
+        properties.num_id_raw = None;
+        properties.num_ilvl_raw = None;
         properties.numbering_revision = None;
         properties.numbering_revision_xml.clear();
+        properties.numbering_revision_xml_positions.clear();
+        properties.numbering_revision_position = None;
         properties.change = None;
         properties.revision_xml.clear();
         properties

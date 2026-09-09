@@ -217,7 +217,7 @@ bytes remain in the ZIP package.
 | DOCX-010 | theme-font | font table and licensed embedded fonts | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-011 | styles | paragraph, character, and table style graphs | Y | Y | Y | Y | Y | package | Y | Y | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-012 | numbering | numbering level and instance package model | Y | Y | Y | Y | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
-| DOCX-013 | numbering | style-linked counters, restarts, TOC, and REF | N | P | N | N | PV | all | P | P | N | P | B | B | B | unsupported | boundary:F-248 | F-248 |
+| DOCX-013 | numbering | style-linked counters, restarts, TOC, and REF | Y | Y | Y | Y | Y | all | Y | Y | P | Y | B | B | B | partial | implementation:`crates/rdocx/src/document.rs`,implementation:`crates/rdocx-layout/src/style_resolver.rs`,implementation:`crates/rdocx/src/field.rs` | F-248 |
 | DOCX-014 | package | deterministic identifiers across owned parts | Y | Y | Y | NA | Y | package | NA | NA | Y | Y | B | B | B | complete | implementation:`crates/rdocx/src/document.rs` | - |
 | DOCX-015 | sections | ordered section lookup, insertion, mutation, and removal | P | P | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4233` | F-250 |
 | DOCX-016 | sections | page geometry and ordinary section properties | P | Y | P | N | P | body | P | P | P | P | B | B | B | partial | implementation:`crates/rdocx/src/document.rs:4247` | F-251 |

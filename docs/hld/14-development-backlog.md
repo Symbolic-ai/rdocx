@@ -2312,14 +2312,27 @@ reopen with schema-correct order and reports no unmodeled properties when
 created solely through the public API.
 
 ### F-248, Style-linked numbering, counters, TOC, and REF (L)
-Provide one transactional operation that writes both the numbering-level style
-link and the style's numbering properties. Counter behavior covers independent
-instances, continuation, restarts, table cells, sections, suppression through
-`numId` zero, numbered TOC entries, and numbering-aware REF switches.
+The native facade provides atomic link and unlink operations that write the
+numbering-level style link and the style's numbering properties together.
+Result-local counters are keyed by concrete instance and level and cover
+continuation, overrides, restarts, table cells, sections, suppression through
+`numId` zero, numbered TOC entries, and numbering-aware REF switches. Distinct
+concrete instances start independently, including when they share an abstract
+definition. This is an intentional divergence from the captured Word 16.112.3
+shared-definition behavior.
 **Depends on**: F-246, F-247.
 **Test gate**: differential. Three-level numbered headings inside and outside
-tables match Word in body text, TOC entries, cross-references, and restart
-behavior.
+tables match Word 16.112.3 in body text, TOC entries, cross-references, and
+restart behavior. Twenty-seven exact Word records and three normalized TOC
+records are the semantic authority. The two-page 150 DPI Word PDF oracle
+requires at most one pixel of raster dimension difference, at least 0.95 paired
+ink coverage, at most 0.08 normalized ink bounding-edge delta, at most 0.27
+total variation across a 32-region ink distribution, and at most 0.04 row or
+column projection distance on every page. A synthetic five percent shift must
+exceed the projection threshold. The recorded minimum coverage is 0.983131.
+The recorded maximum edge delta is 0.062144, the maximum distribution delta is
+0.257661, and the maximum projection distance is 0.038314. The recorded minimum
+synthetic-shift distance is 0.049960.
 
 ### F-249, Deterministic package identifier allocation (M)
 The Word facade owns deterministic allocation for relationships, bookmarks,

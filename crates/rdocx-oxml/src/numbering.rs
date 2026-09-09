@@ -584,7 +584,7 @@ fn capture_extra_attributes(
     Ok(attributes)
 }
 
-fn namespace_binding(prefix: &str, namespace: &str) -> String {
+pub(crate) fn namespace_binding(prefix: &str, namespace: &str) -> String {
     format!("\0{prefix}\0{namespace}")
 }
 
@@ -665,7 +665,7 @@ fn word_attribute_value(
     Ok(None)
 }
 
-fn typed_leaf_requires_raw(
+pub(crate) fn typed_leaf_requires_raw(
     element: &BytesStart<'_>,
     word_prefixes: &[String],
     has_content: bool,
@@ -684,7 +684,10 @@ fn typed_leaf_requires_raw(
     Ok(has_content || value_count != 1 || has_unmodelled_attribute)
 }
 
-fn typed_leaf_value(element: &BytesStart<'_>, word_prefixes: &[String]) -> Result<Option<String>> {
+pub(crate) fn typed_leaf_value(
+    element: &BytesStart<'_>,
+    word_prefixes: &[String],
+) -> Result<Option<String>> {
     let prefixes = word_prefixes_at(element, word_prefixes)?;
     let mut value = None;
     for attribute in element.attributes() {
@@ -836,7 +839,7 @@ fn validate_typed_leaf_prefixes(raw: &[u8], inherited: &[String]) -> Result<()> 
     Ok(())
 }
 
-fn write_typed_leaf_raw<W: std::io::Write>(
+pub(crate) fn write_typed_leaf_raw<W: std::io::Write>(
     writer: &mut Writer<W>,
     raw: &[u8],
     word_prefixes: &[String],
@@ -939,6 +942,30 @@ fn parse_on_off_token(value: &str) -> Option<bool> {
         "false" | "0" | "off" => Some(false),
         _ => None,
     }
+}
+
+fn namespaced_attribute_value<'a>(
+    attributes: &'a [(String, String)],
+    root_attributes: &'a [(String, String)],
+    namespace: &str,
+    local_name: &str,
+) -> Option<&'a str> {
+    attributes.iter().find_map(|(name, value)| {
+        let (prefix, local) = name.split_once(':')?;
+        if local != local_name || prefix == "xmlns" {
+            return None;
+        }
+        let declaration = format!("xmlns:{prefix}");
+        let resolved = attributes
+            .iter()
+            .find(|(name, _)| name == &declaration)
+            .or_else(|| {
+                root_attributes
+                    .iter()
+                    .find(|(name, _)| name == &declaration)
+            })?;
+        (resolved.1 == namespace).then_some(value.as_str())
+    })
 }
 
 fn capture_level_attributes(
@@ -1300,6 +1327,12 @@ fn ppr_from_raw(raw: &[u8], word_prefixes: &[String]) -> Result<(CT_PPr, bool)> 
     // duplicate them when canonical properties are merged back into it.
     ppr.revision_xml.clear();
     ppr.revision_xml_positions.clear();
+    ppr.num_ilvl_raw = None;
+    ppr.num_id_raw = None;
+    ppr.num_pr_extra_attributes.clear();
+    ppr.num_pr_extra_xml.clear();
+    ppr.numbering_revision_xml_positions.clear();
+    ppr.numbering_revision_position = None;
     Ok((ppr, has_producer))
 }
 
@@ -4328,6 +4361,23 @@ impl CT_Numbering {
             .iter()
             .find(|a| a.abstract_num_id == num.abstract_num_id)
     }
+
+    /// Whether the concrete numbering instance restarts after a section break.
+    pub fn restarts_after_section_break(&self, num_id: u32) -> bool {
+        const WORD_2012_NAMESPACE: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+
+        self.get_abstract_num_for(num_id)
+            .and_then(|definition| {
+                namespaced_attribute_value(
+                    &definition.extra_attributes,
+                    &self.root_attributes,
+                    WORD_2012_NAMESPACE,
+                    "restartNumberingAfterBreak",
+                )
+            })
+            .and_then(parse_on_off_token)
+            .unwrap_or(false)
+    }
 }
 
 impl Default for CT_Numbering {
@@ -4966,6 +5016,32 @@ mod tests {
 
         assert!(!numbering.set_list_level(99, 0, ST_NumberFormat::Decimal, None));
         assert!(!numbering.set_list_level(num_id, 9, ST_NumberFormat::Decimal, None));
+    }
+
+    #[test]
+    fn restart_after_break_resolves_an_alias_and_preserves_it() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="http://schemas.microsoft.com/office/word/2012/wordml"><w:abstractNum w:abstractNumId="0" x:restartNumberingAfterBreak="on"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#;
+        let numbering = CT_Numbering::from_xml(xml).unwrap();
+
+        assert!(numbering.restarts_after_section_break(1));
+        let output = String::from_utf8(numbering.to_xml().unwrap()).unwrap();
+        assert!(
+            output.contains(r#"xmlns:x="http://schemas.microsoft.com/office/word/2012/wordml""#)
+        );
+        assert!(output.contains(r#"x:restartNumberingAfterBreak="on""#));
+    }
+
+    #[test]
+    fn a_local_namespace_shadow_does_not_enable_restart() {
+        let xml = br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="http://schemas.microsoft.com/office/word/2012/wordml"><w:abstractNum xmlns:x="urn:producer" w:abstractNumId="0" x:restartNumberingAfterBreak="1"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#;
+        let numbering = CT_Numbering::from_xml(xml).unwrap();
+
+        assert!(!numbering.restarts_after_section_break(1));
+        assert!(
+            String::from_utf8(numbering.to_xml().unwrap())
+                .unwrap()
+                .contains(r#"x:restartNumberingAfterBreak="1""#)
+        );
     }
 
     #[test]

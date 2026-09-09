@@ -6,6 +6,9 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::cell::Cell;
 
+#[cfg(test)]
+use rdocx_oxml::text::Field;
+
 use rdocx_oxml::borders::{CT_PBdr, CT_TabStop};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document, CT_SectPr};
@@ -18,7 +21,7 @@ use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{
-    BookmarkMarker, BreakType, CT_P, CT_R, Field, FieldArgument, RunContent,
+    BookmarkMarker, BreakType, CT_P, CT_R, FieldArgument, FieldInstruction, RunContent,
     hyperlink_revision_index,
 };
 
@@ -30,7 +33,7 @@ use crate::convert;
 use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::notes::NoteRegistry;
 use crate::paginator::{self, HeaderFooterContent, HeaderFooterSemantics, PageGeometry};
-use crate::style_resolver::{self, NumberingState};
+use crate::style_resolver::{self, NumberingState, ResolvedNumbering};
 use crate::table;
 use crate::{WordSourcePath, WordStory};
 use oxml_layout::{
@@ -873,6 +876,7 @@ pub struct Engine {
     pending_header_footer_cache_peak_bytes: usize,
     header_footer_cache_reads_enabled: bool,
     restart_cache: Option<RestartCache>,
+    numbering_by_source: HashMap<SourceNodeId, ResolvedNumbering>,
     #[cfg(test)]
     owned_context_builds: usize,
     #[cfg(test)]
@@ -1548,6 +1552,7 @@ impl Engine {
             pending_header_footer_cache_peak_bytes: 0,
             header_footer_cache_reads_enabled: false,
             restart_cache: None,
+            numbering_by_source: HashMap::new(),
             #[cfg(test)]
             owned_context_builds: 0,
             #[cfg(test)]
@@ -1637,7 +1642,21 @@ impl Engine {
     ) -> Result<(LayoutResult, Vec<WordSourcePath>)> {
         let sources = SourceRegistry::for_input(input);
         let result = self.layout_inner(input, Some(&sources))?;
-        Ok((result, sources.into_nodes()))
+        let nodes = sources.into_nodes();
+        Ok((result, nodes))
+    }
+
+    pub(crate) fn numbering_by_source(
+        &self,
+        source_count: usize,
+    ) -> Vec<Option<ResolvedNumbering>> {
+        (0..source_count)
+            .map(|index| {
+                let id = SourceNodeId::new(u32::try_from(index + 1).expect("source index fits"))
+                    .expect("source ids are one based");
+                self.numbering_by_source.get(&id).cloned()
+            })
+            .collect()
     }
 
     fn layout_inner(
@@ -1645,6 +1664,11 @@ impl Engine {
         input: &LayoutInput,
         sources: Option<&SourceRegistry>,
     ) -> Result<LayoutResult> {
+        self.numbering_by_source.clear();
+        let needs_ref_projection = document_has_ref_projection(input);
+        let generated_sources =
+            (sources.is_none() && needs_ref_projection).then(|| SourceRegistry::for_input(input));
+        let sources = sources.or(generated_sources.as_ref());
         // Load user-provided / DOCX-embedded fonts (highest priority). An exact
         // unchanged set is a no-op in a reusable engine.
         let font_context_changed = self.font_manager.load_additional_fonts(&input.fonts)
@@ -1703,7 +1727,28 @@ impl Engine {
             reset_restart_body_identity_computations();
         }
 
-        let result = self.layout_transaction(input, sources, has_wrapping_drawing);
+        let result = match self.layout_transaction(input, sources, has_wrapping_drawing, None) {
+            Ok((first, references)) if needs_ref_projection => {
+                self.numbering_by_source.clear();
+                if let Some(pending) = &mut self.pending_paragraph_cache {
+                    pending.clear();
+                }
+                if let Some(pending) = &mut self.pending_table_cache {
+                    pending.clear();
+                }
+                if let Some(pending) = &mut self.pending_header_footer_cache {
+                    pending.clear();
+                }
+                self.pending_paragraph_cache_bytes = 0;
+                self.pending_table_cache_bytes = 0;
+                self.pending_header_footer_cache_bytes = 0;
+                drop(first);
+                self.layout_transaction(input, sources, has_wrapping_drawing, Some(&references))
+                    .map(|(result, _)| result)
+            }
+            Ok((result, _)) => Ok(result),
+            Err(error) => Err(error),
+        };
         #[cfg(test)]
         {
             self.last_restart_identity_computations = restart_body_identity_computations();
@@ -1795,10 +1840,24 @@ impl Engine {
         input: &LayoutInput,
         sources: Option<&SourceRegistry>,
         document_wraps: bool,
-    ) -> Result<LayoutResult> {
+        reference_seed: Option<&NumberingState>,
+    ) -> Result<(LayoutResult, NumberingState)> {
         let retained_context_matches = self.retained_context_matches_full;
         let styles = &input.styles;
-        let mut num_state = NumberingState::new();
+        let mut num_state = reference_seed
+            .map(NumberingState::references_only)
+            .unwrap_or_default();
+        if let Some(sources) = sources {
+            for (index, path) in sources.nodes.iter().enumerate() {
+                if path.story == WordStory::Document {
+                    let source = SourceNodeId::new(
+                        u32::try_from(index + 1).expect("source index fits in u32"),
+                    )
+                    .expect("source ids are one based");
+                    num_state.record_main_story_source(source);
+                }
+            }
+        }
         let media = MediaRegistry::new(&input.images);
         let mut diagnostics = Vec::new();
 
@@ -1892,9 +1951,9 @@ impl Engine {
                             input,
                             styles,
                             &media,
-                            &mut num_state,
                             &mut diagnostics,
                             sources,
+                            &mut num_state,
                         )?;
                         let title_pg = sect_pr.title_pg.unwrap_or(false);
                         let (header_footer, header_footer_semantics) = header_footer
@@ -1910,6 +1969,9 @@ impl Engine {
                             page_number_start: section_page_number_start(&sect_pr),
                         });
                         current_sect_pr = Some(sect_pr);
+                        if let Some(numbering) = input.numbering.as_ref() {
+                            num_state.restart_after_section_break(numbering);
+                        }
                     }
                 }
                 MainStoryLayoutItem::Table(tbl, path) => {
@@ -1941,9 +2003,9 @@ impl Engine {
             input,
             styles,
             &media,
-            &mut num_state,
             &mut diagnostics,
             sources,
+            &mut num_state,
         )?;
         let final_title_pg = final_sect_pr.title_pg.unwrap_or(false);
         let (final_hf, final_hf_semantics) = final_hf
@@ -2537,7 +2599,9 @@ impl Engine {
         let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
         result.diagnostics = diagnostics;
         result.structure = Some(structure);
-        Ok(result)
+        let references = num_state.references_only();
+        self.numbering_by_source.extend(num_state.take_resolved());
+        Ok((result, references))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5467,10 +5531,32 @@ fn layout_paragraph_with_source_and_table(
     let mut inline_items = Vec::new();
     let mut multilingual_styles = HashMap::<usize, WordMultilingualStyle>::new();
 
+    if let Some(source_node) = source_node {
+        for name in para
+            .bookmark_markers
+            .iter()
+            .filter(|bookmark| bookmark.is_start())
+            .filter_map(|bookmark| bookmark.name())
+        {
+            num_state.record_bookmark_source(name, source_node);
+        }
+    }
+
     // Handle numbering marker
     if let (Some(num_id), Some(numbering)) = (effective_ppr.num_id, input.numbering.as_ref()) {
         let ilvl = effective_ppr.num_ilvl.unwrap_or(0);
         if let Some(marker) = style_resolver::generate_marker(num_id, ilvl, numbering, num_state) {
+            if let Some(source_node) = source_node {
+                num_state.record(source_node, &marker);
+                for name in para
+                    .bookmark_markers
+                    .iter()
+                    .filter(|bookmark| bookmark.is_start())
+                    .filter_map(|bookmark| bookmark.name())
+                {
+                    num_state.record_bookmark(name, source_node, &marker);
+                }
+            }
             // Shape the marker text
             let marker_rpr = marker.marker_rpr;
             let marker_font_size = marker_rpr.sz.map(|hp| hp.to_pt()).unwrap_or_else(|| {
@@ -5810,15 +5896,25 @@ fn layout_paragraph_with_source_and_table(
                     }
                 }
                 RunContent::Field(field) => {
-                    let (computed_value, field_kind) = match field.instruction.name.as_str() {
+                    let instruction = field.effective_instruction();
+                    let (computed_value, field_kind) = match instruction.name.as_str() {
                         "PAGE" => (Some("99".to_owned()), Some(FieldKind::Page)),
                         "NUMPAGES" => (Some("99".to_owned()), Some(FieldKind::NumPages)),
                         "REF" => {
-                            let Some(bookmark) = field_text_argument(field, 0) else {
+                            let Some(bookmark) = field_text_argument(&instruction, 0) else {
                                 continue;
                             };
                             if let Some(text) = bookmark_text(input, bookmark) {
-                                (Some(text), None)
+                                (
+                                    Some(numbered_ref_text(
+                                        &instruction,
+                                        bookmark,
+                                        text,
+                                        num_state,
+                                        source_node,
+                                    )),
+                                    None,
+                                )
                             } else {
                                 diagnostics.push(Diagnostic {
                                     message: format!(
@@ -5829,7 +5925,7 @@ fn layout_paragraph_with_source_and_table(
                             }
                         }
                         "PAGEREF" => {
-                            let Some(bookmark) = field_text_argument(field, 0) else {
+                            let Some(bookmark) = field_text_argument(&instruction, 0) else {
                                 continue;
                             };
                             if bookmark_text(input, bookmark).is_none() {
@@ -6280,10 +6376,11 @@ pub(crate) fn page_reference_names(input: &LayoutInput) -> Vec<String> {
                 let RunContent::Field(field) = content else {
                     continue;
                 };
-                if field.instruction.name != "PAGEREF" {
+                let instruction = field.effective_instruction();
+                if instruction.name != "PAGEREF" {
                     continue;
                 }
-                let Some(bookmark) = field_text_argument(field, 0) else {
+                let Some(bookmark) = field_text_argument(&instruction, 0) else {
                     continue;
                 };
                 if !names.iter().any(|candidate| candidate == bookmark) {
@@ -6295,11 +6392,118 @@ pub(crate) fn page_reference_names(input: &LayoutInput) -> Vec<String> {
     names
 }
 
-fn field_text_argument(field: &Field, index: usize) -> Option<&str> {
-    match field.instruction.arguments.get(index) {
+fn field_text_argument(instruction: &FieldInstruction, index: usize) -> Option<&str> {
+    match instruction.arguments.get(index) {
         Some(FieldArgument::Text(value)) => Some(value),
         Some(FieldArgument::Nested(_)) | None => None,
     }
+}
+
+fn field_has_switch(instruction: &FieldInstruction, name: &str) -> bool {
+    instruction
+        .switches
+        .iter()
+        .any(|field_switch| field_switch.name == name)
+}
+
+fn numbered_ref_text(
+    instruction: &FieldInstruction,
+    bookmark: &str,
+    bookmark_text: String,
+    numbering: &NumberingState,
+    source: Option<SourceNodeId>,
+) -> String {
+    let mode = if field_has_switch(instruction, "w") {
+        Some("full")
+    } else if field_has_switch(instruction, "r") {
+        Some("relative")
+    } else if field_has_switch(instruction, "n") {
+        Some("level")
+    } else {
+        None
+    };
+    if mode.is_none() && !field_has_switch(instruction, "p") {
+        return bookmark_text;
+    }
+    let target_source = numbering.bookmark_source(bookmark);
+    let source_is_main_story = source.is_some_and(|source| numbering.is_main_story_source(source));
+    let target_is_main_story =
+        target_source.is_some_and(|target| numbering.is_main_story_source(target));
+    if mode.is_none()
+        && (!field_has_switch(instruction, "p") || !source_is_main_story || !target_is_main_story)
+    {
+        return bookmark_text;
+    }
+    let marker = target_is_main_story
+        .then(|| numbering.bookmark(bookmark).map(|(_, marker)| marker))
+        .flatten();
+    let omit_text = field_has_switch(instruction, "t");
+    let mut value = match (mode, marker, omit_text) {
+        (Some("full"), Some(marker), true) => marker.number_full_without_text.clone(),
+        (Some("full"), Some(marker), false) => marker.number_full.clone(),
+        (Some("relative"), Some(marker), omit_text) => marker.relative_to(
+            source
+                .filter(|_| source_is_main_story)
+                .and_then(|source| numbering.source(source)),
+            omit_text,
+        ),
+        (Some("level"), Some(marker), true) => marker.number_level_without_text.clone(),
+        (Some("level"), Some(marker), false) => marker.number_level.clone(),
+        (Some(_), None, _) => bookmark_text,
+        (None, _, _) => String::new(),
+        _ => unreachable!("known REF numbering mode"),
+    };
+    if source_is_main_story
+        && target_is_main_story
+        && field_has_switch(instruction, "p")
+        && let (Some(source), Some(target_source)) = (source, target_source)
+    {
+        if !value.is_empty() {
+            value.push(' ');
+        }
+        value.push_str(if target_source.get() <= source.get() {
+            "above"
+        } else {
+            "below"
+        });
+    }
+    value
+}
+
+fn document_has_ref_projection(input: &LayoutInput) -> bool {
+    let paragraph_has_ref = |paragraph: &CT_P| {
+        project_paragraph_runs(paragraph, input.revision_view)
+            .into_iter()
+            .any(|projected| {
+                projected.run.content.iter().any(|content| {
+                    let RunContent::Field(field) = content else {
+                        return false;
+                    };
+                    let instruction = field.effective_instruction();
+                    instruction.name == "REF"
+                        && ["n", "r", "w", "p"]
+                            .into_iter()
+                            .any(|name| field_has_switch(&instruction, name))
+                })
+            })
+    };
+    let mut found = false;
+    visit_document_paragraphs(input, &mut |paragraph| {
+        found |= paragraph_has_ref(paragraph)
+    });
+    found
+        || input
+            .headers
+            .values()
+            .chain(input.footers.values())
+            .flat_map(|part| &part.paragraphs)
+            .any(paragraph_has_ref)
+        || [input.footnotes.as_ref(), input.endnotes.as_ref()]
+            .into_iter()
+            .flatten()
+            .flat_map(|part| &part.footnotes)
+            .flat_map(|note| &note.paragraphs)
+            .any(paragraph_has_ref)
 }
 
 fn document_has_page_ref(input: &LayoutInput, name: &str) -> bool {
@@ -6921,9 +7125,9 @@ fn layout_header_footer(
     input: &LayoutInput,
     styles: &CT_Styles,
     media: &MediaRegistry,
-    num_state: &mut NumberingState,
     diagnostics: &mut Vec<Diagnostic>,
     sources: Option<&SourceRegistry>,
+    reference_state: &mut NumberingState,
 ) -> Result<Option<(HeaderFooterContent, HeaderFooterSemantics)>> {
     let mut has_content = false;
     let mut header_blocks = Vec::new();
@@ -6964,6 +7168,7 @@ fn layout_header_footer(
             ),
         };
         if let Some(hdr) = input.headers.get(&href.rel_id) {
+            let mut story_num_state = reference_state.references_only();
             let content = layout_header_footer_variant(
                 engine,
                 HeaderFooterStoryKind::Header,
@@ -6974,12 +7179,16 @@ fn layout_header_footer(
                 input,
                 styles,
                 media,
-                num_state,
+                &mut story_num_state,
                 diagnostics,
                 sources,
                 width,
                 geometry,
             )?;
+            reference_state.merge_references(&story_num_state);
+            engine
+                .numbering_by_source
+                .extend(story_num_state.take_resolved());
             target_blocks.extend(content.blocks);
             target_directions.extend(content.directions);
             if target_watermark.is_none() {
@@ -6996,6 +7205,7 @@ fn layout_header_footer(
             HdrFtrType::Even => (&mut even_footer_blocks, &mut even_footer_directions),
         };
         if let Some(ftr) = input.footers.get(&fref.rel_id) {
+            let mut story_num_state = reference_state.references_only();
             let content = layout_header_footer_variant(
                 engine,
                 HeaderFooterStoryKind::Footer,
@@ -7006,12 +7216,16 @@ fn layout_header_footer(
                 input,
                 styles,
                 media,
-                num_state,
+                &mut story_num_state,
                 diagnostics,
                 sources,
                 width,
                 geometry,
             )?;
+            reference_state.merge_references(&story_num_state);
+            engine
+                .numbering_by_source
+                .extend(story_num_state.take_resolved());
             target_blocks.extend(content.blocks);
             target_directions.extend(content.directions);
             has_content = true;
@@ -8717,6 +8931,145 @@ mod tests {
             theme: None,
             fonts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn numbering_state_crosses_tables_and_sections_in_document_order() {
+        use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef};
+        use rdocx_oxml::numbering::CT_Numbering;
+
+        fn numbered_paragraph(text: &str, num_id: u32) -> CT_P {
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                num_id: Some(num_id),
+                num_ilvl: Some(0),
+                ..CT_PPr::default()
+            });
+            paragraph.add_run(text);
+            paragraph
+        }
+
+        fn run_case(restart_after_break: bool) -> Vec<(Vec<usize>, String)> {
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+
+            let mut numbering = CT_Numbering::new();
+            let num_id = numbering.add_numbered_list();
+            if restart_after_break {
+                const W15: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+                numbering
+                    .root_attributes
+                    .push(("xmlns:x".to_owned(), W15.to_owned()));
+                let abstract_id = numbering
+                    .nums
+                    .iter()
+                    .find(|instance| instance.num_id == num_id)
+                    .expect("numbering instance exists")
+                    .abstract_num_id;
+                numbering
+                    .abstract_nums
+                    .iter_mut()
+                    .find(|definition| definition.abstract_num_id == abstract_id)
+                    .expect("abstract definition exists")
+                    .extra_attributes
+                    .push(("x:restartNumberingAfterBreak".to_owned(), "1".to_owned()));
+            }
+            input.numbering = Some(numbering);
+
+            input
+                .document
+                .body
+                .add_paragraph(numbered_paragraph("before table", num_id));
+            let mut table = safe_table("inside table");
+            table.rows[0].cells[0].paragraphs_mut()[0].properties = Some(CT_PPr {
+                num_id: Some(num_id),
+                num_ilvl: Some(0),
+                ..CT_PPr::default()
+            });
+            input.document.body.add_table(table);
+
+            let header_id = "rIdNumberedHeader".to_owned();
+            let mut first_section = CT_SectPr::default_letter();
+            first_section.header_refs.push(HdrFtrRef {
+                hdr_ftr_type: HdrFtrType::Default,
+                rel_id: header_id.clone(),
+            });
+            let mut section_end = numbered_paragraph("section end", num_id);
+            section_end
+                .properties
+                .as_mut()
+                .expect("numbered properties exist")
+                .sect_pr = Some(first_section);
+            input.document.body.add_paragraph(section_end);
+            input
+                .document
+                .body
+                .add_paragraph(numbered_paragraph("next section", num_id));
+            input.document.body.sect_pr = Some(CT_SectPr::default_letter());
+
+            let mut header = CT_HdrFtr::new();
+            header
+                .paragraphs
+                .push(numbered_paragraph("numbered header", num_id));
+            input.headers.insert(header_id.clone(), header);
+
+            let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+            let (layout, sources) = engine
+                .layout_with_provenance(&input)
+                .expect("numbered document lays out");
+            assert!(
+                layout
+                    .pages
+                    .iter()
+                    .any(|page| header_footer_page_text(page).contains("numbered header")),
+                "the numbered header must actually be laid out"
+            );
+            let numbered_sources = sources
+                .iter()
+                .zip(engine.numbering_by_source(sources.len()))
+                .filter_map(|(source, marker)| {
+                    marker.map(|marker| {
+                        (
+                            source.story.clone(),
+                            source.children.clone(),
+                            marker.marker_text,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                numbered_sources.iter().any(|(story, _, marker)| {
+                    matches!(story, WordStory::Header { relationship_id } if relationship_id == &header_id)
+                        && marker == "1."
+                }),
+                "the numbered header must retain its result-local marker"
+            );
+            numbered_sources
+                .into_iter()
+                .filter_map(|(story, children, marker)| {
+                    (story == WordStory::Document).then_some((children, marker))
+                })
+                .collect()
+        }
+
+        assert_eq!(
+            run_case(false),
+            vec![
+                (vec![0], "1.".to_owned()),
+                (vec![1, 0, 0, 0], "2.".to_owned()),
+                (vec![2], "3.".to_owned()),
+                (vec![3], "4.".to_owned()),
+            ]
+        );
+        assert_eq!(
+            run_case(true),
+            vec![
+                (vec![0], "1.".to_owned()),
+                (vec![1, 0, 0, 0], "2.".to_owned()),
+                (vec![2], "3.".to_owned()),
+                (vec![3], "1.".to_owned()),
+            ]
+        );
     }
 
     fn five_large_caller_fonts() -> Vec<oxml_layout::FontFile> {
@@ -11830,17 +12183,17 @@ mod tests {
             .clone();
         let media = MediaRegistry::new(&header_input.images);
         let mut direction_header_engine = Engine::new_deterministic().expect("bundled fonts load");
-        let mut numbering = NumberingState::new();
         let mut diagnostics = Vec::new();
+        let mut reference_state = NumberingState::new();
         let (_, semantics) = layout_header_footer(
             &mut direction_header_engine,
             &section,
             &header_input,
             &header_input.styles,
             &media,
-            &mut numbering,
             &mut diagnostics,
             None,
+            &mut reference_state,
         )
         .expect("real header cache container lays out")
         .expect("header content exists");
@@ -17173,6 +17526,284 @@ mod tests {
             .expect("bundled fonts")
             .layout(input)
             .expect("layout succeeds")
+    }
+
+    #[test]
+    fn non_provenance_layout_resolves_forward_numbered_and_position_refs() {
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        let mut numbering = rdocx_oxml::numbering::CT_Numbering::new();
+        let num_id = numbering.add_numbered_list();
+        input.numbering = Some(numbering);
+
+        let mut fields = CT_P::new();
+        fields.runs.push(cross_reference_run(
+            r"REF numbered_target \n",
+            "stored number",
+        ));
+        fields.runs.push(cross_reference_run(
+            r"REF plain_target \p",
+            "stored position",
+        ));
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(fields));
+
+        let mut numbered = CT_P::new();
+        numbered.properties = Some(CT_PPr {
+            num_id: Some(num_id),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        numbered.add_run("numbered target");
+        assert!(numbered.insert_bookmark_start(0, 81, "numbered_target"));
+        assert!(numbered.insert_bookmark_end(1, 81));
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(numbered));
+
+        let mut plain = CT_P::new();
+        plain.add_run("plain target");
+        assert!(plain.insert_bookmark_start(0, 82, "plain_target"));
+        assert!(plain.insert_bookmark_end(1, 82));
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(plain));
+
+        let text = output_text(&deterministic_layout(&input));
+        assert!(text.iter().any(|value| value == "1"), "{text:?}");
+        assert!(text.iter().any(|value| value == "below"), "{text:?}");
+        assert!(
+            !text.iter().any(|value| value.starts_with("stored")),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn revision_wrapped_forward_numbered_ref_triggers_two_pass_projection() {
+        let field_document = rdocx_oxml::CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:ins w:id="1" w:author="Ada"><w:fldSimple w:instr="REF numbered_target \n"><w:r><w:t>stored number</w:t></w:r></w:fldSimple></w:ins></w:p></w:body></w:document>"#,
+        )
+        .expect("revision-wrapped field parses");
+        let BodyContent::Paragraph(field_paragraph) = &field_document.body.content[0] else {
+            panic!("expected field paragraph")
+        };
+
+        for revision_view in [RevisionView::Accepted, RevisionView::Tracked] {
+            let mut input = make_input_with_text("");
+            input.revision_view = revision_view;
+            input.document.body.content.clear();
+            let mut numbering = rdocx_oxml::numbering::CT_Numbering::new();
+            let num_id = numbering.add_numbered_list();
+            input.numbering = Some(numbering);
+            input
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(field_paragraph.clone()));
+
+            let mut target = CT_P::new();
+            target.properties = Some(CT_PPr {
+                num_id: Some(num_id),
+                num_ilvl: Some(0),
+                ..Default::default()
+            });
+            target.add_run("numbered target");
+            assert!(target.insert_bookmark_start(0, 83, "numbered_target"));
+            assert!(target.insert_bookmark_end(1, 83));
+            input
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(target));
+
+            let text = output_text(&deterministic_layout(&input));
+            assert!(text.iter().any(|value| value == "1"), "{text:?}");
+            assert!(
+                !text.iter().any(|value| value == "stored number"),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_only_instruction_edit_controls_numbered_ref_projection() {
+        let field_document = rdocx_oxml::CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:fldSimple w:instr="REF numbered_target"><w:r><w:t>stored number</w:t></w:r></w:fldSimple></w:p></w:body></w:document>"#,
+        )
+        .expect("field document parses");
+        let BodyContent::Paragraph(mut field_paragraph) = field_document.body.content[0].clone()
+        else {
+            panic!("expected field paragraph")
+        };
+        let RunContent::Field(field) = &mut field_paragraph.runs[0].content[0] else {
+            panic!("expected field")
+        };
+        field.instruction.raw = r"REF numbered_target \n".to_owned();
+
+        let mut input = make_input_with_text("");
+        input.document.body.content.clear();
+        let mut numbering = rdocx_oxml::numbering::CT_Numbering::new();
+        let num_id = numbering.add_numbered_list();
+        input.numbering = Some(numbering);
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(field_paragraph));
+
+        let mut target = CT_P::new();
+        target.properties = Some(CT_PPr {
+            num_id: Some(num_id),
+            num_ilvl: Some(0),
+            ..Default::default()
+        });
+        target.add_run("numbered target");
+        assert!(target.insert_bookmark_start(0, 84, "numbered_target"));
+        assert!(target.insert_bookmark_end(1, 84));
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(target));
+
+        let text = output_text(&deterministic_layout(&input));
+        let joined = text.concat();
+        assert_eq!(joined.matches("numbered target").count(), 1, "{text:?}");
+        assert!(
+            !text.iter().any(|value| value == "stored number"),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn note_only_numbered_ref_triggers_two_pass_projection() {
+        use rdocx_oxml::footnotes::{CT_Footnote, CT_Footnotes, NoteType};
+
+        for stream in [NoteStream::Footnote, NoteStream::Endnote] {
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+            let mut numbering = rdocx_oxml::numbering::CT_Numbering::new();
+            let num_id = numbering.add_numbered_list();
+            input.numbering = Some(numbering);
+
+            let mut target = CT_P::new();
+            target.properties = Some(CT_PPr {
+                num_id: Some(num_id),
+                num_ilvl: Some(0),
+                ..Default::default()
+            });
+            target.add_run("numbered target");
+            assert!(target.insert_bookmark_start(0, 85, "numbered_target"));
+            assert!(target.insert_bookmark_end(1, 85));
+            input
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(target));
+
+            let mut note_reference = CT_P::new();
+            let mut reference_run = CT_R::new("");
+            reference_run.content = vec![match stream {
+                NoteStream::Footnote => RunContent::FootnoteRef { id: 1 },
+                NoteStream::Endnote => RunContent::EndnoteRef { id: 1 },
+            }];
+            note_reference.runs.push(reference_run);
+            input
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(note_reference));
+
+            let mut note_paragraph = CT_P::new();
+            note_paragraph.runs.push(cross_reference_run(
+                r"REF numbered_target \n",
+                "stored number",
+            ));
+            let notes = Some(CT_Footnotes {
+                footnotes: vec![CT_Footnote {
+                    id: 1,
+                    note_type: NoteType::Normal,
+                    paragraphs: vec![note_paragraph],
+                }],
+            });
+            match stream {
+                NoteStream::Footnote => input.footnotes = notes,
+                NoteStream::Endnote => input.endnotes = notes,
+            }
+
+            let text = output_text(&deterministic_layout(&input));
+            let joined = text.concat();
+            assert_eq!(
+                joined.matches("numbered target").count(),
+                1,
+                "{stream:?}: {text:?}"
+            );
+            assert!(
+                !text.iter().any(|value| value == "stored number"),
+                "{stream:?}: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_main_story_ref_uses_target_context_without_position_suffix() {
+        let target_source = SourceNodeId::new(1).expect("target source");
+        let header_source = SourceNodeId::new(2).expect("header source");
+        let target = ResolvedNumbering {
+            marker_text: "4.5.Clause 2.".to_owned(),
+            number_current: "2".to_owned(),
+            number_level: "Clause 2".to_owned(),
+            number_level_without_text: "2".to_owned(),
+            number_level_has_ancestor: false,
+            number_full: "4.5.Clause 2".to_owned(),
+            number_full_without_text: "4.5.2".to_owned(),
+            number_context: vec!["4".to_owned(), "5".to_owned(), "2".to_owned()],
+            number_suffixes_without_text: vec![
+                "4.5.2".to_owned(),
+                "5.2".to_owned(),
+                "2".to_owned(),
+            ],
+            num_id: 7,
+            marker_rpr: CT_RPr::default(),
+            suffix: ST_LvlSuffix::Tab,
+        };
+        let mut state = NumberingState::new();
+        state.record_main_story_source(target_source);
+        state.record_bookmark_source("target", target_source);
+        state.record_bookmark("target", target_source, &target);
+        state.record(header_source, &target);
+
+        for instruction in ["REF target", r"REF target \p"] {
+            let field = Field::new(instruction, "stored");
+            assert_eq!(
+                numbered_ref_text(
+                    &field.effective_instruction(),
+                    "target",
+                    "target text".to_owned(),
+                    &state,
+                    Some(header_source),
+                ),
+                "target text"
+            );
+        }
+        let field = Field::new(r"REF target \r", "stored");
+        assert_eq!(
+            numbered_ref_text(
+                &field.effective_instruction(),
+                "target",
+                "target text".to_owned(),
+                &state,
+                Some(header_source),
+            ),
+            "4.5.Clause 2"
+        );
     }
 
     #[test]

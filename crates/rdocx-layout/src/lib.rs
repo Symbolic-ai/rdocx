@@ -41,6 +41,7 @@ pub struct WordLayoutResult {
     pub layout: LayoutResult,
     pub revision_view: RevisionView,
     source_nodes: Vec<WordSourcePath>,
+    numbering_by_source: Vec<Option<style_resolver::ResolvedNumbering>>,
     page_reference_names: Vec<String>,
 }
 
@@ -48,6 +49,48 @@ impl WordLayoutResult {
     /// Resolve a result-local source identity.
     pub fn source_node(&self, id: SourceNodeId) -> Option<&WordSourcePath> {
         self.source_nodes.get(id.get() as usize - 1)
+    }
+
+    /// Resolve the visible numbering marker assigned to a source paragraph.
+    pub fn paragraph_numbering(
+        &self,
+        id: SourceNodeId,
+    ) -> Option<&style_resolver::ResolvedNumbering> {
+        self.numbering_by_source
+            .get(id.get() as usize - 1)
+            .and_then(Option::as_ref)
+    }
+
+    /// Resolve numbering by flattened main-story paragraph order.
+    #[doc(hidden)]
+    pub fn document_paragraph_numbering(
+        &self,
+        paragraph_index: usize,
+    ) -> Option<&style_resolver::ResolvedNumbering> {
+        let source_index = self
+            .source_nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, path)| path.story == WordStory::Document)
+            .nth(paragraph_index)
+            .map(|(index, _)| index)?;
+        self.numbering_by_source
+            .get(source_index)
+            .and_then(Option::as_ref)
+    }
+
+    /// Resolve numbering for a top-level body paragraph by its body index.
+    #[doc(hidden)]
+    pub fn document_body_paragraph_numbering(
+        &self,
+        body_index: usize,
+    ) -> Option<&style_resolver::ResolvedNumbering> {
+        let source_index = self.source_nodes.iter().position(|path| {
+            path.story == WordStory::Document && path.children.as_slice() == [body_index]
+        })?;
+        self.numbering_by_source
+            .get(source_index)
+            .and_then(Option::as_ref)
     }
 
     /// Discard the Word source map and return the backend-neutral layout.
@@ -69,11 +112,14 @@ pub fn layout_document(input: &LayoutInput) -> Result<LayoutResult> {
 
 /// Lay out a complete DOCX and retain exact Word paragraph provenance.
 pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayoutResult> {
-    let (layout, source_nodes) = engine::Engine::new().layout_with_provenance(input)?;
+    let mut engine = engine::Engine::new();
+    let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -88,10 +134,12 @@ pub fn layout_document_with_reusable_engine(
     input: &LayoutInput,
 ) -> Result<WordLayoutResult> {
     let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -101,12 +149,14 @@ pub fn layout_document_with_reusable_engine(
 pub fn layout_document_with_caller_fonts_and_provenance(
     input: &LayoutInput,
 ) -> Result<WordLayoutResult> {
-    let (layout, source_nodes) =
-        engine::Engine::new_with_caller_fonts().layout_with_provenance(input)?;
+    let mut engine = engine::Engine::new_with_caller_fonts();
+    let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -120,12 +170,14 @@ pub fn layout_document_deterministic(input: &LayoutInput) -> Result<LayoutResult
 pub fn layout_document_deterministic_with_provenance(
     input: &LayoutInput,
 ) -> Result<WordLayoutResult> {
-    let (layout, source_nodes) =
-        engine::Engine::new_deterministic()?.layout_with_provenance(input)?;
+    let mut engine = engine::Engine::new_deterministic()?;
+    let (layout, source_nodes) = engine.layout_with_provenance(input)?;
+    let numbering_by_source = engine.numbering_by_source(source_nodes.len());
     Ok(WordLayoutResult {
         layout,
         revision_view: input.revision_view,
         source_nodes,
+        numbering_by_source,
         page_reference_names: engine::page_reference_names(input),
     })
 }

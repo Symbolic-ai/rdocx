@@ -929,6 +929,43 @@ const WORD_REVISION_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423"
 const WORD_FIELD_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_DENSE_FORM_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
 const WORD_COMPARISON_ORACLE: &str = "Microsoft Word 16.104 build 16.104.25121423";
+const WORD_F248_ORACLE: &str = "Microsoft Word 16.112.3 build 16.112.26083020";
+const WORD_F248_ENVIRONMENT: &str =
+    "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f248-numbering-records-v2";
+const WORD_F248_RECORDS: &[&str] = &[
+    "marker | F248_BODY_L0 | Section 1.",
+    "marker | F248_TABLE_L1 | 1.1.",
+    "marker | F248_BODY_L2 | Section 1.1.1.",
+    "marker | F248_FIRST_CONT | Section 2.",
+    "marker | F248_SECOND_NEW | Section 1.",
+    "marker | F248_FIRST_RESUME | Section 3.",
+    "marker | F248_RESTART_BEFORE | R1.",
+    "marker | F248_FIRST_AFTER_BREAK | Section 4.",
+    "marker | F248_RESTART_AFTER | R1.",
+    "marker | F248_DELIMITER_L0 | 章节 1)",
+    "marker | F248_DELIMITER_L1 | 章节 1 - Part 1)",
+    "field | F248_REF_N | Section 1.1.1",
+    "field | F248_REF_N_T | 1.1.1",
+    "field | F248_REF_R | Section 1.1.1",
+    "field | F248_REF_W | Section 1.1.1",
+    "field | F248_REF_W_T | 1.1.1",
+    "field | F248_REF_N_P | Section 1.1.1 above",
+    "field | F248_REF_P | above",
+    "field | F248_DELIMITER_N | 章节 1 - Part 1)",
+    "field | F248_DELIMITER_N_T | 1-1)",
+    "field | F248_DELIMITER_W_T | 1-1)",
+    "field | F248_CONTEXT_DIFFERENT_N | Clause 2",
+    "field | F248_CONTEXT_DIFFERENT_R | 4.5.Clause 2",
+    "field | F248_CONTEXT_DIFFERENT_R_T | 4.5.2",
+    "field | F248_CONTEXT_N | Clause 2",
+    "field | F248_CONTEXT_R | Clause 2",
+    "field | F248_CONTEXT_W | 4.5.Clause 2",
+];
+const WORD_F248_TOC_RECORDS: &[&str] = &[
+    "TOC1 | Section 1. | Body | 1",
+    "TOC2 | 1.1. | Table | 1",
+    "TOC3 | Section 1.1.1. | Deep | 1",
+];
 const WORD_COMPARISON_ENVIRONMENT: &str = "locale=en-US; normalization=revision-records-v1";
 const WORD_FIELD_ORACLE_ENVIRONMENT: &str =
     "locale=en-US; calendar=Gregorian; decimal=.; grouping=,; timezone=UTC";
@@ -996,7 +1033,10 @@ fn toc_entry_signatures(xml: &str) -> Vec<(String, String, Option<String>, Optio
                         if let rdocx_oxml::text::RunContent::Field(field) = content
                             && field.instruction.name == "PAGEREF"
                         {
-                            display.push_str(&field.cached_result);
+                            let displayed_page = format!("\t{}", field.cached_result);
+                            if !display.ends_with(&displayed_page) {
+                                display.push_str(&field.cached_result);
+                            }
                             page_target =
                                 field.instruction.arguments.first().and_then(|argument| {
                                     let rdocx_oxml::text::FieldArgument::Text(value) = argument
@@ -1018,6 +1058,26 @@ fn toc_entry_signatures(xml: &str) -> Vec<(String, String, Option<String>, Optio
                     page_target,
                 )
             })
+        })
+        .collect()
+}
+
+fn f248_toc_records(xml: &str) -> Vec<String> {
+    toc_entry_signatures(xml)
+        .into_iter()
+        .map(|(display, style, _, _)| {
+            let (content, page) = display
+                .rsplit_once('\t')
+                .expect("F-248 TOC entry has a page separator");
+            let title = ["Body", "Table", "Deep"]
+                .into_iter()
+                .find(|title| content.ends_with(title))
+                .expect("F-248 TOC entry has a known title");
+            let marker = content
+                .strip_suffix(title)
+                .unwrap()
+                .trim_end_matches([' ', '\t']);
+            format!("{style} | {marker} | {title} | {page}")
         })
         .collect()
 }
@@ -1458,6 +1518,30 @@ fn dynamic_toc_rebuild_matches_the_pinned_word_update() {
                 Some("_Toc1".to_owned())
             ),
         ]
+    );
+}
+
+#[test]
+fn numbered_toc_entries_reuse_the_visible_layout_marker() {
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Overview</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let definition = document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Heading1", instance, 0)
+        .unwrap();
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+    assert_eq!(
+        toc_entry_signatures(&document_xml(&mut document))[0].0,
+        "1.\tOverview\t1"
     );
 }
 
@@ -10860,6 +10944,821 @@ fn capture_full_story_comparison_word_records() {
     println!(
         "F-234 preserved Word oracle evidence: {}",
         inspection_directory.display()
+    );
+}
+
+fn f248_numbering_oracle_source() -> Vec<u8> {
+    let mut source = Document::new();
+    for (style_id, name) in [
+        ("F248Heading1", "Numbered Heading 1"),
+        ("F248Heading2", "Numbered Heading 2"),
+        ("F248Heading3", "Numbered Heading 3"),
+    ] {
+        source
+            .add_style(StyleBuilder::paragraph(style_id, name))
+            .unwrap();
+    }
+    let levels = [
+        ListLevel::decimal().level_text("Section %1."),
+        ListLevel::decimal().level_text("%1.%2."),
+        ListLevel::decimal().level_text("Section %1.%2.%3."),
+    ];
+    let definition = source.add_numbering_definition(&levels).unwrap();
+    let first = source.add_numbering_instance(definition, &[]).unwrap();
+    let second_definition = source.add_numbering_definition(&levels).unwrap();
+    let second = source
+        .add_numbering_instance(second_definition, &[])
+        .unwrap();
+    for (style_id, level) in [
+        ("F248Heading1", 0),
+        ("F248Heading2", 1),
+        ("F248Heading3", 2),
+    ] {
+        source
+            .link_style_to_numbering(style_id, first, level)
+            .unwrap();
+    }
+    let restart_definition = source
+        .add_numbering_definition(&[ListLevel::decimal().level_text("R%1.")])
+        .unwrap();
+    let restart = source
+        .add_numbering_instance(restart_definition, &[])
+        .unwrap();
+    let delimiter_definition = source
+        .add_numbering_definition(&[
+            ListLevel::decimal().level_text("章节 %1)"),
+            ListLevel::decimal().level_text("章节 %1 - Part %2)"),
+        ])
+        .unwrap();
+    let delimiter = source
+        .add_numbering_instance(delimiter_definition, &[])
+        .unwrap();
+    let context_definition = source
+        .add_numbering_definition(&[
+            ListLevel::decimal().level_text("%1."),
+            ListLevel::decimal().level_text("%1.%2."),
+            ListLevel::decimal().level_text("Clause %3."),
+        ])
+        .unwrap();
+    let context = source
+        .add_numbering_instance(context_definition, &[])
+        .unwrap();
+
+    let numbered = |bookmark_id: u32,
+                    bookmark: &str,
+                    text: &str,
+                    style: Option<&str>,
+                    num_id: Option<u32>,
+                    level: u32| {
+        let properties = match (style, num_id) {
+            (Some(style), _) => format!(r#"<w:pStyle w:val="{style}"/>"#),
+            (None, Some(num_id)) => format!(
+                r#"<w:numPr><w:ilvl w:val="{level}"/><w:numId w:val="{num_id}"/></w:numPr>"#
+            ),
+            (None, None) => String::new(),
+        };
+        format!(
+            r#"<w:p><w:pPr>{properties}</w:pPr><w:bookmarkStart w:id="{bookmark_id}" w:name="{bookmark}"/><w:r><w:t>{text}</w:t></w:r><w:bookmarkEnd w:id="{bookmark_id}"/></w:p>"#
+        )
+    };
+    let field = |bookmark_id: u32, bookmark: &str, instruction: &str| {
+        let instruction = instruction
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        format!(
+            r#"<w:p><w:bookmarkStart w:id="{bookmark_id}" w:name="{bookmark}"/><w:fldSimple w:instr="{instruction}"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="{bookmark_id}"/></w:p>"#
+        )
+    };
+    let context_fields = format!(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="{context}"/></w:numPr></w:pPr>
+        <w:bookmarkStart w:id="60" w:name="F248_CONTEXT_N"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \n"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="60"/>
+        <w:bookmarkStart w:id="61" w:name="F248_CONTEXT_R"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \r"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="61"/>
+        <w:bookmarkStart w:id="62" w:name="F248_CONTEXT_W"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \w"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="62"/>
+        </w:p>"#
+    );
+    let context_different_fields = format!(
+        r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="{context}"/></w:numPr></w:pPr>
+        <w:bookmarkStart w:id="64" w:name="F248_CONTEXT_DIFFERENT_N"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \n"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="64"/>
+        <w:bookmarkStart w:id="65" w:name="F248_CONTEXT_DIFFERENT_R"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \r"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="65"/>
+        <w:bookmarkStart w:id="66" w:name="F248_CONTEXT_DIFFERENT_R_T"/><w:fldSimple w:instr="REF F248_CONTEXT_TARGET \r \t"><w:r><w:t>stored</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="66"/>
+        </w:p>"#
+    );
+    let context_body = format!(
+        r#"{}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {context_different_fields}
+        {}
+        {}
+        {}
+        {}
+        {context_fields}"#,
+        numbered(
+            40,
+            "F248_CONTEXT_ROOT_1",
+            "Context root 1",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            41,
+            "F248_CONTEXT_ROOT_2",
+            "Context root 2",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            42,
+            "F248_CONTEXT_ROOT_3",
+            "Context root 3",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            43,
+            "F248_CONTEXT_ROOT_4",
+            "Context root 4",
+            None,
+            Some(context),
+            0
+        ),
+        numbered(
+            44,
+            "F248_CONTEXT_BRANCH_1",
+            "Context branch 1",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            45,
+            "F248_CONTEXT_BRANCH_2",
+            "Context branch 2",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            46,
+            "F248_CONTEXT_BRANCH_3",
+            "Context branch 3",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            47,
+            "F248_CONTEXT_BRANCH_4",
+            "Context branch 4",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            48,
+            "F248_CONTEXT_BRANCH_5",
+            "Context branch 5",
+            None,
+            Some(context),
+            1
+        ),
+        numbered(
+            49,
+            "F248_CONTEXT_PRECURSOR",
+            "Context precursor",
+            None,
+            Some(context),
+            2
+        ),
+        numbered(
+            63,
+            "F248_CONTEXT_TARGET",
+            "Context target",
+            None,
+            Some(context),
+            2
+        ),
+    );
+    let body = format!(
+        r#"
+        {}
+        <w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/>{}</w:tc></w:tr></w:tbl>
+        {}
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \t "Numbered Heading 1,1,Numbered Heading 2,2,Numbered Heading 3,3"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:t>stale toc</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        {}
+        {}
+        {}
+        {}
+        <w:p><w:pPr><w:sectPr><w:type w:val="continuous"/><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr><w:r><w:t>section break</w:t></w:r></w:p>
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {}
+        {context_body}
+        <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+        "#,
+        numbered(1, "F248_BODY_L0", "Body", Some("F248Heading1"), None, 0),
+        numbered(2, "F248_TABLE_L1", "Table", Some("F248Heading2"), None, 1),
+        numbered(3, "F248_BODY_L2", "Deep", Some("F248Heading3"), None, 2),
+        numbered(
+            4,
+            "F248_FIRST_CONT",
+            "First continuation",
+            None,
+            Some(first),
+            0
+        ),
+        numbered(5, "F248_SECOND_NEW", "Second new", None, Some(second), 0),
+        numbered(
+            6,
+            "F248_FIRST_RESUME",
+            "First resumed",
+            None,
+            Some(first),
+            0
+        ),
+        numbered(
+            7,
+            "F248_RESTART_BEFORE",
+            "Restart before",
+            None,
+            Some(restart),
+            0
+        ),
+        numbered(
+            8,
+            "F248_FIRST_AFTER_BREAK",
+            "First after break",
+            None,
+            Some(first),
+            0
+        ),
+        numbered(
+            9,
+            "F248_RESTART_AFTER",
+            "Restart after",
+            None,
+            Some(restart),
+            0
+        ),
+        field(20, "F248_REF_N", r"REF F248_BODY_L2 \n"),
+        field(21, "F248_REF_N_T", r"REF F248_BODY_L2 \n \t"),
+        field(22, "F248_REF_R", r"REF F248_BODY_L2 \r"),
+        field(23, "F248_REF_W", r"REF F248_BODY_L2 \w"),
+        field(24, "F248_REF_W_T", r"REF F248_BODY_L2 \w \t"),
+        field(25, "F248_REF_N_P", r"REF F248_BODY_L2 \n \p"),
+        field(26, "F248_REF_P", r"REF F248_BODY_L2 \p"),
+        numbered(
+            27,
+            "F248_DELIMITER_L0",
+            "Delimiter root",
+            None,
+            Some(delimiter),
+            0
+        ),
+        numbered(
+            28,
+            "F248_DELIMITER_L1",
+            "Delimiter target",
+            None,
+            Some(delimiter),
+            1
+        ),
+        field(29, "F248_DELIMITER_N", r"REF F248_DELIMITER_L1 \n"),
+        field(30, "F248_DELIMITER_N_T", r"REF F248_DELIMITER_L1 \n \t",),
+        field(31, "F248_DELIMITER_W_T", r"REF F248_DELIMITER_L1 \w \t",),
+    );
+    let document_xml = wrap_word_body(&body);
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    package.set_part("/word/document.xml", document_xml.into_bytes());
+    let numbering_xml =
+        String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec())
+            .unwrap()
+            .replacen(
+                "<w:numbering",
+                "<w:numbering xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"",
+                1,
+            );
+    let definition_start = format!(r#"<w:abstractNum w:abstractNumId="{restart_definition}""#);
+    let numbered_restart = format!(
+        r#"<w:abstractNum w15:restartNumberingAfterBreak="1" w:abstractNumId="{restart_definition}""#
+    );
+    assert!(numbering_xml.contains(&definition_start));
+    package.set_part(
+        "/word/numbering.xml",
+        numbering_xml
+            .replacen(&definition_start, &numbered_restart, 1)
+            .into_bytes(),
+    );
+    assert!(
+        rdocx_oxml::numbering::CT_Numbering::from_xml(
+            package.get_part("/word/numbering.xml").unwrap()
+        )
+        .unwrap()
+        .restarts_after_section_break(restart)
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    bytes.into_inner()
+}
+
+fn f248_rdocx_records(document: &mut Document) -> Vec<String> {
+    let layout = document.layout_deterministic().unwrap();
+    let marker = |name: &str, value: &str| format!("marker | {name} | {value}");
+    let body_marker = |body_index| {
+        layout
+            .document_body_paragraph_numbering(body_index)
+            .map(|numbering| numbering.marker_text.as_str())
+            .unwrap()
+    };
+    let mut records = vec![
+        marker("F248_BODY_L0", body_marker(0)),
+        marker(
+            "F248_TABLE_L1",
+            layout
+                .document_paragraph_numbering(1)
+                .map(|numbering| numbering.marker_text.as_str())
+                .unwrap(),
+        ),
+        marker("F248_BODY_L2", body_marker(2)),
+        marker("F248_FIRST_CONT", body_marker(6)),
+        marker("F248_SECOND_NEW", body_marker(7)),
+        marker("F248_FIRST_RESUME", body_marker(8)),
+        marker("F248_RESTART_BEFORE", body_marker(9)),
+        marker("F248_FIRST_AFTER_BREAK", body_marker(11)),
+        marker("F248_RESTART_AFTER", body_marker(12)),
+        marker("F248_DELIMITER_L0", body_marker(20)),
+        marker("F248_DELIMITER_L1", body_marker(21)),
+    ];
+    let field_names = [
+        "F248_REF_N",
+        "F248_REF_N_T",
+        "F248_REF_R",
+        "F248_REF_W",
+        "F248_REF_W_T",
+        "F248_REF_N_P",
+        "F248_REF_P",
+        "F248_DELIMITER_N",
+        "F248_DELIMITER_N_T",
+        "F248_DELIMITER_W_T",
+        "F248_CONTEXT_DIFFERENT_N",
+        "F248_CONTEXT_DIFFERENT_R",
+        "F248_CONTEXT_DIFFERENT_R_T",
+        "F248_CONTEXT_N",
+        "F248_CONTEXT_R",
+        "F248_CONTEXT_W",
+    ];
+    let fields = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap()
+        .into_iter()
+        .filter(|field| field.instruction.trim_start().starts_with("REF "))
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), field_names.len());
+    records.extend(fields.into_iter().zip(field_names).map(|(field, name)| {
+        let FieldOutcome::Resolved(value) = field.outcome else {
+            panic!("F-248 field {name} did not resolve")
+        };
+        format!("field | {name} | {value}")
+    }));
+    records
+}
+
+#[test]
+fn three_level_style_linked_numbering_matches_pinned_word() {
+    assert_eq!(
+        WORD_F248_ORACLE,
+        "Microsoft Word 16.112.3 build 16.112.26083020"
+    );
+    assert_eq!(
+        WORD_F248_ENVIRONMENT,
+        "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f248-numbering-records-v2"
+    );
+
+    let mut document = Document::from_bytes(&f248_numbering_oracle_source()).unwrap();
+    assert_eq!(
+        f248_rdocx_records(&mut document)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        WORD_F248_RECORDS
+    );
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+    assert_eq!(
+        f248_toc_records(&document_xml(&mut document)),
+        WORD_F248_TOC_RECORDS
+    );
+    document
+        .update_fields(&FieldEvaluationContext::default())
+        .unwrap();
+    let visible_layout = document.layout_deterministic().unwrap();
+    let mut visible_text = String::new();
+    for page in &visible_layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                visible_text.push_str(&run.text);
+            }
+        });
+    }
+    for expected in ["Section 1.1.1 above", "1-1)", "4.5.2", "4.5.Clause 2"] {
+        assert!(
+            visible_text.contains(expected),
+            "{expected}: {visible_text}"
+        );
+    }
+    assert_eq!(visible_text.matches("above").count(), 2, "{visible_text}");
+    assert_eq!(
+        visible_text.matches("Clause 2").count(),
+        6,
+        "{visible_text}"
+    );
+}
+
+#[test]
+#[ignore = "requires installed Microsoft Word 16.112.3 GUI automation"]
+fn capture_f248_word_16_112_numbering_records() {
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let version = Command::new("/usr/libexec/PlistBuddy")
+        .args([
+            "-c",
+            "Print:CFBundleShortVersionString",
+            "/Applications/Microsoft Word.app/Contents/Info.plist",
+        ])
+        .output()
+        .expect("read Word version");
+    let build = Command::new("/usr/libexec/PlistBuddy")
+        .args([
+            "-c",
+            "Print:CFBundleVersion",
+            "/Applications/Microsoft Word.app/Contents/Info.plist",
+        ])
+        .output()
+        .expect("read Word build");
+    assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "16.112.3");
+    assert_eq!(
+        String::from_utf8_lossy(&build.stdout).trim(),
+        "16.112.26083020"
+    );
+    assert_eq!(
+        WORD_F248_ORACLE,
+        "Microsoft Word 16.112.3 build 16.112.26083020"
+    );
+    assert_eq!(
+        WORD_F248_ENVIRONMENT,
+        "macOS 26.6.2 build 25G83; locale=en-GB; normalization=f248-numbering-records-v2"
+    );
+
+    let source_bytes = f248_numbering_oracle_source();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    let directory = std::path::Path::new(
+        "/Users/atulsharma/Library/Containers/com.microsoft.Word/Data/Documents/rdocx-f248-word-oracle",
+    )
+    .join(format!("{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("create F-248 Word oracle directory");
+    let input_path = directory.join("f248-source.docx");
+    let output_path = directory.join("f248-word-updated.docx");
+    let pdf_path = directory.join("f248-word-render.pdf");
+    std::fs::write(&input_path, &source_bytes).expect("write F-248 Word source");
+
+    let script = format!(
+        r#"with timeout of 60 seconds
+tell application "Microsoft Word"
+open file name "{}" read only false add to recent files false
+set f248Doc to document 1
+repeat with toc_object in (get tables of contents of f248Doc)
+update toc_object
+end repeat
+repeat with field_object in (get fields of f248Doc)
+update field field_object
+end repeat
+save as f248Doc file name "{}" file format format document default add to recent files false
+set f248Doc to active document
+set recordSeparator to "<F248-RECORD>"
+set unitSeparator to "<F248-VALUE>"
+set captureRecords to {{}}
+set markerNames to {{"F248_BODY_L0", "F248_TABLE_L1", "F248_BODY_L2", "F248_FIRST_CONT", "F248_SECOND_NEW", "F248_FIRST_RESUME", "F248_RESTART_BEFORE", "F248_FIRST_AFTER_BREAK", "F248_RESTART_AFTER", "F248_DELIMITER_L0", "F248_DELIMITER_L1"}}
+repeat with recordName in markerNames
+try
+set namedBookmark to get bookmark (contents of recordName) of f248Doc
+set bookmarkStart to get start of bookmark of namedBookmark
+set bookmarkEnd to get end of bookmark of namedBookmark
+set sourceRange to create range f248Doc start bookmarkStart end bookmarkEnd
+set sourceListFormat to get list format of sourceRange
+set markerText to get list string of sourceListFormat
+set end of captureRecords to "marker" & unitSeparator & (recordName as text) & unitSeparator & markerText
+on error errorMessage
+error "marker " & (contents of recordName) & ": " & errorMessage
+end try
+end repeat
+set fieldNames to {{"F248_REF_N", "F248_REF_N_T", "F248_REF_R", "F248_REF_W", "F248_REF_W_T", "F248_REF_N_P", "F248_REF_P", "F248_DELIMITER_N", "F248_DELIMITER_N_T", "F248_DELIMITER_W_T", "F248_CONTEXT_DIFFERENT_N", "F248_CONTEXT_DIFFERENT_R", "F248_CONTEXT_DIFFERENT_R_T", "F248_CONTEXT_N", "F248_CONTEXT_R", "F248_CONTEXT_W"}}
+repeat with recordName in fieldNames
+try
+set namedBookmark to get bookmark (contents of recordName) of f248Doc
+set bookmarkStart to get start of bookmark of namedBookmark
+set bookmarkEnd to get end of bookmark of namedBookmark
+set resultRange to create range f248Doc start bookmarkStart end bookmarkEnd
+set resultText to get content of resultRange
+set end of captureRecords to "field" & unitSeparator & (recordName as text) & unitSeparator & resultText
+on error errorMessage
+error "field " & (contents of recordName) & ": " & errorMessage
+end try
+end repeat
+set AppleScript's text item delimiters to recordSeparator
+set capturedText to captureRecords as text
+save as f248Doc file name "{}" file format format PDF add to recent files false
+close f248Doc saving no
+return capturedText
+end tell
+end timeout"#,
+        input_path.display(),
+        output_path.display(),
+        pdf_path.display(),
+    );
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .expect("run F-248 Word automation");
+    assert!(
+        output.status.success(),
+        "F-248 Word capture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = String::from_utf8_lossy(&output.stdout)
+        .replace("<F248-RECORD>", "\n")
+        .replace("<F248-VALUE>", " | ");
+    println!("F-248 Word records\n{records}");
+    assert_eq!(
+        records
+            .lines()
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>(),
+        WORD_F248_RECORDS
+    );
+    let word_bytes = std::fs::read(&output_path).expect("read F-248 Word output");
+    let word_package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&word_bytes)).unwrap();
+    let word_toc = toc_entry_signatures(&word_part_xml(&word_package, "/word/document.xml"));
+    println!("F-248 Word TOC: {word_toc:#?}");
+    assert_eq!(
+        f248_toc_records(&word_part_xml(&word_package, "/word/document.xml")),
+        WORD_F248_TOC_RECORDS
+    );
+
+    const RASTER_DPI: f64 = 150.0;
+    const MINIMUM_INK_COVERAGE_RATIO: f64 = 0.95;
+    const MAXIMUM_INK_EDGE_DELTA_RATIO: f64 = 0.08;
+    const MAXIMUM_INK_DISTRIBUTION_DELTA: f64 = 0.27;
+    const MAXIMUM_PROJECTION_DISTANCE: f64 = 0.04;
+    const MAXIMUM_RASTER_DIMENSION_DELTA: usize = 1;
+    const PDFTOPPM_ORACLE: &str = "pdftoppm version 26.01.0";
+    let pdftoppm_version = Command::new("pdftoppm")
+        .arg("-v")
+        .output()
+        .expect("read pinned PDF rasterizer version");
+    assert!(pdftoppm_version.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&pdftoppm_version.stderr)
+            .lines()
+            .next(),
+        Some(PDFTOPPM_ORACLE)
+    );
+    let mut subject = Document::from_bytes(&source_bytes).expect("open F-248 rdocx subject");
+    subject.rebuild_toc().expect("rebuild F-248 subject TOC");
+    subject
+        .update_fields(&FieldEvaluationContext::default())
+        .expect("update F-248 subject REF fields");
+    let oracle = Document::from_bytes(&word_bytes).expect("open F-248 Word render oracle");
+    let subject_pages = subject
+        .layout_deterministic()
+        .expect("layout F-248 rdocx subject")
+        .layout
+        .pages
+        .len();
+    let oracle_pages = oracle
+        .layout_deterministic()
+        .expect("layout F-248 Word oracle")
+        .layout
+        .pages
+        .len();
+    assert_eq!(subject_pages, oracle_pages);
+    let oracle_prefix = directory.join("f248-word-render");
+    let rasterized = Command::new("pdftoppm")
+        .args(["-png", "-r"])
+        .arg(RASTER_DPI.to_string())
+        .arg(&pdf_path)
+        .arg(&oracle_prefix)
+        .output()
+        .expect("rasterize F-248 Word PDF");
+    assert!(
+        rasterized.status.success(),
+        "F-248 Word PDF rasterization failed: {}",
+        String::from_utf8_lossy(&rasterized.stderr)
+    );
+    let metrics_script = r#"from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[3])
+from golden_png_harness import decode_png
+from pptx_ssim_harness import composite_luminance
+records = []
+for path in sys.argv[1:3]:
+    width, height, rgba = decode_png(Path(path))
+    luminance = composite_luminance(rgba)
+    ink = [index for index, value in enumerate(luminance) if value < 245]
+    xs = [index % width for index in ink]
+    ys = [index // width for index in ink]
+    grid = []
+    rows = [sum(luminance[y * width + x] < 245 for x in range(width)) for y in range(height)]
+    columns = [sum(luminance[y * width + x] < 245 for y in range(height)) for x in range(width)]
+    for row in range(8):
+        top = row * height // 8
+        bottom = (row + 1) * height // 8
+        for column in range(4):
+            left = column * width // 4
+            right = (column + 1) * width // 4
+            grid.append(sum(
+                luminance[y * width + x] < 245
+                for y in range(top, bottom)
+                for x in range(left, right)
+            ))
+    records.append((rows, columns))
+    print(width, height, len(ink), min(xs), min(ys), max(xs), max(ys), *grid)
+def normalized_emd(first, second):
+    length = max(len(first), len(second))
+    first = first + [0] * (length - len(first))
+    second = second + [0] * (length - len(second))
+    first_total = sum(first)
+    second_total = sum(second)
+    first_cumulative = 0.0
+    second_cumulative = 0.0
+    distance = 0.0
+    for first_value, second_value in zip(first, second):
+        first_cumulative += first_value / first_total
+        second_cumulative += second_value / second_total
+        distance += abs(first_cumulative - second_cumulative)
+    return distance / length
+def shifted(profile):
+    distance = max(1, round(len(profile) * 0.05))
+    return [0] * distance + profile[:-distance]
+subject_rows, subject_columns = records[0]
+oracle_rows, oracle_columns = records[1]
+scale = 1_000_000_000
+print(
+    round(normalized_emd(subject_rows, oracle_rows) * scale),
+    round(normalized_emd(subject_columns, oracle_columns) * scale),
+    round(normalized_emd(subject_rows, shifted(subject_rows)) * scale),
+    round(normalized_emd(subject_columns, shifted(subject_columns)) * scale),
+)"#;
+    let mut ink_coverage_ratios = Vec::with_capacity(subject_pages);
+    let mut ink_edge_delta_ratios = Vec::with_capacity(subject_pages);
+    let mut ink_distribution_deltas = Vec::with_capacity(subject_pages);
+    let mut row_projection_distances = Vec::with_capacity(subject_pages);
+    let mut column_projection_distances = Vec::with_capacity(subject_pages);
+    let mut shifted_row_distances = Vec::with_capacity(subject_pages);
+    let mut shifted_column_distances = Vec::with_capacity(subject_pages);
+    for page_index in 0..subject_pages {
+        let subject_png = subject
+            .render_page_to_png_deterministic(page_index, RASTER_DPI)
+            .expect("render F-248 rdocx subject")
+            .expect("F-248 subject page exists");
+        let subject_png_path = directory.join(format!("f248-rdocx-render-{}.png", page_index + 1));
+        let oracle_png_path = directory.join(format!("f248-word-render-{}.png", page_index + 1));
+        std::fs::write(&subject_png_path, subject_png).expect("write F-248 rdocx raster");
+        assert!(oracle_png_path.is_file(), "missing Word PDF raster page");
+        let metrics = Command::new("python3")
+            .args(["-c", metrics_script])
+            .arg(&subject_png_path)
+            .arg(&oracle_png_path)
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts"))
+            .output()
+            .expect("measure F-248 Word raster");
+        assert!(
+            metrics.status.success(),
+            "F-248 Word raster measurement failed: {}",
+            String::from_utf8_lossy(&metrics.stderr)
+        );
+        let values = String::from_utf8_lossy(&metrics.stdout)
+            .split_whitespace()
+            .map(|value| value.parse::<usize>().expect("F-248 raster metric"))
+            .collect::<Vec<_>>();
+        const METRIC_VALUES: usize = 7 + 8 * 4;
+        assert_eq!(
+            values.len(),
+            METRIC_VALUES * 2 + 4,
+            "two raster records, an 8 by 4 ink grid, and projection distances"
+        );
+        let subject_metrics = &values[..METRIC_VALUES];
+        let oracle_metrics = &values[METRIC_VALUES..METRIC_VALUES * 2];
+        assert!(
+            subject_metrics[0].abs_diff(oracle_metrics[0]) <= MAXIMUM_RASTER_DIMENSION_DELTA
+                && subject_metrics[1].abs_diff(oracle_metrics[1]) <= MAXIMUM_RASTER_DIMENSION_DELTA,
+            "F-248 raster dimensions differ beyond {MAXIMUM_RASTER_DIMENSION_DELTA} pixel: subject={}x{}, oracle={}x{}",
+            subject_metrics[0],
+            subject_metrics[1],
+            oracle_metrics[0],
+            oracle_metrics[1]
+        );
+        let coverage = subject_metrics[2].min(oracle_metrics[2]) as f64
+            / subject_metrics[2].max(oracle_metrics[2]) as f64;
+        let horizontal = [3usize, 5]
+            .into_iter()
+            .map(|index| subject_metrics[index].abs_diff(oracle_metrics[index]) as f64)
+            .fold(0.0, f64::max)
+            / subject_metrics[0].max(oracle_metrics[0]) as f64;
+        let vertical = [4usize, 6]
+            .into_iter()
+            .map(|index| subject_metrics[index].abs_diff(oracle_metrics[index]) as f64)
+            .fold(0.0, f64::max)
+            / subject_metrics[1].max(oracle_metrics[1]) as f64;
+        ink_coverage_ratios.push(coverage);
+        ink_edge_delta_ratios.push(horizontal.max(vertical));
+        let distribution_delta = subject_metrics[7..]
+            .iter()
+            .zip(&oracle_metrics[7..])
+            .map(|(subject, oracle)| {
+                (*subject as f64 / subject_metrics[2] as f64
+                    - *oracle as f64 / oracle_metrics[2] as f64)
+                    .abs()
+            })
+            .sum::<f64>()
+            / 2.0;
+        ink_distribution_deltas.push(distribution_delta);
+        let projection = &values[METRIC_VALUES * 2..];
+        row_projection_distances.push(projection[0] as f64 / 1_000_000_000.0);
+        column_projection_distances.push(projection[1] as f64 / 1_000_000_000.0);
+        shifted_row_distances.push(projection[2] as f64 / 1_000_000_000.0);
+        shifted_column_distances.push(projection[3] as f64 / 1_000_000_000.0);
+    }
+    assert!(
+        !directory
+            .join(format!("f248-word-render-{}.png", subject_pages + 1))
+            .exists(),
+        "Word PDF has more pages than the deterministic rdocx render"
+    );
+    let minimum_ink_coverage = ink_coverage_ratios.iter().copied().fold(1.0, f64::min);
+    let maximum_ink_edge_delta = ink_edge_delta_ratios.iter().copied().fold(0.0, f64::max);
+    let maximum_ink_distribution_delta =
+        ink_distribution_deltas.iter().copied().fold(0.0, f64::max);
+    let maximum_projection_distance = row_projection_distances
+        .iter()
+        .chain(&column_projection_distances)
+        .copied()
+        .fold(0.0, f64::max);
+    let minimum_shifted_projection_distance = shifted_row_distances
+        .iter()
+        .chain(&shifted_column_distances)
+        .copied()
+        .fold(1.0, f64::min);
+    println!(
+        "F-248 Word raster: dpi={RASTER_DPI}, pages={subject_pages}, dimension_delta_threshold={MAXIMUM_RASTER_DIMENSION_DELTA}px, ink_coverage={ink_coverage_ratios:?}, minimum_coverage={minimum_ink_coverage:.6}, coverage_threshold={MINIMUM_INK_COVERAGE_RATIO:.2}, ink_edge_delta={ink_edge_delta_ratios:?}, maximum_edge_delta={maximum_ink_edge_delta:.6}, edge_threshold={MAXIMUM_INK_EDGE_DELTA_RATIO:.2}, ink_distribution_delta={ink_distribution_deltas:?}, maximum_distribution_delta={maximum_ink_distribution_delta:.6}, distribution_threshold={MAXIMUM_INK_DISTRIBUTION_DELTA:.2}, row_projection_distance={row_projection_distances:?}, column_projection_distance={column_projection_distances:?}, maximum_projection_distance={maximum_projection_distance:.6}, projection_threshold={MAXIMUM_PROJECTION_DISTANCE:.2}, shifted_row_distance={shifted_row_distances:?}, shifted_column_distance={shifted_column_distances:?}, minimum_shifted_projection_distance={minimum_shifted_projection_distance:.6}, rasterizer={PDFTOPPM_ORACLE}"
+    );
+    assert!(
+        minimum_ink_coverage >= MINIMUM_INK_COVERAGE_RATIO,
+        "F-248 Word raster ink coverage {minimum_ink_coverage:.6} fell below {MINIMUM_INK_COVERAGE_RATIO:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        maximum_ink_edge_delta <= MAXIMUM_INK_EDGE_DELTA_RATIO,
+        "F-248 Word raster ink edge delta {maximum_ink_edge_delta:.6} exceeded {MAXIMUM_INK_EDGE_DELTA_RATIO:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        maximum_ink_distribution_delta <= MAXIMUM_INK_DISTRIBUTION_DELTA,
+        "F-248 Word raster ink distribution delta {maximum_ink_distribution_delta:.6} exceeded {MAXIMUM_INK_DISTRIBUTION_DELTA:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        maximum_projection_distance <= MAXIMUM_PROJECTION_DISTANCE,
+        "F-248 Word raster projection distance {maximum_projection_distance:.6} exceeded {MAXIMUM_PROJECTION_DISTANCE:.2} at {RASTER_DPI} DPI"
+    );
+    assert!(
+        minimum_shifted_projection_distance > MAXIMUM_PROJECTION_DISTANCE,
+        "F-248 raster gate did not reject a synthetic 5 percent geometry shift: {minimum_shifted_projection_distance:.6}"
     );
 }
 

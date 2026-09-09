@@ -5400,15 +5400,10 @@ mod tests {
         let mut document = Document::new();
         let list = document.add_list_definition(&[ListLevel::bullet()]);
         document
-            .add_style(
-                crate::StyleBuilder::paragraph("Numbered", "Numbered").paragraph_properties(
-                    CT_PPr {
-                        num_id: Some(list),
-                        num_ilvl: Some(0),
-                        ..Default::default()
-                    },
-                ),
-            )
+            .add_style(crate::StyleBuilder::paragraph("Numbered", "Numbered"))
+            .unwrap();
+        document
+            .link_style_to_numbering("Numbered", list, 0)
             .unwrap();
         let mut paragraph = document.add_paragraph("not a list");
         paragraph.set_style("Numbered");
@@ -6627,16 +6622,16 @@ mod tests {
         assert_eq!(reopened.paragraph(0).unwrap().numbering().unwrap().1, 8);
 
         let mut inherited = Document::new();
-        let inherited_list = inherited.add_list_definition(&[ListLevel::decimal()]);
+        let inherited_list =
+            inherited.add_list_definition(&[ListLevel::decimal(), ListLevel::decimal()]);
         inherited
-            .add_style(
-                crate::StyleBuilder::paragraph("InheritedList", "Inherited List")
-                    .paragraph_properties(CT_PPr {
-                        num_id: Some(inherited_list),
-                        num_ilvl: Some(1),
-                        ..Default::default()
-                    }),
-            )
+            .add_style(crate::StyleBuilder::paragraph(
+                "InheritedList",
+                "Inherited List",
+            ))
+            .unwrap();
+        inherited
+            .link_style_to_numbering("InheritedList", inherited_list, 1)
             .unwrap();
         inherited
             .add_paragraph("styled list")

@@ -8986,6 +8986,20 @@ impl Document {
     pub fn validate_numbering_graph(&self) -> Result<()> {
         let numbering = self.numbering.as_ref();
         let Some(numbering) = numbering else {
+            for style in &self.styles.styles {
+                if style.style_type == StyleType::Paragraph
+                    && style
+                        .ppr
+                        .as_ref()
+                        .and_then(|properties| properties.num_id)
+                        .is_some_and(|num_id| num_id != 0)
+                {
+                    return Err(Error::Other(format!(
+                        "style '{}' references a missing numbering part",
+                        style.style_id
+                    )));
+                }
+            }
             let live_references = self.document_numbering_references()?;
             if let Some((num_id, level)) = live_references.first() {
                 return Err(Error::Other(format!(
@@ -9073,6 +9087,103 @@ impl Document {
                             instance.num_id
                         )));
                     }
+                }
+            }
+        }
+        let mut style_links = HashMap::<&str, (u32, u32)>::new();
+        for style in &self.styles.styles {
+            if style.style_type != StyleType::Paragraph {
+                continue;
+            }
+            let Some(properties) = style.ppr.as_ref() else {
+                continue;
+            };
+            let Some(num_id) = properties.num_id else {
+                if properties.num_ilvl.is_some() {
+                    return Err(Error::Other(format!(
+                        "style '{}' has a numbering level without an instance",
+                        style.style_id
+                    )));
+                }
+                continue;
+            };
+            if num_id == 0 {
+                continue;
+            }
+            let level = properties.num_ilvl.unwrap_or(0);
+            let instance = numbering
+                .nums
+                .iter()
+                .find(|instance| instance.num_id == num_id)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "style '{}' references missing numbering instance {num_id}",
+                        style.style_id
+                    ))
+                })?;
+            let definition = numbering
+                .abstract_nums
+                .iter()
+                .find(|definition| definition.abstract_num_id == instance.abstract_num_id)
+                .expect("numbering instances were validated above");
+            let base = definition
+                .levels
+                .iter()
+                .find(|candidate| candidate.ilvl == level)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "style '{}' references numbering instance {num_id} at missing level {level}",
+                        style.style_id
+                    ))
+                })?;
+            let effective = instance
+                .level_overrides
+                .iter()
+                .find(|value| value.ilvl == level)
+                .and_then(|value| value.level.as_ref())
+                .unwrap_or(base);
+            if effective.p_style.as_deref() != Some(style.style_id.as_str()) {
+                return Err(Error::Other(format!(
+                    "style '{}' and numbering instance {num_id} level {level} are not reciprocally linked",
+                    style.style_id
+                )));
+            }
+            style_links.insert(style.style_id.as_str(), (num_id, level));
+        }
+        for definition in &numbering.abstract_nums {
+            for level in &definition.levels {
+                let Some(style_id) = level.p_style.as_deref() else {
+                    continue;
+                };
+                let linked = style_links.get(style_id).is_some_and(|(num_id, ilvl)| {
+                    *ilvl == level.ilvl
+                        && numbering.nums.iter().any(|instance| {
+                            instance.num_id == *num_id
+                                && instance.abstract_num_id == definition.abstract_num_id
+                        })
+                });
+                if !linked {
+                    return Err(Error::Other(format!(
+                        "numbering definition {} level {} and style '{style_id}' are not reciprocally linked",
+                        definition.abstract_num_id, level.ilvl
+                    )));
+                }
+            }
+        }
+        for instance in &numbering.nums {
+            for level in instance
+                .level_overrides
+                .iter()
+                .filter_map(|value| value.level.as_ref())
+            {
+                let Some(style_id) = level.p_style.as_deref() else {
+                    continue;
+                };
+                if style_links.get(style_id) != Some(&(instance.num_id, level.ilvl)) {
+                    return Err(Error::Other(format!(
+                        "numbering instance {} replacement level {} and style '{style_id}' are not reciprocally linked",
+                        instance.num_id, level.ilvl
+                    )));
                 }
             }
         }
@@ -9235,6 +9346,248 @@ impl Document {
         updated
     }
 
+    /// Atomically associate a paragraph style with one concrete numbering level.
+    ///
+    /// Both the style's paragraph properties and the numbering level's
+    /// paragraph-style link are published together. Existing links must either
+    /// match this exact tuple or the operation fails without changing the
+    /// document.
+    pub fn link_style_to_numbering(
+        &mut self,
+        style_id: &str,
+        num_id: u32,
+        level: u32,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.validate_numbering_graph()?;
+        candidate.reserve_styles_bundle()?;
+        candidate.reserve_numbering_bundle()?;
+
+        let style_index = candidate
+            .styles
+            .styles
+            .iter()
+            .position(|style| style.style_id == style_id)
+            .ok_or_else(|| Error::Other(format!("style '{style_id}' does not exist")))?;
+        if candidate.styles.styles[style_index].style_type != StyleType::Paragraph {
+            return Err(Error::Other(format!(
+                "style '{style_id}' is not a paragraph style"
+            )));
+        }
+
+        let numbering = candidate
+            .numbering
+            .as_ref()
+            .ok_or_else(|| Error::Other(format!("numbering instance {num_id} does not exist")))?;
+        let instance_index = numbering
+            .nums
+            .iter()
+            .position(|instance| instance.num_id == num_id)
+            .ok_or_else(|| Error::Other(format!("numbering instance {num_id} does not exist")))?;
+        let definition_id = numbering.nums[instance_index].abstract_num_id;
+        let definition_index = numbering
+            .abstract_nums
+            .iter()
+            .position(|definition| definition.abstract_num_id == definition_id)
+            .expect("the numbering graph was validated");
+        let override_index = numbering.nums[instance_index]
+            .level_overrides
+            .iter()
+            .position(|value| value.ilvl == level && value.level.is_some());
+        let definition_level_index = numbering.abstract_nums[definition_index]
+            .levels
+            .iter()
+            .position(|value| value.ilvl == level)
+            .ok_or_else(|| {
+                Error::Other(format!("numbering instance {num_id} has no level {level}"))
+            })?;
+
+        let style_numbering = candidate.styles.styles[style_index]
+            .ppr
+            .as_ref()
+            .map(|properties| (properties.num_id, properties.num_ilvl))
+            .unwrap_or((None, None));
+        if style_numbering != (None, None) && style_numbering != (Some(num_id), Some(level)) {
+            return Err(Error::Other(format!(
+                "style '{style_id}' already references a different numbering level"
+            )));
+        }
+
+        for (candidate_definition_index, definition) in numbering.abstract_nums.iter().enumerate() {
+            for (candidate_level_index, candidate_level) in definition.levels.iter().enumerate() {
+                if candidate_level.p_style.as_deref() == Some(style_id)
+                    && (candidate_definition_index, candidate_level_index)
+                        != (definition_index, definition_level_index)
+                {
+                    return Err(Error::Other(format!(
+                        "style '{style_id}' is already linked to another numbering level"
+                    )));
+                }
+            }
+        }
+        for (candidate_instance_index, instance) in numbering.nums.iter().enumerate() {
+            for (candidate_override_index, value) in instance.level_overrides.iter().enumerate() {
+                if value
+                    .level
+                    .as_ref()
+                    .and_then(|level| level.p_style.as_deref())
+                    == Some(style_id)
+                    && Some(candidate_override_index)
+                        != override_index.filter(|_| candidate_instance_index == instance_index)
+                {
+                    return Err(Error::Other(format!(
+                        "style '{style_id}' is already linked to another numbering level"
+                    )));
+                }
+            }
+        }
+
+        let target_style = override_index
+            .and_then(|index| {
+                numbering.nums[instance_index].level_overrides[index]
+                    .level
+                    .as_ref()
+            })
+            .unwrap_or(&numbering.abstract_nums[definition_index].levels[definition_level_index])
+            .p_style
+            .as_deref();
+        if target_style.is_some() && target_style != Some(style_id) {
+            return Err(Error::Other(format!(
+                "numbering instance {num_id} level {level} is already linked to another style"
+            )));
+        }
+
+        let properties = candidate.styles.styles[style_index]
+            .ppr
+            .get_or_insert_with(CT_PPr::default);
+        properties.num_id = Some(num_id);
+        properties.num_ilvl = Some(level);
+        let numbering = candidate
+            .numbering
+            .as_mut()
+            .expect("the numbering part was resolved above");
+        if let Some(index) = override_index {
+            numbering.nums[instance_index].level_overrides[index]
+                .level
+                .as_mut()
+                .expect("the override was selected only when it owns a level")
+                .p_style = Some(style_id.to_owned());
+        } else {
+            numbering.abstract_nums[definition_index].levels[definition_level_index].p_style =
+                Some(style_id.to_owned());
+        }
+
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.validate_numbering_graph()?;
+        candidate.flush_to_package()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Atomically remove one exact paragraph-style numbering association.
+    pub fn unlink_style_from_numbering(
+        &mut self,
+        style_id: &str,
+        num_id: u32,
+        level: u32,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.validate_numbering_graph()?;
+
+        let style_index = candidate
+            .styles
+            .styles
+            .iter()
+            .position(|style| style.style_id == style_id)
+            .ok_or_else(|| Error::Other(format!("style '{style_id}' does not exist")))?;
+        if candidate.styles.styles[style_index].style_type != StyleType::Paragraph {
+            return Err(Error::Other(format!(
+                "style '{style_id}' is not a paragraph style"
+            )));
+        }
+        let numbering = candidate
+            .numbering
+            .as_ref()
+            .ok_or_else(|| Error::Other(format!("numbering instance {num_id} does not exist")))?;
+        let instance_index = numbering
+            .nums
+            .iter()
+            .position(|instance| instance.num_id == num_id)
+            .ok_or_else(|| Error::Other(format!("numbering instance {num_id} does not exist")))?;
+        let definition_id = numbering.nums[instance_index].abstract_num_id;
+        let definition_index = numbering
+            .abstract_nums
+            .iter()
+            .position(|definition| definition.abstract_num_id == definition_id)
+            .expect("the numbering graph was validated");
+        let override_index = numbering.nums[instance_index]
+            .level_overrides
+            .iter()
+            .position(|value| value.ilvl == level && value.level.is_some());
+        let definition_level_index = numbering.abstract_nums[definition_index]
+            .levels
+            .iter()
+            .position(|value| value.ilvl == level)
+            .ok_or_else(|| {
+                Error::Other(format!("numbering instance {num_id} has no level {level}"))
+            })?;
+
+        let style_numbering = candidate.styles.styles[style_index]
+            .ppr
+            .as_ref()
+            .map(|properties| (properties.num_id, properties.num_ilvl))
+            .unwrap_or((None, None));
+        let target_style = override_index
+            .and_then(|index| {
+                numbering.nums[instance_index].level_overrides[index]
+                    .level
+                    .as_ref()
+            })
+            .unwrap_or(&numbering.abstract_nums[definition_index].levels[definition_level_index])
+            .p_style
+            .as_deref();
+        if style_numbering == (None, None) && target_style.is_none() {
+            return Ok(());
+        }
+        if style_numbering != (Some(num_id), Some(level)) || target_style != Some(style_id) {
+            return Err(Error::Other(format!(
+                "style '{style_id}' and numbering instance {num_id} level {level} are not linked"
+            )));
+        }
+
+        candidate.reserve_styles_bundle()?;
+        candidate.reserve_numbering_bundle()?;
+        let properties = candidate.styles.styles[style_index]
+            .ppr
+            .as_mut()
+            .expect("the exact style link was validated above");
+        properties.num_id = None;
+        properties.num_ilvl = None;
+        let numbering = candidate
+            .numbering
+            .as_mut()
+            .expect("the numbering part was resolved above");
+        if let Some(index) = override_index {
+            numbering.nums[instance_index].level_overrides[index]
+                .level
+                .as_mut()
+                .expect("the override was selected only when it owns a level")
+                .p_style = None;
+        } else {
+            numbering.abstract_nums[definition_index].levels[definition_level_index].p_style = None;
+        }
+
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.validate_numbering_graph()?;
+        candidate.flush_to_package()?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
     // ---- Style access ----
 
     /// Get all styles.
@@ -9261,6 +9614,16 @@ impl Document {
         if candidate.styles.get_by_id(&authored.style_id).is_some() {
             return Err(Error::Other(format!(
                 "style '{}' already exists",
+                authored.style_id
+            )));
+        }
+        if authored
+            .ppr
+            .as_ref()
+            .is_some_and(|properties| properties.num_id.is_some() || properties.num_ilvl.is_some())
+        {
+            return Err(Error::Other(format!(
+                "style '{}' numbering must be established with link_style_to_numbering",
                 authored.style_id
             )));
         }
@@ -9301,6 +9664,22 @@ impl Document {
         }
         let old_link = existing.linked_style.clone();
         merge_style_update(existing, &mut authored, cleared);
+        let existing_numbering = existing
+            .ppr
+            .as_ref()
+            .map(|properties| (properties.num_id, properties.num_ilvl))
+            .unwrap_or((None, None));
+        let authored_numbering = authored
+            .ppr
+            .as_ref()
+            .map(|properties| (properties.num_id, properties.num_ilvl))
+            .unwrap_or((None, None));
+        if authored_numbering != existing_numbering {
+            return Err(Error::Other(format!(
+                "style '{}' numbering must be changed with link_style_to_numbering or unlink_style_from_numbering",
+                authored.style_id
+            )));
+        }
         let style_id = authored.style_id.clone();
         let new_link = authored.linked_style.clone();
         candidate.styles.styles[index] = authored;
@@ -9366,6 +9745,25 @@ impl Document {
         if self.document_references_style(style_id)? {
             return Err(Error::Other(format!(
                 "style '{style_id}' is referenced by document content"
+            )));
+        }
+        if self.numbering.as_ref().is_some_and(|numbering| {
+            numbering.abstract_nums.iter().any(|definition| {
+                definition
+                    .levels
+                    .iter()
+                    .any(|level| level.p_style.as_deref() == Some(style_id))
+            }) || numbering.nums.iter().any(|instance| {
+                instance.level_overrides.iter().any(|value| {
+                    value
+                        .level
+                        .as_ref()
+                        .is_some_and(|level| level.p_style.as_deref() == Some(style_id))
+                })
+            })
+        }) {
+            return Err(Error::Other(format!(
+                "style '{style_id}' is referenced by a numbering level"
             )));
         }
 
@@ -21967,15 +22365,10 @@ mod tests {
             .unwrap();
         let instance = document.add_numbering_instance(complete, &[]).unwrap();
         document
-            .add_style(
-                StyleBuilder::paragraph("DeepListBase", "Deep List Base").paragraph_properties(
-                    CT_PPr {
-                        num_id: Some(instance),
-                        num_ilvl: Some(2),
-                        ..CT_PPr::default()
-                    },
-                ),
-            )
+            .add_style(StyleBuilder::paragraph("DeepListBase", "Deep List Base"))
+            .unwrap();
+        document
+            .link_style_to_numbering("DeepListBase", instance, 2)
             .unwrap();
         document
             .add_style(
@@ -22116,18 +22509,372 @@ mod tests {
             .unwrap();
         let instance = document.add_numbering_instance(definition, &[]).unwrap();
         document
-            .add_style(
-                StyleBuilder::paragraph("UnusedListStyle", "Unused List Style")
-                    .paragraph_properties(CT_PPr {
-                        num_id: Some(instance),
-                        num_ilvl: Some(0),
-                        ..CT_PPr::default()
-                    }),
-            )
+            .add_style(StyleBuilder::paragraph(
+                "UnusedListStyle",
+                "Unused List Style",
+            ))
+            .unwrap();
+        document
+            .link_style_to_numbering("UnusedListStyle", instance, 0)
             .unwrap();
 
         assert!(document.remove_numbering_instance(instance).is_err());
         assert!(document.numbering_instance(instance).is_some());
+    }
+
+    #[test]
+    fn style_numbering_link_is_atomic_in_both_directions() {
+        let mut document = Document::new();
+        document
+            .add_style(StyleBuilder::paragraph(
+                "NumberedHeading",
+                "Numbered Heading",
+            ))
+            .unwrap();
+        let definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        let baseline = document.to_bytes().unwrap();
+
+        assert!(
+            document
+                .add_style(
+                    StyleBuilder::paragraph("OneSidedAdd", "One-sided add").paragraph_properties(
+                        CT_PPr {
+                            num_id: Some(instance),
+                            num_ilvl: Some(0),
+                            ..CT_PPr::default()
+                        }
+                    ),
+                )
+                .is_err()
+        );
+        assert!(document.style("OneSidedAdd").is_none());
+        assert!(
+            document
+                .set_style(
+                    StyleBuilder::paragraph("NumberedHeading", "Numbered Heading")
+                        .paragraph_properties(CT_PPr {
+                            num_id: Some(instance),
+                            num_ilvl: Some(0),
+                            ..CT_PPr::default()
+                        }),
+                )
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+
+        assert!(
+            document
+                .link_style_to_numbering("MissingStyle", instance, 0)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+        assert!(
+            document
+                .link_style_to_numbering("NumberedHeading", instance, 8)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+
+        document
+            .link_style_to_numbering("NumberedHeading", instance, 0)
+            .unwrap();
+        let style = document.style("NumberedHeading").unwrap();
+        let properties = style.paragraph_properties().unwrap();
+        assert_eq!(properties.num_id, Some(instance));
+        assert_eq!(properties.num_ilvl, Some(0));
+        assert_eq!(
+            document
+                .numbering_definition(definition)
+                .unwrap()
+                .paragraph_style_links,
+            vec![Some("NumberedHeading".to_owned())]
+        );
+
+        let linked = document.to_bytes().unwrap();
+        assert!(
+            document
+                .unlink_style_from_numbering("NumberedHeading", instance, 1)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), linked);
+        document
+            .unlink_style_from_numbering("NumberedHeading", instance, 0)
+            .unwrap();
+        let style = document.style("NumberedHeading").unwrap();
+        assert_eq!(style.paragraph_properties().unwrap().num_id, None);
+        assert_eq!(style.paragraph_properties().unwrap().num_ilvl, None);
+        assert_eq!(
+            document
+                .numbering_definition(definition)
+                .unwrap()
+                .paragraph_style_links,
+            vec![None]
+        );
+    }
+
+    #[test]
+    fn numbering_graph_rejects_each_one_sided_style_link() {
+        let mut document = Document::new();
+        let normal = document
+            .styles
+            .styles
+            .iter_mut()
+            .find(|style| style.style_id == "Normal")
+            .unwrap();
+        normal.ppr = Some(CT_PPr {
+            num_id: Some(99),
+            ..CT_PPr::default()
+        });
+        assert!(document.validate_numbering_graph().is_err());
+        document
+            .styles
+            .styles
+            .iter_mut()
+            .find(|style| style.style_id == "Normal")
+            .unwrap()
+            .ppr = None;
+
+        let definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        document.numbering.as_mut().unwrap().abstract_nums[0].levels[0].p_style =
+            Some("Normal".to_owned());
+        assert!(document.validate_numbering_graph().is_err());
+        let baseline = document.to_bytes().unwrap();
+        assert!(
+            document
+                .link_style_to_numbering("Heading1", instance, 0)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), baseline);
+    }
+
+    #[test]
+    fn style_numbering_link_overlays_extended_num_pr_payload() {
+        let mut source = Document::new();
+        source
+            .add_style(StyleBuilder::paragraph("ExtLinked", "Extended Linked"))
+            .unwrap();
+        let definition = source
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = source.add_numbering_instance(definition, &[]).unwrap();
+        let mut package = OpcPackage::from_reader(Cursor::new(source.to_bytes().unwrap())).unwrap();
+        let mut styles =
+            String::from_utf8(package.get_part(DEFAULT_STYLES_PART).unwrap().to_vec()).unwrap();
+        let style_start = styles.find(r#"w:styleId="ExtLinked""#).unwrap();
+        let style_end = styles[style_start..].find("</w:style>").unwrap() + style_start;
+        styles.insert_str(
+            style_end,
+            r#"<w:pPr><w:numPr xmlns:ext="urn:producer" ext:root="a&#x20;b"><ext:before/><w:ilvl ext:leaf="level"><ext:level-child/></w:ilvl><w:numId ext:leaf="id"><ext:id-child/></w:numId><ext:after/></w:numPr></w:pPr>"#,
+        );
+        package.set_part(DEFAULT_STYLES_PART, styles.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        document
+            .link_style_to_numbering("ExtLinked", instance, 0)
+            .unwrap();
+        let linked = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let linked =
+            String::from_utf8(linked.get_part(DEFAULT_STYLES_PART).unwrap().to_vec()).unwrap();
+        for retained in [
+            r#"ext:root="a&#x20;b""#,
+            "<ext:before",
+            "<ext:level-child/>",
+            "<ext:id-child/>",
+            "<ext:after",
+        ] {
+            assert!(linked.contains(retained), "{linked}");
+        }
+        assert!(linked.contains(r#"w:val="0""#), "{linked}");
+        assert!(
+            linked.contains(&format!(r#"w:val="{instance}""#)),
+            "{linked}"
+        );
+
+        document
+            .unlink_style_from_numbering("ExtLinked", instance, 0)
+            .unwrap();
+        let unlinked = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let unlinked =
+            String::from_utf8(unlinked.get_part(DEFAULT_STYLES_PART).unwrap().to_vec()).unwrap();
+        let num_pr_start = unlinked.find("<w:numPr").unwrap();
+        let num_pr_end = unlinked[num_pr_start..].find("</w:numPr>").unwrap()
+            + num_pr_start
+            + "</w:numPr>".len();
+        assert_eq!(
+            &unlinked[num_pr_start..num_pr_end],
+            "<w:numPr xmlns:ext=\"urn:producer\" ext:root=\"a&#x20;b\"><ext:before/><w:ilvl ext:leaf=\"level\"><ext:level-child/></w:ilvl><w:numId ext:leaf=\"id\"><ext:id-child/></w:numId><ext:after/>\n      </w:numPr>"
+        );
+    }
+
+    #[test]
+    fn style_linked_numbering_survives_reopen_and_rebuild() {
+        let mut document = Document::new();
+        document
+            .add_style(StyleBuilder::paragraph(
+                "NumberedHeading",
+                "Numbered Heading",
+            ))
+            .unwrap();
+        let definition = document
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        document
+            .link_style_to_numbering("NumberedHeading", instance, 0)
+            .unwrap();
+        document.add_paragraph("First").style("NumberedHeading");
+        document
+            .add_bookmark(
+                "numbered_target",
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        let mut reference = CT_P::new();
+        reference.runs.push(CT_R {
+            properties: None,
+            content: vec![RunContent::Field(Field::new(
+                r"REF numbered_target \w \t",
+                "stale REF",
+            ))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(reference));
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let document_part = document.doc_part_name.clone();
+        let xml = std::str::from_utf8(package.get_part(&document_part).unwrap()).unwrap();
+        let toc = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \t "Numbered Heading,1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p><w:p><w:r><w:t>stale TOC</w:t></w:r></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+        let xml = xml.replacen("<w:body>", &format!("<w:body>{toc}"), 1);
+        package.set_part(&document_part, xml.into_bytes());
+        let mut authored = Cursor::new(Vec::new());
+        package.write_to(&mut authored).unwrap();
+        document = Document::from_bytes(authored.get_ref()).unwrap();
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap();
+        assert!(
+            document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap()
+                .iter()
+                .any(|field| field.outcome == crate::FieldOutcome::Resolved("1".to_owned()))
+        );
+
+        let bytes = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        let reopened_bytes = reopened.to_bytes().unwrap();
+        if reopened_bytes != bytes {
+            let original = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+            let rebuilt = OpcPackage::from_reader(Cursor::new(&reopened_bytes)).unwrap();
+            let mut changed = original
+                .parts
+                .iter()
+                .filter_map(|(name, contents)| {
+                    (rebuilt.parts.get(name) != Some(contents)).then_some(name.as_str())
+                })
+                .collect::<Vec<_>>();
+            changed.sort_unstable();
+            let extract_style = |package: &OpcPackage| {
+                let styles =
+                    std::str::from_utf8(package.get_part(DEFAULT_STYLES_PART).unwrap()).unwrap();
+                let start = styles.find(r#"w:styleId="NumberedHeading""#).unwrap();
+                let start = styles[..start].rfind("<w:style").unwrap();
+                let end = styles[start..].find("</w:style>").unwrap() + start + "</w:style>".len();
+                styles[start..end].to_owned()
+            };
+            panic!(
+                "reopened package changed parts: {changed:?}\noriginal: {}\nrebuilt: {}",
+                extract_style(&original),
+                extract_style(&rebuilt)
+            );
+        }
+        let style = reopened.style("NumberedHeading").unwrap();
+        let properties = style.paragraph_properties().unwrap();
+        assert_eq!(
+            (properties.num_id, properties.num_ilvl),
+            (Some(instance), Some(0))
+        );
+        assert_eq!(
+            reopened
+                .numbering_definition(definition)
+                .unwrap()
+                .paragraph_style_links,
+            vec![Some("NumberedHeading".to_owned())]
+        );
+        assert_eq!(reopened.rebuild_toc().unwrap().entry_count, 1);
+        reopened
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap();
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn style_linking_accepts_three_distinct_levels() {
+        let mut document = Document::new();
+        for (style_id, name) in [
+            ("NumberedHeading1", "Numbered Heading 1"),
+            ("NumberedHeading2", "Numbered Heading 2"),
+            ("NumberedHeading3", "Numbered Heading 3"),
+        ] {
+            document
+                .add_style(StyleBuilder::paragraph(style_id, name))
+                .unwrap();
+        }
+        let definition = document
+            .add_numbering_definition(&[
+                ListLevel::decimal().level_text("%1."),
+                ListLevel::decimal().level_text("%1.%2."),
+                ListLevel::decimal().level_text("%1.%2.%3."),
+            ])
+            .unwrap();
+        let first = document.add_numbering_instance(definition, &[]).unwrap();
+        let second = document.add_numbering_instance(definition, &[]).unwrap();
+        for (style_id, level) in [
+            ("NumberedHeading1", 0),
+            ("NumberedHeading2", 1),
+            ("NumberedHeading3", 2),
+        ] {
+            document
+                .link_style_to_numbering(style_id, first, level)
+                .unwrap();
+        }
+
+        assert_ne!(first, second);
+        assert_eq!(
+            document
+                .numbering_definition(definition)
+                .unwrap()
+                .paragraph_style_links,
+            vec![
+                Some("NumberedHeading1".to_owned()),
+                Some("NumberedHeading2".to_owned()),
+                Some("NumberedHeading3".to_owned()),
+            ]
+        );
     }
 
     #[test]
@@ -22283,6 +23030,17 @@ mod tests {
         let instance_id = document
             .add_numbering_instance(definition_id, &[NumberingLevelOverride::new(0).start(4)])
             .unwrap();
+        document
+            .styles
+            .styles
+            .iter_mut()
+            .find(|style| style.style_id == "Normal")
+            .unwrap()
+            .ppr = Some(CT_PPr {
+            num_id: Some(instance_id),
+            num_ilvl: Some(0),
+            ..CT_PPr::default()
+        });
         let numbering = document.numbering.as_mut().unwrap();
         numbering
             .root_attributes
@@ -22339,8 +23097,19 @@ mod tests {
             .add_numbering_definition(&[ListLevel::decimal()])
             .unwrap();
         let instance_id = source.add_numbering_instance(definition_id, &[]).unwrap();
+        source
+            .styles
+            .styles
+            .iter_mut()
+            .find(|style| style.style_id == "Normal")
+            .unwrap()
+            .ppr = Some(CT_PPr {
+            num_id: Some(instance_id),
+            num_ilvl: Some(0),
+            ..CT_PPr::default()
+        });
         let xml = format!(
-            r#"<n:numbering xmlns:n="{WORD_NAMESPACE}" xmlns:ext="urn:producer"><ext:root value="kept"/><n:abstractNum n:abstractNumId="{definition_id}" ext:definition="kept"><ext:definition-child/><n:multiLevelType n:val="hybridMultilevel" ext:leaf="type"><ext:type-child/></n:multiLevelType><n:lvl n:ilvl="0"><n:start n:val="1" ext:leaf="start"><ext:start-child/></n:start><n:numFmt n:val="producerFormat" ext:leaf="format"><ext:format-child/></n:numFmt><n:lvlRestart n:val="0" ext:restart="kept"></n:lvlRestart><n:pStyle n:val="Normal"></n:pStyle><n:isLgl n:val="false"/><n:suff n:val="space" ext:leaf="suffix"><ext:suffix-child/></n:suff><ext:level-child/><n:lvlText n:val="%1." ext:leaf="text"><ext:text-child/></n:lvlText><n:lvlJc n:val="left" ext:leaf="alignment"><ext:alignment-child/></n:lvlJc></n:lvl></n:abstractNum><n:num n:numId="{instance_id}" ext:instance="kept"><n:abstractNumId n:val="{definition_id}" ext:reference="kept"><ext:reference-child/></n:abstractNumId><ext:instance-child/><n:lvlOverride n:ilvl="0" ext:override="kept"><n:startOverride n:val="4" ext:start="kept"></n:startOverride><ext:override-child/><n:lvl n:ilvl="0"><n:numFmt n:val="decimal"/><n:lvlText n:val="%1)"/><ext:replacement-child/></n:lvl></n:lvlOverride></n:num></n:numbering>"#
+            r#"<n:numbering xmlns:n="{WORD_NAMESPACE}" xmlns:ext="urn:producer"><ext:root value="kept"/><n:abstractNum n:abstractNumId="{definition_id}" ext:definition="kept"><ext:definition-child/><n:multiLevelType n:val="hybridMultilevel" ext:leaf="type"><ext:type-child/></n:multiLevelType><n:lvl n:ilvl="0"><n:start n:val="1" ext:leaf="start"><ext:start-child/></n:start><n:numFmt n:val="producerFormat" ext:leaf="format"><ext:format-child/></n:numFmt><n:lvlRestart n:val="0" ext:restart="kept"></n:lvlRestart><n:pStyle n:val="Normal"></n:pStyle><n:isLgl n:val="false"/><n:suff n:val="space" ext:leaf="suffix"><ext:suffix-child/></n:suff><ext:level-child/><n:lvlText n:val="%1." ext:leaf="text"><ext:text-child/></n:lvlText><n:lvlJc n:val="left" ext:leaf="alignment"><ext:alignment-child/></n:lvlJc></n:lvl></n:abstractNum><n:num n:numId="{instance_id}" ext:instance="kept"><n:abstractNumId n:val="{definition_id}" ext:reference="kept"><ext:reference-child/></n:abstractNumId><ext:instance-child/><n:lvlOverride n:ilvl="0" ext:override="kept"><n:startOverride n:val="4" ext:start="kept"></n:startOverride><ext:override-child/><n:lvl n:ilvl="0"><n:numFmt n:val="decimal"/><n:pStyle n:val="Normal"/><n:lvlText n:val="%1)"/><ext:replacement-child/></n:lvl></n:lvlOverride></n:num></n:numbering>"#
         );
         let imported = replace_numbering_xml(&mut source, xml.into_bytes());
         let mut imported = Document::from_bytes(&imported).unwrap();
@@ -22442,6 +23211,7 @@ mod tests {
     fn reader_exposes_complete_numbering_level_facts() {
         let mut doc = Document::new();
         let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
+        let none_id = doc.add_list_definition(&[ListLevel::decimal()]);
         let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
         level.num_fmt = Some(ST_NumberFormat::Other("producerFormat".to_owned()));
         level.start = Some(4);
@@ -22476,7 +23246,6 @@ mod tests {
         assert!(level.has_paragraph_presentation);
         assert!(level.has_marker_presentation);
 
-        let none_id = doc.add_list_definition(&[ListLevel::decimal()]);
         doc.numbering.as_mut().unwrap().abstract_nums[1].levels[0].num_fmt =
             Some(ST_NumberFormat::None);
         assert_eq!(
@@ -22604,7 +23373,6 @@ mod tests {
         let mut doc = Document::new();
         let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
         let level = &mut doc.numbering.as_mut().unwrap().abstract_nums[0].levels[0];
-        level.p_style = Some("ListBase".to_owned());
         level.ppr = Some(CT_PPr {
             keep_next: Some(true),
             ..Default::default()
@@ -22615,17 +23383,13 @@ mod tests {
         });
 
         doc.add_style(
-            StyleBuilder::paragraph("ListBase", "List Base")
-                .paragraph_properties(CT_PPr {
-                    num_id: Some(num_id),
-                    ..Default::default()
-                })
-                .run_properties(CT_RPr {
-                    italic: Some(true),
-                    ..Default::default()
-                }),
+            StyleBuilder::paragraph("ListBase", "List Base").run_properties(CT_RPr {
+                italic: Some(true),
+                ..Default::default()
+            }),
         )
         .unwrap();
+        doc.link_style_to_numbering("ListBase", num_id, 0).unwrap();
         doc.add_style(StyleBuilder::paragraph("ListChild", "List Child").based_on("ListBase"))
             .unwrap();
         doc.add_paragraph("text").style("ListChild");
@@ -22677,16 +23441,10 @@ mod tests {
             keep_lines: Some(true),
             ..Default::default()
         });
-        doc.add_style(
-            StyleBuilder::paragraph("InheritedList", "Inherited List").paragraph_properties(
-                CT_PPr {
-                    num_id: Some(inherited_num_id),
-                    num_ilvl: Some(0),
-                    ..Default::default()
-                },
-            ),
-        )
-        .unwrap();
+        doc.add_style(StyleBuilder::paragraph("InheritedList", "Inherited List"))
+            .unwrap();
+        doc.link_style_to_numbering("InheritedList", inherited_num_id, 0)
+            .unwrap();
 
         doc.add_paragraph("direct").numbering(direct_num_id, 0);
         doc.add_paragraph("override")

@@ -408,8 +408,22 @@ The `Document` facade projects abstract definitions and numbering instances as
 owned concrete values. Create, update, and remove operations validate level
 ranges, placeholders, identifiers, override ownership, style references, and
 the complete candidate graph before committing the staged package. Standalone
-numbering style-link mutation remains outside this owner because F-248 writes
-both sides of that cross-part invariant in one transaction.
+style-link mutation is forbidden. `link_style_to_numbering` and
+`unlink_style_from_numbering` stage the complete document, validate both
+graphs, write the style paragraph properties and effective numbering-level
+style link together, flush the candidate package, and publish once. A missing
+or conflicting style, instance, level, or reciprocal edge leaves the original
+document unchanged.
+
+The layout counter owner keys visible state by concrete `numId` and level. A
+reused instance continues its sequence across ordinary body paragraphs, table
+cells, and section boundaries unless its definition requests a section
+restart. A distinct instance starts independently even when it shares an
+abstract definition. Base-level starts and restart controls, instance start
+overrides, replacement-level formatting, legal numbering, and `numId` zero
+suppression enter the
+same result-local projection consumed by marker layout, TOC rebuild, and REF
+evaluation.
 
 The same grammar owns the bounded `w:ffData` projection on complex legacy form
 fields and the `w:glossaryDocument` root model. Typed form values and glossary
