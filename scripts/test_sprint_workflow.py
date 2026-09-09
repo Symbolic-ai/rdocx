@@ -5582,6 +5582,56 @@ rdocx-layout = "=0.10.1"
             self.assertFalse(readme_doctests.validate_inventory())
         self.assertIn("('oxml-core', 'crates/oxml-core')", errors.getvalue())
 
+    def test_root_readme_leads_with_proven_capabilities(self) -> None:
+        readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme_doctests.validate_root_narrative(readme))
+        mutations = (
+            readme.replace(
+                "## Built for complete document workflows",
+                "## Capability status",
+                1,
+            ),
+            readme.replace("integrated native document stack", "DOCX writer", 1),
+            readme.replace("## Examples", "## Project status\n\n## Examples", 1),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[:80]):
+                self.assertFalse(readme_doctests.validate_root_narrative(mutation))
+
+    def test_crate_readmes_present_capabilities_and_audience(self) -> None:
+        self.assertTrue(readme_doctests.validate_crate_narratives())
+        path = workflow.REPO / "crates/rpptx-py/README.md"
+        readme = path.read_text(encoding="utf-8")
+        mutations = (
+            readme.replace("## Capabilities", "## Features", 1),
+            readme.replace("## Use it when", "## Audience", 1),
+            readme.replace("## Relationship", "## Internals", 1),
+            readme.replace("## Example", "## Sample", 1),
+            readme.replace(
+                "creating,\nopening, editing, and saving",
+                "reading, editing, and rendering",
+                1,
+            ),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[:80]):
+                self.assertFalse(
+                    readme_doctests.validate_crate_narratives({path: mutation})
+                )
+
+    def test_all_readme_local_links_resolve(self) -> None:
+        self.assertTrue(readme_doctests.validate_all_local_links())
+        path = workflow.REPO / "crates/rdocx-layout/README.md"
+        readme = path.read_text(encoding="utf-8")
+        broken_path = f"{readme}\n[missing](missing.md)\n"
+        broken_anchor = f"{readme}\n[missing](../../README.md#missing-anchor)\n"
+        self.assertFalse(
+            readme_doctests.validate_all_local_links({path: broken_path})
+        )
+        self.assertFalse(
+            readme_doctests.validate_all_local_links({path: broken_anchor})
+        )
+
     def test_root_readme_capability_claims_match_the_approved_matrix(self) -> None:
         readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
         matrix = (
@@ -5592,15 +5642,13 @@ rdocx-layout = "=0.10.1"
         )
         mutations = (
             readme.replace(
-                "| DOCX package I/O | Open, save, and byte serialization | complete |",
-                "| DOCX package I/O | Open, save, and byte serialization | partial |",
+                "| DOCX | Create, open, edit, validate, and save complete packages, with encryption and signing through opt-in features |",
+                "| DOCX | Write packages |",
                 1,
             ),
-            readme.replace("DOCX-001", "DOCX-999", 1),
-            readme.replace("DOCX-001", "DOCX-011", 1),
             readme.replace(
-                "Open, save, and byte serialization",
-                "Execute every embedded application",
+                "| Fixed output | PDF, PDF/A, PNG, JPEG, TIFF, and SVG |",
+                "| DOCX | PDF, PDF/A, PNG, JPEG, TIFF, and SVG |",
                 1,
             ),
         )
@@ -5609,6 +5657,49 @@ rdocx-layout = "=0.10.1"
                 self.assertFalse(
                     readme_doctests.validate_root_capability_claims(mutation, matrix)
                 )
+        matrix_mutation = matrix.replace("DOCX-080", "DOCX-999", 1)
+        self.assertFalse(
+            readme_doctests.validate_root_capability_claims(readme, matrix_mutation)
+        )
+        encrypted_matrix_mutation = matrix.replace("DOCX-002", "DOCX-999", 1)
+        self.assertFalse(
+            readme_doctests.validate_root_capability_claims(
+                readme, encrypted_matrix_mutation
+            )
+        )
+
+    def test_root_and_rpptx_security_features_are_explicit_opt_ins(self) -> None:
+        metadata = readme_doctests.cargo_metadata()
+        self.assertIsNotNone(metadata)
+        root_readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
+        rpptx_readme = (workflow.REPO / "crates/rpptx/README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(
+            readme_doctests.validate_opt_in_security_claims(
+                root_readme, rpptx_readme, metadata
+            )
+        )
+        root_mutation = root_readme.replace(
+            '["agile-encryption", "digital-signatures"]',
+            '["agile-encryption"]',
+            1,
+        )
+        self.assertFalse(
+            readme_doctests.validate_opt_in_security_claims(
+                root_mutation, rpptx_readme, metadata
+            )
+        )
+        metadata_mutation = json.loads(json.dumps(metadata))
+        for package in metadata_mutation["packages"]:
+            if package["name"] == "rdocx":
+                package["features"]["default"].append("digital-signatures")
+                break
+        self.assertFalse(
+            readme_doctests.validate_opt_in_security_claims(
+                root_readme, rpptx_readme, metadata_mutation
+            )
+        )
 
     def test_root_readme_versions_match_workspace_manifests(self) -> None:
         metadata = readme_doctests.cargo_metadata()
@@ -5631,15 +5722,9 @@ rdocx-layout = "=0.10.1"
     def test_root_readme_local_link_and_anchor_mutation_matrix(self) -> None:
         readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
         self.assertTrue(readme_doctests.validate_local_links(readme))
-        missing_path = readme.replace(
-            "[LICENSE](LICENSE)", "[LICENSE](missing-license)", 1
-        )
-        missing_anchor = readme.replace(
-            "CHANGELOG.md#unreleased", "CHANGELOG.md#missing-anchor", 1
-        )
-        missing_badge_target = readme.replace(
-            "](LICENSE)", "](missing-badge-target)", 1
-        )
+        missing_path = f"{readme}\n[missing](missing-license)\n"
+        missing_anchor = f"{readme}\n[missing](README.md#missing-anchor)\n"
+        missing_badge_target = f"{readme}\n![missing](missing-badge-target)\n"
         self.assertFalse(readme_doctests.validate_local_links(missing_path))
         self.assertFalse(readme_doctests.validate_local_links(missing_anchor))
         self.assertFalse(readme_doctests.validate_local_links(missing_badge_target))
@@ -5653,19 +5738,38 @@ rdocx-layout = "=0.10.1"
             1,
         )
         volatile = readme.replace(
-            "Generate and parse DOCX",
-            "Most popular tool to generate and parse DOCX",
+            "Create and parse into the model used by its writer",
+            "Most popular tool to create and parse into its writer model",
             1,
         )
         unsupported = readme.replace(
-            "| python-docx | Create, read, and update DOCX with paragraphs, "
-            "tables, and inline pictures | MIT |",
-            "| python-docx | Execute macros | Proprietary |",
+            "| [python-docx](https://python-docx.readthedocs.io/en/stable/user/documents.html) | Create, open, change, and save |",
+            "| [python-docx](https://python-docx.readthedocs.io/en/stable/user/documents.html) | Execute macros |",
+            1,
+        )
+        extra_row = readme.replace(
+            "\nAmong these reviewed projects,",
+            "\n| Extra | ND | ND | ND | ND | ND | ND | ND | ND |\n\nAmong these reviewed projects,",
+            1,
+        )
+        short_extra_row = readme.replace(
+            "\nAmong these reviewed projects,",
+            "\n| Extra | ND | ND | ND | ND | ND | ND | ND |\n\nAmong these reviewed projects,",
+            1,
+        )
+        broad_uniqueness = readme.replace("rdocx alone", "every project", 1)
+        duplicate_evidence = readme.replace(
+            "\n## Honest boundaries",
+            "\n[duplicate evidence](https://github.com/tensorbee/rdocx)\n\n## Honest boundaries",
             1,
         )
         self.assertFalse(readme_doctests.validate_comparison_evidence(unapproved))
         self.assertFalse(readme_doctests.validate_comparison_evidence(volatile))
         self.assertFalse(readme_doctests.validate_comparison_evidence(unsupported))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(extra_row))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(short_extra_row))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(broad_uniqueness))
+        self.assertFalse(readme_doctests.validate_comparison_evidence(duplicate_evidence))
 
     def test_stable_release_family_has_lockstep_preparation_metadata(self) -> None:
         stable_packages = (

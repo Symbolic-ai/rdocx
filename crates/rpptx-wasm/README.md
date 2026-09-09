@@ -1,10 +1,22 @@
 # rpptx-wasm
 
-WebAssembly bindings for PPTX round trips and optional deterministic PDF rendering.
+`rpptx-wasm` provides a compact browser and bundler facade for complete PPTX
+byte round trips. It creates decks from the bundled template, opens existing
+package bytes, adds slides by layout, and optionally produces deterministic
+PDF.
+
+## Capabilities
+
+- Create or open a presentation from bytes.
+- Serialize the complete package and count slides.
+- Add a slide from a layout index.
+- Keep rendering out of the default profile.
+- Add deterministic PDF through the optional `render` feature.
 
 ## Use it when
 
-Use the generated `@tensorbee/rpptx-wasm` package in browser or bundler projects. This Cargo package remains unpublished on crates.io.
+Build the local `@tensorbee/rpptx-wasm` package for browser or bundler projects.
+It is deliberately unpublished to npm and crates.io.
 
 ## Relationship
 
@@ -18,4 +30,10 @@ import init, { WasmPresentation } from "@tensorbee/rpptx-wasm";
 await init();
 const deck = new WasmPresentation();
 const bytes = deck.toBytes();
+```
+
+Build the checked bundler package locally:
+
+```sh
+wasm-pack build --target bundler --scope tensorbee crates/rpptx-wasm --out-name rpptx_wasm
 ```

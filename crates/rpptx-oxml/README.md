@@ -1,14 +1,27 @@
 # rpptx-oxml
 
-Typed PresentationML object model with package-preserving parse and serialization support.
+`rpptx-oxml` provides typed PresentationML parts for schema-level slide work.
+It parses and serializes presentations, slides, layouts, masters, shape trees,
+notes, comments, diagrams, and timing data.
+
+## Capabilities
+
+- Typed presentation, slide, layout, master, and notes parts.
+- Shapes, groups, pictures, connectors, and graphic frames.
+- Comments, replies, placeholders, SmartArt, and animation timing structures.
+- Part-level round trips with schema-aware ordering and identifier helpers.
 
 ## Use it when
 
-Use this crate for schema-level slide, shape, text, relationship, and presentation-part work. Use `rpptx` for a stable high-level facade.
+Use this crate for schema-level slide, shape, text, relationship, and
+presentation-part work. Use the incubating `rpptx` facade for complete deck
+operations.
 
 ## Relationship
 
-`rpptx` owns complete package behavior, while layout and rendering crates consume this typed model.
+`rpptx` owns complete package behavior, while layout and rendering crates
+consume this typed model. `rpptx-oxml` promises part-level parsing and
+serialization, not whole-package preservation by itself.
 
 ## Example
 

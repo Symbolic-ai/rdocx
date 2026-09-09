@@ -2011,26 +2011,40 @@ extensions, invalid range rejection and no partial output. Process ID and an
 atomic counter isolate temporary workspaces across concurrent runs.
 
 All 27 workspace packages explicitly declare one distinct README. The root
-README is the high-level `rdocx` guide. Its three Rust examples cover blank
-authoring, read and mutation, and render and export. Its major-category claims
-carry stable IDs and classifications from the 85-row modern DOCX capability
-matrix. The comparison table accepts only the reviewed official evidence for
-python-docx, docx-rs, docx4j, and Aspose.Words, and makes no volatile
-performance, popularity, price, or footprint claims. Each crate-local document
-states the package purpose, direct-use guidance, adjacent package relationship,
+README is the high-level `rdocx` guide. It leads with the complete native
+document workflow and a seven-row implemented-outcome summary before examples,
+installation, alternatives, or boundaries. Its three Rust examples cover blank
+authoring, read and mutation, and render and export. The detailed property
+boundary remains in the modern DOCX capability matrix rather than a status
+table on the product front page. The dated comparison accepts only reviewed
+official evidence for rdocx, python-docx, docx-rs, docx4j, and Aspose.Words.
+`ND` means not documented in that evidence, and no row makes a volatile
+performance, popularity, price, or footprint claim.
+
+Each crate-local document leads with an outcome and at least three implemented
+capabilities, then states direct-use guidance, adjacent package relationships,
 publication status, and a concrete Rust, CLI, Python, or JavaScript example.
 The compatibility shims direct users to their shared replacements. Internal
-binding and WASM crates state that they are not crates.io packages.
+binding and WASM crates state that they are not crates.io packages. The
+presentation Python binding does not claim rendering, `rpptx-render` owns
+layout lowering rather than fixed output, and `rpptx-oxml` promises part-level
+serialization rather than complete-package preservation.
 
 `scripts/readme_doctests.py` validates the exact package-to-README inventory,
 the documented CLI argument names, Python and JavaScript surface names,
-deterministic feature guidance, and matching dependency and import names. It
+deterministic feature guidance, scoped WASM build and import names, and
+default-off encryption and signature features. It
 derives the root dependency and CLI requirements from Cargo metadata, checks
-every root local path and Markdown anchor, and rejects a capability ID or
-classification that differs from the canonical matrix. Comparison evidence is
-an exact official-URL allowlist. Its focused `--check-official-links` mode
-resolves those sources during implementation review, while default CI remains
-network-independent. It builds the applicable libraries with locked
+every local path and Markdown anchor from all 27 source locations, and rejects
+root narrative, section-order, workflow-claim, crate-audience, or boundary
+drift. The root outcome gate also checks the canonical matrix classifications
+that support package I/O, encrypted package I/O, preservation, and permanent
+non-goals. Comparison evidence has exact official-URL use counts, exact row
+claims, and one exact date-bounded uniqueness conclusion. Its focused
+`--check-official-links` mode resolves those sources during implementation
+review, while default CI remains network-independent. Mutation tests remove or
+reorder the narrative sections, alter a workflow row, restore rejected crate
+claims, and break non-root links. It builds the applicable libraries with locked
 dependencies and Cargo JSON
 messages, locates each emitted rlib from one package build graph, and invokes
 rustdoc with the 2024 edition, warnings denied, the dependency search path, and

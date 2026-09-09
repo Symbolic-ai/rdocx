@@ -1,6 +1,6 @@
 # F-X089, Capability-led README family
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S71
 **Size**: L
 **Depends on**: F-242, F-X009
@@ -118,15 +118,15 @@ change generated documents or renders.
 
 ## Implementation checklist
 
-- [ ] Replace the root status-first opening with an outcome and capability-led product story.
-- [ ] Add a strong, dated, evidence-backed comparison without volatile claims.
-- [ ] Keep exact support boundaries available without presenting the README as a sprint tracker.
-- [ ] Rewrite all 26 crate-local READMEs using family-appropriate capability-led structures.
-- [ ] Compile all Rust examples and validate CLI, Python, and JavaScript snippets.
-- [ ] Validate local links across all 27 package READMEs.
-- [ ] Make narrative, comparison, inventory, metadata, and archive checks mutation-sensitive.
-- [ ] Run focused official-link checks, package dry-runs, the full gate, and the unchanged hash harness.
-- [ ] Update exactly the listed HLD files.
+- [x] Replace the root status-first opening with an outcome and capability-led product story.
+- [x] Add a strong, dated, evidence-backed comparison without volatile claims.
+- [x] Keep exact support boundaries available without presenting the README as a sprint tracker.
+- [x] Rewrite all 26 crate-local READMEs using family-appropriate capability-led structures.
+- [x] Compile all Rust examples and validate CLI, Python, and JavaScript snippets.
+- [x] Validate local links across all 27 package READMEs.
+- [x] Make narrative, comparison, inventory, metadata, and archive checks mutation-sensitive.
+- [x] Run focused official-link checks, package dry-runs, the full gate, and the unchanged hash harness.
+- [x] Update exactly the listed HLD files.
 
 ## Open questions
 

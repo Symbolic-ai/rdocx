@@ -1,14 +1,21 @@
 # rdocx-html
 
-`rdocx-html` converts parsed Word content to a complete HTML document, an HTML
-fragment, or Markdown. It works from semantic WordprocessingML and does not
-run the page layout engine.
+`rdocx-html` converts assembled WordprocessingML content into portable web
+text. It produces complete HTML, embeddable fragments, and Markdown directly
+from semantic Word content without running pagination.
+
+## Capabilities
+
+- Complete HTML document output and body-only fragments.
+- Markdown conversion from the same semantic input.
+- Style, numbering, link, and image projection through `HtmlInput`.
+- A flow-output path with no page-layout or fixed-output dependency.
 
 ## Use it when
 
-Use this crate when an application already owns semantic Word content. Use the
-high-level [`rdocx`](https://docs.rs/rdocx) facade when starting from a DOCX
-file.
+Use this crate when an application already owns `HtmlInput`. Use the high-level
+[`rdocx`](https://docs.rs/rdocx) facade when starting from a DOCX package or
+when HTML import is required.
 
 ## Relationship
 

@@ -1,16 +1,26 @@
 # oxml-chart
 
-ChartML modeling, editing, workbook integration, validation, and backend-neutral chart geometry.
+Model, edit, serialize, and render format-neutral ChartML with typed chart data
+and geometry.
+
+## Capabilities
+
+- Typed axes, series, titles, legends, labels, and seven plot families.
+- Chart XML authoring with an editable embedded workbook.
+- Backend-neutral chart geometry for document-family renderers.
+- Ordered preservation of unmodelled XML around typed edits.
 
 ## Use it when
 
-Use this crate when implementing editable OOXML charts or rendering chart
-geometry. Use `rpptx` for charts inside a complete presentation.
+Use this crate when an application needs ChartML models or chart rendering
+without depending on DOCX or PPTX APIs. Use `rpptx` for charts inside a
+complete presentation.
 
 ## Relationship
 
-It uses SpreadsheetML workbooks from `oxml-sml` and feeds backend-neutral
-chart geometry into document-family renderers.
+It uses focused one-sheet SpreadsheetML workbooks from `oxml-sml` and feeds
+backend-neutral chart geometry into document-family renderers. It is not a
+complete OOXML package editor or a general spreadsheet library.
 
 ## Example
 

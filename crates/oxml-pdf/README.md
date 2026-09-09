@@ -1,6 +1,14 @@
 # oxml-pdf
 
-Format-neutral PDF generation from the positioned output model in `oxml-layout`.
+Render format-neutral `LayoutResult` pages to PDF, archival PDF/A, or raster
+images.
+
+## Capabilities
+
+- PDF output from positioned page elements.
+- PDF/A-2b and PDF/A-3b preflight and rendering.
+- Font embedding and subsetting, metadata, outlines, links, and structure.
+- Selected-page PNG and JPEG plus multi-page TIFF output.
 
 ## Use it when
 
@@ -8,7 +16,9 @@ Use this crate when a custom OOXML frontend already produces shared layout frame
 
 ## Relationship
 
-This is the shared successor to the deprecated `rdocx-pdf` shim.
+This is the shared successor to the deprecated `rdocx-pdf` shim. It is an
+output backend and does not open OOXML packages or lay out DOCX and PPTX
+content. Raster page indices are zero-based.
 
 ## Example
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -218,6 +219,7 @@ README_REQUIRED_TEXT = {
     REPO_ROOT / "crates/rdocx-wasm/README.md": (
         'from "@tensorbee/rdocx-wasm"',
         "doc.toDocxBytes()",
+        "wasm-pack build --target bundler --scope tensorbee crates/rdocx-wasm --out-name rdocx_wasm",
     ),
     REPO_ROOT / "crates/rpptx/README.md": (
         "use rpptx::Presentation;",
@@ -232,85 +234,33 @@ README_REQUIRED_TEXT = {
     REPO_ROOT / "crates/rpptx-py/README.md": (
         'Presentation("deck.pptx")',
         "len(presentation.slides)",
+        "The binding does not expose PDF or raster rendering.",
     ),
     REPO_ROOT / "crates/rpptx-layout/README.md": ("ScopedMediaIds::default()",),
-    REPO_ROOT / "crates/rpptx-oxml/README.md": ("CT_Presentation::from_xml",),
-    REPO_ROOT / "crates/rpptx-render/README.md": ("RelScopes::default()",),
+    REPO_ROOT / "crates/rpptx-oxml/README.md": (
+        "CT_Presentation::from_xml",
+        "part-level parsing and",
+    ),
+    REPO_ROOT / "crates/rpptx-render/README.md": (
+        "RelScopes::default()",
+        "does not write PDF or raster files",
+    ),
     REPO_ROOT / "crates/rpptx-wasm/README.md": (
         'from "@tensorbee/rpptx-wasm"',
         "deck.toBytes()",
+        "wasm-pack build --target bundler --scope tensorbee crates/rpptx-wasm --out-name rpptx_wasm",
     ),
 }
 
-ROOT_CAPABILITY_CLAIMS = (
-    ("DOCX-001", "DOCX package I/O", "Open, save, and byte serialization"),
-    (
-        "DOCX-011",
-        "Styles",
-        "Paragraph, character, and table style graphs have a bounded public surface",
-    ),
-    ("DOCX-012", "Numbering", "Numbering level and instance package model"),
-    (
-        "DOCX-017",
-        "Headers and footers",
-        "Per-section default, first, and even stories have a bounded surface",
-    ),
-    (
-        "DOCX-022",
-        "Tables",
-        "Grids, widths, borders, and layout mode are partly public",
-    ),
-    (
-        "DOCX-029",
-        "Paragraphs",
-        "Ordinary text, alignment, spacing, indentation, and pagination",
-    ),
-    (
-        "DOCX-031",
-        "Runs",
-        "Fonts, emphasis, color, language, and ordinary inline content",
-    ),
-    (
-        "DOCX-045",
-        "Fields",
-        "Simple and complex field construction has a bounded surface",
-    ),
-    (
-        "DOCX-052",
-        "Forms",
-        "Content control creation and lifecycle are partly public",
-    ),
-    (
-        "DOCX-060",
-        "Collaboration",
-        "Comments, replies, people, and modern metadata are partly public",
-    ),
-    (
-        "DOCX-064",
-        "Drawings",
-        "Picture anchors, wrapping, crop, transforms, and effects are partly public",
-    ),
-    (
-        "DOCX-079",
-        "Equations",
-        "Transitional OfficeMath authoring and conversion",
-    ),
-    (
-        "DOCX-080",
-        "Unknown safe producer XML",
-        "Retained byte for byte when it is not modeled",
-    ),
-    (
-        "DOCX-082",
-        "Legacy Word formats",
-        "Binary DOC, Word 2003 XML, and pre-OOXML payloads",
-    ),
-    (
-        "DOCX-083",
-        "Executable payloads",
-        "VBA, ActiveX, OLE, add-in, and embedded application execution",
-    ),
-)
+ROOT_WORKFLOW_CLAIMS = {
+    "DOCX": "Create, open, edit, validate, and save complete packages, with encryption and signing through opt-in features",
+    "Rich authoring": "Paragraphs, runs, tables, styles, numbering, fields, forms, equations, drawings, comments, and metadata",
+    "Preservation": "Retain unknown safe producer XML byte for byte when it is not modelled",
+    "Native layout": "Resolve Word flow content into positioned pages with bundled, system, embedded, or caller-provided fonts",
+    "Fixed output": "PDF, PDF/A, PNG, JPEG, TIFF, and SVG",
+    "Flow output": "HTML, HTML fragments, Markdown, MHTML, RTF, ODT, and EPUB",
+    "Automation": "Rust facade, CLI, Python binding, and locally built browser binding",
+}
 CAPABILITY_CLASSIFICATIONS = {
     "complete",
     "partial",
@@ -318,38 +268,80 @@ CAPABILITY_CLASSIFICATIONS = {
     "preserve-only",
     "permanent-non-goal",
 }
-COMPARISON_CLAIMS = {
+COMPARISON_ROWS = {
+    "rdocx": (
+        "Open, create, edit, and save",
+        "Unknown safe producer XML is retained byte for byte when it is not modelled",
+        "Yes, Word flow layout with deterministic bundled fonts",
+        "PDF and page images",
+        "HTML and Markdown export",
+        "`rdocx-cli`",
+        "`rdocx-py`, with a narrower facade",
+        "Workspace `rdocx-wasm` facade, deliberately unpublished",
+    ),
     "python-docx": (
-        "Create, read, and update DOCX with paragraphs, tables, and inline pictures",
-        "MIT",
-        "Python with declared Python dependencies",
-        (
-            "https://python-docx.readthedocs.io/en/latest/user/quickstart.html",
-            "https://github.com/python-openxml/python-docx",
-        ),
+        "Create, open, change, and save",
+        "Existing content that its API cannot manipulate is left alone on load and save. No byte-exact guarantee is stated",
+        "ND",
+        "ND",
+        "ND",
+        "ND",
+        "Primary API",
+        "ND",
     ),
     "docx-rs": (
-        "Generate and parse DOCX from Rust, WebAssembly, and JavaScript",
-        "MIT",
-        "Rust, with optional WebAssembly and JavaScript surfaces",
-        ("https://github.com/bokuweb/docx-rs",),
+        "Create and parse into the model used by its writer. Editing a parsed document is not separately documented",
+        "ND. The project states that its OOXML support is not exhaustive",
+        "ND",
+        "ND",
+        "ND",
+        "ND",
+        "ND",
+        "Document generation and DOCX-to-JSON parsing through WebAssembly",
     ),
     "docx4j": (
-        "Create, edit, save, and convert Open XML packages",
-        "Apache-2.0",
-        "Java with one selected JAXB implementation",
-        ("https://github.com/plutext/docx4j",),
+        "Open, create, edit, and save",
+        "ND for unknown XML or byte-exact round trips",
+        "No project-owned page engine is documented. PDF paths use XSL-FO with Apache FOP, Microsoft Word through documents4j, or Microsoft Graph",
+        "PDF through the documented conversion paths. Raster output is ND",
+        "HTML export and first-party Markdown import and export",
+        "ND",
+        "ND",
+        "ND",
     ),
     "Aspose.Words": (
-        "Create, modify, convert, render, and print documents without Office automation",
-        "Commercial license or limited evaluation",
-        "Java without Microsoft Word as a host application",
-        (
-            "https://docs.aspose.com/words/java/product-overview/",
-            "https://docs.aspose.com/words/java/licensing/",
-        ),
+        "Create, load, modify, and save DOCX",
+        "Feature-level preservation is documented during conversion. No byte-exact unknown-XML contract is stated",
+        "Yes, its own page-layout engine",
+        "PDF plus PNG, JPEG, BMP, and TIFF",
+        "HTML and Markdown",
+        "ND",
+        "Official Python via .NET API",
+        "ND",
     ),
 }
+COMPARISON_EVIDENCE = (
+    "https://github.com/tensorbee/rdocx",
+    "https://python-docx.readthedocs.io/en/stable/user/documents.html",
+    "https://github.com/bokuweb/docx-rs",
+    "https://github.com/plutext/docx4j",
+    "https://www.docx4java.org/blog/2020/09/office-pptxxlsxdocx-to-pdf-to-in-docx4j-8-2-3/",
+    "https://github.com/plutext/docx4j/tree/VERSION_17_1_1/docx4j-markdown",
+    "https://docs.aspose.com/words/python-net/product-overview/",
+    "https://docs.aspose.com/words/python-net/converting-to-fixed-page-format/",
+    "https://docs.aspose.com/words/python-net/supported-document-formats/",
+    "https://docs.aspose.com/words/python-net/supported-features-on-document-load/",
+)
+COMPARISON_EVIDENCE_USAGE = COMPARISON_EVIDENCE + (
+    "https://python-docx.readthedocs.io/en/stable/user/documents.html",
+    "https://github.com/bokuweb/docx-rs",
+)
+ROOT_UNIQUENESS_CLAIM = (
+    "Among these reviewed projects, rdocx alone documents the complete combination\n"
+    "of a native Rust API, project-owned Word layout, fixed and flow outputs, a CLI,\n"
+    "Python, and a browser surface. That statement is bounded to the official\n"
+    "evidence set and review date."
+)
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 MARKDOWN_IMAGE = re.compile(r"!\[[^]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
@@ -381,7 +373,7 @@ def capability_matrix(text: str) -> dict[str, str]:
 
 
 def validate_root_capability_claims(readme: str, matrix_text: str) -> bool:
-    section = markdown_section(readme, "Capability status")
+    section = markdown_section(readme, "Built for complete document workflows")
     matrix = capability_matrix(matrix_text)
     if section is None or not matrix:
         print(
@@ -389,68 +381,149 @@ def validate_root_capability_claims(readme: str, matrix_text: str) -> bool:
             file=sys.stderr,
         )
         return False
-
-    expected_claims = {
-        capability_id: (category, boundary)
-        for capability_id, category, boundary in ROOT_CAPABILITY_CLAIMS
-    }
-    observed: dict[str, tuple[str, str, str]] = {}
-    valid = True
+    observed: dict[str, str] = {}
     for line in section.splitlines():
-        if not line.startswith("|") or "DOCX-" not in line:
+        if not line.startswith("|"):
             continue
-        ids = re.findall(r"DOCX-\d{3}", line)
         cells = tuple(cell.strip() for cell in line.strip("|").split("|"))
-        if (
-            len(cells) != 4
-            or len(ids) != 1
-            or cells[2] not in CAPABILITY_CLASSIFICATIONS
-        ):
-            print(
-                f"README doctest error: malformed capability claim {line!r}",
-                file=sys.stderr,
-            )
-            valid = False
+        if len(cells) != 2 or cells[0] in {"Workflow", "---"}:
             continue
-        capability_id = ids[0]
-        if capability_id in observed:
-            print(
-                f"README doctest error: duplicate capability id {capability_id}",
-                file=sys.stderr,
-            )
-            valid = False
-        expected_link = (
-            f"[{capability_id}]"
-            "(docs/hld/02-scope-and-non-goals.md#modern-docx-capability-matrix)"
-        )
-        if cells[3] != expected_link:
-            print(
-                f"README doctest error: invalid capability link for {capability_id}",
-                file=sys.stderr,
-            )
-            valid = False
-        observed[capability_id] = (cells[0], cells[1], cells[2])
-
-    expected_ids = tuple(claim[0] for claim in ROOT_CAPABILITY_CLAIMS)
-    if tuple(observed) != expected_ids:
+        if cells[0] in observed:
+            print(f"README doctest error: duplicate workflow {cells[0]}", file=sys.stderr)
+            return False
+        observed[cells[0]] = cells[1]
+    if observed != ROOT_WORKFLOW_CLAIMS:
         print(
-            "README doctest error: root capability ids differ from the approved "
-            f"summary, observed={tuple(observed)!r}",
+            "README doctest error: root workflow claims differ from the approved "
+            f"summary, observed={observed!r}",
             file=sys.stderr,
         )
-        valid = False
-    for capability_id, (category, boundary, classification) in observed.items():
-        if expected_claims.get(capability_id) != (category, boundary):
+        return False
+    required_matrix_state = {
+        "DOCX-001": "complete",
+        "DOCX-002": "complete",
+        "DOCX-080": "preserve-only",
+        "DOCX-082": "permanent-non-goal",
+        "DOCX-083": "permanent-non-goal",
+    }
+    if any(matrix.get(key) != value for key, value in required_matrix_state.items()):
+        print(
+            "README doctest error: approved matrix no longer supports the root boundary",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def validate_opt_in_security_claims(
+    root_readme: str, rpptx_readme: str, metadata: dict[str, object]
+) -> bool:
+    packages = metadata.get("packages")
+    if not isinstance(packages, list):
+        print("README doctest error: invalid metadata for opt-in features", file=sys.stderr)
+        return False
+    package_metadata = {
+        package.get("name"): package
+        for package in packages
+        if isinstance(package, dict)
+    }
+    expected = {"rdocx": root_readme, "rpptx": rpptx_readme}
+    valid = True
+    for package_name, readme in expected.items():
+        package = package_metadata.get(package_name)
+        features = package.get("features") if isinstance(package, dict) else None
+        version = package.get("version") if isinstance(package, dict) else None
+        defaults = features.get("default") if isinstance(features, dict) else None
+        dependency = (
+            f'{package_name} = {{ version = "{version}", features = '
+            '["agile-encryption", "digital-signatures"] }'
+        )
+        if (
+            not isinstance(version, str)
+            or not isinstance(features, dict)
+            or "agile-encryption" not in features
+            or "digital-signatures" not in features
+            or not isinstance(defaults, list)
+            or "agile-encryption" in defaults
+            or "digital-signatures" in defaults
+            or readme.count(dependency) != 1
+        ):
             print(
-                "README doctest error: capability claim differs from the approved "
-                f"summary for {capability_id}",
+                f"README doctest error: {package_name} security features are not "
+                "documented as exact opt-ins",
                 file=sys.stderr,
             )
             valid = False
-        if matrix.get(capability_id) != classification:
+    return valid
+
+
+def validate_root_narrative(readme: str) -> bool:
+    headings = (
+        "## Built for complete document workflows",
+        "## Examples",
+        "## Installation",
+        "## Evidence-based alternatives",
+        "## Honest boundaries",
+    )
+    positions = tuple(readme.find(heading) for heading in headings)
+    required_intro = (
+        "one `Document` for the complete Word workflow",
+        "integrated native document stack",
+        "without an Office installation or conversion service",
+    )
+    valid = all(position >= 0 for position in positions)
+    valid = valid and positions == tuple(sorted(positions))
+    valid = valid and all(item in readme[: positions[0]] for item in required_intro)
+    valid = valid and "## Capability status" not in readme
+    valid = valid and "## Project status" not in readme
+    if not valid:
+        print(
+            "README doctest error: root README does not lead with the approved product narrative",
+            file=sys.stderr,
+        )
+    return valid
+
+
+def validate_crate_narratives(overrides: dict[Path, str] | None = None) -> bool:
+    overrides = {} if overrides is None else overrides
+    metadata = cargo_metadata()
+    if metadata is None or not isinstance(metadata.get("packages"), list):
+        print("README doctest error: invalid metadata for crate narratives", file=sys.stderr)
+        return False
+    valid = True
+    for package in metadata["packages"]:
+        if not isinstance(package, dict) or package.get("name") == "rdocx":
+            continue
+        readme = package_readme(package)
+        if readme is None or not readme.is_file():
+            valid = False
+            continue
+        text = overrides.get(readme, readme.read_text(encoding="utf-8"))
+        headings = ("## Capabilities", "## Use it when", "## Relationship", "## Example")
+        positions = tuple(text.find(heading) for heading in headings)
+        section = markdown_section(text, "Capabilities")
+        bullet_count = 0 if section is None else sum(
+            line.startswith("- ") for line in section.splitlines()
+        )
+        if any(position < 0 for position in positions) or positions != tuple(
+            sorted(positions)
+        ) or bullet_count < 3:
             print(
-                "README doctest error: capability classification differs from "
-                f"the approved matrix for {capability_id}",
+                f"README doctest error: {readme} lacks the capability-led crate narrative",
+                file=sys.stderr,
+            )
+            valid = False
+    forbidden = {
+        REPO_ROOT / "crates/rpptx-py/README.md": ("reading, editing, and rendering",),
+        REPO_ROOT / "crates/rpptx-render/README.md": ("layout, raster, and PDF output",),
+        REPO_ROOT / "crates/rpptx-oxml/README.md": ("package-preserving parse",),
+        REPO_ROOT / "crates/rdocx-oxml/README.md": ("## Migrating from 0.4",),
+    }
+    for readme, claims in forbidden.items():
+        text = overrides.get(readme, readme.read_text(encoding="utf-8"))
+        if any(claim in text for claim in claims):
+            print(
+                f"README doctest error: {readme} retains a rejected capability claim",
                 file=sys.stderr,
             )
             valid = False
@@ -504,7 +577,8 @@ def markdown_anchors(text: str) -> set[str]:
     return anchors
 
 
-def validate_local_links(readme: str) -> bool:
+def validate_local_links(readme: str, source: Path | None = None) -> bool:
+    source = REPO_ROOT / "README.md" if source is None else source
     valid = True
     for destination in markdown_destinations(readme):
         parsed = urlsplit(destination)
@@ -512,9 +586,9 @@ def validate_local_links(readme: str) -> bool:
             continue
         relative_path = unquote(parsed.path)
         target = (
-            (REPO_ROOT / relative_path).resolve()
+            (source.parent / relative_path).resolve()
             if relative_path
-            else REPO_ROOT / "README.md"
+            else source
         )
         try:
             target.relative_to(REPO_ROOT)
@@ -543,6 +617,27 @@ def validate_local_links(readme: str) -> bool:
     return valid
 
 
+def validate_all_local_links(overrides: dict[Path, str] | None = None) -> bool:
+    overrides = {} if overrides is None else overrides
+    metadata = cargo_metadata()
+    if metadata is None or not isinstance(metadata.get("packages"), list):
+        print("README doctest error: invalid metadata for README links", file=sys.stderr)
+        return False
+    readmes = {
+        readme
+        for package in metadata["packages"]
+        if isinstance(package, dict)
+        for readme in (package_readme(package),)
+        if readme is not None
+    }
+    return all(
+        validate_local_links(
+            overrides.get(readme, readme.read_text(encoding="utf-8")), readme
+        )
+        for readme in sorted(readmes)
+    )
+
+
 def validate_comparison_evidence(readme: str) -> bool:
     section = markdown_section(readme, "Evidence-based alternatives")
     if section is None:
@@ -564,59 +659,53 @@ def validate_comparison_evidence(readme: str) -> bool:
         for destination in markdown_destinations(section)
         if urlsplit(destination).scheme
     )
-    approved_urls = {
-        url
-        for _, _, _, product_urls in COMPARISON_CLAIMS.values()
-        for url in product_urls
-    }
-    if set(urls) != approved_urls or len(urls) != len(approved_urls):
+    if Counter(urls) != Counter(COMPARISON_EVIDENCE_USAGE):
         print(
             "README doctest error: comparison links differ from approved "
             f"official evidence, observed={urls!r}",
             file=sys.stderr,
         )
         return False
-    for product, (
-        expected_functionality,
-        expected_license,
-        expected_runtime,
-        expected_urls,
-    ) in COMPARISON_CLAIMS.items():
-        rows = tuple(
-            line
-            for line in section.splitlines()
-            if line.startswith("|")
-            and tuple(cell.strip() for cell in line.strip("|").split("|"))[0]
-            == product
-        )
-        if len(rows) != 1:
+    rows: list[tuple[str, tuple[str, ...]]] = []
+    for line in section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = tuple(cell.strip() for cell in line.strip("|").split("|"))
+        if len(cells) != 9:
             print(
-                f"README doctest error: incomplete official evidence for {product}",
+                "README doctest error: comparison table has a malformed row",
                 file=sys.stderr,
             )
             return False
-        cells = tuple(cell.strip() for cell in rows[0].strip("|").split("|"))
-        if (
-            len(cells) != 5
-            or cells[1:4]
-            != (expected_functionality, expected_license, expected_runtime)
-            or any(url not in cells[4] for url in expected_urls)
-        ):
+        if cells[0] in {"Project", "---"}:
+            continue
+        product = re.sub(r"^\[([^]]+)\]\([^)]+\)$", r"\1", cells[0])
+        rows.append((product, cells[1:]))
+    if tuple(product for product, _ in rows) != tuple(COMPARISON_ROWS):
+        print(
+            "README doctest error: comparison projects differ from the approved set",
+            file=sys.stderr,
+        )
+        return False
+    for product, cells in rows:
+        if cells != COMPARISON_ROWS[product]:
             print(
                 f"README doctest error: unsupported comparison claim for {product}",
                 file=sys.stderr,
             )
             return False
+    if section.count(ROOT_UNIQUENESS_CLAIM) != 1:
+        print(
+            "README doctest error: scoped comparison conclusion changed",
+            file=sys.stderr,
+        )
+        return False
     return True
 
 
 def check_official_links() -> bool:
     valid = True
-    for url in sorted(
-        url
-        for _, _, _, product_urls in COMPARISON_CLAIMS.values()
-        for url in product_urls
-    ):
+    for url in sorted(COMPARISON_EVIDENCE):
         request = Request(url, headers={"User-Agent": "rdocx-readme-check/1"})
         try:
             with urlopen(request, timeout=20) as response:
@@ -868,9 +957,16 @@ def validate_inventory() -> bool:
     ).read_text(encoding="utf-8")
     if not validate_root_capability_claims(root_readme, capability_source):
         valid = False
+    if not validate_root_narrative(root_readme):
+        valid = False
+    if not validate_crate_narratives():
+        valid = False
     if not validate_root_versions(root_readme, metadata):
         valid = False
-    if not validate_local_links(root_readme):
+    rpptx_readme = (REPO_ROOT / "crates/rpptx/README.md").read_text(encoding="utf-8")
+    if not validate_opt_in_security_claims(root_readme, rpptx_readme, metadata):
+        valid = False
+    if not validate_all_local_links():
         valid = False
     if not validate_comparison_evidence(root_readme):
         valid = False

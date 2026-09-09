@@ -1,6 +1,14 @@
 # oxml-opc
 
-Format-neutral Open Packaging Conventions support for ZIP parts, relationships, content types, and package preservation.
+Read, mutate, and write the Open Packaging Conventions layer used by OOXML
+files.
+
+## Capabilities
+
+- ZIP package parts with configurable read limits.
+- Content type defaults and overrides.
+- Relationship parsing, target resolution, and mutation.
+- Main-document discovery, part navigation, and package preservation.
 
 ## Use it when
 
@@ -8,7 +16,10 @@ Use this crate when implementing an OOXML package reader or writer. Use `rdocx` 
 
 ## Relationship
 
-This is the shared successor to the deprecated `rdocx-opc` shim and is used by both document families.
+This is the shared successor to the deprecated `rdocx-opc` shim and is used by
+both document families. OPC manages containers, parts, and relationships. It
+does not interpret document-format XML. Encryption and digital signature APIs
+are optional feature-gated capabilities.
 
 ## Example
 

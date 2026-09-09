@@ -1,8 +1,15 @@
 # rdocx-pdf
 
-`rdocx-pdf` is a deprecated compatibility shim for the shared
-[`oxml-pdf`](https://docs.rs/oxml-pdf) renderer. Existing imports continue to
-work because the public functions are exact re-exports.
+`rdocx-pdf` preserves the former Word-family renderer import path while
+applications migrate to [`oxml-pdf`](https://docs.rs/oxml-pdf). Its public API
+is an exact re-export of the shared fixed-output backend.
+
+## Capabilities
+
+- Existing `rdocx_pdf` imports continue to compile.
+- Exact `oxml-pdf` functions and types.
+- No duplicate renderer implementation or document parsing.
+- A direct migration path to `oxml-pdf` or `rdocx::Document`.
 
 ## Use it when
 

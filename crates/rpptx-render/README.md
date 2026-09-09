@@ -1,14 +1,28 @@
 # rpptx-render
 
-Rendering bridge from resolved presentation models to shared layout, raster, and PDF output.
+`rpptx-render` lowers resolved presentation content into the shared positioned
+page model. It assembles source-scoped relationships and media, lays out one
+page per slide, and offers deterministic bundled-font output for stable
+rendering pipelines.
+
+## Capabilities
+
+- `RenderInput` assembly for slides, media, fonts, and metadata.
+- Source-scoped slide, layout, and master relationships.
+- Shapes, text, tables, images, groups, and backgrounds lowered to page frames.
+- Structured diagnostics and `LayoutResult` output for downstream backends.
 
 ## Use it when
 
-Use this crate when integrating the presentation renderer below the `rpptx` facade. Applications normally call deterministic render methods on `rpptx::Presentation`.
+Use this crate when integrating presentation layout below the `rpptx` facade.
+Applications normally call deterministic output methods on
+`rpptx::Presentation`.
 
 ## Relationship
 
-It consumes `rpptx-layout` output and uses `oxml-layout` and `oxml-pdf` backends.
+It consumes `rpptx-layout` output and produces `oxml-layout` page frames. It
+does not write PDF or raster files. Those formats belong to downstream output
+backends and the high-level facade.
 
 ## Example
 

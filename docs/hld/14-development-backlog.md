@@ -4635,30 +4635,33 @@ the next stable release without a date. Issue 69 is closed as completed at
 
 ### F-X089, Capability-led README family (L)
 
-Present the root README as the product front page and give every crate-local
-README the same outcome-first treatment. The root page leads with the complete
-toolkit promise, shipped capabilities, working examples, and a dated,
-evidence-backed comparison with relevant Rust and cross-language alternatives.
-It keeps exact support boundaries available through the canonical capability
-matrix without leading with internal delivery classifications or sprint state.
+The root README is the product front page and every crate-local README uses the
+same outcome-first treatment. The root page leads with the complete native
+document workflow, a seven-row implemented-outcome summary, working examples,
+and a dated, evidence-backed comparison with relevant Rust and cross-language
+alternatives. Exact property boundaries remain available through the canonical
+capability matrix without leading with internal delivery classifications or
+sprint state.
 
 Each of the 26 crate-local documents explains the result its consumer can
-achieve, its strongest implemented capabilities, when to choose it, its place
+achieve, at least three implemented capabilities, when to choose it, its place
 in the workspace, and one checked example in the consumer's language or command
 surface. Deprecated shims and unpublished support crates remain labelled
 accurately, but status warnings do not replace the value proposition. Claims
-come from current public APIs, package metadata, compiled examples, and reviewed
-official comparison sources. Volatile popularity, price, size, memory, and
-speed claims remain excluded unless a dated reproducible measurement is checked
-into the repository.
+come from current public APIs, package metadata, compiled examples, and
+reviewed official comparison sources. Volatile popularity, price, size,
+memory, and speed claims remain excluded unless a dated reproducible
+measurement is checked into the repository.
 
 **Depends on**: F-242, F-X009.
 **Test gate**: regression. `python3 scripts/readme_doctests.py` compiles all 23
 Rust examples across the 21 Rust-library READMEs, validates the CLI, Python, and
 JavaScript snippets, checks versions and local links for all 27 package
 documents, verifies the capability-led section contract, resolves the approved
-official comparison sources in focused network mode, and proves every one of
-the 22 publishable archives contains its byte-identical declared README.
+official comparison sources in focused network mode, rejects extra rows,
+duplicate evidence, or a broadened uniqueness conclusion, binds security claims
+to default-off Cargo features, and proves every one of the 22 publishable
+archives contains its byte-identical declared README.
 
 ### F-X021, The hash harness should cover PDF output (M)
 The output-stability harness records `page1.png` and three `word/*.xml` parts

@@ -1,6 +1,14 @@
 # oxml-drawing
 
-Typed DrawingML colours, geometry, fills, lines, effects, themes, and text models used across OOXML formats.
+Parse, edit, resolve, and serialize reusable DrawingML content without
+depending on a document format.
+
+## Capabilities
+
+- Typed colors with theme and color-map resolution.
+- Solid, gradient, pattern, image, and no-fill models.
+- Preset and custom geometry, lines, transforms, text bodies, and tables.
+- Schema-ordered writing with ordered preservation of unmodelled children.
 
 ## Use it when
 
@@ -8,7 +16,10 @@ Use this crate when reading or writing DrawingML shared by DOCX and PPTX package
 
 ## Relationship
 
-It consumes format-neutral OOXML primitives and supplies drawing models to presentation and rendering crates.
+It consumes format-neutral OOXML primitives and supplies drawing models to
+presentation and rendering crates. Format-specific anchors, wrappers,
+packaging, and rendering belong elsewhere. Effects and DrawingML elements that
+are not typed remain preserved rather than being interpreted.
 
 ## Example
 

@@ -1,8 +1,15 @@
 # rpptx-chart
 
-`rpptx-chart` is a deprecated compatibility shim for the shared
-[`oxml-chart`](https://docs.rs/oxml-chart) model and renderer. Existing imports
-continue to work because every public item is an exact re-export.
+`rpptx-chart` keeps existing presentation chart imports compiling while callers
+migrate to [`oxml-chart`](https://docs.rs/oxml-chart). Every public item is an
+exact re-export of the shared ChartML model and renderer.
+
+## Capabilities
+
+- Existing `rpptx_chart` imports continue to compile.
+- Exact `oxml-chart` models, validators, and geometry.
+- No duplicate chart implementation or presentation package policy.
+- A direct dependency and import migration path.
 
 ## Use it when
 
