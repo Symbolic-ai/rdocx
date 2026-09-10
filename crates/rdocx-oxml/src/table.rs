@@ -1718,11 +1718,7 @@ impl CT_Tc {
                 Ok(Event::Empty(ref e)) => {
                     let name = e.name();
                     let prefixes = word_prefixes_at(e, word_prefixes)?;
-                    if is_word_element(name.as_ref(), b"p", &prefixes) {
-                        content.push(CellContent::Paragraph(CT_P::new()));
-                    } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
-                        content.push(CellContent::Table(CT_Tbl::new()));
-                    } else if !is_word_element(name.as_ref(), b"tcPr", &prefixes) {
+                    if !is_word_element(name.as_ref(), b"tcPr", &prefixes) {
                         extra_xml.push((
                             content.len(),
                             crate::text::raw_with_external_bindings(
@@ -3862,18 +3858,6 @@ mod tests {
 
         // text() should concat paragraph text with newline separator
         assert_eq!(cell.text(), "First\nSecond");
-    }
-
-    #[test]
-    fn self_closing_cell_paragraph_is_modeled() {
-        let table = parse_table(
-            r#"<w:tblGrid><w:gridCol w:w="100"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr>"#,
-        );
-        let cell = &table.rows[0].cells[0];
-
-        assert_eq!(cell.paragraphs().len(), 1);
-        assert!(cell.paragraphs()[0].text().is_empty());
-        assert!(table_to_xml(&table).contains("<w:p/>"));
     }
 
     /// Serialize a table and return the XML, for the fidelity tests below.
