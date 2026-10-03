@@ -17274,3 +17274,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
 
 **Notes for future sessions.** F-X173 and F-X174 can prepare the incubating and stable minor versions on this workflow. Keep `work/f-x172-codex` until final sprint verification and review. The user authorized an Issue 266 comment after both releases are verified, naming their published numbers and links.
+
+### F-273, Rich endnote authoring
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native endnotes can be created with a direct body reference, located as stories, edited with rich content, reordered without changing IDs, and removed with matching references in one staged mutation. Endnotes and footnotes keep separate ID spaces. Endnote pictures, hyperlinks and comments use the endnote part, while separator and unknown XML survive save and reopen.
+
+**Non-obvious choices.** The package-backed note part is reopened before publication. Word for Mac placed the two fixture endnotes on the final body page with Roman labels. The existing deterministic renderer appends an endnote page and uses decimal labels. The approved F-273 contract keeps that policy and asserts the difference explicitly. F-274 owns placement and number-format policy.
+
+**Deviations from the design plan.** The pinned Word comparison exposed an existing page-placement and label-format difference. The plan's differential gate and rendering spec now record and assert that difference without changing the F-273 API or renderer policy.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, endnote authoring scope, `docs/hld/03-architecture.md`, note story ownership, `docs/hld/04-opc-and-packaging.md`, part and unknown XML preservation, `docs/hld/08-rendering-spec.md`, independent labels and the Word divergence, `docs/hld/10-bindings-spec.md`, native API, and `docs/hld/14-development-backlog.md`, F-273 acceptance.
+
+**Tests.** The named mixed-rich-notes gate passed on the integrated sprint tree. The worker passed 494 Word unit, 343 integration, 760 regression and documentation tests, all 137 policy tests, scoped Clippy, formatting, prose, generated skills, archive inventory and the 22-package dry run. Microsoft Word for Mac 16.113.2 build 16.113.26092012 opened the exact generated DOCX and showed two pages, footnote labels 1 and 2, endnote labels i and ii, and both endnotes after final body text. Microscope pass 2 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
+
+**Notes for future sessions.** F-X173 and F-X174 may now prepare both release families. Keep `work/f-273-codex` branch through final sprint review. The current append-page and decimal-label policies are documented for F-274.
