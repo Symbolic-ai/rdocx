@@ -17205,9 +17205,9 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 
 **Non-obvious choices.** Related-part comment anchoring edits the paragraph fragment in the selected part. Its package is validated and reopened before the live document changes. Body and table-cell comments keep their existing publication path.
 
-**Deviations from the design plan.** The initial worker pass missed the package reopen before publishing related-part comments. Integration review caught it, and the corrected worker passed another microscope review and scoped gate.
+**Deviations from the design plan.** The initial worker pass missed the package reopen before publishing related-part comments. Integration review caught it, and the corrected worker passed another microscope review and scoped gate. An integration policy check also required the completed DOCX-038 capability row in `docs/hld/02-scope-and-non-goals.md`, beyond the plan's HLD impact list.
 
-**Spec sections touched.** `docs/hld/03-architecture.md`, related story publication, and `docs/hld/14-development-backlog.md`, F-271 acceptance.
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-038 completion, `docs/hld/03-architecture.md`, related story publication, and `docs/hld/14-development-backlog.md`, F-271 acceptance.
 
 **Tests.** The worker passed 488 Word unit, 333 integration, 745 regression and 2 documentation tests with pinned tools. Scoped Clippy, formatting, prose, generated skills, 133 policy tests and the archive inventory passed. The all-variant rich-content test and aliased-header rollback test passed. Microscope pass 4 found zero defects and zero smells. Full integrated verification and sprint review remain due.
 

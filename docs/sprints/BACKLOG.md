@@ -726,6 +726,6 @@ regenerated, never hand-edited.
 | F-X170 | High-level Word style formatting API | S84 | M | done |
 | F-X171 | Pin LibreOffice for macOS Python acceptance | S85 | S | done |
 | F-X172 | Unified release artifacts and provenance | S86 | L | in-progress |
-| F-X173 | Prepare unified rpptx 0.12.2 family | S86 | M | pending |
-| F-X174 | Prepare unified rdocx 0.14.1 family | S86 | M | pending |
+| F-X173 | Prepare unified rpptx 0.13.0 family | S86 | M | pending |
+| F-X174 | Prepare unified rdocx 0.15.0 family | S86 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->

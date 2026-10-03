@@ -6412,12 +6412,12 @@ asset or attestation, a checksum omission, a mismatched family or version,
 untrusted PyPI publication, premature GitHub release creation, and partial
 registry publication reported as success. Manual dispatch remains build-only.
 
-### F-X173, Prepare unified rpptx 0.12.2 family (M)
+### F-X173, Prepare unified rpptx 0.13.0 family (M)
 
-Prepare the patch release of the 15 shared OOXML and PowerPoint crates,
-`rpptx-cli` and the `rpptx` Python distribution at 0.12.2 from the reviewed S86
+Prepare the minor release of the 15 shared OOXML and PowerPoint crates,
+`rpptx-cli` and the `rpptx` Python distribution at 0.13.0 from the reviewed S86
 source. Record version and internal pin changes, metadata, compatibility and
-contributor notes under `rpptx-v0.12.2`. Complete preparation through the S86
+contributor notes under `rpptx-v0.13.0`. Complete preparation through the S86
 full gate and clean review. After `/close-sprint` merges the reviewed source
 to `main`, `/release` verifies that main merge SHA, obtains separate final
 approval, and checks every crates.io and PyPI version, asset, checksum,
@@ -6428,17 +6428,19 @@ build-only wheel preflight, full verification and clean sprint review pass on
 the prepared source. Publication follows `/close-sprint` from `main` with its
 own final approval and hosted verification.
 
-### F-X174, Prepare unified rdocx 0.14.1 family (M)
+### F-X174, Prepare unified rdocx 0.15.0 family (M)
 
-Prepare the patch release of the seven stable Word crates, `rdocx-cli` and the
-`rdocx` Python distribution at 0.14.1 from the same reviewed S86 source.
+Prepare the minor release of the seven stable Word crates, `rdocx-cli` and the
+`rdocx` Python distribution at 0.15.0 from the same reviewed S86 source.
 Record version and internal pin changes, metadata, compatibility and
-contributor notes under `v0.14.1`, including the S85 to S86 work and Issue
+contributor notes under `v0.15.0`, including the S85 to S86 work and Issue
 266's release changes. Complete preparation through the S86 full gate and
 clean review. After `/close-sprint` merges the reviewed source to `main`,
 `/release` verifies that main merge SHA, obtains separate final approval for
 this tag, and checks every crates.io and PyPI version, asset, checksum,
 attestation, release note, owner role and contributor notification.
+After both family releases pass, comment on Issue 266 with the published
+`rpptx-v0.13.0` and `v0.15.0` numbers and links to their verified releases.
 **Depends on**: F-X173.
 **Test gate**: release preparation. The local dry run, metadata contract,
 build-only wheel preflight, full verification and clean sprint review pass on

@@ -1,4 +1,4 @@
-# F-X173, Prepare unified rpptx 0.12.2 family
+# F-X173, Prepare unified rpptx 0.13.0 family
 
 **Status**: approved
 **Sprint**: S86
@@ -21,16 +21,16 @@ provenance and matching CLI and Python versions.
 
 ## Approach
 
-Prepare the 15 incubating package manifests and workspace pins at 0.12.2,
-with the selected `rpptx-py` binding metadata at 0.12.2. Update `Cargo.lock`,
+Prepare the 15 incubating package manifests and workspace pins at 0.13.0,
+with the selected `rpptx-py` binding metadata at 0.13.0. Update `Cargo.lock`,
 release assertions and exact archive measurements as needed. Add
-`CHANGELOG.md` notes under `rpptx-v0.12.2` with highlights, additions, fixes,
+`CHANGELOG.md` notes under `rpptx-v0.13.0` with highlights, additions, fixes,
 compatibility and contributor credit for included work since 0.12.1. The
 selected GitHub release will contain six rpptx CLI archives, six rpptx wheels,
 one source distribution and checksums. Each archive and wheel must have a
 verifiable attestation. Complete the F-ID after local preparation, the full
 gate and clean sprint review on the integrated S86 branch. `/close-sprint`
-then merges the prepared result to `main`. Run `/release rpptx-v0.12.2` at
+then merges the prepared result to `main`. Run `/release rpptx-v0.13.0` at
 the verified main merge SHA, obtain its separate final approval before any
 release tag, and verify registry entries, assets, notes, owners and
 contributor notifications after publication.
@@ -45,10 +45,10 @@ contributor notifications after publication.
 
 | Category | Test | Asserts |
 |---|---|---|
-| release preparation | `rpptx_v0_12_2_unified_family_contract` | **Test gate.** Exact 15 crates, CLI and Python metadata share 0.12.2, with no stable family package in the selected publish set. |
+| release preparation | `rpptx_v0_13_0_unified_family_contract` | **Test gate.** Exact 15 crates, CLI and Python metadata share 0.13.0, with no stable family package in the selected publish set. |
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected 15 stay under 10 MiB. |
 | Python | manual build-only `wheels.yml` run | Six wheels and source distribution pass metadata, clean-install and priority runtime checks without publication. |
-| release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release rpptx-v0.12.2` after the S86 main merge. Hosted publication is a separate post-close gate. |
+| release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release rpptx-v0.13.0` after the S86 main merge. Hosted publication is a separate post-close gate. |
 
 ## HLD impact
 
@@ -73,7 +73,7 @@ all 49 entries on the reviewed source.
 - [ ] Write exact changelog notes and contribution inventory.
 - [ ] Complete scoped preparation, microscope, full gate and clean review.
 - [ ] Complete the preparation story after the full sprint gate and review.
-- [ ] After `/close-sprint`, obtain final approval and execute `/release rpptx-v0.12.2` from the reviewed main merge SHA.
+- [ ] After `/close-sprint`, obtain final approval and execute `/release rpptx-v0.13.0` from the reviewed main merge SHA.
 - [ ] Verify publication and notifications as the post-close release gate.
 
 ## Open questions

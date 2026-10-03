@@ -1911,8 +1911,8 @@ family for Issue 266.
 | F-272 | Rich footnote authoring | L |
 | F-273 | Rich endnote authoring | L |
 | F-X172 | Unified release artifacts and provenance | L |
-| F-X173 | Prepare unified rpptx 0.12.2 family | M |
-| F-X174 | Prepare unified rdocx 0.14.1 family | M |
+| F-X173 | Prepare unified rpptx 0.13.0 family | M |
+| F-X174 | Prepare unified rdocx 0.15.0 family | M |
 
 F-X133 is independent and may proceed alongside F-271. F-272 establishes
 the note-authoring model that F-273 extends. The other 11 stories from the

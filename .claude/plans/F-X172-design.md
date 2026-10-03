@@ -93,6 +93,6 @@ rendering. Confirm all 49 entries at the scoped and integrated gates.
 
 ## Open questions
 
-None. Both families and patch versions were selected for S86. The published
+None. Both families and minor versions were selected for S86. The published
 S85 main commit is the starting point, and the reviewed S86 source is the new
 release candidate.

@@ -1,4 +1,4 @@
-# F-X174, Prepare unified rdocx 0.14.1 family
+# F-X174, Prepare unified rdocx 0.15.0 family
 
 **Status**: approved
 **Sprint**: S86
@@ -21,20 +21,22 @@ GitHub release and verifiable provenance.
 
 ## Approach
 
-Prepare the seven stable package manifests and workspace pins at 0.14.1,
-with `rdocx-py` binding metadata at 0.14.1. Pin any selected shared
-dependencies to the published rpptx 0.12.2 family where the reviewed graph
+Prepare the seven stable package manifests and workspace pins at 0.15.0,
+with `rdocx-py` binding metadata at 0.15.0. Pin any selected shared
+dependencies to the published rpptx 0.13.0 family where the reviewed graph
 requires them. Update `Cargo.lock`, release assertions and exact archive
-measurements as needed. Add `CHANGELOG.md` notes under `v0.14.1` covering
+measurements as needed. Add `CHANGELOG.md` notes under `v0.15.0` covering
 included S85 and S86 work, Issue 266, compatibility and authenticated
 contributor credit. The GitHub release will contain six rdocx CLI archives,
 six rdocx wheels, one source distribution and checksums. Each archive and
 wheel must have a verifiable attestation. Complete the F-ID after local
 preparation, the full gate and clean sprint review on the integrated S86
 branch. `/close-sprint` then merges the prepared result to `main`. Run
-`/release v0.14.1` at that verified main merge SHA, obtain its own final
+`/release v0.15.0` at that verified main merge SHA, obtain its own final
 approval before any release tag, and verify registries, assets, notes, owners
 and contributor notifications after publication.
+After both family releases pass, comment on Issue 266 with the two published
+tag numbers and direct links to their verified GitHub releases.
 
 ## Rejected alternatives
 
@@ -46,10 +48,10 @@ and contributor notifications after publication.
 
 | Category | Test | Asserts |
 |---|---|---|
-| release preparation | `rdocx_v0_14_1_unified_family_contract` | **Test gate.** Exact seven crates, CLI and Python metadata share 0.14.1, with no incubating package in the selected publish set. |
+| release preparation | `rdocx_v0_15_0_unified_family_contract` | **Test gate.** Exact seven crates, CLI and Python metadata share 0.15.0, with no incubating package in the selected publish set. |
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected seven stay under 10 MiB. |
 | Python | manual build-only `wheels.yml` run | Six wheels and source distribution pass metadata, clean-install and priority runtime checks without publication. |
-| release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release v0.14.1` after the S86 main merge. Hosted publication is a separate post-close gate. |
+| release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release v0.15.0` after the S86 main merge. Hosted publication is a separate post-close gate. |
 
 ## HLD impact
 
@@ -74,8 +76,9 @@ all 49 entries on the reviewed source.
 - [ ] Write exact changelog notes and contribution inventory.
 - [ ] Complete scoped preparation, microscope, full gate and clean review.
 - [ ] Complete the preparation story after the full sprint gate and review.
-- [ ] After `/close-sprint`, obtain final approval and execute `/release v0.14.1` from the reviewed main merge SHA.
+- [ ] After `/close-sprint`, obtain final approval and execute `/release v0.15.0` from the reviewed main merge SHA.
 - [ ] Verify publication and notifications as the post-close release gate.
+- [ ] Comment on Issue 266 with both published tag numbers and release links.
 
 ## Open questions
 
