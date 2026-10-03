@@ -526,9 +526,10 @@ remain live and unyanked. The current complete stable family is 0.14.0. Earlier
 immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
-The 17 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.12.1, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-preparation group contains unpublished `rpptx-py` and `rpptx-wasm`, while the crates.io
+The 15 publishable `oxml-*` and `rpptx*` package manifests and the unpublished
+`rpptx-py` binding crate use explicit version 0.13.0, the named `incubating`
+group, and the `rpptx-v{{version}}` template. The unpublished `rpptx-wasm`
+crate remains at 0.12.1 with its separate npm boundary. The crates.io
 allowlist remains exactly 15 packages. The latest published complete family is
 the immutable `rpptx-v0.12.1` release at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`, and earlier registry releases
@@ -582,9 +583,13 @@ explicit approval is required immediately before each family tag is created.
 The tag points to the reviewed `main` merge SHA. `/close-sprint` alone owns
 main merges and sprint tags.
 
-The manual `wheels.yml` build-only preflight runs at the reviewed preparation
-SHA before sprint close. Its exact selected artifacts and metadata are
-validated, installed and tested in Python 3.9 and 3.12. Typing and stub checks
+The manual `wheels.yml` build-only preflight runs at the final reviewed sprint
+SHA after the sprint push and before sprint close. Its exact selected artifacts
+and metadata are validated, installed and tested in Python 3.9 and 3.12.
+Wheel smoke runs the documented presentation examples on native and musllinux
+runners, excluding only the SHA-bound Issue 158 viewer fixture that requires
+the separately pinned LibreOffice oracle. The geometry comparison uses
+explicit equal-length checks that work on Python 3.9. Typing and stub checks
 run under Python 3.12. The same version carriers and source are then checked
 at the main release boundary. Earlier published `py-*` tags and PyPI versions
 remain historical records. New releases use the two unified family tags.

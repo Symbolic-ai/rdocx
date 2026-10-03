@@ -18,7 +18,7 @@ The archive row is regenerated from the package that carries this README.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: oxml-drawing | 182,039 compressed bytes, 1,226,103 member bytes, 24 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-drawing` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-01 |
+| Crates.io archive: oxml-drawing | 182,039 compressed bytes, 1,226,103 member bytes, 24 members | 0.13.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-drawing` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-03 |
 
 ## Use it when
 
@@ -43,4 +43,4 @@ assert!(matches!(fill, Fill::NoFill(_)));
 # Ok::<(), oxml_drawing::fill::FillError>(())
 ```
 
-Add `oxml-drawing = "0.12.1"` to your dependencies. Browse the [typed DrawingML API](https://docs.rs/oxml-drawing) before constructing schema-level values directly.
+Add `oxml-drawing = "0.13.0"` to your dependencies. Browse the [typed DrawingML API](https://docs.rs/oxml-drawing) before constructing schema-level values directly.

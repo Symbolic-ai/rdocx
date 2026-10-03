@@ -2,7 +2,95 @@
 
 ## Unreleased
 
-No changes have been recorded since the S73 package family preparations.
+No changes have been recorded after the prepared family sections below.
+
+## rpptx-v0.13.0
+
+### Highlights
+
+The shared OOXML and PowerPoint Rust crates, `rpptx` CLI, and `rpptx` Python
+distribution move together to 0.13.0. One family release carries six CLI
+archives, six `cp39-abi3` wheels, one source distribution, and a `SHA256SUMS`
+covering all thirteen payloads. Each payload has build provenance that can be
+checked with `gh attestation verify FILE -R tensorbee/rdocx`. This answers
+[@hadim](https://github.com/hadim)'s
+[Issue 266](https://github.com/tensorbee/rdocx/issues/266) request for a
+current release from the reviewed main merge with matching CLI and Python
+versions.
+
+### Added
+
+- Native and Python presentation editing now covers retained run handles,
+  inherited shape geometry, table rows and cells, picture crop,
+  grouping, shape hyperlinks, and text-range comment anchors.
+- Shape authoring covers slide jumps, line dash and ends, outer shadows,
+  preset geometry replacement, and theme effect selection. Cross-deck slide
+  import carries supported media and notes. Counted replacement can target a
+  single slide or text frame, and built-in table styles render their
+  backgrounds.
+- The CLI can add comments and report speaker notes. Text, outline, and
+  inspection commands have JSON forms for automation.
+
+### Fixed
+
+- DrawingML text edits retain unmodelled body properties and turn assigned
+  line feeds into paragraphs while preserving line separators in layout.
+  Newly authored shapes receive theme style references in schema order.
+- Presentation PDF output paints slide backgrounds, preserves supported
+  producer paragraph properties, and keeps searchable text paired with its
+  glyphs. Rich and plain line layout follow the reviewed spacing and line
+  break cases.
+
+### Compatibility
+
+The exact 15 publishable shared OOXML and PowerPoint crates move from 0.12.1
+to 0.13.0 together. They are `oxml-core`, `oxml-opc`, `oxml-media`,
+`oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
+`oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, `rpptx-render`,
+`rpptx`, and `rpptx-cli`. Rust callers should update every shared internal
+crate pin together. This pre-1.0 minor release adds authored-shape and
+presentation APIs and changes the output of affected shape, text, and PDF
+operations. `oxml-layout::LineBreakParams` gained required public fields, so
+Rust callers constructing it with a struct literal must update those
+literals. Review exact-output fixtures and exhaustive use of public models.
+
+The Python distribution and import name remain `rpptx`. The 0.13.0 wheels
+require Python 3.9 or newer. Stable Word crates, `rdocx` Python, and the
+unpublished `rpptx-wasm` and npm packages are outside this tag. Historical
+`rpptx-v0.12.1` and `py-rpptx-v0.12.1` remain unchanged.
+
+### Contributors
+
+[@hadim](https://github.com/hadim), Hadrien Mary, reported
+[Issue 266](https://github.com/tensorbee/rdocx/issues/266) and contributed the
+presentation changes in
+[PR 173](https://github.com/tensorbee/rdocx/pull/173),
+[PR 181](https://github.com/tensorbee/rdocx/pull/181),
+[PR 189](https://github.com/tensorbee/rdocx/pull/189),
+[PR 192](https://github.com/tensorbee/rdocx/pull/192),
+[PR 208](https://github.com/tensorbee/rdocx/pull/208),
+[PR 209](https://github.com/tensorbee/rdocx/pull/209),
+[PR 218](https://github.com/tensorbee/rdocx/pull/218),
+[PR 219](https://github.com/tensorbee/rdocx/pull/219),
+[PR 221](https://github.com/tensorbee/rdocx/pull/221),
+[PR 223](https://github.com/tensorbee/rdocx/pull/223),
+[PR 224](https://github.com/tensorbee/rdocx/pull/224),
+[PR 230](https://github.com/tensorbee/rdocx/pull/230),
+[PR 231](https://github.com/tensorbee/rdocx/pull/231),
+[PR 234](https://github.com/tensorbee/rdocx/pull/234),
+[PR 235](https://github.com/tensorbee/rdocx/pull/235),
+[PR 238](https://github.com/tensorbee/rdocx/pull/238), and
+[PR 252](https://github.com/tensorbee/rdocx/pull/252). The shared rendering
+and layout work came from
+[PR 175](https://github.com/tensorbee/rdocx/pull/175),
+[PR 188](https://github.com/tensorbee/rdocx/pull/188),
+[PR 196](https://github.com/tensorbee/rdocx/pull/196),
+[PR 206](https://github.com/tensorbee/rdocx/pull/206),
+[PR 207](https://github.com/tensorbee/rdocx/pull/207),
+[PR 222](https://github.com/tensorbee/rdocx/pull/222), and
+[PR 242](https://github.com/tensorbee/rdocx/pull/242). These PRs were closed
+after their behavior was integrated or hardened in the repository. Atul
+Sharma reviewed and integrated the release family.
 
 ## rpptx-v0.12.1
 

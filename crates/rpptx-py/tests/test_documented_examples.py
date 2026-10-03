@@ -2167,8 +2167,10 @@ def test_placeholder_effective_geometry_matches_python_pptx_and_one_setter_keeps
     )
     oracle = pptx.Presentation(source)
     prs = rpptx.Presentation(source)
-    for slide, oracle_slide in zip(prs.slides, oracle.slides, strict=True):
-        for shape, expected in zip(slide.shapes, oracle_slide.shapes, strict=True):
+    assert len(prs.slides) == len(oracle.slides)
+    for slide, oracle_slide in zip(prs.slides, oracle.slides):
+        assert len(slide.shapes) == len(oracle_slide.shapes)
+        for shape, expected in zip(slide.shapes, oracle_slide.shapes):
             assert (shape.left, shape.top, shape.width, shape.height) == (None,) * 4
             geometry = shape.effective_geometry()
             assert geometry == (expected.left, expected.top, expected.width, expected.height)

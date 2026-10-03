@@ -83,7 +83,8 @@ jobs:
               crates/rdocx-py/tests/test_shared.py \
               crates/rdocx-py/tests/test_python_docx_parity.py
           else
-            "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py
+            # The SHA-bound Issue 158 viewer oracle runs in pinned CI, not bare wheel runners.
+            "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py -k "not test_issue_158_deck_fixture_acceptance"
           fi
       - id: cp312
         if: (github.event_name == 'workflow_dispatch' || (matrix.package.distribution == 'rdocx' && startsWith(github.ref, 'refs/tags/v')) || (matrix.package.distribution == 'rpptx' && startsWith(github.ref, 'refs/tags/rpptx-v'))) && matrix.platform.install == 'native'
@@ -134,7 +135,8 @@ jobs:
                   crates/rdocx-py/tests/test_shared.py \
                   crates/rdocx-py/tests/test_python_docx_parity.py
               else
-                "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py
+                # The SHA-bound Issue 158 viewer oracle runs in pinned CI, not bare wheel runners.
+                "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py -k "not test_issue_158_deck_fixture_acceptance"
               fi
             '
       - name: Attest built artifact

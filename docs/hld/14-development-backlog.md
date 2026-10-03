@@ -6427,8 +6427,9 @@ registry publication reported as success. Manual dispatch remains build-only.
 Prepare the minor release of the 15 shared OOXML and PowerPoint crates,
 `rpptx-cli` and the `rpptx` Python distribution at 0.13.0 from the reviewed S86
 source. Record version and internal pin changes, metadata, compatibility and
-contributor notes under `rpptx-v0.13.0`. Complete preparation through the S86
-full gate and clean review. After `/close-sprint` merges the reviewed source
+contributor notes under `rpptx-v0.13.0`. Complete local preparation at the
+dependency checkpoint, then pass the full gate and clean review on the final
+integrated S86 result. After `/close-sprint` merges the reviewed source
 to `main`, `/release` verifies that main merge SHA, obtains separate final
 approval, and checks every crates.io and PyPI version, asset, checksum,
 attestation, release note, owner role and contributor notification.
