@@ -1,6 +1,6 @@
 # F-272, Rich footnote authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S86
 **Size**: L
 **Depends on**: F-253, F-254, F-255
@@ -86,13 +86,20 @@ separators and restart policy.
 Expected unchanged unless the approved implementation fixes existing note
 rendering. Any changed output must be attributed before updating a baseline.
 
+The scoped implementation keeps all 49 recorded hash entries unchanged.
+Microsoft Word for Mac 16.113.2 build 16.113.26092012 opened the generated
+rich-footnote DOCX and exported a three-page PDF. The first page displayed
+body reference labels 1 and 2. The long first note continued across all three
+pages, and the short second note appeared on page three. Deterministic rdocx
+PDF output matches those recorded page, label, and continuation observations.
+
 ## Implementation checklist
 
-- [ ] Establish stable note identity and atomic creation and removal with body references.
-- [ ] Implement staged rich note reorder and package-backed mutation.
-- [ ] Reuse common story content and part-scoped asset operations, and support comment anchoring in note paragraphs.
-- [ ] Run the pinned differential gate and focused preservation tests.
-- [ ] Run scoped verification and obtain a zero-finding microscope review.
+- [x] Establish stable note identity and atomic creation and removal with body references.
+- [x] Implement staged rich note reorder and package-backed mutation.
+- [x] Reuse common story content and part-scoped asset operations, and support comment anchoring in note paragraphs.
+- [x] Run the pinned differential gate and focused preservation tests.
+- [x] Run scoped verification and obtain a zero-finding microscope review.
 
 ## Open questions
 

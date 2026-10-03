@@ -22442,3 +22442,87 @@ fn a_refused_measurement_names_its_element_attribute_and_value() {
         assert!(error.contains(message), "{error}");
     }
 }
+
+#[test]
+fn rich_footnotes_match_word_after_create_edit_reorder_and_remove() {
+    const WORD_ORACLE_VERSION: &str = "Microsoft Word 16.113.2 build 16.113.26092012";
+    // Word's PDF has three pages. Both body references on page one are
+    // numbered by occurrence, and the long note continues onto pages two
+    // and three before the second note.
+    const WORD_PAGE_COUNT: usize = 3;
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let first = document.create_footnote(&location, "first").unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let second = document.create_footnote(&location, "second").unwrap();
+    assert_eq!((first, second), (2, 3));
+    let first_story = document.footnote_story(first).unwrap().unwrap();
+    let mut paragraph = rdocx_oxml::text::CT_P::new();
+    paragraph.add_run("rich continuation");
+    document
+        .insert_content(
+            &rdocx::ContentLocation::end(first_story),
+            rdocx::ContentFragment::paragraph(paragraph).unwrap(),
+        )
+        .unwrap();
+    document.move_footnote_before(second, first).unwrap();
+    assert_eq!(
+        document
+            .footnotes()
+            .iter()
+            .map(|item| item.0)
+            .collect::<Vec<_>>(),
+        [second, first]
+    );
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(body.contains(&format!("footnoteReference w:id=\"{first}\"")));
+    assert!(body.contains(&format!("footnoteReference w:id=\"{second}\"")));
+    let notes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    assert!(notes.contains("rich continuation"));
+    document.remove_footnote(first).unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.footnotes(), vec![(second, "second".to_owned())]);
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(!body.contains(&format!("footnoteReference w:id=\"{first}\"")));
+    assert!(body.contains(&format!("footnoteReference w:id=\"{second}\"")));
+
+    let mut oracle = Document::new();
+    oracle.add_paragraph("Body opening");
+    let location = oracle.paragraph_story_location(0).unwrap().unwrap();
+    let long = std::iter::repeat_n("continued footnote text", 500)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let long_id = oracle.create_footnote(&location, &long).unwrap();
+    let location = oracle.paragraph_story_location(0).unwrap().unwrap();
+    let short_id = oracle
+        .create_footnote(&location, "short second footnote")
+        .unwrap();
+    oracle.move_footnote_before(short_id, long_id).unwrap();
+    let pdf = oracle.to_pdf_deterministic().unwrap();
+    let source = std::env::temp_dir().join(format!("f272-note-{}.pdf", std::process::id()));
+    std::fs::write(&source, pdf).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&source)
+        .arg("-")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&source);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let pages = text
+        .trim_end_matches('\u{c}')
+        .split('\u{c}')
+        .collect::<Vec<_>>();
+    assert_eq!(pages.len(), WORD_PAGE_COUNT, "{WORD_ORACLE_VERSION}");
+    assert!(pages[0].contains("Body opening12"), "{}", pages[0]);
+    assert!(pages[0].contains("continued footnote text"));
+    assert!(pages[1].contains("continued footnote text"));
+    assert!(pages[2].contains("continued footnote text"));
+    assert!(pages[2].contains("short second footnote"));
+}

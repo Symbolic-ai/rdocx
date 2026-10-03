@@ -9819,6 +9819,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-271 closed DOCX-038 with rich editing in all header and
                 # footer variants in S86.
                 271,
+                # F-272 closed DOCX-039 with rich footnote authoring, so it
+                # no longer owns an incomplete row.
+                272,
             }
         }
         self.assertEqual(

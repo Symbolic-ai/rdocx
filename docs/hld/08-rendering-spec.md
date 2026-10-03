@@ -1280,8 +1280,16 @@ therefore resolve to the embedded face in deterministic layout. Theme or font
 mutation invalidates completed normal and deterministic layouts while reusable
 engines compare the changed theme and font bytes in their full context.
 
-A direct footnote or endnote
-reference in an otherwise safe body paragraph remains cacheable. Its explicit
+A normal note keeps its package ID as its layout lookup key. The visible
+footnote and endnote labels are assigned independently from the first body
+reference to each note in projected document order. The same label shapes the
+body superscript and the marker beside the note. Reordering the note part does
+not renumber either marker. A removed note leaves the remaining IDs stable
+while the displayed sequence closes the gap. Custom marks and section restart
+policy remain outside this behavior.
+
+A direct footnote or endnote reference in an otherwise safe body paragraph
+remains cacheable. Its explicit
 note ID is part of the complete typed paragraph key. Retained paragraph reads
 compare the base context separately from the exact footnote and endnote parts.
 Changing the reference misses that paragraph. Changing either note part keeps

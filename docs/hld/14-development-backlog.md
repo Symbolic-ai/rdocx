@@ -2852,8 +2852,11 @@ anchors, can be authored in every header and footer variant and reopens with
 correct part-scoped relationships.
 
 ### F-272, Rich footnote authoring (L)
-Create, edit, reorder, and remove footnotes containing rich paragraphs, tables,
-fields, links, drawings, comments, and content controls.
+The native facade creates normal footnotes with body references, resolves their
+story IDs, reorders their exact part elements, and removes them with all body
+references in one staged mutation. Common story operations edit rich
+paragraphs, tables, fields, links, drawings, comments, and content controls.
+Internal note IDs stay stable while visible labels follow body reference order.
 **Depends on**: F-253 through F-255.
 **Test gate**: differential. Rich notes and their references match Word in
 numbering, page placement, continuation, and round-trip structure.

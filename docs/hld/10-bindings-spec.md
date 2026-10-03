@@ -1109,6 +1109,17 @@ had its own story. Rich story content is authored with the typed body
 API and moved with `pop_content` and `insert_content`, which accept story
 coordinates. WASM and CLI gain no corresponding binding surface.
 
+Native Rust `Document::create_footnote(&ContentLocation, &str)` appends a normal
+footnote and its reference to one direct body paragraph in a staged operation.
+It returns the stable internal note ID. `footnote_story(i32)` resolves that ID
+to its current checked `StoryId`. `move_footnote_before(i32, i32)` reorders the
+note elements without changing IDs, and `remove_footnote(i32)` removes the note
+and all matching body references together. All four methods are fallible.
+Rich paragraphs, tables, fields, links, pictures, content controls, and
+comments use the common story APIs on the resolved footnote story. This is an
+additive pre-1.0 native API. Python, WASM, and CLI gain no matching authoring
+entry point.
+
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
 These model and handle additions are additive APIs on the published pre-1.0

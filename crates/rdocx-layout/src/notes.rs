@@ -202,7 +202,7 @@ impl NoteRegistry {
                         });
                     }
 
-                    let Some(marker) = shape_marker(note.id, fm)? else {
+                    let Some(marker) = shape_marker(num_state.note_label(note_ref), fm)? else {
                         continue;
                     };
 

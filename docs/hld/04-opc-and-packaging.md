@@ -103,6 +103,15 @@ source part, owner kind, source-order ordinal, and a structural fingerprint.
 Any changed owner makes a retained identity stale before indexed content can be
 resolved.
 
+Rich footnote authoring reserves the relationship-resolved footnotes part,
+adds one normal note with an available internal ID, and inserts its body
+reference in one staged package. Reorder moves only the selected note element
+within the part. Removal deletes that element and every matching body
+reference before the candidate is reopened. Common story edits preserve
+untouched note children, separator records, producer prefixes, and unrelated
+part relationships. Pictures and hyperlinks use the footnotes part relationship
+set, and comment anchors in note paragraphs use the comments part.
+
 Revision inventory uses these same supported story owners and reports their
 `StoryId` with each record. A revision reachable by resolution without a
 discoverable owner is an error. CLI text extraction retains readable body text
