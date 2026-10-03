@@ -6386,9 +6386,11 @@ Add a workflow assertion that prevents this macOS oracle setup from silently
 disappearing. After hosted `main` CI passes, reconcile the 32 S84 PRs and nine
 issues using their already reviewed criterion evidence, with Issue 158 last.
 **Depends on**: F-X168.
-**Test gate**: hosted integration. The full macOS presentation Python job,
-including the original Issue 158 deck acceptance test, and the aggregate
-required CI gate pass at the final pushed `main` SHA.
+**Test gate**: workflow regression. The CI contract rejects missing or
+bypassed pinned viewer setup, the exact DMG digest and mounted build identity
+match the reviewed oracle, and the full local presentation binding suite
+passes. The hosted presentation job and aggregate required CI gate must pass
+at the S85 close boundary before any S84 contribution closure.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 

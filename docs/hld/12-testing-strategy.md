@@ -3254,7 +3254,7 @@ in CI.
 | doc | `cargo doc --workspace --no-deps --all-features --exclude rdocx-py --exclude rpptx-py` with `RUSTDOCFLAGS=-D warnings`, then `python3 scripts/readme_doctests.py` |
 | package-oxml-layout | Verify the exact 24-font and six licence-and-notice-file inventory, then build and size-check the verified archive |
 | msrv | Install exact uv 0.10.2, fetch both pinned corpora, then run `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py` under Rust 1.93 with an isolated uv cache and 8 MiB Rust test-thread stack |
-| python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment, then run its complete pytest directory |
+| python-bindings | On pull requests, build each Python package with `maturin develop --locked` in its own Python 3.12.9 environment. The presentation cell mounts the SHA-256-pinned LibreOffice 26.2.5 macOS image, verifies build 26.2.5.2, and exposes `soffice` to the original Issue 158 deck workflow. Both cells then run their complete pytest directory with pinned Poppler 26.01.0. |
 | supply-chain | `cargo-deny check` |
 | ci-gate | Always validate that every selected filtered job succeeded and every unselected filtered job was skipped |
 | python-wheels | On manual dispatch, build six cp39-abi3 wheels and one source distribution for each Python package. On a `py-rdocx-v*` or `py-rpptx-v*` tag, build, validate, and publish only the selected package's seven artifacts. Install and test every compatible built artifact in a fresh environment. |

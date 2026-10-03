@@ -234,6 +234,26 @@ jobs:
             cmake ninja pkg-config fontconfig freetype jpeg-turbo \
             libpng libtiff little-cms2 openjpeg
           python3 scripts/install_pinned_poppler.py
+      - name: Install pinned LibreOffice 26.2.5.2
+        if: matrix.package.distribution == 'rpptx'
+        shell: bash
+        run: |
+          archive="${RUNNER_TEMP}/LibreOffice_26.2.5_MacOS_aarch64.dmg"
+          curl --fail --location --silent --show-error \
+            https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg \
+            --output "$archive"
+          printf '%s  %s\n' \
+            c99fb4fe574437fc4cb820a4ca15271bca325920861f7139858b36d7f9df78ad \
+            "$archive" | shasum -a 256 --check
+          viewer_root="${RUNNER_TEMP}/rdocx-libreoffice-26.2.5"
+          mkdir -p "$viewer_root"
+          hdiutil attach -readonly -nobrowse -mountpoint "$viewer_root" "$archive"
+          soffice="$viewer_root/LibreOffice.app/Contents/MacOS/soffice"
+          test -x "$soffice"
+          test "$("$soffice" --version)" = \
+            'LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb'
+          echo "RPPTX_PINNED_SOFFICE=$soffice" >> "$GITHUB_ENV"
+          echo "$(dirname "$soffice")" >> "$GITHUB_PATH"
       - name: Create isolated binding environment
         shell: bash
         run: |

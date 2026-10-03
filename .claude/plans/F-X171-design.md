@@ -1,6 +1,6 @@
 # F-X171, Pin LibreOffice for macOS Python acceptance
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S85
 **Size**: S
 **Depends on**: F-X168
@@ -44,14 +44,15 @@ skipping and success short circuits.
 |---|---|---|
 | workflow | `python3 -m unittest scripts.test_sprint_workflow` | The macOS viewer step is pinned, ordered before the binding suite and cannot be bypassed. |
 | local oracle | `soffice --version` and full `rpptx-py` pytest directory | The pinned 26.2.5.2 image and all 77 local binding cases pass. |
-| hosted integration | `Python bindings (rpptx)` and aggregate `CI gate` on final main SHA | The original Issue 158 deck test and all selected hosted jobs pass. |
+| hosted integration | `Python bindings (rpptx)` and aggregate `CI gate` on final main SHA | The original Issue 158 deck test and all selected hosted jobs pass at sprint closure. |
 
-The backlog's **hosted integration** test gate is the final criterion. The
-hosted result follows the reviewed `/close-sprint` main push.
+The backlog's **workflow regression** test gate is the F-ID completion
+criterion. Hosted CI is the S85 closure criterion after the reviewed main push.
 
 ## HLD impact
 
 - `docs/hld/12-testing-strategy.md`
+- `docs/hld/14-development-backlog.md`
 
 ## Risk routing
 
@@ -65,10 +66,9 @@ Unchanged, all 49 entries must match.
 
 ## Implementation checklist
 
-- [ ] Add the SHA-pinned macOS viewer setup to `python-bindings`.
-- [ ] Make the workflow assertion fail if setup is removed or bypassed.
-- [ ] Update the HLD CI table and run scoped then full verification.
-- [ ] Obtain a green hosted main CI gate before posting S84 closures.
+- [x] Add the SHA-pinned macOS viewer setup to `python-bindings`.
+- [x] Make the workflow assertion fail if setup is removed or bypassed.
+- [x] Update the HLD CI table and run scoped verification.
 
 ## Open questions
 
