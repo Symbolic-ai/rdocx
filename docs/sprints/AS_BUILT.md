@@ -17174,3 +17174,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. Rerun on the final integrated sprint head.
 
 **Notes for future sessions.** After full verification and clean sprint review, `/close-sprint` must merge to main, then reconcile each of the 32 PRs and nine issues against live GitHub and evidence on main. Close Issue 158 last. Individual closure drafts were saved outside the worker worktree at `/private/tmp/rdocx-s84-closure-drafts.md`. Keep `work/f-x168-codex` through sprint verification and review.
+
+### F-X171, Pin LibreOffice for macOS Python acceptance
+
+**Sprint.** S85
+**Completed.** 2026-10-03
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The macOS presentation Python CI cell now downloads the official LibreOffice 26.2.5 aarch64 image, checks its SHA-256, mounts it read-only, verifies exact build 26.2.5.2 and exposes `soffice` to the complete binding suite. The workflow contract detects missing, skipped, weakened or unpinned setup.
+
+**Non-obvious choices.** The `macos-26` runner is arm64, and the image digest was checked against the official download and a clean local mount. The existing Linux viewer installer and the Word Python matrix cell are unchanged. The S84 tag remains fixed while S85 repairs the hosted CI setup found after its main push.
+
+**Deviations from the design plan.** The F-ID test gate was clarified to use local workflow and oracle evidence, because hosted main CI cannot run before `/close-sprint`. The S85 sprint boundary owns the hosted gate and the prepared GitHub closures. The roadmap assertion moved with the planned feature sprints from S85 to S86.
+
+**Spec sections touched.** `docs/hld/12-testing-strategy.md`, the hosted Python binding CI row, and `docs/hld/14-development-backlog.md`, F-X171's completion and closure gate.
+
+**Tests.** The workflow assertion failed against the old CI job and passed after the setup step. All 133 workflow regressions and 77 source-built presentation Python tests passed with the pinned `soffice`. The reviewed DMG digest, clean mount, executable identity, formatting, prose and skill adapter checks passed. Microscope pass 1 found zero defects and zero smells. Full integrated verification, sprint review and hosted CI remain at the S85 boundary.
+
+**Hash harness.** Unchanged, all 49 entries match on the worker and integrated source.
+
+**Notes for future sessions.** After `/close-sprint` pushes S85, wait for the macOS presentation Python job and aggregate CI gate to pass on `main`. Only then post the individual 32 PR and nine issue dispositions, with Issue 158 last. Keep `work/f-x171-codex` through sprint verification and review.

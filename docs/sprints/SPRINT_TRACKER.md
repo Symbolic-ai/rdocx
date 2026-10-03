@@ -99,6 +99,7 @@ defended.
 | S82 | X | 3 | 3 | 0 | 13 | 1 | Exercised the original Word report and Presentation deck, completed both matrices and workflows, repaired image comparison and reconciled the original 22 issue criteria. The full gate passed with 168 Word and 76 Presentation Python tests, 49 unchanged hashes, all 22 archives below 10 MiB and sprint review pass 1 clean. Issues 158, 160 and 226 retain follow-up criteria. No stories carried |
 | S83 | X | 2 | 2 | 0 | 8 | 1 | Corrected Word package validity, accepted producer style, drawing and decimal measurement forms, and kept F-X160 output stable after F-X159's three declared hash changes. The full gate passed with 169 Word Python tests, 49 matching hashes, all 22 archives below 10 MiB and sprint review pass 1 clean. No stories carried |
 | S84 | X | 10 | 10 | 0 | 38 | 2 | Combined the S84 through S89 repair scope in one sprint, including PR 265's mixed-section regression. All nine issue contracts and 32 contribution dispositions have integrated evidence. The full gate passed with 175 Word and 77 Presentation Python tests, 49 matching hashes, 22 package archives below 10 MiB and sprint review pass 1 clean. GitHub closure follows the reviewed main push. No stories carried |
+| S85 | X | 1 | 1 | 0 | 1 | 1 | Pinned LibreOffice 26.2.5.2 for the macOS Presentation Python CI cell after the S84 main run exposed the missing viewer. The full integrated local gate passed, including 77 Presentation Python tests, 133 workflow checks, 49 matching hashes, both WASM targets, 22 package archives below 10 MiB and a clear supply-chain scan. Hosted CI and the 32 PR and nine issue dispositions follow the reviewed main push. No stories carried |
 
 ## Completed features
 
@@ -543,6 +544,7 @@ defended.
 | F-X170 | S84 | M | 3 | 1 | 2026-10-03 | Added high-level Word style formatting for Issue 264 with public examples, round-trip resolution and unchanged hashes |
 | F-X167 | S84 | L | 5 | 1 | 2026-10-03 | Integrated accepted-view paragraph joins and deleted-row projection across text, CLI JSON, HTML, Markdown and PDF with 175 Python binding cases and unchanged hashes |
 | F-X168 | S84 | M | 3 | 1 | 2026-10-03 | Proved both Issue 158 fixture workflows, the identity and producer matrices, nine issue contracts and PR 265 mixed-section pagination on the integrated repair prefix |
+| F-X171 | S85 | S | 1 | 1 | 2026-10-03 | Pinned LibreOffice 26.2.5.2 in the macOS presentation Python CI cell, verified the reviewed DMG digest and restored the complete Issue 158 deck oracle gate |
 
 ## Velocity
 
@@ -642,6 +644,7 @@ five working days.
 | S82 | 3 | 1 | 15.00 |
 | S83 | 2 | 1 | 10.00 |
 | S84 | 10 | 2 | 25.00 |
+| S85 | 1 | 1 | 5.00 |
 
 ## Escalation record
 

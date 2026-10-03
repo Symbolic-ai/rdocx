@@ -896,11 +896,31 @@ class SprintWorkflowTests(unittest.TestCase):
             "step:2",
             "Set up Python 3.12",
             "Install pinned Poppler 26.01.0",
+            "Install pinned LibreOffice 26.2.5.2",
             "Create isolated binding environment",
             "Build Python extension",
             "Run full Python binding suite",
         )
         self.assertEqual(identities, required_order)
+        viewer = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+        self.assertEqual(
+            self.yaml_direct_lines(viewer, 8),
+            ("if: matrix.package.distribution == 'rpptx'", "shell: bash", "run: |"),
+        )
+        operative_viewer = "\n".join(self.operative_lines(viewer))
+        for required in (
+            "https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg",
+            "c99fb4fe574437fc4cb820a4ca15271bca325920861f7139858b36d7f9df78ad",
+            "shasum -a 256 --check",
+            "hdiutil attach -readonly -nobrowse",
+            "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb",
+            "RPPTX_PINNED_SOFFICE=$soffice",
+            '"$GITHUB_PATH"',
+        ):
+            self.assertIn(required, operative_viewer)
+        self.assert_no_success_short_circuit(self.operative_lines(viewer))
+        self.assertNotIn("continue-on-error", viewer)
+        self.assertLess(job.index(viewer), job.index("Run full Python binding suite"))
 
         action_contract = (
             (
@@ -1958,6 +1978,36 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.assertEqual(len(test_steps), 1)
                 self.assertLess(job.index(fetch), job.index(test_steps[0]))
                 self.assertNotIn("continue-on-error", fetch)
+
+    def test_python_binding_ci_pins_the_deck_viewer(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job = self.yaml_block(ci, "  python-bindings:")
+        self.assert_python_pr_job_contract(ci)
+        viewer = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
+        for name, changed in {
+            "missing": "",
+            "wrong-matrix-cell": viewer.replace("== 'rpptx'", "== 'rdocx'"),
+            "skip": viewer.replace("== 'rpptx'", "== 'never'"),
+            "swallow-failure": viewer.replace(
+                "        shell: bash\n",
+                "        continue-on-error: true\n        shell: bash\n",
+            ),
+            "early-success": viewer.replace(
+                "        run: |\n", "        run: |\n          exit 0\n"
+            ),
+            "unpin-digest": viewer.replace(
+                "c99fb4fe574437fc4cb820a4ca15271bca325920861f7139858b36d7f9df78ad",
+                "unreviewed",
+            ),
+            "comment-out-digest-check": viewer.replace(
+                '"$archive" | shasum -a 256 --check',
+                '"$archive" # | shasum -a 256 --check',
+            ),
+        }.items():
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_python_pr_job_contract(ci.replace(viewer, changed, 1))
 
     def test_python_pr_job_rejects_failure_swallowing_and_incomplete_cells(
         self,
@@ -9825,7 +9875,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertTrue(all(len(value) == 1 for value in placements.values()))
         self.assertEqual(
             {sprint for value in placements.values() for sprint, _, _ in value},
-            set(range(70, 75)) | set(range(85, 91)),
+            set(range(70, 75)) | set(range(86, 92)),
         )
 
         backlog_rows: dict[str, list[tuple[int, str, str, str]]] = {
