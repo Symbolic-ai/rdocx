@@ -74,13 +74,18 @@ all 49 entries on the reviewed source.
 
 - [ ] Prepare and review all stable versions, pins and Python metadata.
 - [ ] Write exact changelog notes and contribution inventory.
-- [ ] Complete scoped preparation, microscope, full gate and clean review.
-- [ ] Complete the preparation story after the full sprint gate and review.
-- [ ] After `/close-sprint`, obtain final approval and execute `/release v0.15.0` from the reviewed main merge SHA.
-- [ ] Verify publication and notifications as the post-close release gate.
-- [ ] Comment on Issue 266 with both published tag numbers and release links.
+- [ ] Pass scoped preparation and a zero-finding microscope review.
+- [ ] Complete the preparation story before the integrated full gate and review.
+
+## Post-close release gate
+
+After both family preparations pass the integrated full gate and clean sprint
+review, `/close-sprint` merges them to `main`. `/release v0.15.0` then
+requires its own final approval at that reviewed merge SHA and verifies
+publication and notifications. After both families pass, comment on Issue 266
+with both published tag numbers and release links.
 
 ## Open questions
 
-None. The user selected both families and patch versions. This release uses
+None. The user selected both families and minor versions. This release uses
 the reviewed S86 source descended from the S85 main merge.

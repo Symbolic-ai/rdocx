@@ -6428,9 +6428,10 @@ approval, and checks every crates.io and PyPI version, asset, checksum,
 attestation, release note, owner role and contributor notification.
 **Depends on**: F-X172, F-X133, F-271, F-272, F-273.
 **Test gate**: release preparation. The local dry run, metadata contract,
-build-only wheel preflight, full verification and clean sprint review pass on
-the prepared source. Publication follows `/close-sprint` from `main` with its
-own final approval and hosted verification.
+build-only wheel preflight, scoped verification and zero-finding microscope
+pass on the prepared source. The integrated full gate and clean sprint review
+follow both preparations at S86 closure. Publication follows `/close-sprint`
+from `main` with its own final approval and hosted verification.
 
 ### F-X174, Prepare unified rdocx 0.15.0 family (M)
 
@@ -6447,9 +6448,10 @@ After both family releases pass, comment on Issue 266 with the published
 `rpptx-v0.13.0` and `v0.15.0` numbers and links to their verified releases.
 **Depends on**: F-X173.
 **Test gate**: release preparation. The local dry run, metadata contract,
-build-only wheel preflight, full verification and clean sprint review pass on
-the prepared source. Publication follows `/close-sprint` from `main` with its
-own final approval and hosted verification.
+build-only wheel preflight, scoped verification and zero-finding microscope
+pass on the prepared source. The integrated full gate and clean sprint review
+follow both preparations at S86 closure. Publication follows `/close-sprint`
+from `main` with its own final approval and hosted verification.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 

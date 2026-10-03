@@ -71,12 +71,17 @@ all 49 entries on the reviewed source.
 
 - [ ] Prepare and review all incubating versions, pins and Python metadata.
 - [ ] Write exact changelog notes and contribution inventory.
-- [ ] Complete scoped preparation, microscope, full gate and clean review.
-- [ ] Complete the preparation story after the full sprint gate and review.
-- [ ] After `/close-sprint`, obtain final approval and execute `/release rpptx-v0.13.0` from the reviewed main merge SHA.
-- [ ] Verify publication and notifications as the post-close release gate.
+- [ ] Pass scoped preparation and a zero-finding microscope review.
+- [ ] Complete the preparation story at its dependency checkpoint before F-X174.
+
+## Post-close release gate
+
+After both family preparations pass the integrated full gate and clean sprint
+review, `/close-sprint` merges them to `main`. `/release rpptx-v0.13.0` then
+requires its own final approval at that reviewed merge SHA and verifies
+publication and notifications.
 
 ## Open questions
 
-None. The user selected both families and patch versions. This release uses
+None. The user selected both families and minor versions. This release uses
 the reviewed S86 source descended from the S85 main merge.
