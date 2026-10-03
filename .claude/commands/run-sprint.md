@@ -21,9 +21,10 @@ checkpoint uses its scoped evidence and focused reconciliation checks.
 resumable through `.claude/scratch/SNN-run.json`. Reuse it rather than starting
 over.
 
-**This command never merges to `main`.** It normally creates no tag and ends by
-telling you the exact `/close-sprint` invocation. A release F-ID is the one
-exception described below, and it delegates the release tag to `/release`.
+**This command never merges to `main` or creates a release tag.** It ends by
+telling you the exact `/close-sprint` invocation. Release preparation F-IDs
+finish with local evidence. Publication follows sprint close through
+`/release` from the reviewed `main` merge SHA.
 
 ## 1. Initialise
 
@@ -189,32 +190,14 @@ The final `/verify --full` and `/sprint-review` cover the complete integrated
 sprint at its current HEAD. A dependency checkpoint never supplies closure
 evidence for that final result.
 
-#### Release dependency extension
+#### Release preparation dependencies
 
-When a release F-ID is a dependency of any unfinished story in the same sprint,
-first use the ordinary checkpoint above to complete its non-release dependency
-prefix, then extend the route:
-
-1. Prepare and integrate the release F-ID through the normal worker,
-   `/microscope`, `/complete-feature --prepare`, and batch integration route.
-   Keep it `reviewed` in run state and `in-progress` in both delivery trackers
-   under the release exception.
-2. Run `/verify --full` and `/sprint-review` at the prepared release current
-   HEAD. Apply every release risk rider and use the exact clean-review commit,
-   record, and verification sequence from the ordinary checkpoint.
-3. Follow `/release <tag>` at that exact reviewed and fully verified HEAD.
-   `/release` remains the only tag and publication authority and obtains its
-   separate final approval immediately before the first external mutation. If
-   approval is withheld or publication fails, preserve the recorded state and
-   stop without starting a consumer.
-4. Finalise the release F-ID's delivery records only after `/release` verifies
-   every required registry entry, tag, release body, owner, notification, and
-   other selected-family evidence. Commit those records, mark the release F-ID
-   completed, clear its owner, then run the ordinary checkpoint's full
-   verification and clean-review evidence sequence at the new current HEAD.
-5. Return the phase to `implementation` again. Resume only the later waves whose
-   dependencies are now completed. Never start an unfinished dependent story
-   before verified publication and release-F-ID completion.
+A release preparation F-ID is an ordinary dependency until its reviewed local
+workflow, artifact and version preflights pass. Complete its delivery records
+through the dependency-prefix checkpoint before starting any dependent story.
+Do not create or push a release tag, publish a registry package, or call
+`/release` inside `/run-sprint`. Publication follows `/close-sprint` from the
+reviewed `main` merge SHA under separate approval for each family tag.
 
 Every verification and review record remains bound to its exact current HEAD.
 Never use checkpoint evidence for final closure after later waves or delivery
@@ -262,13 +245,7 @@ by a dependency-prefix checkpoint:
 
 After verification passes:
 
-First identify any remaining release F-ID whose gate requires real
-publication. Leave it
-`reviewed` in run state and `in-progress` in the delivery trackers, retain its
-owner and approved plan, and defer its delivery ledgers until step 9. It still
-participates in the integrated full verification and sprint review.
-
-For every other integrated F-ID:
+For every integrated F-ID, including a release preparation story:
 
 1. Apply the `/complete-feature` documentation steps:
    update exactly the HLD files its plan listed, append its `AS_BUILT.md` entry
@@ -313,14 +290,6 @@ push, and report what is outstanding. Closure stays forbidden.
 
 When the latest pass is clean:
 
-0. If a remaining unfinished release F-ID requires a real publication gate,
-   pause at the reviewed and fully verified SHA. Report the exact `/release
-   vX.Y.Z` command and follow it. `/release` performs its own separate final
-   approval before any external mutation. After the release is verified, create
-   that F-ID's delivery records, set its plan and state to completed, clear its
-   owner, re-run the affected checks and the bounded sprint review, then
-   continue here.
-
 1. Run `close-preflight SNN`. It refuses on an unconsumed handoff, a feature
    that is neither completed nor carried, a blocking review finding, a missing
    full verify, or a tracker that disagrees with the run state.
@@ -333,6 +302,7 @@ When the latest pass is clean:
    - Review passes and their verdicts.
    - **Retained worker branches and any remaining worktrees**, which
      `/close-sprint` will clean after the sprint merge and tag are pushed.
+   - The prepared family tags to release from `main` after sprint close.
    - The exact next command:
 
      ```text

@@ -64,7 +64,7 @@ checks. The full gate runs on the final integrated sprint result.
    they agree. Regenerate with the same script and commit the result.
 
    Then `python3 -m unittest scripts.test_sprint_workflow`. This holds the
-   release family preflights that `.github/workflows/publish.yml` invokes by
+   release family preflights that `.github/workflows/wheels.yml` invokes by
    name as the publication gate, and the assertions over the pinned CI
    toolchains. A failure means a version carrier moved without its assertion
    moving with it. The fix is the carrier or the assertion, never deleting the

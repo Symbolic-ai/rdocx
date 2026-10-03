@@ -1,6 +1,6 @@
 # F-X172, Unified release artifacts and provenance
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S86
 **Size**: L
 **Depends on**: F-X111, F-X094f
@@ -37,13 +37,16 @@ reviewed, SHA-pinned GitHub action. Aggregate and validate the exact thirteen
 payloads, generate one `SHA256SUMS`, and verify downloaded subjects with
 `gh attestation verify FILE -R tensorbee/rdocx` before either registry job.
 Create one GitHub release with the thirteen payloads and checksums only after
-both registry jobs and their post-publication checks succeed. A partial
+both registry jobs succeed. The release command verifies the published
+registries and downloaded release payloads afterward. A partial
 publication retains the immutable tag and is reported as a failure.
 
 Update `.claude/commands/release.md`, `.claude/commands/release-notes.md`,
 `.claude/WORKFLOW.md`, `scripts/sprint_workflow.py`, existing policy tests,
-the build HLD and generated agent adapters. The release command still requires
-a separate final approval for each exact tag and SHA. Historical `py-*` tags
+the build HLD and generated agent adapters. Release preparation finishes before `/close-sprint`. The release command
+requires clean `main` at the exact closed sprint merge SHA, a matching
+reviewed sprint source tree, a fresh full gate and a separate final approval
+for each tag. Historical `py-*` tags
 stay immutable and readable, but are not new publication triggers.
 
 ## Rejected alternatives
@@ -85,14 +88,15 @@ rendering. Confirm all 49 entries at the scoped and integrated gates.
 
 ## Implementation checklist
 
-- [ ] Consolidate the tag job graph in `wheels.yml` without a PyPI identity change.
-- [ ] Attest and verify exact artifacts, then write complete `SHA256SUMS`.
-- [ ] Gate registry and GitHub publication on the exact validated family.
-- [ ] Update release commands, workflow policy tests, HLD and generated adapters.
-- [ ] Run the scoped gate and a zero-finding microscope review.
+- [x] Consolidate the tag job graph in `wheels.yml` without a PyPI identity change.
+- [x] Attest and verify exact artifacts, then write complete `SHA256SUMS`.
+- [x] Gate registry and GitHub publication on the exact validated family.
+- [x] Update release commands, workflow policy tests, HLD and generated adapters.
+- [x] Run the scoped gate and a zero-finding microscope review.
 
 ## Open questions
 
-None. Both families and minor versions were selected for S86. The published
-S85 main commit is the starting point, and the reviewed S86 source is the new
-release candidate.
+None. S86 prepares `rpptx-v0.13.0` and `v0.15.0` as minor releases.
+The published S85 main commit is the starting point, and the reviewed S86
+source is the new release candidate. The workflow validator derives versions
+from each requested tag.

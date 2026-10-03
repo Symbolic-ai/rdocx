@@ -15,6 +15,9 @@ Subcommands:
     validate-handoff PATH ...    check a worker handoff before integration
     close-preflight SNN          the checks /close-sprint requires
     release-notes TAG            validate or render reviewed release notes
+    unified-release-family TAG      validate matching Rust and Python versions
+    published-unified-release TAG DIR
+                                 verify exact selected registry entries
     python-release-artifacts TAG DIR
                                  validate one selected Python release set
 
@@ -32,6 +35,10 @@ import string
 import subprocess
 import sys
 import tarfile
+import time
+import urllib.error
+import urllib.request
+import tomllib
 import unicodedata
 import zipfile
 from html.parser import HTMLParser
@@ -73,7 +80,7 @@ RELEASE_TAG_RE = re.compile(
     rf"{SEMVER_COMPONENT_RE}\.{SEMVER_COMPONENT_RE}$"
 )
 PYTHON_RELEASE_TAG_RE = re.compile(
-    rf"^py-(?P<distribution>rdocx|rpptx)-v(?P<version>{SEMVER_COMPONENT_RE}\."
+    rf"^(?:(?P<stable>v)|(?P<incubating>rpptx-v)|py-(?P<legacy>rdocx|rpptx)-v)(?P<version>{SEMVER_COMPONENT_RE}\."
     rf"{SEMVER_COMPONENT_RE}\.{SEMVER_COMPONENT_RE})$"
 )
 PYTHON_RELEASE_PLATFORMS = (
@@ -787,15 +794,149 @@ def validate_python_project_metadata(
         )
 
 
+RELEASE_CRATES = {
+    "rdocx": (
+        "rdocx-opc", "rdocx-oxml", "rdocx-layout", "rdocx-html",
+        "rdocx-pdf", "rdocx", "rdocx-cli",
+    ),
+    "rpptx": (
+        "oxml-core", "oxml-opc", "oxml-media", "oxml-layout",
+        "oxml-drawing", "oxml-pdf", "oxml-sml", "oxml-cli-support",
+        "oxml-chart", "rpptx-oxml", "rpptx-chart", "rpptx-layout",
+        "rpptx-render", "rpptx", "rpptx-cli",
+    ),
+}
+
+
+def validate_unified_release_family(tag: str) -> dict[str, object]:
+    """Check the exact selected Rust and Python version carriers for a new tag."""
+    match = PYTHON_RELEASE_TAG_RE.fullmatch(tag)
+    if match is None or match.group("legacy") is not None:
+        raise ValueError(f"{tag!r} is not a unified release tag")
+    distribution = "rdocx" if match.group("stable") else "rpptx"
+    version = match.group("version")
+    workspace = tomllib.loads((REPO / "Cargo.toml").read_text(encoding="utf-8"))
+    if distribution == "rdocx" and workspace["workspace"]["package"]["version"] != version:
+        raise ValueError("stable workspace version differs from release tag")
+    dependencies = workspace["workspace"]["dependencies"]
+    selected = set(RELEASE_CRATES[distribution])
+    publishable = set()
+    lock = tomllib.loads((REPO / "Cargo.lock").read_text(encoding="utf-8"))
+    locked = {(package["name"], package["version"]) for package in lock["package"]}
+    for member in workspace["workspace"]["members"]:
+        manifest = tomllib.loads((REPO / member / "Cargo.toml").read_text(encoding="utf-8"))
+        package = manifest["package"]
+        carrier = package["version"]
+        member_version = workspace["workspace"]["package"]["version"] if isinstance(carrier, dict) and carrier.get("workspace") is True else carrier
+        registry = package.get("publish")
+        if member_version == version and (registry is None or registry is True or isinstance(registry, list) and "crates-io" in registry):
+            publishable.add(package["name"])
+    if publishable != selected:
+        raise ValueError(f"selected publishable crates differ: missing={sorted(selected - publishable)}, extra={sorted(publishable - selected)}")
+    for crate in (*RELEASE_CRATES[distribution], f"{distribution}-py"):
+        manifest = tomllib.loads(
+            (REPO / "crates" / crate / "Cargo.toml").read_text(encoding="utf-8")
+        )
+        carrier = manifest["package"]["version"]
+        actual = workspace["workspace"]["package"]["version"] if isinstance(carrier, dict) and carrier.get("workspace") is True else carrier
+        if actual != version:
+            raise ValueError(f"{crate} is {actual}, expected {version}")
+        if crate in selected and (crate, version) not in locked:
+            raise ValueError(f"Cargo.lock lacks {crate} {version}")
+        if crate in dependencies and dependencies[crate]["version"] != version:
+            raise ValueError(f"workspace dependency {crate} differs from {version}")
+    project = tomllib.loads(
+        (REPO / "crates" / f"{distribution}-py" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    if project["project"]["version"] != version:
+        raise ValueError(f"{distribution} Python distribution differs from {version}")
+    return {"tag": tag, "distribution": distribution, "version": version}
+
+
+def cmd_unified_release_family(args: argparse.Namespace) -> int:
+    try:
+        result = validate_unified_release_family(args.tag)
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        die(f"unified release family: {error}")
+    print(f"unified-release-family {result['tag']}: {result['distribution']} {result['version']}, ok")
+    return 0
+
+
+def verify_published_unified_release(tag: str, directory: Path) -> dict[str, object]:
+    """Confirm both registries expose the selected exact version and Python bytes."""
+    from hashlib import sha256
+
+    family = validate_unified_release_family(tag)
+    distribution = str(family["distribution"])
+    version = str(family["version"])
+    expected_python = {
+        path.name: sha256(path.read_bytes()).hexdigest()
+        for path in directory.iterdir()
+        if path.name.startswith(f"{distribution}-{version}-")
+        or path.name == f"{distribution}-{version}.tar.gz"
+    }
+    if len(expected_python) != 7:
+        raise ValueError("reviewed family assets lack seven Python distributions")
+
+    def fetch_json(url: str) -> dict[str, object]:
+        request = urllib.request.Request(url, headers={"User-Agent": "rdocx-release/1"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            value = json.load(response)
+        if not isinstance(value, dict):
+            raise ValueError(f"invalid registry response from {url}")
+        return value
+
+    pending = set(RELEASE_CRATES[distribution])
+    for attempt in range(20):
+        for crate in tuple(sorted(pending)):
+            try:
+                result = fetch_json(f"https://crates.io/api/v1/crates/{crate}/{version}")
+                entry = result.get("version")
+                if isinstance(entry, dict) and entry.get("num") == version:
+                    pending.remove(crate)
+            except (urllib.error.HTTPError, urllib.error.URLError):
+                pass
+        try:
+            project = fetch_json(f"https://pypi.org/pypi/{distribution}/{version}/json")
+            urls = project.get("urls")
+            if not isinstance(urls, list):
+                raise ValueError("PyPI release lacks a file list")
+            actual_python = {
+                entry["filename"]: entry["digests"]["sha256"]
+                for entry in urls
+                if isinstance(entry, dict)
+            }
+            python_ready = actual_python == expected_python
+        except (KeyError, TypeError, urllib.error.HTTPError, urllib.error.URLError):
+            python_ready = False
+        if not pending and python_ready:
+            return family
+        if attempt < 19:
+            time.sleep(30)
+    raise ValueError(
+        f"registry publication incomplete: crates={sorted(pending)}, "
+        f"PyPI exact files={python_ready}"
+    )
+
+
+def cmd_published_unified_release(args: argparse.Namespace) -> int:
+    try:
+        result = verify_published_unified_release(args.tag, Path(args.directory))
+    except (OSError, TypeError, ValueError) as error:
+        die(f"published unified release: {error}")
+    print(f"published-unified-release {result['tag']}: both registries, ok")
+    return 0
+
+
 def validate_python_release_artifacts(tag: str, directory: Path) -> dict[str, object]:
     """Validate the exact selected Python distribution artifact set."""
     match = PYTHON_RELEASE_TAG_RE.fullmatch(tag)
     if match is None:
         raise ValueError(
             f"{tag!r} is not a Python release tag, expected "
-            "py-rdocx-vX.Y.Z or py-rpptx-vX.Y.Z"
+            "vX.Y.Z or rpptx-vX.Y.Z"
         )
-    distribution = match.group("distribution")
+    distribution = "rdocx" if match.group("stable") else ("rpptx" if match.group("incubating") else match.group("legacy"))
     version = match.group("version")
     if not directory.is_dir():
         raise ValueError(f"Python release artifact directory is missing: {directory}")
@@ -1362,6 +1503,8 @@ def main() -> int:
     p = sub.add_parser("validate-handoff"); p.add_argument("path"); p.add_argument("--fid", required=True); p.set_defaults(fn=cmd_validate_handoff)
     p = sub.add_parser("close-preflight"); p.add_argument("sprint"); p.set_defaults(fn=cmd_close_preflight)
     p = sub.add_parser("release-notes"); p.add_argument("tag"); mode = p.add_mutually_exclusive_group(required=True); mode.add_argument("--check", action="store_true"); mode.add_argument("--render", action="store_true"); p.set_defaults(fn=cmd_release_notes)
+    p = sub.add_parser("unified-release-family"); p.add_argument("tag"); p.set_defaults(fn=cmd_unified_release_family)
+    p = sub.add_parser("published-unified-release"); p.add_argument("tag"); p.add_argument("directory"); p.set_defaults(fn=cmd_published_unified_release)
     p = sub.add_parser("python-release-artifacts"); p.add_argument("tag"); p.add_argument("directory"); p.set_defaults(fn=cmd_python_release_artifacts)
 
     args = ap.parse_args()
