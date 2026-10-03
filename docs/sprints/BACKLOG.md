@@ -724,5 +724,5 @@ regenerated, never hand-edited.
 | F-X168 | Current issue and contribution closure evidence | S84 | M | done |
 | F-X169 | Reconcile live contributions and open issue contracts | S84 | L | done |
 | F-X170 | High-level Word style formatting API | S84 | M | done |
-| F-X171 | Pin LibreOffice for macOS Python acceptance | S85 | S | in-progress |
+| F-X171 | Pin LibreOffice for macOS Python acceptance | S85 | S | done |
 <!-- AUTOGEN:backlog-MX END -->

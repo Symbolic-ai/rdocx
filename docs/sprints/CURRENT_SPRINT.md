@@ -16,7 +16,7 @@ The published `s84` tag stays fixed. Planned M24 feature work starts in S86.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X171 | Pin LibreOffice for macOS Python acceptance | S | in-progress | codex |
+| F-X171 | Pin LibreOffice for macOS Python acceptance | S | done | - |
 
 ## Sequencing note
 

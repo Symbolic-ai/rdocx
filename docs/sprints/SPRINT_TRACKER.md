@@ -543,6 +543,7 @@ defended.
 | F-X170 | S84 | M | 3 | 1 | 2026-10-03 | Added high-level Word style formatting for Issue 264 with public examples, round-trip resolution and unchanged hashes |
 | F-X167 | S84 | L | 5 | 1 | 2026-10-03 | Integrated accepted-view paragraph joins and deleted-row projection across text, CLI JSON, HTML, Markdown and PDF with 175 Python binding cases and unchanged hashes |
 | F-X168 | S84 | M | 3 | 1 | 2026-10-03 | Proved both Issue 158 fixture workflows, the identity and producer matrices, nine issue contracts and PR 265 mixed-section pagination on the integrated repair prefix |
+| F-X171 | S85 | S | 1 | 1 | 2026-10-03 | Pinned LibreOffice 26.2.5.2 in the macOS presentation Python CI cell, verified the reviewed DMG digest and restored the complete Issue 158 deck oracle gate |
 
 ## Velocity
 
