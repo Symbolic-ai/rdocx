@@ -508,12 +508,13 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
 That shared-version group, the `rdocx` Python project, and the rdocx WASM
-contract literals are prepared at 0.14.0. The exact
-seven-package stable family is published from immutable annotated `v0.14.0`
-tag at reviewed SHA `58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published
-archives require shared 0.12.1, and `rpptx-v0.12.1` was published first. The
-unpublished 0.13.2
-crates.io train is superseded rather than backfilled. The Python, binding, and
+contract literals are prepared at 0.15.0, together with the exact
+seven-package stable family and its `v0.15.0` release notes. The prepared
+stable packages require shared OOXML 0.13.0. The latest published stable family
+remains the immutable annotated `v0.14.0` tag at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published archives
+require shared 0.12.1. The unpublished 0.13.2 crates.io train is superseded
+rather than backfilled. The Python, binding, and
 WASM carriers remain unpublished on crates.io. The source version move gives no
 Rust publication authority.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
@@ -590,7 +591,10 @@ Wheel smoke runs the documented presentation examples on native and musllinux
 runners, excluding only the SHA-bound Issue 158 viewer fixture that requires
 the separately pinned LibreOffice oracle. The geometry comparison uses
 explicit equal-length checks that work on Python 3.9. Typing and stub checks
-run under Python 3.12. The same version carriers and source are then checked
+run under Python 3.12. Word wheel smoke runs its documented core, formatting,
+shared, and python-docx parity cases on native and musllinux runners. It
+excludes only the Issue 253 PDF text oracle, which requires Poppler 26.01.0
+and remains in the separately pinned CI suite. The same version carriers and source are then checked
 at the main release boundary. Earlier published `py-*` tags and PyPI versions
 remain historical records. New releases use the two unified family tags.
 

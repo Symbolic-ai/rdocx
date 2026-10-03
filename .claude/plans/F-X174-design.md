@@ -1,6 +1,6 @@
 # F-X174, Prepare unified rdocx 0.15.0 family
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S86
 **Size**: M
 **Depends on**: F-X173
@@ -51,6 +51,7 @@ tag numbers and direct links to their verified GitHub releases.
 | release preparation | `rdocx_v0_15_0_unified_family_contract` | **Test gate.** Exact seven crates, CLI and Python metadata share 0.15.0, with no incubating package in the selected publish set. |
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected seven stay under 10 MiB. |
 | Python | local selected wheel and source distribution check | Build on the available host, check metadata, clean-install and priority runtime behavior without publication. The six-platform manual build-only `wheels.yml` run follows the final reviewed S86 push, before `/close-sprint`. |
+| wheel smoke | Python 3.9 and 3.12 clean installs | The release suite passes on the supported floor. Only the Issue 253 PDF text oracle is excluded from bare wheel runners and retained in CI with pinned Poppler 26.01.0. |
 | release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release v0.15.0` after the S86 main merge. Hosted publication is a separate post-close gate. |
 
 ## HLD impact
@@ -64,6 +65,10 @@ tag numbers and direct links to their verified GitHub releases.
   and `docs/hld/15-build-and-toolchain.md`. Inspect every manifest, lockfile
   and README version diff, run the publish dry run and require a separate
   exact-SHA approval before tagging.
+- **Wheel smoke environment**. The Issue 253 PDF text test requires exact
+  Poppler 26.01.0, which bare release wheel runners do not install. Exclude
+  only this test from native and musllinux wheel smoke. Retain it in the
+  separately pinned CI suite and run the full local suite with pinned Poppler.
 
 ## Hash harness
 
@@ -72,10 +77,10 @@ all 49 entries on the reviewed source.
 
 ## Implementation checklist
 
-- [ ] Prepare and review all stable versions, pins and Python metadata.
-- [ ] Write exact changelog notes and contribution inventory.
-- [ ] Pass scoped preparation and a zero-finding microscope review.
-- [ ] Complete the preparation story before the integrated full gate and review.
+- [x] Prepare and review all stable versions, pins and Python metadata.
+- [x] Write exact changelog notes and contribution inventory.
+- [x] Pass scoped preparation and a zero-finding microscope review.
+- [x] Complete the preparation story before the integrated full gate and review.
 
 ## Post-close release gate
 

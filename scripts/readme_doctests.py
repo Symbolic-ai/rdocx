@@ -179,26 +179,26 @@ README_CASES = (
 
 README_REQUIRED_TEXT = {
     REPO_ROOT / "README.md": (
-        'rdocx = "0.14.0"',
-        'rdocx = { version = "0.14.0", default-features = false }',
+        'rdocx = "0.15.0"',
+        'rdocx = { version = "0.15.0", default-features = false }',
         "rdocx convert report.docx --to pdf -o report.pdf",
         "rdocx convert report.docx --to html -o report.html",
         "rdocx convert report.docx --to md -o report.md",
         'rdocx replace report.docx --placeholder "Draft" --value "Final" -o final.docx',
     ),
     REPO_ROOT / "crates/rdocx-cli/README.md": (
-        "cargo install rdocx-cli --version '^0.14.0'",
+        "cargo install rdocx-cli --version '^0.15.0'",
         "rdocx convert report.docx --to pdf -o report.pdf",
     ),
-    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.14.0"',),
-    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.14.0"',),
+    REPO_ROOT / "crates/rdocx-html/README.md": ('rdocx-html = "0.15.0"',),
+    REPO_ROOT / "crates/rdocx-layout/README.md": ('rdocx-layout = "0.15.0"',),
     REPO_ROOT / "crates/rdocx-opc/README.md": (
-        'rdocx-opc = "0.14.0"',
+        'rdocx-opc = "0.15.0"',
         "use rdocx_opc::OpcPackage;",
     ),
-    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.14.0"',),
+    REPO_ROOT / "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.15.0"',),
     REPO_ROOT / "crates/rdocx-pdf/README.md": (
-        'rdocx-pdf = "0.14.0"',
+        'rdocx-pdf = "0.15.0"',
         "use rdocx_pdf::render_to_pdf;",
     ),
     REPO_ROOT / "crates/oxml-cli-support/README.md": (
@@ -367,6 +367,8 @@ MEASUREMENT_COLUMNS = (
 )
 MEASUREMENT_DATE = "2026-09-19"
 ARCHIVE_REMEASUREMENT_DATES = {
+    "rdocx-pdf": "2026-10-03",
+    "rdocx-opc": "2026-10-03",
     "rdocx-html": "2026-10-03",
     "oxml-cli-support": "2026-10-03",
     "oxml-core": "2026-10-03",
@@ -400,12 +402,12 @@ ARCHIVE_MEASUREMENTS = {
     "oxml-opc": (99_467, 385_350, 12),
     "oxml-pdf": (73_907, 339_219, 14),
     "oxml-sml": (12_507, 49_803, 6),
-    "rdocx": (1_267_331, 7_351_519, 36),
-    "rdocx-cli": (70_046, 311_073, 8),
-    "rdocx-html": (18_559, 72_244, 11),
-    "rdocx-layout": (270_594, 1_443_740, 15),
-    "rdocx-opc": (3_655, 9_668, 6),
-    "rdocx-oxml": (417_039, 2_604_345, 32),
+    "rdocx": (1_267_323, 7_351_519, 36),
+    "rdocx-cli": (70_052, 311_073, 8),
+    "rdocx-html": (18_554, 72_244, 11),
+    "rdocx-layout": (270_593, 1_443_740, 15),
+    "rdocx-opc": (3_649, 9_668, 6),
+    "rdocx-oxml": (417_031, 2_604_345, 32),
     "rdocx-pdf": (8_111, 26_758, 6),
     "rpptx": (463_722, 2_402_432, 16),
     "rpptx-chart": (6_646, 21_136, 6),
@@ -416,7 +418,7 @@ ARCHIVE_MEASUREMENTS = {
 }
 PACKAGE_VERSIONS = {
     **{name: "0.13.0" for name, _ in LOCAL_PATCHES if not name.startswith("rdocx")},
-    **{name: "0.14.0" for name, _ in LOCAL_PATCHES if name.startswith("rdocx")},
+    **{name: "0.15.0" for name, _ in LOCAL_PATCHES if name.startswith("rdocx")},
 }
 PERFORMANCE_OBSERVATIONS = {
     "layout-throughput": "31,019.1 pages/s",
@@ -424,6 +426,7 @@ PERFORMANCE_OBSERVATIONS = {
     "pdf-throughput": "60,058.0 pages/s",
     "pdf-peak": "1.73 MiB",
 }
+PERFORMANCE_MEASUREMENT_VERSION = "rdocx 0.14.0"
 PERFORMANCE_COMMAND = (
     "`cargo test -p rdocx --test regression_test --release "
     "a_thousand_page_document_paginates_and_renders_within_the_declared_limits "
@@ -451,7 +454,7 @@ MEASUREMENT_ROWS: dict[str, MeasurementRow] = {
     "layout-throughput": (
         "Large-document layout throughput",
         f"minimum 250 pages/s, observed {PERFORMANCE_OBSERVATIONS['layout-throughput']}",
-        "rdocx 0.14.0",
+        PERFORMANCE_MEASUREMENT_VERSION,
         MEASUREMENT_PLATFORM,
         "release, one test thread",
         "1,000 one-page paragraphs with deterministic fonts",
@@ -462,7 +465,7 @@ MEASUREMENT_ROWS: dict[str, MeasurementRow] = {
     "layout-peak": (
         "Large-document layout peak allocation",
         f"maximum 64 MiB, observed {PERFORMANCE_OBSERVATIONS['layout-peak']}",
-        "rdocx 0.14.0",
+        PERFORMANCE_MEASUREMENT_VERSION,
         MEASUREMENT_PLATFORM,
         "release, one test thread",
         "1,000 one-page paragraphs with deterministic fonts",
@@ -473,7 +476,7 @@ MEASUREMENT_ROWS: dict[str, MeasurementRow] = {
     "pdf-throughput": (
         "Large-document PDF throughput",
         f"minimum 1,000 pages/s, observed {PERFORMANCE_OBSERVATIONS['pdf-throughput']}",
-        "rdocx 0.14.0",
+        PERFORMANCE_MEASUREMENT_VERSION,
         MEASUREMENT_PLATFORM,
         "release, one test thread",
         "1,000 deterministic layout pages",
@@ -484,7 +487,7 @@ MEASUREMENT_ROWS: dict[str, MeasurementRow] = {
     "pdf-peak": (
         "Large-document PDF peak allocation",
         f"maximum 16 MiB, observed {PERFORMANCE_OBSERVATIONS['pdf-peak']}",
-        "rdocx 0.14.0",
+        PERFORMANCE_MEASUREMENT_VERSION,
         MEASUREMENT_PLATFORM,
         "release, one test thread",
         "1,000 deterministic layout pages",
@@ -671,8 +674,9 @@ def expected_measurement_version(
 ) -> str | None:
     if measurement_id.startswith("archive:"):
         return versions.get(measurement_id.removeprefix("archive:"))
-    version = versions.get("rdocx")
-    return None if version is None else f"rdocx {version}"
+    if measurement_id in SPEED_MEASUREMENTS:
+        return PERFORMANCE_MEASUREMENT_VERSION
+    return None
 
 
 def validate_measurement_evidence(

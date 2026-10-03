@@ -2371,7 +2371,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.14.0" "rdocx_wasm"',
+            '"0.15.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.12.1" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -2750,6 +2750,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("Validate installed typing surface", wheel_build)
         self.assertEqual(wheel_build.count('-k "not test_issue_158_deck_fixture_acceptance"'), 2)
         self.assertIn("The SHA-bound Issue 158 viewer oracle runs in pinned CI", wheel_build)
+        self.assertEqual(wheel_build.count('-k "not test_issue_253_pdf_text_view"'), 2)
+        self.assertIn("The Issue 253 PDF text oracle requires pinned Poppler 26.01.0 in CI", wheel_build)
         self.assertIn("needs: build-cli-assets", cli_review)
         self.assertIn("expected_members = {executable, \"README.md\", \"LICENSE\"}", cli_review)
         self.assertIn("needs: [cli-assets, build-wheels, build-sdists]", aggregate)
@@ -3663,8 +3665,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertNotIn("rpptx-v0.11.0", notes)
         return notes
 
-    def test_stable_release_family_is_prepared_at_0_14_0(self) -> None:
-        expected_version = "0.14.0"
+    def test_stable_release_family_is_prepared_at_0_15_0(self) -> None:
+        expected_version = "0.15.0"
         stable_members = (
             "oxml-py-support",
             "rdocx-opc",
@@ -3794,13 +3796,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.14.0"', 'version = "0.14.0"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.14.0'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.14.0"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.14.0"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.14.0"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.14.0"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.14.0"',),
+            "README.md": ('rdocx = "0.15.0"', 'version = "0.15.0"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.15.0'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.15.0"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.15.0"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.15.0"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.15.0"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.15.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -3932,7 +3934,7 @@ class SprintWorkflowTests(unittest.TestCase):
     def test_s73_release_contract_requires_four_version_aligned_families(
         self,
     ) -> None:
-        stable_version = "0.14.0"
+        stable_version = "0.15.0"
         incubating_version = "0.13.0"
         stable_publishable = {
             "rdocx-opc",
@@ -4114,11 +4116,11 @@ class SprintWorkflowTests(unittest.TestCase):
                     0,
                     packaged.stdout + packaged.stderr,
                 )
-                archive = target / "package" / f"{name}-0.14.0.crate"
+                archive = target / "package" / f"{name}-0.15.0.crate"
                 self.assertTrue(archive.is_file(), archive)
                 with tarfile.open(archive, mode="r:gz") as package:
                     package.extractall(target / "package", filter="data")
-                source = target / "package" / f"{name}-0.14.0"
+                source = target / "package" / f"{name}-0.15.0"
                 self.assertTrue(source.is_dir(), source)
                 return source
 
@@ -4611,13 +4613,13 @@ rdocx-layout = "=0.10.1"
         readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
         self.assertTrue(readme_doctests.validate_root_versions(readme, metadata))
         for requirement in (
-            'rdocx = "0.14.0"',
-            'rdocx = { version = "0.14.0", default-features = false }',
-            "cargo install rdocx-cli --version '^0.14.0'",
+            'rdocx = "0.15.0"',
+            'rdocx = { version = "0.15.0", default-features = false }',
+            "cargo install rdocx-cli --version '^0.15.0'",
         ):
             with self.subTest(requirement=requirement):
                 mutation = readme.replace(
-                    requirement, requirement.replace("0.14.0", "9.9.9")
+                    requirement, requirement.replace("0.15.0", "9.9.9")
                 )
                 self.assertFalse(
                     readme_doctests.validate_root_versions(mutation, metadata)
@@ -4791,7 +4793,8 @@ rdocx-layout = "=0.10.1"
         mutations = (
             text.replace("| 2026-09-19 |", "|  |", 1),
             text.replace("| 2026-09-19 |", "| 19 September 2026 |", 1),
-            text.replace("| 0.14.0 |", "| 9.9.9 |", 1),
+            text.replace("| 0.15.0 |", "| 9.9.9 |", 1),
+            text.replace("| rdocx 0.14.0 |", "| rdocx 9.9.9 |", 1),
         )
         self.assertFalse(readme_doctests.valid_measurement_date("2026-99-99"))
         for mutation in mutations:
@@ -4999,7 +5002,7 @@ rdocx-layout = "=0.10.1"
         preparation_packages = (*incubating_packages, "rpptx-wasm")
         expected_version = "0.13.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.14.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.15.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -5510,7 +5513,7 @@ rdocx-layout = "=0.10.1"
         self,
     ) -> None:
         expected = {
-            "rdocx": ("rdocx-py", "0.14.0", "py-rdocx-v0.14.0"),
+            "rdocx": ("rdocx-py", "0.15.0", "v0.15.0"),
             "rpptx": ("rpptx-py", "0.13.0", "rpptx-v0.13.0"),
         }
         workspace = tomllib.loads(
@@ -5634,6 +5637,22 @@ rdocx-layout = "=0.10.1"
             self.assertIn("## Quick start", readme)
             self.assertIn("## Type checking", readme)
             self.assertIn("## Project links", readme)
+
+    def test_rdocx_v0_15_0_unified_family_contract(self) -> None:
+        family = workflow.validate_unified_release_family("v0.15.0")
+        self.assertEqual(family["distribution"], "rdocx")
+        self.assertEqual(family["version"], "0.15.0")
+        self.assertEqual(
+            set(workflow.RELEASE_CRATES["rdocx"]),
+            {
+                "rdocx-opc", "rdocx-oxml", "rdocx-layout", "rdocx-html",
+                "rdocx-pdf", "rdocx", "rdocx-cli",
+            },
+        )
+        project = tomllib.loads(
+            (workflow.REPO / "crates/rdocx-py/pyproject.toml").read_text()
+        )
+        self.assertEqual(project["project"]["version"], "0.15.0")
 
     def test_unified_release_family_rejects_mismatched_version_carriers(self) -> None:
         workspace = tomllib.loads((workflow.REPO / "Cargo.toml").read_text())
@@ -7496,7 +7515,7 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace(
-                    "prepared at\n  0.14.0",
+                    "prepared at\n  0.15.0",
                     "prepared at\n  0.2.0",
                     1,
                 ),

@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "oxml-py-support"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "oxml-core",
  "smallvec",
@@ -1464,7 +1464,7 @@ checksum = "a611d15b50743feb4c76b7d03edcb0e64f399c26961e4efe6975bc398be6aa3d"
 
 [[package]]
 name = "rdocx"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "base64",
  "encoding_rs",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "rdocx-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "clap",
  "oxml-cli-support",
@@ -1508,14 +1508,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-html"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "rdocx-oxml",
 ]
 
 [[package]]
 name = "rdocx-layout"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "oxml-chart",
  "oxml-drawing",
@@ -1525,14 +1525,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-opc"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "oxml-opc",
 ]
 
 [[package]]
 name = "rdocx-oxml"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "itoa",
  "oxml-core",
@@ -1544,14 +1544,14 @@ dependencies = [
 
 [[package]]
 name = "rdocx-pdf"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "oxml-pdf",
 ]
 
 [[package]]
 name = "rdocx-py"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "oxml-layout",
  "oxml-py-support",
@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "rdocx-wasm"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "js-sys",
  "oxml-opc",

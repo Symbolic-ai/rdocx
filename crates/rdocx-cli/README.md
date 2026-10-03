@@ -25,7 +25,7 @@ and produces fixed or flow output without an Office host.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rdocx-cli | 70,046 compressed bytes, 311,073 member bytes, 8 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-03 |
+| Crates.io archive: rdocx-cli | 70,052 compressed bytes, 311,073 member bytes, 8 members | 0.15.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-03 |
 
 ## Use it when
 
@@ -41,7 +41,7 @@ conventions with `rpptx-cli` through `oxml-cli-support`.
 ## Example
 
 ```sh
-cargo install rdocx-cli --version '^0.14.0'
+cargo install rdocx-cli --version '^0.15.0'
 
 rdocx inspect report.docx
 rdocx text report.docx

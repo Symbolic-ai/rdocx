@@ -6446,11 +6446,15 @@ Prepare the minor release of the seven stable Word crates, `rdocx-cli` and the
 `rdocx` Python distribution at 0.15.0 from the same reviewed S86 source.
 Record version and internal pin changes, metadata, compatibility and
 contributor notes under `v0.15.0`, including the S85 to S86 work and Issue
-266's release changes. Complete preparation through the S86 full gate and
-clean review. After `/close-sprint` merges the reviewed source to `main`,
-`/release` verifies that main merge SHA, obtains separate final approval for
-this tag, and checks every crates.io and PyPI version, asset, checksum,
-attestation, release note, owner role and contributor notification.
+266's release changes. Complete local preparation with the selected-family
+metadata contract, exact package dry run, host wheel and source distribution
+rehearsal, scoped gate, and zero-finding review. The integrated S86 source then
+passes the full gate and clean review. A six-platform manual build-only
+rehearsal runs on the final pushed sprint SHA before closure. After
+`/close-sprint` merges the reviewed source to `main`, `/release` verifies
+that main merge SHA, obtains separate final approval for this tag, and checks
+every crates.io and PyPI version, asset, checksum, attestation, release note,
+owner role and contributor notification.
 After both family releases pass, comment on Issue 266 with the published
 `rpptx-v0.13.0` and `v0.15.0` numbers and links to their verified releases.
 **Depends on**: F-X173.

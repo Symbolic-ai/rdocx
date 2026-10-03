@@ -4,6 +4,143 @@
 
 No changes have been recorded after the prepared family sections below.
 
+## v0.15.0
+
+### Highlights
+
+The seven stable Word Rust crates, the `rdocx` CLI, and the `rdocx` Python
+distribution move together to 0.15.0 from the reviewed S86 source. One
+release carries six CLI archives, six `cp39-abi3` wheels, one source
+distribution, and a `SHA256SUMS` covering all thirteen payloads. Each
+payload has build provenance verifiable with `gh attestation verify FILE -R
+tensorbee/rdocx`. This answers
+[@hadim](https://github.com/hadim)'s
+[Issue 266](https://github.com/tensorbee/rdocx/issues/266) request for one
+current-main release with matching CLI and Python versions.
+
+### Added
+
+- Word authoring now covers rich content and comments in all six header and
+  footer variants, together with rich footnotes and endnotes whose references,
+  relationships, pictures, hyperlinks, and unmodelled XML survive save and
+  reopen. High-level style formatting covers alignment, spacing, indentation,
+  font, size, bold, and colour for
+  [Issue 264](https://github.com/tensorbee/rdocx/issues/264).
+- Python editing exposes tables, sections, styles, bookmarks, fields, story
+  content, pictures, hyperlinks, tracked revisions, and counted replacement.
+  The CLI can inspect and compare related stories, anchor comments on text,
+  select accepted or tracked revision views, and emit structured results.
+  These surfaces incorporate
+  [PR 176](https://github.com/tensorbee/rdocx/pull/176),
+  [PR 186](https://github.com/tensorbee/rdocx/pull/186),
+  [PR 187](https://github.com/tensorbee/rdocx/pull/187),
+  [PR 194](https://github.com/tensorbee/rdocx/pull/194),
+  [PR 198](https://github.com/tensorbee/rdocx/pull/198),
+  [PR 201](https://github.com/tensorbee/rdocx/pull/201),
+  [PR 203](https://github.com/tensorbee/rdocx/pull/203),
+  [PR 204](https://github.com/tensorbee/rdocx/pull/204),
+  [PR 212](https://github.com/tensorbee/rdocx/pull/212),
+  [PR 220](https://github.com/tensorbee/rdocx/pull/220),
+  [PR 236](https://github.com/tensorbee/rdocx/pull/236), and
+  [PR 256](https://github.com/tensorbee/rdocx/pull/256).
+- Native Word story traversal and replacement reach content controls, text
+  boxes, footnotes, endnotes, tracked insertions, simple fields, smart tags,
+  and custom XML wrappers. This incorporates
+  [PR 177](https://github.com/tensorbee/rdocx/pull/177),
+  [PR 179](https://github.com/tensorbee/rdocx/pull/179),
+  [PR 180](https://github.com/tensorbee/rdocx/pull/180),
+  [PR 191](https://github.com/tensorbee/rdocx/pull/191),
+  [PR 195](https://github.com/tensorbee/rdocx/pull/195),
+  [PR 202](https://github.com/tensorbee/rdocx/pull/202),
+  [PR 210](https://github.com/tensorbee/rdocx/pull/210), and
+  [PR 211](https://github.com/tensorbee/rdocx/pull/211).
+
+### Fixed
+
+- Editing Word parts writes compact XML without repeating canonical namespace
+  declarations on every retained paragraph. It preserves producer aliases,
+  root attributes, unknown content, and unchanged package parts, building on
+  [PR 154](https://github.com/tensorbee/rdocx/pull/154) and
+  [PR 251](https://github.com/tensorbee/rdocx/pull/251) for
+  [Issue 245](https://github.com/tensorbee/rdocx/issues/245).
+  Newly created documents now carry Word-compatible application metadata, and
+  nested tables retain their required trailing paragraph.
+- Word layout uses the governing section for each paragraph and table. Line
+  height, inline picture height, tab stops, TOC entries, page fields,
+  keep-with-next chains, row minimum heights, and terminal spaces follow the
+  reviewed Word cases. This incorporates
+  [PR 148](https://github.com/tensorbee/rdocx/pull/148),
+  [PR 199](https://github.com/tensorbee/rdocx/pull/199),
+  [PR 200](https://github.com/tensorbee/rdocx/pull/200),
+  [PR 225](https://github.com/tensorbee/rdocx/pull/225),
+  [PR 237](https://github.com/tensorbee/rdocx/pull/237),
+  [PR 241](https://github.com/tensorbee/rdocx/pull/241), and
+  [PR 242](https://github.com/tensorbee/rdocx/pull/242).
+  [PR 265](https://github.com/tensorbee/rdocx/pull/265) supplied independent
+  mixed-section regression coverage.
+- Comparison now records changed picture bytes and final table or paragraph
+  changes as revisions that survive acceptance and rejection. Accepted text,
+  HTML, Markdown, JSON, PDF layout, and media traversal omit deleted table
+  rows and join paragraphs whose marks were deleted. This incorporates
+  [PR 228](https://github.com/tensorbee/rdocx/pull/228),
+  [PR 229](https://github.com/tensorbee/rdocx/pull/229),
+  [PR 257](https://github.com/tensorbee/rdocx/pull/257),
+  [PR 258](https://github.com/tensorbee/rdocx/pull/258),
+  [PR 259](https://github.com/tensorbee/rdocx/pull/259),
+  [PR 260](https://github.com/tensorbee/rdocx/pull/260),
+  [PR 261](https://github.com/tensorbee/rdocx/pull/261),
+  [PR 262](https://github.com/tensorbee/rdocx/pull/262), and
+  [PR 263](https://github.com/tensorbee/rdocx/pull/263).
+- CLI and package saves refuse unintended overwrite and stage replacement
+  atomically. Edited border and namespace declarations, shared-run field
+  text, and XML-valid characters survive their supported read and write paths.
+  This incorporates
+  [PR 174](https://github.com/tensorbee/rdocx/pull/174),
+  [PR 178](https://github.com/tensorbee/rdocx/pull/178),
+  [PR 185](https://github.com/tensorbee/rdocx/pull/185),
+  [PR 197](https://github.com/tensorbee/rdocx/pull/197),
+  [PR 232](https://github.com/tensorbee/rdocx/pull/232),
+  [PR 233](https://github.com/tensorbee/rdocx/pull/233), and
+  [PR 239](https://github.com/tensorbee/rdocx/pull/239).
+
+### Compatibility
+
+The exact seven publishable stable crates move from 0.14.0 to 0.15.0:
+`rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
+`rdocx-pdf`, `rdocx`, and `rdocx-cli`. Update their pins together.
+They use the separately prepared shared OOXML 0.13.0 family. The Python
+distribution and import name stay `rdocx`, and its 0.15.0 wheels require
+Python 3.9 or newer. Historical `v0.14.0` and `py-rdocx-v0.14.0`
+remain unchanged. The unpublished `rdocx-wasm` and npm package are outside
+this crates.io and PyPI release.
+
+This pre-1.0 minor release has source-incompatible Rust model changes.
+`rdocx_layout::PageGeometry` was `Copy` in 0.14.0 and is now `Clone`
+because it owns column tracks and optional page metadata. Pass it by
+reference or call `.clone()` where a copy was previously implicit. Full
+`PageGeometry` struct literals must supply `columns`,
+`column_separator`, `page_borders`, `line_numbers`,
+`vertical_alignment`, `mirror_margins`,
+`do_not_use_html_paragraph_auto_spacing`, and `body_rotation`.
+Public `GlyphRun`, `LineBreakParams`, and `LayoutInput` also gained
+fields. Update full literals and exact-output fixtures when upgrading.
+`rdocx replace` now refuses input-as-output and existing output paths.
+Scripts that overwrote a source file must choose a new output path.
+
+### Contributors
+
+[@hadim](https://github.com/hadim), Hadrien Mary, reported
+[Issue 266](https://github.com/tensorbee/rdocx/issues/266) and
+[Issue 245](https://github.com/tensorbee/rdocx/issues/245). The linked Word,
+Python, CLI, layout, comparison, and preservation PRs above supplied
+reference behavior that was reconciled or hardened in maintainer commits.
+Those GitHub PRs were closed without direct merges.
+[@set2374](https://github.com/set2374) supplied the independent
+[PR 265](https://github.com/tensorbee/rdocx/pull/265) mixed-section regression.
+[@Andrewkoro105](https://github.com/Andrewkoro105) requested the
+[Issue 264](https://github.com/tensorbee/rdocx/issues/264) high-level style
+API. Atul Sharma reviewed and integrated the release family.
+
 ## rpptx-v0.13.0
 
 ### Highlights
