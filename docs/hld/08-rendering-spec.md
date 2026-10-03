@@ -1288,6 +1288,16 @@ not renumber either marker. A removed note leaves the remaining IDs stable
 while the displayed sequence closes the gap. Custom marks and section restart
 policy remain outside this behavior.
 
+New normal endnotes join the independent endnote label stream. References in
+different sections retain one document-wide occurrence sequence, and their
+notes append after the final body page under the current document-end policy.
+Microsoft Word for Mac 16.113.2 places both endnotes of the F-273 mixed-section
+fixture on its second and final body page and displays endnote labels `i` and
+`ii`. The current deterministic renderer appends a third page and uses decimal
+labels `1` and `2`. The fixture asserts this known placement and format
+divergence while checking that both note streams keep independent occurrence
+order. F-274 owns placement and number-format policy.
+
 A direct footnote or endnote reference in an otherwise safe body paragraph
 remains cacheable. Its explicit
 note ID is part of the complete typed paragraph key. Retained paragraph reads

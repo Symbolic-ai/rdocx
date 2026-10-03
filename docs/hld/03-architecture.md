@@ -1174,6 +1174,12 @@ rule. A reference therefore carries a `NoteRef`, its stream and its number,
 because the streams number independently and a document may hold a footnote and
 an endnote sharing a number.
 
+The native document facade stages normal endnote creation, exact element
+reordering, and removal with matching body references. Endnotes use their own
+relationship-resolved part and ID allocation. Rich edits use the same checked
+story operations as footnotes, then reopen the candidate package before
+publication.
+
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common

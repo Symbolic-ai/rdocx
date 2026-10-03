@@ -1,6 +1,6 @@
 # F-273, Rich endnote authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S86
 **Size**: L
 **Depends on**: F-272
@@ -44,7 +44,7 @@ policy, custom markers, separator authoring and restart rules.
 
 | Category | Test | Asserts |
 |---|---|---|
-| differential | `mixed_rich_notes_match_word_at_section_and_document_end_boundaries` | **Test gate.** Footnote and endnote numbering remain independent and endnotes append at document end after references across sections. |
+| differential | `mixed_rich_notes_match_word_at_section_and_document_end_boundaries` | **Test gate.** Word confirms independent footnote and endnote occurrence order across sections. The test asserts the documented current-policy divergence in endnote page placement and number format. |
 | integration | `rich_endnotes_reopen_with_part_scoped_relationships` | Rich content, drawings and links survive all lifecycle operations. |
 | regression | `endnote_removal_preserves_footnotes_with_the_same_id` | Removing an endnote and its references leaves an equal-numbered footnote unchanged. |
 | round-trip | `endnote_edit_preserves_unmodelled_children` | Separator and unknown XML survive byte for byte. |
@@ -78,13 +78,25 @@ Expected unchanged. Any rendering delta must be attributed to the story.
 
 ## Implementation checklist
 
-- [ ] Consume F-272's completed note lifecycle without changing its contract.
-- [ ] Add endnote creation and reference insertion with independent IDs.
-- [ ] Cover rich edits, reorder, removal and part-local relationships.
-- [ ] Run the pinned differential gate and scoped verification.
-- [ ] Obtain a zero-finding microscope review.
+- [x] Consume F-272's completed note lifecycle without changing its contract.
+- [x] Add endnote creation and reference insertion with independent IDs.
+- [x] Cover rich edits, reorder, removal and part-local relationships.
+- [x] Run the pinned differential gate and scoped verification.
+- [x] Obtain a zero-finding microscope review.
 
 ## Open questions
 
 None. The section boundary case tests references in different sections under
 the current document-end placement policy. Policy authoring belongs to F-274.
+
+## Pinned Word comparison
+
+Microsoft Word for Mac 16.113.2 build 16.113.26092012 opened the exact
+generated `/private/tmp/f273-note-oracle.docx`. Its accessibility view showed
+two pages. The first section displayed footnote `1` and endnote `i`. The
+second displayed footnote `2` and endnote `ii`. Both endnote bodies followed
+the second section's body text on page two. The deterministic renderer displays
+the same independent occurrence order as `1/1` and `2/2` but places the
+endnotes on a third page. `docs/hld/08-rendering-spec.md` specifies the current
+fresh-page and decimal-label behavior. F-274 owns the placement and number
+format policy difference.

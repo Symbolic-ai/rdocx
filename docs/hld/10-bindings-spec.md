@@ -1120,6 +1120,17 @@ comments use the common story APIs on the resolved footnote story. This is an
 additive pre-1.0 native API. Python, WASM, and CLI gain no matching authoring
 entry point.
 
+Native Rust `Document::create_endnote(&ContentLocation, &str)` stages a normal
+endnote with its reference in a direct body paragraph and returns its stable
+internal ID. `endnote_story(i32)` resolves a current checked story identity.
+`move_endnote_before(i32, i32)` reorders exact note elements without changing
+IDs. `remove_endnote(i32)` removes a normal endnote and every matching body
+reference together. All four methods are fallible. Endnotes allocate IDs
+independently from footnotes and use the common rich story operations,
+including part-scoped pictures, links, and comment anchors. This is additive
+pre-1.0 native API. Python, WASM, and CLI gain no corresponding authoring
+entry point.
+
 `CT_SectPr` adds typed page-number start and raw child-position state, while
 `PageFrame` adds `displayed_page_number` beside its physical `page_number`.
 These model and handle additions are additive APIs on the published pre-1.0

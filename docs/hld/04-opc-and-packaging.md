@@ -112,6 +112,13 @@ untouched note children, separator records, producer prefixes, and unrelated
 part relationships. Pictures and hyperlinks use the footnotes part relationship
 set, and comment anchors in note paragraphs use the comments part.
 
+Endnote authoring uses the relationship-resolved endnotes part and its own
+normal ID namespace. Creation inserts the note and body reference together.
+Reorder moves an exact endnote element, while removal deletes that element and
+its body references. The staged package reopens before publication. Endnote
+story edits preserve separator records, unknown children, and unrelated
+relationships. Pictures and hyperlinks are owned by the endnotes part.
+
 Revision inventory uses these same supported story owners and reports their
 `StoryId` with each record. A revision reachable by resolution without a
 discoverable owner is an error. CLI text extraction retains readable body text

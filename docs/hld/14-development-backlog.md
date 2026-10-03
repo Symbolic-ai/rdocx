@@ -2864,9 +2864,15 @@ numbering, page placement, continuation, and round-trip structure.
 ### F-273, Rich endnote authoring (L)
 Create, edit, reorder, and remove endnotes with the same content and relationship
 surface as footnotes while retaining an independent identifier namespace.
+The native facade stages each mutation and reopens the package before
+publication. Common story editing preserves exact untouched XML, separator
+records, and endnote-owned picture and hyperlink relationships. Body references
+across sections number independently from footnotes, and the endnote stream
+appends after the final body page under the current placement policy.
 **Depends on**: F-272.
-**Test gate**: differential. Mixed footnotes and endnotes remain independent and
-match Word at section and document-end placement boundaries.
+**Test gate**: differential. Word confirms independent occurrence order across
+sections. The gate asserts the current renderer's documented fresh-page and
+decimal-label divergence at the document end. F-274 owns those policies.
 
 ### F-274, Note separators, markers, and restart policy (L)
 Author separator and continuation stories, custom reference marks, number

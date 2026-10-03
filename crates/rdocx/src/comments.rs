@@ -552,7 +552,7 @@ impl Document {
         Ok(id)
     }
 
-    /// Add a dated comment over a checked body, table-cell, header, footer, or footnote run range.
+    /// Add a dated comment over a checked body, table-cell, header, footer, or note run range.
     ///
     /// A body location can also name a paragraph inside a block content
     /// control with the two-segment path that
@@ -568,7 +568,10 @@ impl Document {
     ) -> Result<i32> {
         let related_part = matches!(
             range.start.location.story().kind(),
-            crate::StoryKind::Header | crate::StoryKind::Footer | crate::StoryKind::Footnote
+            crate::StoryKind::Header
+                | crate::StoryKind::Footer
+                | crate::StoryKind::Footnote
+                | crate::StoryKind::Endnote
         );
         let mut candidate = self.clone_for_staging();
         let id = candidate.add_story_comment_staged(range, author, initials, text, date)?;
@@ -582,7 +585,7 @@ impl Document {
         Ok(id)
     }
 
-    /// Add a comment over a checked body, table-cell, header, footer, or footnote run range, as
+    /// Add a comment over a checked body, table-cell, header, footer, or note run range, as
     /// [`Self::add_story_comment_with_date`] does without a date.
     pub fn add_story_comment(
         &mut self,
@@ -612,7 +615,10 @@ impl Document {
         }
         if matches!(
             range.start.location.story().kind(),
-            crate::StoryKind::Header | crate::StoryKind::Footer | crate::StoryKind::Footnote
+            crate::StoryKind::Header
+                | crate::StoryKind::Footer
+                | crate::StoryKind::Footnote
+                | crate::StoryKind::Endnote
         ) {
             let mut identifiers = self.identifiers.clone();
             let id = identifiers.reserve_comment_id()?;
