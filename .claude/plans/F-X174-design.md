@@ -29,9 +29,9 @@ measurements as needed. Add `CHANGELOG.md` notes under `v0.15.0` covering
 included S85 and S86 work, Issue 266, compatibility and authenticated
 contributor credit. The GitHub release will contain six rdocx CLI archives,
 six rdocx wheels, one source distribution and checksums. Each archive and
-wheel must have a verifiable attestation. Complete the F-ID after local
-preparation, the full gate and clean sprint review on the integrated S86
-branch. `/close-sprint` then merges the prepared result to `main`. Run
+wheel must have a verifiable attestation. Complete the F-ID after its scoped
+preparation gate. The full gate and clean sprint review run once on the final
+integrated S86 branch. `/close-sprint` then merges the prepared result to `main`. Run
 `/release v0.15.0` at that verified main merge SHA, obtain its own final
 approval before any release tag, and verify registries, assets, notes, owners
 and contributor notifications after publication.
@@ -50,7 +50,7 @@ tag numbers and direct links to their verified GitHub releases.
 |---|---|---|
 | release preparation | `rdocx_v0_15_0_unified_family_contract` | **Test gate.** Exact seven crates, CLI and Python metadata share 0.15.0, with no incubating package in the selected publish set. |
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected seven stay under 10 MiB. |
-| Python | manual build-only `wheels.yml` run | Six wheels and source distribution pass metadata, clean-install and priority runtime checks without publication. |
+| Python | local selected wheel and source distribution check | Build on the available host, check metadata, clean-install and priority runtime behavior without publication. The six-platform manual build-only `wheels.yml` run follows the final reviewed S86 push, before `/close-sprint`. |
 | release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release v0.15.0` after the S86 main merge. Hosted publication is a separate post-close gate. |
 
 ## HLD impact
@@ -78,6 +78,10 @@ all 49 entries on the reviewed source.
 - [ ] Complete the preparation story before the integrated full gate and review.
 
 ## Post-close release gate
+
+The hosted manual build-only run uses the final reviewed sprint SHA after
+`/run-sprint` pushes it. A worker does not push a preparation branch to create
+this evidence. Its complete six-platform result must pass before sprint close.
 
 After both family preparations pass the integrated full gate and clean sprint
 review, `/close-sprint` merges them to `main`. `/release v0.15.0` then

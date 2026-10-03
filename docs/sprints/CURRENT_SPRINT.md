@@ -30,7 +30,7 @@ elements, and prepare combined CLI and Python releases for both families.
 | F-273 | Rich endnote authoring | L | done | - |
 | F-X172 | Unified release artifacts and provenance | L | done | - |
 | F-X173 | Prepare unified rpptx 0.13.0 family | M | done | - |
-| F-X174 | Prepare unified rdocx 0.15.0 family | M | pending | - |
+| F-X174 | Prepare unified rdocx 0.15.0 family | M | in-progress | codex |
 
 ## Sequencing note
 

@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 15 | 0 | 39 |
-| X, Cross-cutting (opportunistic)              | 184 | 179 | 0 | 1 |
-| **Total** | **509** | **444** | **0** | **61** |
+| X, Cross-cutting (opportunistic)              | 184 | 179 | 1 | 0 |
+| **Total** | **509** | **444** | **1** | **60** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -727,5 +727,5 @@ regenerated, never hand-edited.
 | F-X171 | Pin LibreOffice for macOS Python acceptance | S85 | S | done |
 | F-X172 | Unified release artifacts and provenance | S86 | L | done |
 | F-X173 | Prepare unified rpptx 0.13.0 family | S86 | M | done |
-| F-X174 | Prepare unified rdocx 0.15.0 family | S86 | M | pending |
+| F-X174 | Prepare unified rdocx 0.15.0 family | S86 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
