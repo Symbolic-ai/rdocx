@@ -28,7 +28,7 @@ elements, and prepare combined CLI and Python releases for both families.
 | F-271 | Uniform rich header and footer editing | L | done | - |
 | F-272 | Rich footnote authoring | L | in-progress | codex |
 | F-273 | Rich endnote authoring | L | pending | - |
-| F-X172 | Unified release artifacts and provenance | L | pending | - |
+| F-X172 | Unified release artifacts and provenance | L | in-progress | codex |
 | F-X173 | Publish unified rpptx 0.12.2 family | M | pending | - |
 | F-X174 | Publish unified rdocx 0.14.1 family | M | pending | - |
 
