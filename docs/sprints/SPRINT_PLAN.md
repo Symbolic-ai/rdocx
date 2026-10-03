@@ -1911,14 +1911,15 @@ family for Issue 266.
 | F-272 | Rich footnote authoring | L |
 | F-273 | Rich endnote authoring | L |
 | F-X172 | Unified release artifacts and provenance | L |
-| F-X173 | Publish unified rpptx 0.12.2 family | M |
-| F-X174 | Publish unified rdocx 0.14.1 family | M |
+| F-X173 | Prepare unified rpptx 0.12.2 family | M |
+| F-X174 | Prepare unified rdocx 0.14.1 family | M |
 
 F-X133 is independent and may proceed alongside F-271. F-272 establishes
 the note-authoring model that F-273 extends. The other 11 stories from the
 original S76 inventory move together to S87 in dependency order. Issue 266
 adds a release pipeline story followed by the incubating and stable release
-checkpoints. Each tag requires its own final approval at the reviewed SHA.
+preparations. After `/close-sprint` merges the reviewed result to `main`, each
+tag requires its own final approval at that merge SHA.
 
 #### Sprint S87, Related-story completion, fields, and stable templating
 

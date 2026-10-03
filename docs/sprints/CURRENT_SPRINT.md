@@ -29,8 +29,8 @@ elements, and prepare combined CLI and Python releases for both families.
 | F-272 | Rich footnote authoring | L | in-progress | codex |
 | F-273 | Rich endnote authoring | L | pending | - |
 | F-X172 | Unified release artifacts and provenance | L | in-progress | codex |
-| F-X173 | Publish unified rpptx 0.12.2 family | M | pending | - |
-| F-X174 | Publish unified rdocx 0.14.1 family | M | pending | - |
+| F-X173 | Prepare unified rpptx 0.12.2 family | M | pending | - |
+| F-X174 | Prepare unified rdocx 0.14.1 family | M | pending | - |
 
 ## Sequencing note
 
@@ -40,10 +40,11 @@ story and related-part foundations. Complete and integrate F-272 before starting
 F-273, which extends the note-authoring model while preserving a separate
 endnote identifier namespace. Reconcile shared story and relationship changes
 on the sprint branch before the integrated gate.
-Issue 266 adds the unified release pipeline and two publication checkpoints.
-Publish the incubating family before the stable family so the reviewed stable
-dependency graph can resolve its shared packages. Each tag needs its own
-exact-SHA approval through `/release`.
+Issue 266 adds the unified release pipeline and two family preparations.
+Prepare the incubating family before the stable family so the reviewed stable
+dependency graph can resolve its shared packages. `/close-sprint` merges the
+prepared source to `main`, then each tag needs its own exact-SHA approval
+through `/release`.
 
 ## Definition of done for this sprint
 
@@ -58,7 +59,7 @@ exact-SHA approval through `/release`.
 - Each story passes its own acceptance gate and scoped verification. The final
   integrated result passes the full gate, hash harness, and sprint review before
   `/close-sprint S86`.
-- Each published family has one tag and one GitHub release with six CLI
+- Each prepared family has one tag and one GitHub release with six CLI
   archives, six Python wheels, one source distribution, complete checksums,
   verified build provenance, matching crates.io and PyPI versions, and
   contributor notifications.

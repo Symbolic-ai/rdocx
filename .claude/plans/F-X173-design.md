@@ -1,4 +1,4 @@
-# F-X173, Publish unified rpptx 0.12.2 family
+# F-X173, Prepare unified rpptx 0.12.2 family
 
 **Status**: approved
 **Sprint**: S86
@@ -28,10 +28,12 @@ release assertions and exact archive measurements as needed. Add
 compatibility and contributor credit for included work since 0.12.1. The
 selected GitHub release will contain six rpptx CLI archives, six rpptx wheels,
 one source distribution and checksums. Each archive and wheel must have a
-verifiable attestation. After the full gate and clean sprint review at the
-exact prepared SHA, run `/release rpptx-v0.12.2` and obtain its separate final
-approval before any push or tag. Verify all registry entries, assets, notes,
-owners and contributor notifications before completing this F-ID.
+verifiable attestation. Complete the F-ID after local preparation, the full
+gate and clean sprint review on the integrated S86 branch. `/close-sprint`
+then merges the prepared result to `main`. Run `/release rpptx-v0.12.2` at
+the verified main merge SHA, obtain its separate final approval before any
+release tag, and verify registry entries, assets, notes, owners and
+contributor notifications after publication.
 
 ## Rejected alternatives
 
@@ -46,7 +48,7 @@ owners and contributor notifications before completing this F-ID.
 | release preparation | `rpptx_v0_12_2_unified_family_contract` | **Test gate.** Exact 15 crates, CLI and Python metadata share 0.12.2, with no stable family package in the selected publish set. |
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected 15 stay under 10 MiB. |
 | Python | manual build-only `wheels.yml` run | Six wheels and source distribution pass metadata, clean-install and priority runtime checks without publication. |
-| hosted publication | `/release rpptx-v0.12.2` | The approved exact SHA yields verified crates.io, PyPI and GitHub release evidence, checksum and attestation checks, owners and notifications. |
+| release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release rpptx-v0.12.2` after the S86 main merge. Hosted publication is a separate post-close gate. |
 
 ## HLD impact
 
@@ -70,8 +72,9 @@ all 49 entries on the reviewed source.
 - [ ] Prepare and review all incubating versions, pins and Python metadata.
 - [ ] Write exact changelog notes and contribution inventory.
 - [ ] Complete scoped preparation, microscope, full gate and clean review.
-- [ ] Obtain final approval and execute `/release rpptx-v0.12.2`.
-- [ ] Verify publication and notifications before completing the story.
+- [ ] Complete the preparation story after the full sprint gate and review.
+- [ ] After `/close-sprint`, obtain final approval and execute `/release rpptx-v0.12.2` from the reviewed main merge SHA.
+- [ ] Verify publication and notifications as the post-close release gate.
 
 ## Open questions
 

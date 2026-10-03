@@ -1,4 +1,4 @@
-# F-X174, Publish unified rdocx 0.14.1 family
+# F-X174, Prepare unified rdocx 0.14.1 family
 
 **Status**: approved
 **Sprint**: S86
@@ -29,10 +29,12 @@ measurements as needed. Add `CHANGELOG.md` notes under `v0.14.1` covering
 included S85 and S86 work, Issue 266, compatibility and authenticated
 contributor credit. The GitHub release will contain six rdocx CLI archives,
 six rdocx wheels, one source distribution and checksums. Each archive and
-wheel must have a verifiable attestation. After the full gate and clean sprint
-review at the prepared SHA, run `/release v0.14.1` and obtain its own final
-approval before any push or tag. Verify all registries, assets, notes,
-owners and contributor notifications before completing this F-ID.
+wheel must have a verifiable attestation. Complete the F-ID after local
+preparation, the full gate and clean sprint review on the integrated S86
+branch. `/close-sprint` then merges the prepared result to `main`. Run
+`/release v0.14.1` at that verified main merge SHA, obtain its own final
+approval before any release tag, and verify registries, assets, notes, owners
+and contributor notifications after publication.
 
 ## Rejected alternatives
 
@@ -47,7 +49,7 @@ owners and contributor notifications before completing this F-ID.
 | release preparation | `rdocx_v0_14_1_unified_family_contract` | **Test gate.** Exact seven crates, CLI and Python metadata share 0.14.1, with no incubating package in the selected publish set. |
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected seven stay under 10 MiB. |
 | Python | manual build-only `wheels.yml` run | Six wheels and source distribution pass metadata, clean-install and priority runtime checks without publication. |
-| hosted publication | `/release v0.14.1` | The approved exact SHA yields verified crates.io, PyPI and GitHub release evidence, checksum and attestation checks, owners and notifications. |
+| release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release v0.14.1` after the S86 main merge. Hosted publication is a separate post-close gate. |
 
 ## HLD impact
 
@@ -71,8 +73,9 @@ all 49 entries on the reviewed source.
 - [ ] Prepare and review all stable versions, pins and Python metadata.
 - [ ] Write exact changelog notes and contribution inventory.
 - [ ] Complete scoped preparation, microscope, full gate and clean review.
-- [ ] Obtain final approval and execute `/release v0.14.1`.
-- [ ] Verify publication and notifications before completing the story.
+- [ ] Complete the preparation story after the full sprint gate and review.
+- [ ] After `/close-sprint`, obtain final approval and execute `/release v0.14.1` from the reviewed main merge SHA.
+- [ ] Verify publication and notifications as the post-close release gate.
 
 ## Open questions
 
