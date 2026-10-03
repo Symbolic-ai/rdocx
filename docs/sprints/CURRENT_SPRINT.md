@@ -30,7 +30,7 @@ elements, and prepare combined CLI and Python releases for both families.
 | F-273 | Rich endnote authoring | L | done | - |
 | F-X172 | Unified release artifacts and provenance | L | done | - |
 | F-X173 | Prepare unified rpptx 0.13.0 family | M | done | - |
-| F-X174 | Prepare unified rdocx 0.15.0 family | M | in-progress | codex |
+| F-X174 | Prepare unified rdocx 0.15.0 family | M | done | - |
 
 ## Sequencing note
 
@@ -59,7 +59,9 @@ through `/release`.
 - Each story passes its own acceptance gate and scoped verification. The final
   integrated result passes the full gate, hash harness, and sprint review before
   `/close-sprint S86`.
-- Each prepared family has one tag and one GitHub release with six CLI
-  archives, six Python wheels, one source distribution, complete checksums,
-  verified build provenance, matching crates.io and PyPI versions, and
-  contributor notifications.
+- Each family preparation passes local package and wheel checks. A manual
+  six-platform build-only rehearsal runs at the final pushed S86 SHA before
+  sprint closure. After `/close-sprint`, each `/release` gate publishes one
+  tag and GitHub release with six CLI archives, six Python wheels, one source
+  distribution, complete checksums, verified build provenance, matching
+  crates.io and PyPI versions, and contributor notifications.

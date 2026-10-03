@@ -17314,3 +17314,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the reviewed worker, all 49 entries match. The final integrated sprint gate is due.
 
 **Notes for future sessions.** F-X174 may now prepare `v0.15.0` against these shared 0.13.0 packages. Keep `work/f-x173-codex` branch through final sprint review. Publish `rpptx-v0.13.0` only from the reviewed S86 main merge through `/release` and its separate final approval.
+
+### F-X174, Prepare unified rdocx 0.15.0 family
+
+**Sprint.** S86
+**Completed.** 2026-10-04
+**Size.** M, estimated 3 days, actual 1 day
+
+**What was built.** The seven selected Word Rust crates, their workspace pins, the `rdocx` CLI, Python project metadata and `Cargo.lock` now agree on 0.15.0. The changelog records Issue 266, compatibility guidance and authenticated contributor credit. The release preparation includes exact package measurements and clean Python wheel and source distribution checks.
+
+**Non-obvious choices.** The pre-1.0 minor version reflects source-incompatible public layout model changes. Historical 0.14.0 performance observations retain their dated version, while archive measurements reflect 0.15.0. Bare wheel runners exclude only the Issue 253 PDF text oracle that needs pinned Poppler 26.01.0. The full pinned CI suite keeps that case. Hosted six-platform build-only evidence follows the final reviewed sprint push before close, and publication requires a separate exact-SHA `/release` approval after close.
+
+**Deviations from the design plan.** The bare wheel smoke needed the narrow Issue 253 selection after a clean Python 3.9 install exposed its exact Poppler dependency. The risk and HLD now name this environment requirement. No publication is claimed by the preparation story.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X174 release acceptance, and `docs/hld/15-build-and-toolchain.md`, stable family versions, artifact rehearsal and wheel smoke.
+
+**Tests.** The 0.15.0 family contract failed on the old 0.14.0 carriers and passes on the integrated source. The worker passed selected Rust crate tests and Clippy, a clean Python 3.9 wheel smoke with 156 cases and one bare-runner deselection, all 157 Python 3.12 cases with pinned Poppler, strict mypy and stubtest, 139 policy tests with two skips, docs, README examples, and the locally patched 22-package dry run. Microscope pass 1 found zero defects and zero smells. The integrated full workspace tests, policy suite, Clippy, no-default path, both WASM targets, docs, README examples, 22-package clean publish dry run and cargo-deny check passed. Hosted build-only rehearsal and release publication remain later gates.
+
+**Hash harness.** Unchanged on the integrated sprint source, all 49 entries match.
+
+**Notes for future sessions.** Keep `work/f-x174-codex` through final sprint review. Publish `v0.15.0` only from the reviewed S86 main merge through `/release` and its separate final approval. After both family releases are verified, comment on Issue 266 with `rpptx-v0.13.0` and `v0.15.0` and direct release links.
