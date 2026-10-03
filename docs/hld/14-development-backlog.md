@@ -38,8 +38,8 @@ spreadsheet programme. Four S70 cross-cutting stories add roughly 12 days for
 the confirmed Issue 67 closure and the three independently measured Issue 69
 performance corrections.
 
-F-X137 through F-X170 form a contribution and issue repair programme across
-S76 through S84. The 2 October intake had 31 open PRs and 8 open issues.
+F-X137 through F-X171 form a contribution and issue repair programme across
+S76 through S85. The 2 October intake had 31 open PRs and 8 open issues.
 Issue 264 joined on 2 October after that intake and is included in S84.
 The new tolerance, baseline, revision and accepted-view work continues after
 the original S82 acceptance wave. These are cross-cutting stories, separate
@@ -49,14 +49,14 @@ contracts require integrated gates at each sprint boundary.
 M23 closes the five-document from-scratch business-document boundary. M24 then
 classifies and closes the broader modern DOCX authoring surface before M19 may
 begin. The spreadsheet programme remains a business decision and proceeds only
-if F-184 confirms a material gap in the Rust ecosystem at S91.
+if F-184 confirms a material gap in the Rust ecosystem at S92.
 
 The stopping and compression choices are:
 
 - **Stop after M23.** S73 can generate the five private reference documents
   from `Document::new()` through public modeled APIs, with no base template,
   raw OOXML, or LibreOffice field-update pass.
-- **Stop after M24.** S90 provides the complete modern DOCX authoring boundary.
+- **Stop after M24.** S91 provides the complete modern DOCX authoring boundary.
   Every in-scope feature is authorable, readable, mutable, round-trip safe,
   rendered where applicable, and classified across the public bindings.
 - **Archive M19 at its decision gate.** F-184 may still find that the advanced
@@ -1603,7 +1603,7 @@ decision lands.
 OPC, DrawingML, the chart engine, the layout engine and the PDF backend all
 exist and are format-neutral, which lowers the cost of a third family. That is
 not sufficient reason to build one. F-184 must reassess the Rust ecosystem when
-S91 begins. M19 proceeds only if no credible maintained crate provides the
+S92 begins. M19 proceeds only if no credible maintained crate provides the
 combined lifecycle required here: open an existing advanced workbook, preserve
 what is not executed, edit typed features, recalculate formulas and local
 pivots, refresh a declared Power Query subset, automate it through an Office
@@ -1625,7 +1625,7 @@ render to PDF.
 
 ### F-184, Advanced spreadsheet go or no-go (S)
 The go or no-go decision record. Reassess the maintained Rust spreadsheet
-ecosystem at S91, state whether the combined lifecycle gap still exists, and
+ecosystem at S92, state whether the combined lifecycle gap still exists, and
 archive M19 if it does not. If it does, amend `02-scope-and-non-goals.md`, define
 the boundary between `oxml-sml` as chart support and `rxlsx` as a library, and
 publish the preserve, model, and execute classification for every advanced
@@ -2233,7 +2233,7 @@ documents only as anonymous, non-identifying capability families. The audit
 found no duplicate scope, missing owner, dangling dependency, dependency cycle,
 or scheduling conflict in F-243 through F-310. Their boundaries, sizes, and
 dependencies remain authoritative. The current plan places them across S71
-through S90.
+through S91.
 **Capability matrix owner**: `docs/hld/02-scope-and-non-goals.md`, "Modern DOCX
 capability matrix".
 **Test gate**: regression. Every in-scope matrix row has evidence, an owner
@@ -6373,6 +6373,22 @@ against the authored paragraph and run.
 **Depends on**: F-246, F-X169.
 **Test gate**: round-trip. The convenient settings survive save and reopen,
 apply to document content and match their typed property equivalents.
+
+### F-X171, Pin LibreOffice for macOS Python acceptance (S)
+
+The S84 main merge passed the local full and source-built Python gates, but its
+hosted `Python bindings (rpptx)` job failed the Issue 158 deck workflow because
+the macOS job installed Poppler without LibreOffice. Download the reviewed
+LibreOffice 26.2.5 macOS aarch64 image with a fixed SHA-256, mount it for the
+job, verify build 26.2.5.2, and expose `soffice` to the complete presentation
+binding suite. Keep the Linux viewer jobs and their existing installer intact.
+Add a workflow assertion that prevents this macOS oracle setup from silently
+disappearing. After hosted `main` CI passes, reconcile the 32 S84 PRs and nine
+issues using their already reviewed criterion evidence, with Issue 158 last.
+**Depends on**: F-X168.
+**Test gate**: hosted integration. The full macOS presentation Python job,
+including the original Issue 158 deck acceptance test, and the aggregate
+required CI gate pass at the final pushed `main` SHA.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 
