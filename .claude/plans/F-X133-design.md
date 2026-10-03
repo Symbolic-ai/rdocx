@@ -59,7 +59,7 @@ matcher from F-X132.
 ## Hash harness
 
 Expected unchanged. The generated samples do not use retained producer root
-attributes; confirm with the harness.
+attributes. Confirm with the harness.
 
 ## Implementation checklist
 

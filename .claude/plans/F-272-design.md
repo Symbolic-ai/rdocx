@@ -24,11 +24,18 @@ cannot create, reorder or remove notes as a coherent lifecycle.
 
 ## Approach
 
-Retain `add_footnote(text)` for compatibility. Add fallible facade operations
-to create a normal footnote with a body reference, address it by stable note
-ID, move it before another note, and remove it with its references atomically.
+Retain `add_footnote(text)` for compatibility. Add fallible facade operations:
+`create_footnote(&mut self, reference: &ContentLocation, text: &str) -> Result<i32>`,
+`footnote_story(&self, id: i32) -> Result<Option<StoryId>>`,
+`move_footnote_before(&mut self, id: i32, before_id: i32) -> Result<()>`, and
+`remove_footnote(&mut self, id: i32) -> Result<()>`. Creation appends a reference
+to the selected direct body paragraph and allocates the first available normal
+footnote ID. Removal clears every matching body reference in the same staged
+transaction. Invalid locations, IDs and package changes publish nothing.
 Reuse `StoryId` and the common content, picture and link editing operations for
-its rich body. Stage mutations against the package note story, validate the
+its rich body. Extend the existing comment anchoring path to related note
+paragraphs so rich footnotes can author annotations as the story requires.
+Stage mutations against the package note story, validate the
 whole candidate, then reopen and publish. Preserve separators, unknown children,
 producer namespaces and independent part-local relationships. Numbering follows
 the existing reference-driven footnote stream. F-274 owns custom markers,
@@ -52,9 +59,11 @@ separators and restart policy.
 
 ## HLD impact
 
+- `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/03-architecture.md`
 - `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/08-rendering-spec.md`
+- `docs/hld/10-bindings-spec.md`
 - `docs/hld/14-development-backlog.md`
 
 ## Risk routing
@@ -81,7 +90,7 @@ rendering. Any changed output must be attributed before updating a baseline.
 
 - [ ] Establish stable note identity and atomic creation and removal with body references.
 - [ ] Implement staged rich note reorder and package-backed mutation.
-- [ ] Reuse common story content and part-scoped asset operations.
+- [ ] Reuse common story content and part-scoped asset operations, and support comment anchoring in note paragraphs.
 - [ ] Run the pinned differential gate and focused preservation tests.
 - [ ] Run scoped verification and obtain a zero-finding microscope review.
 

@@ -21,8 +21,11 @@ which endnotes need with their own identifiers and placement stream.
 
 ## Approach
 
-Extend F-272's concrete note lifecycle to endnotes with matching create, edit,
-move and remove operations, plus an endnote reference insertion path. Reuse its
+Extend F-272's concrete note lifecycle with
+`create_endnote(&mut self, reference: &ContentLocation, text: &str) -> Result<i32>`,
+`endnote_story(&self, id: i32) -> Result<Option<StoryId>>`,
+`move_endnote_before(&mut self, id: i32, before_id: i32) -> Result<()>`, and
+`remove_endnote(&mut self, id: i32) -> Result<()>`. Reuse its
 common story content, relationship and validation code where both actual
 implementations exist. Allocate normal endnote IDs only against endnotes and
 keep existing footnote IDs untouched. Stage and reopen every mutation. Preserve
@@ -48,9 +51,11 @@ policy, custom markers, separator authoring and restart rules.
 
 ## HLD impact
 
+- `docs/hld/02-scope-and-non-goals.md`
 - `docs/hld/03-architecture.md`
 - `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/08-rendering-spec.md`
+- `docs/hld/10-bindings-spec.md`
 - `docs/hld/14-development-backlog.md`
 
 ## Risk routing
