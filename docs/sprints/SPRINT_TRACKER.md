@@ -550,6 +550,7 @@ defended.
 | F-272 | S86 | L | 5 | 1 | 2026-10-03 | Added atomic rich footnote lifecycle and occurrence labels, with pinned Word continuation and package preservation evidence |
 | F-X172 | S86 | L | 5 | 1 | 2026-10-03 | Unified CLI and Python release assets under one family tag with producer attestations, complete checksums and closed-main publication gates |
 | F-273 | S86 | L | 5 | 1 | 2026-10-03 | Added atomic rich endnote authoring with independent IDs, preserved part XML and scoped assets, and recorded the pinned Word policy divergence |
+| F-X173 | S86 | M | 3 | 1 | 2026-10-03 | Prepared rpptx 0.13.0 across 15 Rust crates, CLI and Python with family notes, package evidence and Python 3.9 wheel smoke repair |
 
 ## Velocity
 

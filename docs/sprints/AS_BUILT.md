@@ -17294,3 +17294,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
 
 **Notes for future sessions.** F-X173 and F-X174 may now prepare both release families. Keep `work/f-273-codex` branch through final sprint review. The current append-page and decimal-label policies are documented for F-274.
+
+### F-X173, Prepare unified rpptx 0.13.0 family
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** M, estimated 3 days, actual 1 day
+
+**What was built.** The 15 selected shared OOXML and presentation Rust crates, their workspace pins, the `rpptx` CLI, `rpptx-py` metadata and `Cargo.lock` now agree on 0.13.0. The changelog contains family release notes with compatibility guidance, Issue 266 and authenticated contributor credit. Package assertions and README examples use the reviewed archive measurements. The release wheel smoke now runs on Python 3.9 and excludes only the pinned LibreOffice fixture from bare wheel runners.
+
+**Non-obvious choices.** The public `oxml-layout::LineBreakParams` fields require a pre-1.0 minor version. `rpptx-wasm` remains unpublished at its prior crate version. The wheel smoke keeps an equivalent length assertion where Python 3.9 lacks `zip(strict=True)`. Its Issue 158 viewer oracle still runs in the pinned CI suite. A hosted manual build-only rehearsal needs the final pushed sprint SHA, so it follows the integrated sprint gate and push before close.
+
+**Deviations from the design plan.** The approved plan's hosted build-only run was moved to the final pushed sprint SHA because worker branches do not push. A local wheel and source distribution check covers the dependency checkpoint. Local Python 3.9 rehearsal exposed and fixed the wheel smoke compatibility and LibreOffice environment defects.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X173 release acceptance, and `docs/hld/15-build-and-toolchain.md`, unified family versions, artifact rehearsal and wheel smoke.
+
+**Tests.** The integrated `test_rpptx_v0_13_0_unified_family_contract` and release-note parser passed. The worker passed 17 affected crate test suites and Clippy, wasm check, 138 policy tests with two skips, formatting, prose, generated skills, README inventory and examples, and an exact 22-package locally patched dry run with every archive under 10 MiB. A clean Python 3.9 wheel install passed 75 examples, one skip and the one viewer deselection. The full Python 3.12 examples passed 77 cases with pinned LibreOffice and Poppler, plus strict mypy and stubtest. Microscope pass 1 found zero defects and zero smells. Final integrated verification, sprint review and hosted build-only rehearsal remain due.
+
+**Hash harness.** Unchanged on the reviewed worker, all 49 entries match. The final integrated sprint gate is due.
+
+**Notes for future sessions.** F-X174 may now prepare `v0.15.0` against these shared 0.13.0 packages. Keep `work/f-x173-codex` branch through final sprint review. Publish `rpptx-v0.13.0` only from the reviewed S86 main merge through `/release` and its separate final approval.
