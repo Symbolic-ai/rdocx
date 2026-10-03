@@ -1897,11 +1897,12 @@ build identity, and rerun the full Python suite and aggregate CI gate. Close
 the S84 PR and issue queue only after `main` is green. This one-story repair
 boundary avoids moving the already published `s84` tag.
 
-#### Sprint S86, Rich related-story foundations
+#### Sprint S86, Rich related-story foundations and unified releases
 
 **Goal**: establish rich header, footer, and note authoring on the existing
-story model, while removing repeated canonical-prefix rebinding from retained
-elements. Complete the footnote substrate before extending it to endnotes.
+story model, remove repeated canonical-prefix rebinding from retained
+elements, and prepare and publish one combined CLI and Python release per
+family for Issue 266.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1909,10 +1910,15 @@ elements. Complete the footnote substrate before extending it to endnotes.
 | F-271 | Uniform rich header and footer editing | L |
 | F-272 | Rich footnote authoring | L |
 | F-273 | Rich endnote authoring | L |
+| F-X172 | Unified release artifacts and provenance | L |
+| F-X173 | Publish unified rpptx 0.12.2 family | M |
+| F-X174 | Publish unified rdocx 0.14.1 family | M |
 
 F-X133 is independent and may proceed alongside F-271. F-272 establishes
 the note-authoring model that F-273 extends. The other 11 stories from the
-original S76 inventory move together to S87 in dependency order.
+original S76 inventory move together to S87 in dependency order. Issue 266
+adds a release pipeline story followed by the incubating and stable release
+checkpoints. Each tag requires its own final approval at the reviewed SHA.
 
 #### Sprint S87, Related-story completion, fields, and stable templating
 

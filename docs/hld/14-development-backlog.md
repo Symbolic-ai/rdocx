@@ -41,6 +41,7 @@ performance corrections.
 F-X137 through F-X171 form a contribution and issue repair programme across
 S76 through S85. The 2 October intake had 31 open PRs and 8 open issues.
 Issue 264 joined on 2 October after that intake and is included in S84.
+F-X172 through F-X174 address Issue 266's unified family release in S86.
 The new tolerance, baseline, revision and accepted-view work continues after
 the original S82 acceptance wave. These are cross-cutting stories, separate
 from the 47 planned M24 feature stories. Their shared files and full issue
@@ -6392,6 +6393,54 @@ bypassed pinned viewer setup, the exact DMG digest and mounted build identity
 match the reviewed oracle, and the full local presentation binding suite
 passes. The hosted presentation job and aggregate required CI gate must pass
 at the S85 close boundary before any S84 contribution closure.
+
+### F-X172, Unified release artifacts and provenance (L)
+
+Address [Issue 266](https://github.com/tensorbee/rdocx/issues/266) by making
+each new stable or incubating tag select its Rust crates, CLI binary and Python
+distribution at one matching version. Build the six CLI archives, six
+`cp39-abi3` wheels and source distribution for that family. Publish one GitHub
+release containing all thirteen files and one `SHA256SUMS` covering each of
+them. Generate GitHub build provenance attestations for every CLI archive and
+wheel, and verify each downloaded subject with `gh attestation verify FILE -R
+tensorbee/rdocx`. Preserve the build-only manual wheel preflight and PyPI
+trusted publishing with no long-lived token. Keep old release tags immutable.
+Update the release command, workflow contracts and tests, and the build and
+toolchain HLD for the unified family contract.
+**Depends on**: F-X111, F-X094f.
+**Test gate**: release workflow regression. Mutation checks reject a missing
+asset or attestation, a checksum omission, a mismatched family or version,
+untrusted PyPI publication, premature GitHub release creation, and partial
+registry publication reported as success. Manual dispatch remains build-only.
+
+### F-X173, Publish unified rpptx 0.12.2 family (M)
+
+Prepare the patch release of the 15 shared OOXML and PowerPoint crates,
+`rpptx-cli` and the `rpptx` Python distribution at 0.12.2 from the reviewed S86
+source. Record version and internal pin changes, metadata, compatibility and
+contributor notes under `rpptx-v0.12.2`. Release only after the S86 full gate
+and clean review, with the separate exact-SHA approval required by `/release`.
+Verify every crates.io and PyPI version, all release assets, checksums,
+attestations, release notes, owner roles and contributor notifications.
+**Depends on**: F-X172, F-X133, F-271, F-272, F-273.
+**Test gate**: release preparation and hosted publication. The local dry run
+and build-only wheel preflight pass, and the selected `rpptx-v0.12.2` workflow
+publishes only the reviewed family with complete verified evidence.
+
+### F-X174, Publish unified rdocx 0.14.1 family (M)
+
+Prepare the patch release of the seven stable Word crates, `rdocx-cli` and the
+`rdocx` Python distribution at 0.14.1 from the same reviewed S86 source.
+Record version and internal pin changes, metadata, compatibility and
+contributor notes under `v0.14.1`, including the S85 to S86 work and Issue
+266's release changes. Release only after the S86 full gate and clean review,
+with a separate exact-SHA approval for this tag. Verify every crates.io and
+PyPI version, all release assets, checksums, attestations, release notes,
+owner roles and contributor notifications.
+**Depends on**: F-X173.
+**Test gate**: release preparation and hosted publication. The local dry run
+and build-only wheel preflight pass, and the selected `v0.14.1` workflow
+publishes only the reviewed family with complete verified evidence.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 

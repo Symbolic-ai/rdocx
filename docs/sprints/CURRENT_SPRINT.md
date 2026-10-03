@@ -3,8 +3,8 @@
 **Milestone**: M24, modern DOCX authoring completeness.
 
 **Goal**: establish rich header, footer, and note authoring on the existing
-story model, while removing repeated canonical-prefix rebinding from retained
-elements. Complete the footnote substrate before extending it to endnotes.
+story model, remove repeated canonical-prefix rebinding from retained
+elements, and prepare combined CLI and Python releases for both families.
 
 ## Spec references
 
@@ -17,6 +17,8 @@ elements. Complete the footnote substrate before extending it to endnotes.
   differential gates and the pinned rendering oracle.
 - `docs/hld/14-development-backlog.md`, for each story's scope, dependencies,
   and acceptance test gate.
+- `docs/hld/15-build-and-toolchain.md`, for the unified release package sets,
+  artifact inventory and publication gate.
 
 ## The wave
 
@@ -26,6 +28,9 @@ elements. Complete the footnote substrate before extending it to endnotes.
 | F-271 | Uniform rich header and footer editing | L | done | - |
 | F-272 | Rich footnote authoring | L | in-progress | codex |
 | F-273 | Rich endnote authoring | L | pending | - |
+| F-X172 | Unified release artifacts and provenance | L | pending | - |
+| F-X173 | Publish unified rpptx 0.12.2 family | M | pending | - |
+| F-X174 | Publish unified rdocx 0.14.1 family | M | pending | - |
 
 ## Sequencing note
 
@@ -35,6 +40,10 @@ story and related-part foundations. Complete and integrate F-272 before starting
 F-273, which extends the note-authoring model while preserving a separate
 endnote identifier namespace. Reconcile shared story and relationship changes
 on the sprint branch before the integrated gate.
+Issue 266 adds the unified release pipeline and two publication checkpoints.
+Publish the incubating family before the stable family so the reviewed stable
+dependency graph can resolve its shared packages. Each tag needs its own
+exact-SHA approval through `/release`.
 
 ## Definition of done for this sprint
 
@@ -49,3 +58,7 @@ on the sprint branch before the integrated gate.
 - Each story passes its own acceptance gate and scoped verification. The final
   integrated result passes the full gate, hash harness, and sprint review before
   `/close-sprint S86`.
+- Each published family has one tag and one GitHub release with six CLI
+  archives, six Python wheels, one source distribution, complete checksums,
+  verified build provenance, matching crates.io and PyPI versions, and
+  contributor notifications.
