@@ -1,0 +1,85 @@
+# F-273, Rich endnote authoring
+
+**Status**: approved
+**Sprint**: S86
+**Size**: L
+**Depends on**: F-272
+
+## Problem
+
+Existing endnotes are discovered as package stories but cannot be created,
+reordered or removed through the facade. `Paragraph::add_footnote_ref` has no
+endnote equivalent. F-272 establishes a package-backed rich note lifecycle,
+which endnotes need with their own identifiers and placement stream.
+
+## Spec reference
+
+- `docs/hld/03-architecture.md`, footnote and endnote streams and
+  "Container-neutral Word story editing".
+- `docs/hld/08-rendering-spec.md`, endnote document-end placement.
+- `docs/hld/14-development-backlog.md`, "F-273, Rich endnote authoring".
+
+## Approach
+
+Extend F-272's concrete note lifecycle to endnotes with matching create, edit,
+move and remove operations, plus an endnote reference insertion path. Reuse its
+common story content, relationship and validation code where both actual
+implementations exist. Allocate normal endnote IDs only against endnotes and
+keep existing footnote IDs untouched. Stage and reopen every mutation. Preserve
+endnote separators and unknown XML. Verify references across section boundaries
+and document-end placement under the existing policy. F-274 owns section-end
+policy, custom markers, separator authoring and restart rules.
+
+## Rejected alternatives
+
+- Putting endnotes in the footnote part would couple their ID and relationship
+  namespaces.
+- Duplicating F-272's package traversal would create two paths for the same
+  rich content grammar.
+
+## Test plan
+
+| Category | Test | Asserts |
+|---|---|---|
+| differential | `mixed_rich_notes_match_word_at_section_and_document_end_boundaries` | **Test gate.** Footnote and endnote numbering remain independent and endnotes append at document end after references across sections. |
+| integration | `rich_endnotes_reopen_with_part_scoped_relationships` | Rich content, drawings and links survive all lifecycle operations. |
+| regression | `endnote_removal_preserves_footnotes_with_the_same_id` | Removing an endnote and its references leaves an equal-numbered footnote unchanged. |
+| round-trip | `endnote_edit_preserves_unmodelled_children` | Separator and unknown XML survive byte for byte. |
+
+## HLD impact
+
+- `docs/hld/03-architecture.md`
+- `docs/hld/04-opc-and-packaging.md`
+- `docs/hld/08-rendering-spec.md`
+- `docs/hld/14-development-backlog.md`
+
+## Risk routing
+
+- **Any parser or serialiser**. Read `docs/hld/04-opc-and-packaging.md` and
+  `06-presentationml-model.md`. Verify schema order, prefix-tolerant read,
+  fixed-prefix write and byte-for-byte unknown subtree retention.
+- **Layout, pagination, line breaking, text shaping**. Read
+  `docs/hld/08-rendering-spec.md`. Use deterministic fonts for any baseline.
+- **Public API of a published crate**. Read `docs/hld/10-bindings-spec.md`,
+  state additive semver impact, run `cargo publish --dry-run` and the `.crate`
+  size assertion.
+- **External oracle comparison**. Read
+  `.claude/skills/differential-testing.md`. Pin and record the Word oracle
+  version.
+
+## Hash harness
+
+Expected unchanged. Any rendering delta must be attributed to the story.
+
+## Implementation checklist
+
+- [ ] Consume F-272's completed note lifecycle without changing its contract.
+- [ ] Add endnote creation and reference insertion with independent IDs.
+- [ ] Cover rich edits, reorder, removal and part-local relationships.
+- [ ] Run the pinned differential gate and scoped verification.
+- [ ] Obtain a zero-finding microscope review.
+
+## Open questions
+
+None. The section boundary case tests references in different sections under
+the current document-end placement policy. Policy authoring belongs to F-274.

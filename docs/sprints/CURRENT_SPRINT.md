@@ -1,37 +1,51 @@
-# Current Sprint, S85
+# Current Sprint, S86
 
-**Milestone**: X, hosted CI repair and contribution closure.
+**Milestone**: M24, modern DOCX authoring completeness.
 
-**Goal**: restore the required hosted CI gate on the S84 main result and
-reconcile the 32 reviewed PRs and nine issue contracts after that gate passes.
-The published `s84` tag stays fixed. Planned M24 feature work starts in S86.
+**Goal**: establish rich header, footer, and note authoring on the existing
+story model, while removing repeated canonical-prefix rebinding from retained
+elements. Complete the footnote substrate before extending it to endnotes.
 
 ## Spec references
 
-- `docs/hld/12-testing-strategy.md`, for the pinned CI toolchain, source-built
-  Python suite, reporter deck fixture and criterion-level closure evidence.
-- `docs/hld/14-development-backlog.md`, for F-X171's hosted integration gate.
+- `docs/hld/03-architecture.md`, for story ownership, part-scoped
+  relationships, staged mutation, and the separate footnote and endnote layout
+  streams.
+- `docs/hld/04-opc-and-packaging.md`, for retained namespace bindings and
+  canonical-prefix serialization across Word parts.
+- `docs/hld/12-testing-strategy.md`, for the integration, regression, and
+  differential gates and the pinned rendering oracle.
+- `docs/hld/14-development-backlog.md`, for each story's scope, dependencies,
+  and acceptance test gate.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X171 | Pin LibreOffice for macOS Python acceptance | S | done | - |
+| F-X133 | Stop rebinding a canonical prefix on every retained element | S | pending | - |
+| F-271 | Uniform rich header and footer editing | L | pending | - |
+| F-272 | Rich footnote authoring | L | pending | - |
+| F-273 | Rich endnote authoring | L | pending | - |
 
 ## Sequencing note
 
-F-X171 follows completed F-X168. First repair the macOS CI job and its
-workflow assertion. Then verify the integrated branch, review it, merge through
-`/close-sprint`, wait for a green hosted `main` gate, and post the prepared
-individual PR and issue dispositions. Issue 158 closes last.
+Rows are listed in dependency order. F-X133 is independent of the authoring
+stories and may proceed alongside F-271. F-271 and F-272 build on the completed
+story and related-part foundations. Complete and integrate F-272 before starting
+F-273, which extends the note-authoring model while preserving a separate
+endnote identifier namespace. Reconcile shared story and relationship changes
+on the sprint branch before the integrated gate.
 
 ## Definition of done for this sprint
 
-- The macOS presentation Python job downloads a SHA-256-pinned LibreOffice
-  26.2.5 image, verifies build 26.2.5.2 and runs all binding tests with the
-  pinned `soffice` available. The Linux pinned-viewer jobs remain green.
-- The workflow assertion detects a missing or bypassed macOS viewer setup.
-- The full integrated local gate, hash harness and sprint review pass, then
-  the required hosted CI gate passes on pushed `main`.
-- Each of the 32 S84 PRs and nine issues receives its specific contributor or
-  reporter note and closes only after its full criteria hold on `main`.
+- A plain save preserves retained attributes and new namespace bindings without
+  repeating canonical-prefix declarations on retained elements.
+- Rich content authored in every header and footer variant reopens with the
+  correct part-scoped relationships.
+- Rich footnotes and endnotes can be created, edited, reordered, and removed.
+  Their references, relationship scopes, independent identifiers, numbering,
+  placement, continuation, and round-trip structure pass the declared Word
+  comparisons.
+- Each story passes its own acceptance gate and scoped verification. The final
+  integrated result passes the full gate, hash harness, and sprint review before
+  `/close-sprint S86`.
