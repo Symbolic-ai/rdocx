@@ -17254,3 +17254,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
 
 **Notes for future sessions.** F-273 can start on this completed note substrate. Keep `work/f-272-codex` until final sprint verification and review.
+
+### F-X172, Unified release artifacts and provenance
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** `wheels.yml` now owns the only new family tag trigger for both Rust and Python publication. A tag selects one family, builds six CLI archives, six wheels and one source distribution, checks all thirteen payloads and writes one `SHA256SUMS` for the GitHub release. Build jobs attest each payload, and the aggregate job verifies provenance against the source SHA. The PyPI job remains in the trusted `wheels.yml` identity and `pypi` environment. A GitHub release waits for both registries and exact published Python file digests.
+
+**Non-obvious choices.** The tag workflow requires the tag SHA to match current `origin/main` and one annotated sprint tag at that SHA. The prepublication validator checks the exact selected publishable crate set, matching versions, workspace pins and lockfile entries. A patched 22-package dry run and exact selected archive inventory finish before either registry job can start. Manual dispatch remains build-only. Historical Python tags and changelog sections stay readable, but new publication uses only the combined family tags.
+
+**Deviations from the design plan.** Issue 266's request for a release from `main` led to post-close publication. F-X173 and F-X174 prepare versions and notes during S86, `/close-sprint` merges the reviewed tree, then `/release` applies separate exact-SHA approvals. An independent audit found and the worker fixed missing selected-crate and main-source machine checks plus stale HLD process prose before handoff.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X172 acceptance, and `docs/hld/15-build-and-toolchain.md`, unified family publication and provenance.
+
+**Tests.** The new unified workflow and security mutation gate failed on the old split workflow and passed after the change. The worker passed 137 policy tests with 2 skips, formatting, prose, generated-skill drift, diff checks and a zero-finding microscope pass. Hosted build and registry publication remain the separate post-close release gates.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-X173 and F-X174 can prepare the incubating and stable minor versions on this workflow. Keep `work/f-x172-codex` until final sprint verification and review. The user authorized an Issue 266 comment after both releases are verified, naming their published numbers and links.

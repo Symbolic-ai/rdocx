@@ -548,6 +548,7 @@ defended.
 | F-271 | S86 | L | 5 | 1 | 2026-10-03 | Added rich content and staged comments across all header and footer variants, with scoped relationship and preservation checks |
 | F-X133 | S86 | S | 1 | 1 | 2026-10-03 | Scoped canonical root bindings in retained Word paragraphs while preserving standalone declarations and local shadows |
 | F-272 | S86 | L | 5 | 1 | 2026-10-03 | Added atomic rich footnote lifecycle and occurrence labels, with pinned Word continuation and package preservation evidence |
+| F-X172 | S86 | L | 5 | 1 | 2026-10-03 | Unified CLI and Python release assets under one family tag with producer attestations, complete checksums and closed-main publication gates |
 
 ## Velocity
 
