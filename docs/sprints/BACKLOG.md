@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 13 | 1 | 40 |
-| X, Cross-cutting (opportunistic)              | 184 | 176 | 2 | 2 |
-| **Total** | **509** | **439** | **3** | **63** |
+| X, Cross-cutting (opportunistic)              | 184 | 177 | 1 | 2 |
+| **Total** | **509** | **440** | **2** | **63** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -686,7 +686,7 @@ regenerated, never hand-edited.
 | F-X130 | Show package depth, footprint, and speed | S74 | L | done |
 | F-X131 | Retain only the namespace declarations a root attribute uses | S74 | S | done |
 | F-X132 | Match a retained namespace owner by structure, not by identity | S74 | S | done |
-| F-X133 | Stop rebinding a canonical prefix on every retained element | S86 | S | in-progress |
+| F-X133 | Stop rebinding a canonical prefix on every retained element | S86 | S | done |
 | F-X134 | Keep Python story hyperlink snapshots linear | S75 | S | done |
 | F-X135 | Integrate PRs 146 through 151 and resolve unassigned reports | S75 | L | done |
 | F-X136 | Fix table row breaks and footer-only pages | S75 | L | done |

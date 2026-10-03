@@ -17214,3 +17214,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
 
 **Notes for future sessions.** F-272 can start on this completed prefix. Keep `work/f-271-codex` until final sprint verification and review.
+
+### F-X133, Stop rebinding a canonical prefix on every retained element
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Retained Word paragraph attributes now omit local `r`, `mc` and `wp` declarations when the serialized part root guarantees the same URI binding. Document, header, footer and note writers establish their actual root bindings for the duration of serialization. Standalone fragments, comments, noncanonical roots and true local shadows keep required declarations.
+
+**Non-obvious choices.** A thread-local scope restores the previous binding set on nested serialization and unwind. The guard ties suppression to the exact part root rather than the prefix spelling alone.
+
+**Deviations from the design plan.** The prior F-X161 work already removed repeated canonical `w` declarations. This story covered the remaining root-guaranteed prefixes and added conditional `wp` handling for producer roots.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, retained namespace emission, and `docs/hld/14-development-backlog.md`, F-X133 acceptance.
+
+**Tests.** The named regression failed before the change and passed afterward. The worker passed 601 OXML tests, one documentation test, scoped Clippy, formatting, prose, generated skills, all 133 policy tests and exact package measurement. Microscope pass 4 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-X173 can use this completed serialization prefix. Keep `work/f-x133-codex` until final sprint verification and review.
