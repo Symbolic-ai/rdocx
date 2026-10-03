@@ -1,6 +1,6 @@
 # F-271, Uniform rich header and footer editing
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S86
 **Size**: L
 **Depends on**: F-252, F-253, F-254, F-255
@@ -10,8 +10,10 @@
 The facade already creates, links, inherits, unlinks and replaces section
 stories in `crates/rdocx/src/document.rs`. Its rich-content regression in
 `crates/rdocx/tests/regression_test.rs` covers one default header, while the
-six-variant regression uses only plain markers. The combination of rich content,
-all variants and part-scoped relationships has no acceptance coverage.
+six-variant regression uses only plain markers. `add_story_comment` in
+`crates/rdocx/src/comments.rs` reaches `story_paragraph_mut`, which rejects
+header and footer parts in `crates/rdocx/src/document.rs`. Rich annotation
+authoring and its part-scoped round trip therefore fail.
 
 ## Spec reference
 
@@ -28,9 +30,10 @@ mutation APIs across header and footer, each with default, first and even
 variants. Author paragraphs containing fields, links, drawings and annotations,
 plus a table and a block content control. Save and reopen each variant, verify
 its own relationship target, then exercise inherited and unlinked variants.
-Repair demonstrated gaps in the common story path without adding a parallel
-header or footer content model. Preserve valid producer content and attributes
-that the facade does not edit.
+For `add_story_comment`, patch the checked paragraph spans in the related part
+on a staged document, then publish after package reopen. Reuse the existing
+comment ID, definition and range-anchor model. Preserve valid producer content
+and attributes that the facade does not edit.
 
 ## Rejected alternatives
 
@@ -43,7 +46,7 @@ that the facade does not edit.
 
 | Category | Test | Asserts |
 |---|---|---|
-| integration | `rich_content_reopens_in_every_header_and_footer_variant` | **Test gate.** All six variants reopen with their ordered rich subtree and own image and link relationships. |
+| integration | `rich_content_reopens_in_every_header_and_footer_variant` | **Test gate.** All six variants reopen with their ordered rich subtree, authored comments, and own image and link relationships. |
 | regression | `rich_section_stories_survive_reopen_replace_and_unlink` | Existing inheritance and unlink behavior remains valid. |
 | round-trip | `header_footer_unmodelled_content_survives_rich_edit` | Unknown XML remains byte preserving at its source slot. |
 
@@ -54,7 +57,7 @@ that the facade does not edit.
 
 ## Risk routing
 
-- **Any parser or serialiser**, if a source fix changes one. Read
+- **Any parser or serialiser**, matched by the related-paragraph edit path. Read
   `docs/hld/04-opc-and-packaging.md` and `06-presentationml-model.md`. Check
   schema child order, prefix-tolerant read, fixed-prefix write and byte-for-byte
   retention of an unmodelled subtree.
@@ -68,10 +71,10 @@ Expected unchanged. No sample or renderer behavior is planned to change.
 
 ## Implementation checklist
 
-- [ ] Extend the existing integration entrypoint to exercise all six variants.
-- [ ] Repair any confirmed common story edit or relationship defect.
-- [ ] Run focused integration and round-trip checks, then scoped verification.
-- [ ] Obtain a zero-finding microscope review.
+- [x] Extend the existing integration entrypoint to exercise all six variants.
+- [x] Repair any confirmed common story edit or relationship defect.
+- [x] Run focused integration and round-trip checks, then scoped verification.
+- [x] Obtain a zero-finding microscope review.
 
 ## Open questions
 

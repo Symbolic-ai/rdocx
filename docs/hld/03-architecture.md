@@ -1452,6 +1452,10 @@ then publish once. First-page creation enables `titlePg`. Even-page selection
 is controlled separately by the typed document setting. Rich edits continue
 through the container-neutral story operations rather than a second header or
 footer content model.
+Comment authoring uses the same checked story run range in every header and
+footer variant. The facade anchors selected paragraphs in the owning related
+part on a staged package, retains untouched producer XML around those spans,
+then publishes the part and comment definition together after validation.
 
 Word layout retains that physical ownership. The facade loads header and
 footer images under the main-part relationship that selects the story plus the

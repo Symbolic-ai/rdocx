@@ -51,7 +51,8 @@ use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc, VMerge};
 use rdocx_oxml::text::{
-    CT_P, CT_R, RunContent, story_field_instruction_has_name, story_simple_field_is_typed,
+    CT_P, CT_R, RangeAnchor, RunContent, story_field_instruction_has_name,
+    story_simple_field_is_typed,
 };
 use rdocx_oxml::units::Twips;
 use rdocx_oxml::web_settings::CT_WebSettings;
@@ -14465,6 +14466,85 @@ impl Document {
                 "path-aware comments support body and table-cell paragraphs".to_owned(),
             )),
         }
+    }
+
+    pub(crate) fn anchor_header_footer_comment(
+        &mut self,
+        start: &ContentLocation,
+        start_run: usize,
+        end: &ContentLocation,
+        end_run: usize,
+        id: i32,
+    ) -> Result<()> {
+        if !matches!(start.story.kind, StoryKind::Header | StoryKind::Footer)
+            || start.story != end.story
+        {
+            return Err(Error::Other(
+                "comment range must stay within one header or footer story".to_owned(),
+            ));
+        }
+        let (source, start_item) = self.story_item_source(start)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let (_, end_item) = self.story_item_source(end)?;
+        let read_paragraph = |item: &StoryItemSpan| -> Result<CT_P> {
+            if item.kind != StoryItemKind::Paragraph {
+                return Err(Error::Other(
+                    "comment positions must identify paragraphs".to_owned(),
+                ));
+            }
+            let scope = story_namespace_scope_at(&source_xml, item.full.start)?;
+            let closed = close_content_fragment_namespaces(&source_xml[item.full.clone()], &scope)?;
+            Ok(CT_P::from_xml_fragment(&closed)?)
+        };
+        let mut first = read_paragraph(&start_item)?;
+        let mut last = if start_item.full == end_item.full {
+            first.clone()
+        } else {
+            read_paragraph(&end_item)?
+        };
+        for (label, index, paragraph) in [("start", start_run, &first), ("end", end_run, &last)] {
+            let count = paragraph.accepted_run_paths().len();
+            if index > count {
+                return Err(Error::Other(format!(
+                    "comment range {label} run index {index} exceeds paragraph run count {count}"
+                )));
+            }
+        }
+        if start_item.full == end_item.full {
+            if start_run > end_run {
+                return Err(Error::Other(
+                    "comment story range start must not follow its end".to_owned(),
+                ));
+            }
+            first
+                .anchor_accepted_range(Some(start_run), Some(end_run), RangeAnchor::Comment(id))
+                .map_err(|error| {
+                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                })?;
+        } else {
+            first
+                .anchor_accepted_range(Some(start_run), None, RangeAnchor::Comment(id))
+                .map_err(|error| {
+                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                })?;
+            last.anchor_accepted_range(None, Some(end_run), RangeAnchor::Comment(id))
+                .map_err(|error| {
+                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                })?;
+        }
+        let same_paragraph = start_item.full == end_item.full;
+        let mut edits = vec![(start_item.full, first)];
+        if !same_paragraph {
+            edits.push((end_item.full, last));
+        }
+        edits.sort_by_key(|item| std::cmp::Reverse(item.0.start));
+        let mut updated = source_xml;
+        for (span, paragraph) in edits {
+            let xml = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
+            updated.splice(span, xml);
+        }
+        set_story_source_xml(self, &part_name, updated)
     }
 
     fn story_item_source<'a>(

@@ -552,7 +552,7 @@ impl Document {
         Ok(id)
     }
 
-    /// Add a dated comment over a checked body or table-cell run range.
+    /// Add a dated comment over a checked body, table-cell, header, or footer run range.
     ///
     /// A body location can also name a paragraph inside a block content
     /// control with the two-segment path that
@@ -566,14 +566,23 @@ impl Document {
         text: &str,
         date: Option<&str>,
     ) -> Result<i32> {
+        let related_part = matches!(
+            range.start.location.story().kind(),
+            crate::StoryKind::Header | crate::StoryKind::Footer
+        );
         let mut candidate = self.clone_for_staging();
         let id = candidate.add_story_comment_staged(range, author, initials, text, date)?;
-        candidate.flush_dirty_related_story_models()?;
-        self.commit_staged_mutation(candidate);
+        if related_part {
+            let reopened = candidate.prepare_and_reopen_staged()?;
+            self.commit_staged_mutation(reopened);
+        } else {
+            candidate.flush_dirty_related_story_models()?;
+            self.commit_staged_mutation(candidate);
+        }
         Ok(id)
     }
 
-    /// Add a comment over a checked body or table-cell run range, as
+    /// Add a comment over a checked body, table-cell, header, or footer run range, as
     /// [`Self::add_story_comment_with_date`] does without a date.
     pub fn add_story_comment(
         &mut self,
@@ -600,6 +609,27 @@ impl Document {
             return Err(Error::Other(
                 "comment story range start must not follow its end".to_owned(),
             ));
+        }
+        if matches!(
+            range.start.location.story().kind(),
+            crate::StoryKind::Header | crate::StoryKind::Footer
+        ) {
+            let mut identifiers = self.identifiers.clone();
+            let id = identifiers.reserve_comment_id()?;
+            self.anchor_header_footer_comment(
+                &range.start.location,
+                range.start.run_index,
+                &range.end.location,
+                range.end.run_index,
+                id,
+            )?;
+            self.ensure_comment_models()?;
+            self.ensure_comment_relationships()?;
+            self.push_comment_definition(id, author, initials, text, date)?;
+            self.identifiers = identifiers;
+            self.comments_dirty = true;
+            self.invalidate_layout();
+            return Ok(id);
         }
         let mut start = self.story_paragraph_mut(&range.start.location)?.clone();
         let mut end = self.story_paragraph_mut(&range.end.location)?.clone();

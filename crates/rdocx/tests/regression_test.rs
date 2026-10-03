@@ -449,6 +449,216 @@ fn f252_section_story(
         .clone()
 }
 
+#[test]
+fn rich_content_reopens_in_every_header_and_footer_variant() {
+    let mut document = Document::new();
+    document.add_paragraph("first section");
+    document.insert_section(1).unwrap();
+    document.add_paragraph("second section");
+    document.set_even_and_odd_headers(true).unwrap();
+    let fixture = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>rich paragraph</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>second paragraph</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>rich table</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>rich control</w:t></w:r></w:p></w:sdtContent></w:sdt></w:body></w:document>"#
+    );
+    let content = CT_Document::from_xml(fixture.as_bytes())
+        .unwrap()
+        .body
+        .content;
+    let mut expected = Vec::new();
+    for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+        for variant in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            document.create_section_story(0, kind, variant).unwrap();
+            for item in &content {
+                let fragment = match item.clone() {
+                    BodyContent::Paragraph(value) => ContentFragment::paragraph(value).unwrap(),
+                    BodyContent::Table(value) => ContentFragment::table(value).unwrap(),
+                    BodyContent::ContentControl(value) => {
+                        ContentFragment::content_control(value).unwrap()
+                    }
+                    BodyContent::RawXml(_) => panic!("fixture must be modeled"),
+                };
+                let current = f252_section_story(&document, 0, kind, variant);
+                document
+                    .insert_content(&ContentLocation::end(current), fragment)
+                    .unwrap();
+            }
+            let current = f252_section_story(&document, 0, kind, variant);
+            let marker = format!("{kind:?}-{variant:?}");
+            let url = format!("https://example.invalid/f271/{marker}");
+            document
+                .add_hyperlink_to_story(&current, &marker, &url)
+                .unwrap();
+            let current = f252_section_story(&document, 0, kind, variant);
+            let image = marker.as_bytes().to_vec();
+            document
+                .add_picture_to_story(
+                    &current,
+                    &image,
+                    "f271.png",
+                    Length::pt(9.0),
+                    Length::pt(6.0),
+                )
+                .unwrap();
+            let current = f252_section_story(&document, 0, kind, variant);
+            let paragraphs = document
+                .story_items(&current)
+                .unwrap()
+                .into_iter()
+                .filter(|item| item.kind() == StoryItemKind::Paragraph)
+                .take(2)
+                .map(|item| item.location().clone())
+                .collect::<Vec<_>>();
+            document
+                .add_story_comment(
+                    StoryRunRange {
+                        start: StoryRunPosition {
+                            location: paragraphs[0].clone(),
+                            run_index: 0,
+                        },
+                        end: StoryRunPosition {
+                            location: paragraphs[1].clone(),
+                            run_index: 1,
+                        },
+                    },
+                    "Ada",
+                    None,
+                    &marker,
+                )
+                .unwrap();
+            expected.push((kind, variant, marker, url, image));
+        }
+    }
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.comments().len(), 6);
+    let mut parts = HashSet::new();
+    for (kind, variant, marker, url, image) in &expected {
+        let story = f252_section_story(&reopened, 0, *kind, *variant);
+        assert!(parts.insert(story.part_name().to_owned()));
+        let inherited = reopened.section_story(1, *kind, *variant).unwrap().unwrap();
+        assert!(inherited.is_inherited());
+        assert_eq!(inherited.story().part_name(), story.part_name());
+        let xml = reopened
+            .story_items(&story)
+            .unwrap()
+            .iter()
+            .map(|item| String::from_utf8(item.xml().unwrap().into_owned()).unwrap())
+            .collect::<String>();
+        for value in [
+            "rich paragraph",
+            "second paragraph",
+            "rich table",
+            "rich control",
+            "w:fldSimple",
+            "w:commentRangeStart",
+            marker.as_str(),
+        ] {
+            assert!(
+                xml.contains(value),
+                "{kind:?} {variant:?} lacks {value}: {xml}"
+            );
+        }
+        let link = f255_xml_attribute(&xml, "r:id").unwrap();
+        assert_eq!(
+            reopened.hyperlink_url_for_story(&story, &link).unwrap(),
+            *url
+        );
+        let embed = f255_xml_attribute(&xml, "r:embed").unwrap();
+        assert_eq!(
+            reopened.image_data_for_story(&story, &embed).unwrap(),
+            *image
+        );
+    }
+    assert_eq!(parts.len(), 6);
+    let mut document = reopened;
+    for (kind, variant, _, url, image) in &expected {
+        let detached = document.unlink_section_story(1, *kind, *variant).unwrap();
+        let origin = f252_section_story(&document, 0, *kind, *variant);
+        assert_ne!(detached.part_name(), origin.part_name());
+        let xml = document
+            .story_items(&detached)
+            .unwrap()
+            .iter()
+            .map(|item| String::from_utf8(item.xml().unwrap().into_owned()).unwrap())
+            .collect::<String>();
+        let link = f255_xml_attribute(&xml, "r:id").unwrap();
+        let embed = f255_xml_attribute(&xml, "r:embed").unwrap();
+        assert_eq!(
+            document.hyperlink_url_for_story(&detached, &link).unwrap(),
+            *url
+        );
+        assert_eq!(
+            document.image_data_for_story(&detached, &embed).unwrap(),
+            *image
+        );
+    }
+}
+
+#[test]
+fn header_footer_unmodelled_content_survives_rich_edit() {
+    let extension = r#"<x:private x:flag="a&amp;b"><x:child value="retained"/></x:private>"#;
+    let inner = r#"<x:inside x:flag="leave me"/>"#;
+    let xml = format!(
+        r#"<q:hdr xmlns:q="{W_NS}" xmlns:x="urn:producer"><q:p x:mark="retained"><q:r><q:t>before</q:t></q:r>{inner}</q:p>{extension}</q:hdr>"#
+    );
+    let mut document = document_with_header_story(&xml);
+    let story = f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default);
+    let paragraph = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let before_invalid = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: paragraph.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location: paragraph.clone(),
+                        run_index: 2,
+                    },
+                },
+                "Ada",
+                None,
+                "invalid",
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_invalid);
+    document
+        .add_story_comment(
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: paragraph.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location: paragraph,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "review",
+        )
+        .unwrap();
+    let story = f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default);
+    document
+        .insert_content(&ContentLocation::end(story), f254_paragraph("after"))
+        .unwrap();
+    let saved = header_story_xml(&mut document);
+    assert!(saved.contains(extension), "{saved}");
+    assert!(saved.contains(inner), "{saved}");
+    assert!(saved.contains("x:mark=\"retained\""), "{saved}");
+    assert!(saved.contains("w:commentRangeStart"), "{saved}");
+    assert!(saved.contains("after"), "{saved}");
+}
+
 fn f252_oracle_document() -> Document {
     let mut document = Document::new();
     for (section, markers) in [

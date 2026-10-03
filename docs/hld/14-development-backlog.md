@@ -2846,8 +2846,9 @@ Complete all valid header and footer content, fields, controls, annotations,
 drawings, tables, links, and inherited variant operations through the common
 story API.
 **Depends on**: F-252 through F-255.
-**Test gate**: integration. The same rich subtree can be authored in every
-header and footer variant and reopens with correct part-scoped relationships.
+**Test gate**: integration. The same rich subtree, including authored comment
+anchors, can be authored in every header and footer variant and reopens with
+correct part-scoped relationships.
 
 ### F-272, Rich footnote authoring (L)
 Create, edit, reorder, and remove footnotes containing rich paragraphs, tables,
