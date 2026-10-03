@@ -1,6 +1,7 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -25,6 +26,29 @@ static NEXT_FIELD_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 const ROOT_ATTRIBUTES_ELEMENT: &[u8] = b"rdocxRootAttributes";
 pub(crate) const ROOT_ATTRIBUTES_POSITION: usize = usize::MAX;
 const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+pub(crate) const ROOT_R_BINDING: u8 = 1;
+pub(crate) const ROOT_MC_BINDING: u8 = 2;
+pub(crate) const ROOT_WP_BINDING: u8 = 4;
+
+thread_local! {
+    static ROOT_BINDINGS: Cell<u8> = const { Cell::new(0) };
+}
+
+/// Keep part-root guarantees in scope only while that part is serialized.
+/// Nested serializations restore the caller's guarantees, including on unwind.
+pub(crate) struct RootBindingScope(u8);
+
+pub(crate) fn root_binding_scope(bindings: u8) -> RootBindingScope {
+    RootBindingScope(ROOT_BINDINGS.with(|current| current.replace(bindings)))
+}
+
+impl Drop for RootBindingScope {
+    fn drop(&mut self) {
+        ROOT_BINDINGS.with(|current| current.set(self.0));
+    }
+}
 
 fn namespace_declaration(name: &[u8]) -> bool {
     name == b"xmlns" || name.starts_with(b"xmlns:")
@@ -174,6 +198,19 @@ pub(crate) fn push_root_attribute_record(
         // repeated it hundreds of times in an edited part.
         if (name == b"xmlns:w14" && attribute.value.as_ref() == W14_NS.as_bytes())
             || (name == b"xmlns:w" && attribute.value.as_ref() == crate::namespace::W_NS.as_bytes())
+        {
+            continue;
+        }
+        let root_bindings = ROOT_BINDINGS.with(Cell::get);
+        if (root_bindings & ROOT_R_BINDING != 0
+            && name == b"xmlns:r"
+            && attribute.value.as_ref() == R_NS.as_bytes())
+            || (root_bindings & ROOT_MC_BINDING != 0
+                && name == b"xmlns:mc"
+                && attribute.value.as_ref() == MC_NS.as_bytes())
+            || (root_bindings & ROOT_WP_BINDING != 0
+                && name == b"xmlns:wp"
+                && attribute.value.as_ref() == WP_NS.as_bytes())
         {
             continue;
         }
@@ -10901,6 +10938,146 @@ mod tests {
             ),
             r#"<w:p w:rsidR="00A1B2C3" x:keep="yes" xmlns:x="urn:producer"/>"#
         );
+    }
+
+    #[test]
+    fn a_retained_element_does_not_rebind_a_prefix_its_part_root_declares() {
+        let r_ns = crate::namespace::R_NS;
+        let mc_ns = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+        let wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        let xml = format!(
+            r#"<w:document xmlns:w="{}" xmlns:r="{r_ns}" xmlns:mc="{mc_ns}" xmlns:wp="{wp_ns}"><w:body><w:p w:rsidR="00A1B2C3" r:stamp="relationship" mc:stamp="compatibility" wp:stamp="drawing" xmlns:x="urn:producer" x:stamp="paragraph"><w:r w:rsidRPr="00D4E5F6" xmlns:y="urn:new-binding" y:stamp="run"><w:t>Kept</w:t></w:r><x:opaque xmlns:x="urn:producer" x:flag="exact"><x:inside/></x:opaque></w:p><w:sectPr/></w:body></w:document>"#,
+            crate::namespace::W_NS
+        );
+        let document = crate::document::CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let saved = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        assert_eq!(saved.matches("xmlns:w=").count(), 1, "{saved}");
+        for prefix in ["r", "mc", "wp"] {
+            assert_eq!(
+                saved.matches(&format!("xmlns:{prefix}=")).count(),
+                1,
+                "{saved}"
+            );
+        }
+        for attribute in [
+            r#"w:rsidR="00A1B2C3""#,
+            r#"w:rsidRPr="00D4E5F6""#,
+            r#"r:stamp="relationship""#,
+            r#"mc:stamp="compatibility""#,
+            r#"wp:stamp="drawing""#,
+            r#"x:stamp="paragraph""#,
+            r#"y:stamp="run""#,
+            r#"xmlns:x="urn:producer""#,
+            r#"xmlns:y="urn:new-binding""#,
+        ] {
+            assert!(saved.contains(attribute), "missing {attribute}: {saved}");
+        }
+        let raw = r#"<x:opaque xmlns:x="urn:producer" x:flag="exact"><x:inside/></x:opaque>"#;
+        assert!(saved.contains(raw), "raw child changed: {saved}");
+        let reopened = crate::document::CT_Document::from_xml(saved.as_bytes()).unwrap();
+        assert_eq!(reopened.to_xml().unwrap(), saved.as_bytes());
+    }
+
+    #[test]
+    fn a_standalone_or_comment_paragraph_keeps_its_local_relationship_binding() {
+        let source = format!(
+            r#"<w:p xmlns:w="{}" xmlns:r="{R_NS}" r:stamp="kept"/>"#,
+            crate::namespace::W_NS
+        );
+        let paragraph = CT_P::from_xml_fragment(source.as_bytes()).unwrap();
+        let mut output = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(&format!(r#"xmlns:r="{R_NS}""#)), "{output}");
+
+        let comments = format!(
+            r#"<w:comments xmlns:w="{}"><w:comment w:id="1" w:author="Ada"><w:p xmlns:r="{R_NS}" r:stamp="kept"/></w:comment></w:comments>"#,
+            crate::namespace::W_NS
+        );
+        let comments = crate::comments::CT_Comments::from_xml(comments.as_bytes()).unwrap();
+        let output = String::from_utf8(comments.to_xml().unwrap()).unwrap();
+        assert!(output.contains(&format!(r#"xmlns:r="{R_NS}""#)), "{output}");
+        assert!(output.contains(r#"r:stamp="kept""#), "{output}");
+    }
+
+    #[test]
+    fn header_footer_and_note_roots_own_their_canonical_bindings() {
+        let wp_ns = WP_NS;
+        for root in ["hdr", "ftr"] {
+            let source = format!(
+                r#"<w:{root} xmlns:w="{}" xmlns:r="{R_NS}" xmlns:wp="{wp_ns}"><w:p r:stamp="link" wp:stamp="drawing"/></w:{root}>"#,
+                crate::namespace::W_NS
+            );
+            let part = crate::header_footer::CT_HdrFtr::from_xml(source.as_bytes()).unwrap();
+            let output = if root == "hdr" {
+                part.to_xml_header().unwrap()
+            } else {
+                part.to_xml_footer().unwrap()
+            };
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.matches("xmlns:r=").count(), 1, "{output}");
+            assert_eq!(output.matches("xmlns:wp=").count(), 1, "{output}");
+            assert!(output.contains(r#"r:stamp="link""#), "{output}");
+            assert!(output.contains(r#"wp:stamp="drawing""#), "{output}");
+        }
+
+        for (root, note) in [("footnotes", "footnote"), ("endnotes", "endnote")] {
+            let source = format!(
+                r#"<w:{root} xmlns:w="{}" xmlns:r="{R_NS}"><w:{note} w:id="2"><w:p r:stamp="link"/></w:{note}></w:{root}>"#,
+                crate::namespace::W_NS
+            );
+            let part = crate::footnotes::CT_Footnotes::from_xml(source.as_bytes()).unwrap();
+            let output = if root == "footnotes" {
+                part.to_xml_footnotes().unwrap()
+            } else {
+                part.to_xml_endnotes().unwrap()
+            };
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.matches("xmlns:r=").count(), 1, "{output}");
+            assert!(output.contains(r#"r:stamp="link""#), "{output}");
+        }
+    }
+
+    #[test]
+    fn a_root_prefix_shadow_with_another_uri_remains_local() {
+        let source = format!(
+            r#"<w:document xmlns:w="{}" xmlns:r="{R_NS}"><w:body><w:p xmlns:r="urn:producer" r:stamp="foreign"><w:r><w:t>Kept</w:t></w:r></w:p></w:body></w:document>"#,
+            crate::namespace::W_NS
+        );
+        let document = crate::document::CT_Document::from_xml(source.as_bytes()).unwrap();
+        let output = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        assert!(output.contains(r#"xmlns:r="urn:producer""#), "{output}");
+        assert!(output.contains(r#"r:stamp="foreign""#), "{output}");
+    }
+
+    #[test]
+    fn a_noncanonical_wp_root_does_not_claim_the_canonical_binding() {
+        let source = format!(
+            r#"<w:document xmlns:w="{}" xmlns:wp="urn:producer"><w:body><w:p xmlns:wp="{WP_NS}" wp:stamp="drawing"/></w:body></w:document>"#,
+            crate::namespace::W_NS
+        );
+        let document = crate::document::CT_Document::from_xml(source.as_bytes()).unwrap();
+        let output = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        assert!(output.contains(r#"xmlns:wp="urn:producer""#), "{output}");
+        assert!(
+            output.contains(&format!(r#"xmlns:wp="{WP_NS}""#)),
+            "{output}"
+        );
+        assert!(output.contains(r#"wp:stamp="drawing""#), "{output}");
+    }
+
+    #[test]
+    fn nested_root_binding_scopes_restore_on_unwind() {
+        let before = ROOT_BINDINGS.with(Cell::get);
+        let result = std::panic::catch_unwind(|| {
+            let _outer = root_binding_scope(ROOT_R_BINDING);
+            assert_eq!(ROOT_BINDINGS.with(Cell::get), ROOT_R_BINDING);
+            let _inner = root_binding_scope(ROOT_MC_BINDING);
+            assert_eq!(ROOT_BINDINGS.with(Cell::get), ROOT_MC_BINDING);
+            panic!("scope restoration probe");
+        });
+        assert!(result.is_err());
+        assert_eq!(ROOT_BINDINGS.with(Cell::get), before);
     }
 
     #[test]

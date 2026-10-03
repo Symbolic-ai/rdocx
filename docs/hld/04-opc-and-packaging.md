@@ -520,7 +520,16 @@ does not declare `w14`, such as one rdocx wrote or one under an element that
 declared the prefix itself, gains the canonical declaration when the written
 content uses the prefix. The serializers of the document, header, footer,
 note and comment parts and the comparison output of every story add it, so the
-written part stays namespace well formed.
+written part stays namespace well formed. During complete part serialization,
+a retained attribute also omits same-URI bindings already guaranteed by that
+part root: `r` and `mc` for the main document, canonical `wp` when that root
+actually writes it, `r` and conditionally canonical `wp` for headers and
+footers, and `r` for footnotes and endnotes. Standalone paragraphs and
+comments keep their own bindings. A scoped serializer context restores its
+previous guarantees after nested calls and errors. The retained-attribute
+regression checks one declaration of each canonical prefix at the document
+root, alongside producer attributes, a new binding, and an unchanged
+unmodelled child.
 
 A paragraph cut out of its part and parsed on its own carries none of the
 declarations of its part. The table-of-contents rebuild adds the bindings the

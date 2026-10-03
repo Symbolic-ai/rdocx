@@ -19,8 +19,9 @@ use crate::revision::{CT_Revision, RevisionKind};
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::{CT_Tbl, ST_VerticalJc};
 use crate::text::{
-    CT_P, capture_root_attribute_record, declare_w14_on_part_root, is_root_attribute_record,
-    push_root_attribute_record,
+    CT_P, ROOT_MC_BINDING, ROOT_R_BINDING, ROOT_WP_BINDING, capture_root_attribute_record,
+    declare_w14_on_part_root, is_root_attribute_record, push_root_attribute_record,
+    root_binding_scope,
 };
 use crate::units::Twips;
 
@@ -2976,6 +2977,21 @@ impl CT_Document {
 
     /// Serialize to XML bytes.
     pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        let wp_root_is_canonical = self
+            .extra_namespaces
+            .iter()
+            .find(|(name, _)| name == "xmlns:wp")
+            .is_none_or(|(_, namespace)| namespace == wp_ns);
+        let _binding_scope = root_binding_scope(
+            ROOT_R_BINDING
+                | ROOT_MC_BINDING
+                | if wp_root_is_canonical {
+                    ROOT_WP_BINDING
+                } else {
+                    0
+                },
+        );
         let mut writer = Writer::new(Vec::new());
 
         writer.write_event(Event::Decl(BytesDecl::new(
@@ -2996,7 +3012,6 @@ impl CT_Document {
         ));
 
         // Always emit xmlns:wp for drawing elements
-        let wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
         let mut has_wp = false;
         for (key, _) in &self.extra_namespaces {
             if key == "xmlns:wp" {

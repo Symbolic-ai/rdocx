@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::word_prefixes_at;
 use crate::properties::is_word_element;
-use crate::text::{CT_P, declare_w14_on_part_root};
+use crate::text::{CT_P, ROOT_R_BINDING, declare_w14_on_part_root, root_binding_scope};
 
 /// `ST_FtnEdn` — what a note in the stream is for.
 ///
@@ -176,6 +176,7 @@ impl CT_Footnotes {
     }
 
     fn to_xml_root(&self, root_tag: &str, item_tag: &str) -> Result<Vec<u8>> {
+        let _binding_scope = root_binding_scope(ROOT_R_BINDING);
         let mut writer = Writer::new(Vec::new());
 
         writer.write_event(Event::Decl(BytesDecl::new(

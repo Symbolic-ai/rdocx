@@ -1,18 +1,18 @@
 # F-X133, Stop rebinding a canonical prefix on every retained element
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S86
 **Size**: S
 **Depends on**: F-X131, F-X132
 
 ## Problem
 
-`capture_root_attribute_record` in `crates/rdocx-oxml/src/text.rs` must retain
-the binding of each prefixed producer attribute in its private record. The
-write side should copy that binding only when its output element needs it.
-It already skips canonical `w` and `w14`, but the remaining fixed root bindings
-can be repeated on every retained element, growing a saved part without
-changing name resolution.
+F-X161 already added the canonical `w` skip to
+`push_root_attribute_record` in `crates/rdocx-oxml/src/text.rs`. Retained
+`r`, `mc`, and `wp` attributes still copy same-URI declarations onto descendants
+when a document part root already declares those prefixes. A document model
+round trip currently writes each twice. Header and footer roots guarantee
+`r` and `wp`, while note roots guarantee `r`.
 
 ## Spec reference
 
@@ -23,27 +23,38 @@ changing name resolution.
 
 ## Approach
 
-At `push_root_attribute_record`, compare a record declaration with the
-canonical binding guaranteed by the output part root. Keep the declaration in
-the private record for namespace-resolved attribute precedence, but omit a
-same-URI binding on the output element. Copy aliases, genuinely new bindings
-and shadows, including a canonical prefix rebound to a different URI. Keep
-part roots namespace complete. Do not loosen the retained-owner ambiguity
-matcher from F-X132.
+Scope the part root's exact canonical binding guarantees around its existing
+serializer. `CT_Document::to_xml` supplies `r` and `mc`, plus canonical `wp`
+when its retained root binding permits it. Header and footer serializers
+supply `r` and conditionally canonical `wp`. Footnote and endnote serializers
+supply `r`. `push_root_attribute_record` omits only a declaration whose
+prefix and URI match an active guarantee. A scoped thread-local guard restores
+the prior context on nested serialization, error, and panic. This avoids
+threading context through every nested paragraph, run, table, and section
+serializer, while standalone and comment serialization retains local bindings.
+The existing `w` and `w14` behavior stays unchanged. Refresh the
+`rdocx-oxml` archive measurement in its README and
+`scripts/readme_doctests.py` because the source and tests are packaged.
 
 ## Rejected alternatives
 
 - Dropping declarations during capture would break expanded-name lookup in
   the retained record.
-- Treating every prefix as root-bound would lose a needed local declaration.
+- Skipping `r`, `mc`, or `wp` globally would lose needed local declarations in
+  standalone and comment contexts.
+- Propagating a new context parameter through every nested serializer would
+  enlarge the diff and public method surface for the same lexical scope.
 
 ## Test plan
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | `a_retained_element_does_not_rebind_a_prefix_its_part_root_declares` | **Test gate.** Plain save keeps producer attributes and a new binding but emits each guaranteed canonical binding only at the part root. |
-| regression | `a_genuinely_rebound_prefix_remains_local` | A canonical spelling mapped to another URI keeps its local shadow. |
-| round-trip | `an_unmodelled_child_survives_prefix_deduplication` | Raw child bytes survive and reopen under the correct namespace. |
+| regression | `a_retained_element_does_not_rebind_a_prefix_its_part_root_declares` | **Test gate.** Document serialization emits canonical `w`, `r`, `mc`, and `wp` once at the root, retaining producer attributes, a new binding, and raw child bytes. |
+| regression | `a_standalone_or_comment_paragraph_keeps_its_local_relationship_binding` | A context without a guaranteed `r` root keeps its local declaration. |
+| regression | `header_footer_and_note_roots_own_their_canonical_bindings` | Header, footer, footnote, and endnote roots hold the guaranteed bindings once. |
+| regression | `a_root_prefix_shadow_with_another_uri_remains_local` | A different-URI shadow remains on the retained element. |
+| regression | `a_noncanonical_wp_root_does_not_claim_the_canonical_binding` | A noncanonical root `wp` leaves a local canonical `wp` declaration intact. |
+| unit | `nested_root_binding_scopes_restore_on_unwind` | Nested scopes restore prior bindings, including after a panic. |
 
 ## HLD impact
 
@@ -52,7 +63,8 @@ matcher from F-X132.
 
 ## Risk routing
 
-- **Any parser or serialiser**. Read `docs/hld/04-opc-and-packaging.md` and
+- **Any parser or serialiser**. This changes part serialization. Read
+  `docs/hld/04-opc-and-packaging.md` and
   `06-presentationml-model.md`. Check schema child order, prefix-tolerant read,
   fixed-prefix write and byte-for-byte unknown subtree retention.
 
@@ -63,10 +75,11 @@ attributes. Confirm with the harness.
 
 ## Implementation checklist
 
-- [ ] Identify the canonical bindings each written part root guarantees.
-- [ ] Skip only same-URI declarations already guaranteed on that part root.
-- [ ] Add the regression and round-trip cases to an existing test module.
-- [ ] Run scoped verification and obtain a zero-finding microscope review.
+- [x] Identify the exact canonical bindings each affected part root guarantees.
+- [x] Add scoped, same-URI skips to retained-attribute writing.
+- [x] Prove standalone and comment contexts retain local declarations.
+- [x] Prove the new gate fails with the new `r`, `mc`, and `wp` skip removed.
+- [x] Run scoped verification and obtain a zero-finding microscope review.
 
 ## Open questions
 
