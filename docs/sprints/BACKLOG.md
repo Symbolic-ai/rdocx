@@ -39,9 +39,9 @@ regenerated, never hand-edited.
 | M21, Presentation depth                        | 15 | 15 | 0 | 0  |
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness        | 54 | 13 | 1 | 40 |
+| M24, Modern DOCX authoring completeness        | 54 | 14 | 0 | 40 |
 | X, Cross-cutting (opportunistic)              | 184 | 177 | 1 | 2 |
-| **Total** | **509** | **440** | **2** | **63** |
+| **Total** | **509** | **441** | **1** | **63** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -496,7 +496,7 @@ regenerated, never hand-edited.
 | F-269 | Complete section page semantics | S74 | L | done |
 | F-270 | Complete settings and web settings authoring | S74 | L | done |
 | F-271 | Uniform rich header and footer editing | S86 | L | done |
-| F-272 | Rich footnote authoring | S86 | L | in-progress |
+| F-272 | Rich footnote authoring | S86 | L | done |
 | F-273 | Rich endnote authoring | S86 | L | pending |
 | F-274 | Note separators, markers, and restart policy | S87 | L | pending |
 | F-275 | Cross-story bookmarks, ranges, and annotations | S87 | L | pending |

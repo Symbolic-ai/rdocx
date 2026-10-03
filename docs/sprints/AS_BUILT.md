@@ -17234,3 +17234,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
 
 **Notes for future sessions.** F-X173 can use this completed serialization prefix. Keep `work/f-x133-codex` until final sprint verification and review.
+
+### F-272, Rich footnote authoring
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native footnotes can be created with a body reference, located as stories, edited with existing rich content operations, reordered without changing IDs, and removed with every matching body reference in one staged mutation. Footnote paragraphs support scoped pictures, hyperlinks and comments, while separator and unknown XML survive save and reopen. Visible note labels follow reference occurrence while internal IDs stay stable.
+
+**Non-obvious choices.** The package-backed note part is reopened before publication. Reorder moves a source note fragment and keeps its stable ID. The layout label map uses body reference order, which matches the pinned Word output even when internal IDs begin at two.
+
+**Deviations from the design plan.** The Word comparison exposed raw internal IDs printed as visible labels. The worker added occurrence-based layout numbering and repeated the oracle and hash gates. No new crate, module, trait, generic or feature flag was introduced.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-039 completion, `docs/hld/03-architecture.md`, note story ownership, `docs/hld/04-opc-and-packaging.md`, preservation, `docs/hld/08-rendering-spec.md`, labels and continuation, `docs/hld/10-bindings-spec.md`, native API, and `docs/hld/14-development-backlog.md`, F-272 acceptance.
+
+**Tests.** The worker passed 488 Word unit, 334 integration, 750 regression, 303 layout and documentation tests, all 133 policy tests, scoped Clippy, formatting, prose, generated skills, archive inventory and the 22-package dry run. Microsoft Word for Mac 16.113.2 build 16.113.26092012 and deterministic local PDF both showed three pages, body note labels 1 and 2, a long note continuing through page three and a short note on page three. Microscope pass 1 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-273 can start on this completed note substrate. Keep `work/f-272-codex` until final sprint verification and review.
