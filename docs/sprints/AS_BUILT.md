@@ -17194,3 +17194,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged, all 49 entries match on the worker and integrated source.
 
 **Notes for future sessions.** After `/close-sprint` pushes S85, wait for the macOS presentation Python job and aggregate CI gate to pass on `main`. Only then post the individual 32 PR and nine issue dispositions, with Issue 158 last. Keep `work/f-x171-codex` through sprint verification and review.
+
+### F-271, Uniform rich header and footer editing
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The existing story editing surface now handles rich content in all six header and footer variants. Comment ranges can be anchored in related story parts and published through a staged package reopen. The related part retains unmodelled paragraph XML and keeps its relationships scoped to that part.
+
+**Non-obvious choices.** Related-part comment anchoring edits the paragraph fragment in the selected part. Its package is validated and reopened before the live document changes. Body and table-cell comments keep their existing publication path.
+
+**Deviations from the design plan.** The initial worker pass missed the package reopen before publishing related-part comments. Integration review caught it, and the corrected worker passed another microscope review and scoped gate.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, related story publication, and `docs/hld/14-development-backlog.md`, F-271 acceptance.
+
+**Tests.** The worker passed 488 Word unit, 333 integration, 745 regression and 2 documentation tests with pinned tools. Scoped Clippy, formatting, prose, generated skills, 133 policy tests and the archive inventory passed. The all-variant rich-content test and aliased-header rollback test passed. Microscope pass 4 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-272 can start on this completed prefix. Keep `work/f-271-codex` until final sprint verification and review.
