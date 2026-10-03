@@ -780,7 +780,7 @@ worth filling in the Rust ecosystem.
 
 The table counts milestone stories only. S70 also carries four cross-cutting
 Issue 67 and Issue 69 stories estimated at 12 developer-days. S76 through
-S84 hold the separate contribution and issue repair programme.
+S85 hold the separate contribution, issue repair and hosted CI programme.
 
 ### M15, Charts beyond PowerPoint
 
