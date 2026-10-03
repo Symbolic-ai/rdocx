@@ -24,7 +24,7 @@ elements. Complete the footnote substrate before extending it to endnotes.
 |------|-------|------|--------|-------|
 | F-X133 | Stop rebinding a canonical prefix on every retained element | S | in-progress | codex |
 | F-271 | Uniform rich header and footer editing | L | done | - |
-| F-272 | Rich footnote authoring | L | pending | - |
+| F-272 | Rich footnote authoring | L | in-progress | codex |
 | F-273 | Rich endnote authoring | L | pending | - |
 
 ## Sequencing note

@@ -496,7 +496,7 @@ regenerated, never hand-edited.
 | F-269 | Complete section page semantics | S74 | L | done |
 | F-270 | Complete settings and web settings authoring | S74 | L | done |
 | F-271 | Uniform rich header and footer editing | S86 | L | done |
-| F-272 | Rich footnote authoring | S86 | L | pending |
+| F-272 | Rich footnote authoring | S86 | L | in-progress |
 | F-273 | Rich endnote authoring | S86 | L | pending |
 | F-274 | Note separators, markers, and restart policy | S87 | L | pending |
 | F-275 | Cross-story bookmarks, ranges, and annotations | S87 | L | pending |
