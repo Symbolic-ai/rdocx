@@ -9816,6 +9816,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-270 closed DOCX-007 and DOCX-037 to complete in S74, so it
                 # no longer owns an incomplete row.
                 270,
+                # F-271 closed DOCX-038 with rich editing in all header and
+                # footer variants in S86.
+                271,
             }
         }
         self.assertEqual(
