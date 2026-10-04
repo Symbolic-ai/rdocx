@@ -35,11 +35,18 @@ incompatible pairing atomically. Build
 one dependency graph from selected XML and recursively reachable parts before
 editing the destination. Close styles and aliases, numbering and overrides,
 custom XML binding stores, notes, comment threads, revision and paired-marker
-identities, charts, diagrams, embeddings and package extensions. Preserve
-unmodeled XML bytes as authority. Copy an opaque package extension only when
-its reachable graph is closed and its internal XML needs no reference rewrite.
-Reject external, missing, malformed or unrewritable referenced graphs before
-publication.
+identities, charts, diagrams, embeddings and package extensions. Traverse and
+copy every well-formed reachable package graph, including opaque extension
+parts, rather than excluding a dependency class by default. Preserve opaque
+payload bytes and their part-local relationship IDs verbatim. Give a copied
+opaque owner a fresh part name instead of rewriting its payload on collision.
+Remap package relationship targets and selected-owner references in a
+namespace-aware pass where collisions require it. Carry external relationships
+as external edges
+without fetching them. Validate that all copied internal edges resolve and
+that rewritten XML still parses. A graph whose references cannot be reconciled
+without corrupting any part fails before publication, leaving the destination
+unchanged.
 
 Retain `FragmentConflictPolicy` presets for equivalent reuse and rename-all.
 Apply equivalent reuse only to dependency classes with a proven structural
@@ -60,9 +67,9 @@ path F-277 will reuse.
 | Category | Test | Asserts |
 |---|---|---|
 | regression | `full_story_fragment_import_remaps_every_conflicting_dependency` | **Test gate.** Every supported story-owner class is exercised as source and destination. A complete story fragment with every named dependency imports twice with deterministic maps, no dangling IDs, and resolved package relationships. |
-| regression | `opaque_extension_import_requires_a_safe_closed_graph` | A closed extension graph with no internal XML reference rewrite copies intact, while an unrewritable graph rejects with complete destination rollback. |
+| regression | `opaque_extension_graphs_copy_without_corrupting_parts` | Direct, nested, cyclic and collision-heavy opaque graphs copy with exact payloads where untouched, resolved internal edges and retained external edges. An unreconcilable graph rolls back without changing destination bytes. |
 | round-trip | `fragment_import_preserves_unmodeled_xml_and_reopens` | Selected retained XML and unrelated destination XML remain exact, with schema-valid changed content. |
-| regression | `fragment_import_rejects_incomplete_graph_atomically` | Split ownership, dangling, external, malformed, unsafe or exhausted graphs leave destination bytes unchanged. |
+| regression | `fragment_import_rejects_incomplete_graph_atomically` | Split ownership, dangling internal targets, malformed, unsafe, unreconcilable or exhausted graphs leave destination bytes unchanged. External edges remain external and are never fetched. |
 | regression | `fragment_conflict_policies_reuse_only_equivalent_graphs` | Equivalent-reuse and rename-all yield the declared deterministic style, numbering and leaf-part differences. |
 
 ## HLD impact
@@ -94,4 +101,4 @@ Expected unchanged. Existing fixture imports keep their current serialized outpu
 ## Open questions
 
 - Answered: any grammar-compatible supported source and destination story pair is valid. Ownership and relationship scope are checked for every pair.
-- Answered: copy only safe closed opaque extension graphs that need no internal XML reference rewrite. Reject the rest.
+- Answered and revised: copy every well-formed reachable graph, including opaque extensions and external relationship edges, so far as it can be remapped without corrupting any part. Reject only graphs that cannot satisfy that integrity boundary.
