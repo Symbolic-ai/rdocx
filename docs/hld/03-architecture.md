@@ -663,7 +663,13 @@ raw XML, while unsupported valid fields retain their cached display. Dirty
 complex hyperlinks are not reported as `Document::links()` until the update
 policy defines how to handle them. The `rdocx` facade correlates bookmark ids
 and owns mutation across typed body paragraphs, including supported table and
-content-control traversal.
+content-control traversal. Its story-qualified range inventory also pairs
+bookmarks, comment endpoints, permission ranges and proofing ranges within one
+physical owner. Checked add, move and remove operations stage a candidate,
+validate accepted-view order and reopen the result before publication.
+Proofing pairs carry their spelling or grammar type without an invented id.
+Removing a comment range leaves its reference run and definition as a point
+comment. Moving a comment range moves its reference run with the pair.
 `rdocx-layout` resolves bookmark text and maps page targets, while the shared
 `oxml-layout` boundary exposes only format-neutral `Target` and `TargetPage`
 field kinds.

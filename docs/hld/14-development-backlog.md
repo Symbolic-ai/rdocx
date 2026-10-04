@@ -2891,8 +2891,12 @@ and carried-note notices. A native deterministic test records the pinned
 invalid mutations without disturbing unrelated section numbering.
 
 ### F-275, Cross-story bookmarks, ranges, and annotations (L)
-Create and mutate bookmarks, comment ranges, permission ranges, proofing ranges,
-and other supported paired markers in every valid story and nested container.
+Create and mutate bookmark pairs, comment endpoints, permission ranges and
+spelling or grammar proofing ranges in every valid story and nested block
+control. The native inventory uses immutable story-qualified endpoints.
+Comment pair removal retains the reference and definition as a point comment,
+while moving the pair moves its reference run. Modern metadata, permission
+policy and revision move ranges have separate owners.
 **Depends on**: F-253, F-254.
 **Test gate**: round-trip. Nested and crossing-invalid ranges are respectively
 preserved or rejected atomically, and valid ranges retain exact endpoints.

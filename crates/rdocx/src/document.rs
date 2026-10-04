@@ -8144,6 +8144,56 @@ fn typed_complex_field_candidate_is_admitted(
     Ok(sources.iter().any(|source| source == &isolated))
 }
 
+fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<Vec<Range<usize>>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack = Vec::<(bool, Vec<u8>, usize)>::new();
+    let mut paragraphs = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("control paragraph scan failed: {error}")))?;
+        let is_word = word_element(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let name = element.local_name().as_ref().to_vec();
+                let direct_content = stack
+                    .last()
+                    .is_some_and(|(word, parent, _)| *word && parent.as_slice() == b"sdtContent");
+                let owning_control = stack
+                    .iter()
+                    .rev()
+                    .find(|(word, local, _)| *word && local.as_slice() == b"sdt");
+                if before >= control.full.start
+                    && before < control.full.end
+                    && is_word
+                    && name == b"p"
+                    && direct_content
+                    && owning_control.is_some_and(|(_, _, start)| *start == control.full.start)
+                {
+                    paragraphs.push(before..story_element_end(xml, before)?);
+                }
+                stack.push((is_word, name, before));
+            }
+            Event::Empty(_) => {}
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if after >= control.full.end {
+            break;
+        }
+        buffer.clear();
+    }
+    Ok(paragraphs)
+}
+
 fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
@@ -14716,27 +14766,78 @@ impl Document {
         }
     }
 
-    pub(crate) fn anchor_related_story_comment(
+    pub(crate) fn anchor_story_range(
         &mut self,
-        start: &ContentLocation,
-        start_run: usize,
-        end: &ContentLocation,
-        end_run: usize,
-        id: i32,
+        range: &crate::comments::StoryRunRange,
+        anchor: RangeAnchor<'_>,
+        label: &str,
     ) -> Result<()> {
-        if !matches!(
-            start.story.kind,
-            StoryKind::Header | StoryKind::Footer | StoryKind::Footnote | StoryKind::Endnote
-        ) || start.story != end.story
-        {
-            return Err(Error::Other(
-                "comment range must stay within one header, footer, or note story".to_owned(),
-            ));
+        let start = &range.start.location;
+        let end = &range.end.location;
+        let start_run = range.start.run_index;
+        let end_run = range.end.run_index;
+        if start.story != end.story {
+            return Err(Error::Other(format!(
+                "{label} range endpoints must be ordered in one story owner"
+            )));
         }
-        let (source, start_item) = self.story_item_source(start)?;
+        let nested_body_control = [start, end].iter().any(|location| {
+            location.index_path.len() == 2
+                && self
+                    .story_item_source(&ContentLocation::new(
+                        location.story.clone(),
+                        StoryItemKind::ContentControl,
+                        vec![location.index_path[0]],
+                    ))
+                    .is_ok_and(|(_, control)| !control.direct_owner_child)
+        });
+        if start.story.kind() == StoryKind::Body
+            && (start.index_path.len() == 2 || end.index_path.len() == 2)
+            && !nested_body_control
+        {
+            if start.index_path > end.index_path {
+                return Err(Error::Other(format!(
+                    "{label} range endpoints must be ordered in one story owner"
+                )));
+            }
+            let mut first = self.story_paragraph_mut(start)?.clone();
+            let mut last = if start == end {
+                first.clone()
+            } else {
+                self.story_paragraph_mut(end)?.clone()
+            };
+            if start == end {
+                first
+                    .anchor_accepted_range(Some(start_run), Some(end_run), anchor)
+                    .map_err(|error| {
+                        Error::Other(format!("{label} range cannot be anchored: {error}"))
+                    })?;
+            } else {
+                first
+                    .anchor_accepted_range(Some(start_run), None, anchor)
+                    .map_err(|error| {
+                        Error::Other(format!("{label} range cannot be anchored: {error}"))
+                    })?;
+                last.anchor_accepted_range(None, Some(end_run), anchor)
+                    .map_err(|error| {
+                        Error::Other(format!("{label} range cannot be anchored: {error}"))
+                    })?;
+            }
+            *self.story_paragraph_mut(start)? = first;
+            if start != end {
+                *self.story_paragraph_mut(end)? = last;
+            }
+            return Ok(());
+        }
+        let (source, start_item) = self.story_range_paragraph_source(start)?;
         let part_name = source.part_name.clone();
         let source_xml = source.xml.into_owned();
-        let (_, end_item) = self.story_item_source(end)?;
+        let (_, end_item) = self.story_range_paragraph_source(end)?;
+        if start_item.full.start > end_item.full.start {
+            return Err(Error::Other(format!(
+                "{label} range endpoints must be ordered in one story owner"
+            )));
+        }
         let read_paragraph = |item: &StoryItemSpan| -> Result<CT_P> {
             if item.kind != StoryItemKind::Paragraph {
                 return Err(Error::Other(
@@ -14753,34 +14854,35 @@ impl Document {
         } else {
             read_paragraph(&end_item)?
         };
-        for (label, index, paragraph) in [("start", start_run, &first), ("end", end_run, &last)] {
+        for (boundary, index, paragraph) in [("start", start_run, &first), ("end", end_run, &last)]
+        {
             let count = paragraph.accepted_run_paths().len();
             if index > count {
                 return Err(Error::Other(format!(
-                    "comment range {label} run index {index} exceeds paragraph run count {count}"
+                    "{label} range {boundary} run index {index} exceeds paragraph run count {count}"
                 )));
             }
         }
         if start_item.full == end_item.full {
             if start_run > end_run {
-                return Err(Error::Other(
-                    "comment story range start must not follow its end".to_owned(),
-                ));
+                return Err(Error::Other(format!(
+                    "{label} range start must not follow its end"
+                )));
             }
             first
-                .anchor_accepted_range(Some(start_run), Some(end_run), RangeAnchor::Comment(id))
+                .anchor_accepted_range(Some(start_run), Some(end_run), anchor)
                 .map_err(|error| {
-                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                    Error::Other(format!("{label} range cannot be anchored: {error}"))
                 })?;
         } else {
             first
-                .anchor_accepted_range(Some(start_run), None, RangeAnchor::Comment(id))
+                .anchor_accepted_range(Some(start_run), None, anchor)
                 .map_err(|error| {
-                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                    Error::Other(format!("{label} range cannot be anchored: {error}"))
                 })?;
-            last.anchor_accepted_range(None, Some(end_run), RangeAnchor::Comment(id))
+            last.anchor_accepted_range(None, Some(end_run), anchor)
                 .map_err(|error| {
-                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                    Error::Other(format!("{label} range cannot be anchored: {error}"))
                 })?;
         }
         let same_paragraph = start_item.full == end_item.full;
@@ -14795,6 +14897,186 @@ impl Document {
             let xml = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
             let xml = close_content_fragment_namespaces(&xml, &scope)?;
             updated.splice(span, xml);
+        }
+        set_story_source_xml(self, &part_name, updated)
+    }
+
+    pub(crate) fn remove_story_range_markers(
+        &mut self,
+        entry: &crate::comments::StoryRangeRef,
+        move_comment_reference: bool,
+    ) -> Result<()> {
+        use crate::comments::StoryRangeKind;
+        let (source, owner) = self.story_source_and_owner(entry.range().start.location.story())?;
+        let part_name = source.part_name.clone();
+        let xml = source.xml.as_ref();
+        let mut paragraphs = Vec::new();
+        for item in scan_story_items(xml, &owner)? {
+            match item.kind {
+                StoryItemKind::Paragraph => paragraphs.push(item.full),
+                StoryItemKind::ContentControl => {
+                    paragraphs.extend(scan_story_control_paragraphs(xml, &item)?);
+                }
+                _ => {}
+            }
+        }
+        let (start_tag, end_tag, identity) = match entry.kind() {
+            StoryRangeKind::Bookmark { id, .. } => (
+                b"bookmarkStart".as_slice(),
+                b"bookmarkEnd".as_slice(),
+                id.to_string(),
+            ),
+            StoryRangeKind::Comment { id } => (
+                b"commentRangeStart".as_slice(),
+                b"commentRangeEnd".as_slice(),
+                id.to_string(),
+            ),
+            StoryRangeKind::Permission { id, .. } => (
+                b"permStart".as_slice(),
+                b"permEnd".as_slice(),
+                id.to_string(),
+            ),
+            StoryRangeKind::Proofing { kind } => {
+                (b"proofErr".as_slice(), b"proofErr".as_slice(), kind.clone())
+            }
+        };
+        let mut reader = NsReader::from_reader(xml);
+        reader.config_mut().trim_text(false);
+        let mut ranges = Vec::new();
+        let mut ordinal = 0usize;
+        let mut stack = Vec::<(bool, Vec<u8>)>::new();
+        let mut buffer = Vec::new();
+        loop {
+            let before = reader.buffer_position() as usize;
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|error| Error::Other(format!("range removal scan failed: {error}")))?;
+            let is_word = word_element(&namespace);
+            drop(namespace);
+            let after = reader.buffer_position() as usize;
+            let hidden = stack.iter().any(|(word, name)| {
+                *word
+                    && matches!(
+                        name.as_slice(),
+                        b"del"
+                            | b"moveFrom"
+                            | b"txbxContent"
+                            | b"smartTag"
+                            | b"customXml"
+                            | b"fldSimple"
+                    )
+            });
+            if let Event::End(_) = &event {
+                stack.pop();
+            }
+            if let Event::Start(element) = &event {
+                stack.push((is_word, element.local_name().as_ref().to_vec()));
+            }
+            let element = match &event {
+                Event::Start(element) | Event::Empty(element)
+                    if paragraphs
+                        .iter()
+                        .any(|paragraph| paragraph.contains(&before))
+                        && !hidden
+                        && is_word
+                        && matches!(
+                            element.local_name().as_ref(),
+                            b"bookmarkStart"
+                                | b"bookmarkEnd"
+                                | b"commentRangeStart"
+                                | b"commentRangeEnd"
+                                | b"permStart"
+                                | b"permEnd"
+                                | b"proofErr"
+                                | b"commentReference"
+                        ) =>
+                {
+                    element
+                }
+                Event::Eof => break,
+                _ => {
+                    buffer.clear();
+                    continue;
+                }
+            };
+            let mut id_value = None;
+            let mut type_value = None;
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+                let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                if word_element(&namespace) && matches!(local.as_ref(), b"id" | b"type") {
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(error.to_string()))?;
+                    if local.as_ref() == b"id" {
+                        id_value = Some(value.into_owned());
+                    } else {
+                        type_value = Some(value.into_owned());
+                    }
+                }
+            }
+            let name = element.local_name();
+            let name = name.as_ref();
+            let paired = matches!(
+                name,
+                b"bookmarkStart"
+                    | b"bookmarkEnd"
+                    | b"commentRangeStart"
+                    | b"commentRangeEnd"
+                    | b"permStart"
+                    | b"permEnd"
+            ) || name == b"proofErr"
+                && matches!(
+                    type_value.as_deref(),
+                    Some("spellStart" | "spellEnd" | "gramStart" | "gramEnd")
+                );
+            let this_ordinal = paired.then(|| {
+                let current = ordinal;
+                ordinal += 1;
+                current
+            });
+            let matched = if name == b"commentReference" {
+                move_comment_reference
+                    && matches!(entry.kind(), StoryRangeKind::Comment { .. })
+                    && id_value.as_deref() == Some(identity.as_str())
+            } else {
+                (name == start_tag || name == end_tag)
+                    && this_ordinal.is_some_and(|index| {
+                        index == entry.start_ordinal || index == entry.end_ordinal
+                    })
+                    && if matches!(entry.kind(), StoryRangeKind::Proofing { .. }) {
+                        type_value.as_deref() == Some(format!("{identity}Start").as_str())
+                            || type_value.as_deref() == Some(format!("{identity}End").as_str())
+                    } else {
+                        id_value.as_deref() == Some(identity.as_str())
+                    }
+            };
+            if matched {
+                let end = if matches!(event, Event::Empty(_)) {
+                    after
+                } else {
+                    story_element_end(xml, before)?
+                };
+                ranges.push(before..end);
+            }
+            buffer.clear();
+        }
+        let expected =
+            if move_comment_reference && matches!(entry.kind(), StoryRangeKind::Comment { .. }) {
+                3
+            } else {
+                2
+            };
+        if ranges.len() != expected {
+            return Err(Error::Other(format!(
+                "range marker identity {} has {} selected elements, expected {expected}",
+                identity,
+                ranges.len()
+            )));
+        }
+        let mut updated = xml.to_vec();
+        for range in ranges.into_iter().rev() {
+            updated.splice(range, []);
         }
         set_story_source_xml(self, &part_name, updated)
     }
@@ -14826,6 +15108,56 @@ impl Document {
         Ok((source, item))
     }
 
+    fn story_range_paragraph_source<'a>(
+        &'a self,
+        location: &ContentLocation,
+    ) -> Result<(StorySource<'a>, StoryItemSpan)> {
+        if location.index_path.len() == 1 {
+            return self.story_item_source(location);
+        }
+        if location.index_path.len() != 2 || location.item_kind != StoryItemKind::Paragraph {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let control_index = location.index_path[0];
+        let control = items.get(control_index).ok_or(StoryError::OutOfBounds {
+            index: control_index,
+            len: items.len(),
+        })?;
+        if control.kind != StoryItemKind::ContentControl {
+            return Err(StoryError::KindMismatch {
+                expected: StoryItemKind::ContentControl,
+                actual: control.kind,
+            }
+            .into());
+        }
+        let paragraphs = scan_story_control_paragraphs(source.xml.as_ref(), control)?;
+        let paragraph_index = location.index_path[1];
+        let full = paragraphs
+            .get(paragraph_index)
+            .cloned()
+            .ok_or(StoryError::OutOfBounds {
+                index: paragraph_index,
+                len: paragraphs.len(),
+            })?;
+        Ok((
+            source,
+            StoryItemSpan {
+                kind: StoryItemKind::Paragraph,
+                scan: full.clone(),
+                full,
+                direct_owner_child: false,
+                complex_field: false,
+                complex_ancestors: Vec::new(),
+                sdt_context: None,
+            },
+        ))
+    }
+
     /// Traverse one story's supported content without constructing a second
     /// document tree.
     pub fn story_items<'a>(&'a self, story: &StoryId) -> Result<Vec<StoryItemRef<'a>>> {
@@ -14843,6 +15175,43 @@ impl Document {
                     is_end: false,
                 },
             })
+            .collect())
+    }
+
+    pub(crate) fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
+        let mut paragraphs = Vec::new();
+        for (story_index, story) in self.stories()?.into_iter().enumerate() {
+            let (source, owner) = self.story_source_and_owner(&story)?;
+            let source_xml = source.xml.as_ref();
+            for (index, item) in scan_story_items(source_xml, &owner)?.iter().enumerate() {
+                let spans = match item.kind {
+                    StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                    StoryItemKind::ContentControl => {
+                        scan_story_control_paragraphs(source_xml, item)?
+                            .into_iter()
+                            .enumerate()
+                            .map(|(paragraph_index, span)| (vec![index, paragraph_index], span))
+                            .collect()
+                    }
+                    _ => continue,
+                };
+                for (path, span) in spans {
+                    let scope = story_namespace_scope_at(source_xml, span.start)?;
+                    let order = span.start;
+                    let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
+                    paragraphs.push((
+                        story_index,
+                        order,
+                        ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                        xml,
+                    ));
+                }
+            }
+        }
+        paragraphs.sort_by_key(|(story_index, offset, _, _)| (*story_index, *offset));
+        Ok(paragraphs
+            .into_iter()
+            .map(|(_, _, location, xml)| (location, xml))
             .collect())
     }
 

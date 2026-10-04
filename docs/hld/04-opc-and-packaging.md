@@ -670,6 +670,16 @@ range and reference anchors remain ordered among neighbouring paragraph and
 run XML. A document without a comments relationship does not gain a comments
 part, relationship, or override during an ordinary save.
 
+Story-qualified marker edits resolve both endpoints through the same body,
+table-cell, text-box, header, footer, note or comment owner. Block content
+controls expose their contained paragraphs under a second path segment in
+each owner. Namespace-resolved scans pair bookmark, comment, permission and
+proofing markers in accepted-view order. Rewrites splice only the affected
+paragraph bytes into its owning part and retain unrelated siblings and
+unsupported markers. Invalid owner paths, crossing or unmatched pairs, stale
+snapshots, duplicate names and exhausted identifiers reject the staged edit
+without changing the live package.
+
 The Word facade resolves an existing settings part through the main document's
 `SETTINGS` relationship and retains the normalized target instead of assuming
 `/word/settings.xml`. `rdocx-oxml` projects valid document protection metadata

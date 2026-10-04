@@ -23379,3 +23379,779 @@ fn oversized_endnote_continuation_separator_does_not_stall_flow() {
     assert!(layout.layout.pages.len() > 1);
     assert!(layout.layout.pages.len() < 12);
 }
+
+#[test]
+fn cross_story_ranges_reopen_with_exact_endpoints() {
+    let mut document = container_neutral_story_fixture();
+    for kind in [
+        StoryKind::Body,
+        StoryKind::TableCell,
+        StoryKind::TextBox,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::Comment,
+    ] {
+        let range_for = |document: &Document| {
+            let story = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|story| story.kind() == kind)
+                .unwrap();
+            let location = document
+                .story_items(&story)
+                .unwrap()
+                .into_iter()
+                .find(|item| item.kind() == StoryItemKind::Paragraph)
+                .unwrap()
+                .location()
+                .clone();
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            }
+        };
+        let name = format!("F275{kind:?}");
+        let id = document
+            .add_story_bookmark(&name, range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document.story_ranges().unwrap().iter().any(|entry| {
+                entry.bookmark_id() == Some(id)
+                    && entry.range().start.run_index == 0
+                    && entry.range().end.run_index == 1
+                    && entry.range().start.location.story().kind() == kind
+            }),
+            "{kind:?}"
+        );
+        let permission = document
+            .add_story_permission_range(Some("Ada"), None, range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(|entry| {
+            matches!(entry.kind(), rdocx::StoryRangeKind::Permission { id, editor: Some(editor), .. }
+                if *id == permission && editor == "Ada")
+                && entry.range().start.location.story().kind() == kind
+        }), "permission {kind:?}");
+        document
+            .add_story_proofing_range("spell", range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(|entry| {
+            matches!(entry.kind(), rdocx::StoryRangeKind::Proofing { kind: proof } if proof == "spell")
+                && entry.range().start.location.story().kind() == kind
+        }), "proofing {kind:?}");
+        let comment = document
+            .add_story_comment(range_for(&document), "Ada", None, "annotation")
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document.story_ranges().unwrap().iter().any(|entry| {
+                matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id } if *id == comment)
+                    && entry.range().start.location.story().kind() == kind
+            }),
+            "comment {kind:?}"
+        );
+    }
+    let nested = document.paragraph_story_location(2).unwrap().unwrap();
+    assert_eq!(nested.index_path().len(), 2);
+    let nested_range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: nested.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: nested,
+            run_index: 1,
+        },
+    };
+    let nested_id = document
+        .add_story_bookmark("F275BlockControl", nested_range)
+        .unwrap();
+    document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(document.story_ranges().unwrap().iter().any(|entry| {
+        entry.bookmark_id() == Some(nested_id)
+            && entry.range().start.location.index_path().len() == 2
+    }));
+    for family in ["permission", "proofing", "comment"] {
+        let nested = document.paragraph_story_location(2).unwrap().unwrap();
+        let range = rdocx::StoryRunRange {
+            start: rdocx::StoryRunPosition {
+                location: nested.clone(),
+                run_index: 0,
+            },
+            end: rdocx::StoryRunPosition {
+                location: nested,
+                run_index: 1,
+            },
+        };
+        match family {
+            "permission" => {
+                document
+                    .add_story_permission_range(None, Some("everyone"), range)
+                    .unwrap();
+            }
+            "proofing" => document.add_story_proofing_range("gram", range).unwrap(),
+            "comment" => {
+                document
+                    .add_story_comment(range, "Ada", None, "nested annotation")
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    }
+    assert_eq!(
+        document
+            .story_ranges()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.range().start.location.index_path().len() == 2)
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn related_story_block_controls_reopen_with_all_range_families() {
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    for (part, old, replacement) in [
+        (
+            "/word/document.xml",
+            "<w:p><w:r><w:t>cell</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>cell control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/document.xml",
+            "<w:p><w:r><w:t>text box</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>text box control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/header-story.xml",
+            "<a:p><a:r><a:t>header</a:t></a:r></a:p>",
+            "<a:sdt><a:sdtContent><a:p><a:r><a:t>header control</a:t></a:r></a:p></a:sdtContent></a:sdt>",
+        ),
+        (
+            "/word/footer-story.xml",
+            "<w:p><w:r><w:t>footer</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>footer control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/footnotes-story.xml",
+            "<w:p><w:r><w:t>footnote</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>footnote control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/endnotes-story.xml",
+            "<w:p><w:r><w:t>endnote</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>endnote control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+        (
+            "/word/comments-story.xml",
+            "<w:p><w:r><w:t>comment</w:t></w:r></w:p>",
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>comment control</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        ),
+    ] {
+        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+        assert!(xml.contains(old), "{part}");
+        package.set_part(part, xml.replacen(old, replacement, 1).into_bytes());
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    for kind in [
+        StoryKind::TableCell,
+        StoryKind::TextBox,
+        StoryKind::Header,
+        StoryKind::Footer,
+        StoryKind::Footnote,
+        StoryKind::Endnote,
+        StoryKind::Comment,
+    ] {
+        let range_for = |document: &Document| {
+            let story = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|story| story.kind() == kind)
+                .unwrap();
+            let control = document
+                .story_items(&story)
+                .unwrap()
+                .into_iter()
+                .find(|item| item.kind() == StoryItemKind::ContentControl)
+                .unwrap();
+            let location = rdocx::ContentLocation::new(
+                story,
+                StoryItemKind::Paragraph,
+                vec![control.location().index_path()[0], 0],
+            );
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            }
+        };
+        let bookmark = document
+            .add_story_bookmark(&format!("Nested{kind:?}"), range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document
+                .story_ranges()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.bookmark_id() == Some(bookmark)
+                    && entry.range().start.location.story().kind() == kind
+                    && entry.range().start.location.index_path().len() == 2)
+        );
+        let permission = document
+            .add_story_permission_range(Some("Ada"), None, range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(|entry| matches!(entry.kind(), rdocx::StoryRangeKind::Permission { id, .. } if *id == permission) && entry.range().start.location.story().kind() == kind && entry.range().end.location.index_path().len() == 2));
+        document
+            .add_story_proofing_range("spell", range_for(&document))
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(
+            document
+                .story_ranges()
+                .unwrap()
+                .iter()
+                .any(
+                    |entry| matches!(entry.kind(), rdocx::StoryRangeKind::Proofing { .. })
+                        && entry.range().start.location.story().kind() == kind
+                        && entry.range().end.location.index_path().len() == 2
+                )
+        );
+        let comment = document
+            .add_story_comment(range_for(&document), "Ada", None, "nested annotation")
+            .unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(document.story_ranges().unwrap().iter().any(
+            |entry| matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id } if *id == comment)
+                && entry.range().start.location.story().kind() == kind
+                && entry.range().end.location.index_path().len() == 2
+        ));
+    }
+}
+
+#[test]
+fn nested_control_ranges_follow_physical_order_not_item_index_order() {
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let header = header.replacen(
+        "<a:p><a:r><a:t>header</a:t></a:r></a:p>",
+        "<a:sdt><a:sdtContent><a:sdt><a:sdtContent><a:p><a:r><a:t>inner</a:t></a:r></a:p></a:sdtContent></a:sdt><a:p><a:r><a:t>outer</a:t></a:r></a:p></a:sdtContent></a:sdt>",
+        1,
+    );
+    package.set_part("/word/header-story.xml", header.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let header_story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let controls = document
+        .story_items(&header_story)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == StoryItemKind::ContentControl)
+        .map(|item| item.location().index_path()[0])
+        .collect::<Vec<_>>();
+    assert_eq!(controls.len(), 2);
+    let inner = rdocx::ContentLocation::new(
+        header_story.clone(),
+        StoryItemKind::Paragraph,
+        vec![controls[1], 0],
+    );
+    let outer =
+        rdocx::ContentLocation::new(header_story, StoryItemKind::Paragraph, vec![controls[0], 0]);
+    assert!(inner.index_path() > outer.index_path());
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: inner,
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: outer,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("PhysicalOrder", range).unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let pair = reopened
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    assert!(pair.range().start.location.index_path() > pair.range().end.location.index_path());
+}
+
+#[test]
+fn nested_body_controls_accept_physical_story_range_endpoints() {
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:p><w:r><w:t>body</w:t></w:r></w:p>",
+        "<w:sdt><w:sdtContent><w:sdt><w:sdtContent><w:p><w:r><w:t>inner</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>outer</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let body_story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let controls = document
+        .story_items(&body_story)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == StoryItemKind::ContentControl)
+        .map(|item| item.location().index_path()[0])
+        .collect::<Vec<_>>();
+    assert!(controls.len() >= 2);
+    let inner = rdocx::ContentLocation::new(
+        body_story.clone(),
+        StoryItemKind::Paragraph,
+        vec![controls[1], 0],
+    );
+    let outer =
+        rdocx::ContentLocation::new(body_story, StoryItemKind::Paragraph, vec![controls[0], 0]);
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: inner,
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: outer,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("BodyNested", range).unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let pair = reopened
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    assert!(pair.range().start.location.index_path() > pair.range().end.location.index_path());
+    assert_eq!(pair.range().start.run_index, 0);
+    assert_eq!(pair.range().end.run_index, 1);
+}
+
+#[test]
+fn story_marker_allocation_is_family_aware() {
+    let mut document = Document::new();
+    document.add_paragraph("alpha");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let bookmark = document.add_story_bookmark("Bookmark", range).unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let permission = document
+        .add_story_permission_range(Some("editor"), None, range)
+        .unwrap();
+    assert_eq!(bookmark, permission);
+}
+
+#[test]
+fn paired_marker_mutation_preserves_unknown_siblings() {
+    let mut document = Document::new();
+    document.add_paragraph("alpha");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("Anchor", range).unwrap();
+    assert!(document.remove_story_bookmark(id).unwrap());
+    assert!(document.story_ranges().unwrap().is_empty());
+
+    let mut seed = container_neutral_story_fixture();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let header = header
+        .replacen(
+            "<a:p><a:r>",
+            "<a:p><a:bookmarkStart a:id=\"77\" a:name=\"Alias\"/><x:slot x:flag=\"exact\"/><a:r>",
+            1,
+        )
+        .replacen(
+            "</a:r></a:p>",
+            "</a:r><a:bookmarkEnd a:id=\"77\"/></a:p>",
+            1,
+        );
+    package.set_part("/word/header-story.xml", header.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    assert!(document.story_ranges().unwrap().iter().any(|entry| {
+        matches!(entry.kind(), rdocx::StoryRangeKind::Bookmark { id: 77, name } if name == "Alias")
+    }));
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let location = document.story_items(&header).unwrap()[0].location().clone();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    document
+        .add_story_permission_range(Some("Ada"), None, range)
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    assert!(header.contains("<a:bookmarkStart a:id=\"77\" a:name=\"Alias\"/>"));
+    assert!(header.contains("<a:bookmarkEnd a:id=\"77\"/>"));
+    assert!(header.contains("<x:slot x:flag=\"exact\"/>"));
+}
+
+#[test]
+fn story_comment_endpoint_move_keeps_one_reference_and_its_definition() {
+    let mut document = container_neutral_story_fixture();
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let location = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let id = document
+        .add_story_comment(range, "Ada", None, "moved comment")
+        .unwrap();
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id: found } if *found == id))
+        .unwrap();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let location = document
+        .story_items(&header)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let target = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    document.move_story_range(&selected, target).unwrap();
+    assert!(
+        document
+            .move_story_range(&selected, selected.range().clone())
+            .is_err()
+    );
+    let before_stale_remove = document.to_bytes().unwrap();
+    assert!(!document.remove_story_range(&selected).unwrap());
+    assert_eq!(document.to_bytes().unwrap(), before_stale_remove);
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let comments =
+        std::str::from_utf8(package.get_part("/word/comments-story.xml").unwrap()).unwrap();
+    assert!(!body.contains(&format!("commentRangeStart w:id=\"{id}\"")));
+    assert!(body.contains("<x:keep x:flag=\"exact\"><x:child/></x:keep>"));
+    assert!(header.contains("<x:header x:flag=\"exact\"/>"));
+    assert!(header.contains(&format!("commentRangeStart w:id=\"{id}\"")));
+    assert_eq!(
+        body.matches(&format!("commentReference w:id=\"{id}\""))
+            .count(),
+        0
+    );
+    assert_eq!(
+        header
+            .matches(&format!("commentReference w:id=\"{id}\""))
+            .count(),
+        1
+    );
+    assert!(comments.contains("moved comment"));
+    let moved = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| matches!(entry.kind(), rdocx::StoryRangeKind::Comment { id: found } if *found == id))
+        .unwrap();
+    assert!(document.remove_story_range(&moved).unwrap());
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let header = std::str::from_utf8(package.get_part("/word/header-story.xml").unwrap()).unwrap();
+    let comments =
+        std::str::from_utf8(package.get_part("/word/comments-story.xml").unwrap()).unwrap();
+    assert!(!header.contains(&format!("commentRangeStart w:id=\"{id}\"")));
+    assert!(!header.contains(&format!("commentRangeEnd w:id=\"{id}\"")));
+    assert_eq!(
+        header
+            .matches(&format!("commentReference w:id=\"{id}\""))
+            .count(),
+        1
+    );
+    assert!(comments.contains("moved comment"));
+}
+
+#[test]
+fn proofing_ranges_without_ids_remove_only_the_selected_pair() {
+    let mut document = Document::new();
+    document.add_paragraph("first");
+    document.add_paragraph("second");
+    for index in 0..2 {
+        let location = document.paragraph_story_location(index).unwrap().unwrap();
+        let range = rdocx::StoryRunRange {
+            start: rdocx::StoryRunPosition {
+                location: location.clone(),
+                run_index: 0,
+            },
+            end: rdocx::StoryRunPosition {
+                location,
+                run_index: 1,
+            },
+        };
+        document.add_story_proofing_range("spell", range).unwrap();
+    }
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| {
+            matches!(entry.kind(), rdocx::StoryRangeKind::Proofing { kind } if kind == "spell")
+                && entry.range().start.location.index_path() == [1]
+        })
+        .unwrap();
+    assert!(document.remove_story_range(&selected).unwrap());
+    let remaining = document.story_ranges().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].range().start.location.index_path(), [0]);
+}
+
+#[test]
+fn hidden_markers_do_not_shift_checked_removal_ordinals() {
+    let mut seed = Document::new();
+    seed.add_paragraph("visible");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:p><w:r>",
+        "<w:p><w:del><w:bookmarkStart w:id=\"80\" w:name=\"Hidden\"/></w:del><w:r>",
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("Visible", range).unwrap();
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    assert!(document.remove_story_range(&selected).unwrap());
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(body.contains("Hidden"));
+    assert!(!body.contains("Visible"));
+}
+
+#[test]
+fn crossing_story_markers_reject_addition_without_partial_edit() {
+    let mut seed = Document::new();
+    seed.add_paragraph("text");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let body = body.replacen(
+        "<w:p><w:r>",
+        "<w:p><w:bookmarkStart w:id=\"17\" w:name=\"Outer\"/><w:permStart w:id=\"17\" w:ed=\"Ada\"/><w:r>",
+        1,
+    ).replacen(
+        "</w:r></w:p>",
+        "</w:r><w:bookmarkEnd w:id=\"17\"/><w:permEnd w:id=\"17\"/></w:p>",
+        1,
+    );
+    package.set_part("/word/document.xml", body.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let before = document.to_bytes().unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let range = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location,
+            run_index: 1,
+        },
+    };
+    assert!(document.add_story_bookmark("Another", range).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn invalid_story_range_moves_are_atomic() {
+    let mut document = container_neutral_story_fixture();
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let body_location = document.story_items(&body).unwrap()[0].location().clone();
+    let original = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: body_location.clone(),
+            run_index: 0,
+        },
+        end: rdocx::StoryRunPosition {
+            location: body_location,
+            run_index: 1,
+        },
+    };
+    let id = document.add_story_bookmark("Atomic", original).unwrap();
+    let selected = document
+        .story_ranges()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.bookmark_id() == Some(id))
+        .unwrap();
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let header_location = document.story_items(&header).unwrap()[0].location().clone();
+    let invalid = rdocx::StoryRunRange {
+        start: selected.range().start.clone(),
+        end: rdocx::StoryRunPosition {
+            location: header_location,
+            run_index: 1,
+        },
+    };
+    let before = document.to_bytes().unwrap();
+    assert!(document.move_story_range(&selected, invalid).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let reversed = rdocx::StoryRunRange {
+        start: rdocx::StoryRunPosition {
+            location: selected.range().start.location.clone(),
+            run_index: 1,
+        },
+        end: rdocx::StoryRunPosition {
+            location: selected.range().end.location.clone(),
+            run_index: 0,
+        },
+    };
+    assert!(document.move_story_range(&selected, reversed).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}

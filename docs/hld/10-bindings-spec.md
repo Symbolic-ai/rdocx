@@ -1670,6 +1670,17 @@ and does not advance the revision. A rejected name or range raises
 their existing surface and preserve the typed content when they save the owned
 document.
 
+The additive native pre-1.0 story range API exposes `StoryRangeKind`,
+`StoryRangeRef` and `Document::story_ranges` with immutable story-qualified
+`StoryRunRange` endpoints. `add_story_bookmark`,
+`add_story_permission_range`, `add_story_proofing_range`,
+`move_story_range` and `remove_story_range` validate one physical owner,
+accepted run boundaries and pair order before committing. Permission starts
+retain an editor or group, while proofing pairs use `spell` or `gram` and no
+numeric id. Removing a comment pair retains its reference and definition as
+a point comment. Moving the pair relocates the reference with it. Existing
+Python, WASM and CLI APIs remain source compatible and preserve these markers.
+
 Native Word callers evaluate fields with `Document::evaluate_fields` and an
 explicit `FieldEvaluationContext`. `FieldDateTime` supplies deterministic civil
 time. Caller maps supply merge values and included text, including

@@ -4086,6 +4086,14 @@ pub enum RangeAnchor<'a> {
     Comment(i32),
     /// Bookmark markers.
     Bookmark { id: i32, name: &'a str },
+    /// Permission range with one selected editor or editor group.
+    Permission {
+        id: i32,
+        editor: Option<&'a str>,
+        group: Option<&'a str>,
+    },
+    /// Spelling or grammar proofing range, which has no numeric identifier.
+    Proofing { kind: &'a str },
 }
 
 /// Why [`CT_P::anchor_accepted_range`] could not place a range exactly.
@@ -6154,7 +6162,10 @@ impl CT_P {
                 extra_xml_positions: Vec::new(),
                 alt_drawings: Vec::new(),
             }),
-            RangeAnchor::Comment(_) | RangeAnchor::Bookmark { .. } => None,
+            RangeAnchor::Comment(_)
+            | RangeAnchor::Bookmark { .. }
+            | RangeAnchor::Permission { .. }
+            | RangeAnchor::Proofing { .. } => None,
         };
         let inserted = match site {
             MarkerSite::Control { controls, index } => {
@@ -6184,7 +6195,9 @@ impl CT_P {
                         });
                         BoundaryItem::Marker(self.comment_ranges.len() - 1)
                     }
-                    RangeAnchor::Bookmark { .. } => {
+                    RangeAnchor::Bookmark { .. }
+                    | RangeAnchor::Permission { .. }
+                    | RangeAnchor::Proofing { .. } => {
                         self.extra_xml.push((boundary, marker_xml));
                         BoundaryItem::Raw(self.extra_xml.len() - 1)
                     }
@@ -9423,17 +9436,48 @@ fn common_prefix_len(left: &[AcceptedRunPathSegment], right: &[AcceptedRunPathSe
 
 /// Serialize one canonical comment or bookmark range marker.
 fn range_marker_xml(anchor: RangeAnchor<'_>, start: bool) -> Option<Vec<u8>> {
-    let (tag, id, name) = match anchor {
-        RangeAnchor::Comment(id) if start => ("w:commentRangeStart", id, None),
-        RangeAnchor::Comment(id) => ("w:commentRangeEnd", id, None),
-        RangeAnchor::Bookmark { id, name } if start => ("w:bookmarkStart", id, Some(name)),
-        RangeAnchor::Bookmark { id, .. } => ("w:bookmarkEnd", id, None),
+    let tag = match anchor {
+        RangeAnchor::Comment(_) if start => "w:commentRangeStart",
+        RangeAnchor::Comment(_) => "w:commentRangeEnd",
+        RangeAnchor::Bookmark { .. } if start => "w:bookmarkStart",
+        RangeAnchor::Bookmark { .. } => "w:bookmarkEnd",
+        RangeAnchor::Permission { .. } if start => "w:permStart",
+        RangeAnchor::Permission { .. } => "w:permEnd",
+        RangeAnchor::Proofing { .. } => "w:proofErr",
     };
     let mut value = itoa::Buffer::new();
     let mut element = BytesStart::new(tag);
-    element.push_attribute(("w:id", value.format(id)));
-    if let Some(name) = name {
+    match anchor {
+        RangeAnchor::Comment(id)
+        | RangeAnchor::Bookmark { id, .. }
+        | RangeAnchor::Permission { id, .. } => {
+            element.push_attribute(("w:id", value.format(id)));
+        }
+        RangeAnchor::Proofing { kind } => {
+            let value = match (kind, start) {
+                ("spell", true) => "spellStart",
+                ("spell", false) => "spellEnd",
+                ("gram", true) => "gramStart",
+                ("gram", false) => "gramEnd",
+                _ => return None,
+            };
+            element.push_attribute(("w:type", value));
+        }
+    }
+    if let RangeAnchor::Bookmark { name, .. } = anchor
+        && start
+    {
         element.push_attribute(("w:name", name));
+    }
+    if let RangeAnchor::Permission { editor, group, .. } = anchor
+        && start
+    {
+        if let Some(editor) = editor {
+            element.push_attribute(("w:ed", editor));
+        }
+        if let Some(group) = group {
+            element.push_attribute(("w:edGrp", group));
+        }
     }
     let mut raw = Vec::new();
     Writer::new(&mut raw)

@@ -46,7 +46,8 @@ mod template;
 
 pub use building_block::{BuildingBlock, BuildingBlockInfo, BuildingBlockKind};
 pub use comments::{
-    BookmarkRef, CommentRef, RunPosition, RunRange, StoryRunPosition, StoryRunRange,
+    BookmarkRef, CommentRef, RunPosition, RunRange, StoryRangeKind, StoryRangeRef,
+    StoryRunPosition, StoryRunRange,
 };
 pub use comparison::{
     ComparisonDiagnostic, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind,

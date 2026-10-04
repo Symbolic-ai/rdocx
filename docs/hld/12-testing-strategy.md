@@ -1843,6 +1843,14 @@ sample identity, dimensions, normalization provenance, or case coverage.
 
 ## The Word corpus
 
+The cross-story range gate source-builds all eight supported story owners and
+block content controls inside related owners. It adds bookmark, comment,
+permission and proofing pairs, then reopens each package to check exact
+endpoints and owner identity. Alias-prefixed marker input, unknown siblings,
+same-boundary ordering, nested pairs, crossing-invalid pairs and atomic
+failed moves are regression cases. The hash harness remains unchanged because
+these marker edits do not change the existing rendered corpus.
+
 The Issue 158 acceptance gate fetches the original report attachment by its
 SHA-256 digest `d05f9c753c00eb804c6e345126ef7a1f7a4fc635d2c9b653b829922030cd875e`.
 The source-built identity matrix has 18 rows, including the no-attribute

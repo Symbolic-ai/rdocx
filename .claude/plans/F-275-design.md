@@ -1,6 +1,6 @@
 # F-275, Cross-story bookmarks, ranges, and annotations
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S89
 **Size**: L
 **Depends on**: F-253, F-254
@@ -71,11 +71,11 @@ Expected unchanged. Marker-only edits must not alter existing rendered fixtures.
 
 ## Implementation checklist
 
-- [ ] Extend marker parsing and anchoring in the existing paragraph model.
-- [ ] Add checked story-qualified range inventory and mutation to the facade.
-- [ ] Validate same-owner pairing and crossing before any candidate publication.
-- [ ] Cover aliases, nested owners, unsupported raw XML, round-trip and atomic negatives.
-- [ ] Run scoped verification and obtain a zero-finding microscope review.
+- [x] Extend marker parsing and anchoring in the existing paragraph model.
+- [x] Add checked story-qualified range inventory and mutation to the facade.
+- [x] Validate same-owner pairing and crossing before any candidate publication.
+- [x] Cover aliases, nested owners, unsupported raw XML, round-trip and atomic negatives.
+- [x] Run scoped verification and obtain a zero-finding microscope review.
 
 ## Open questions
 
