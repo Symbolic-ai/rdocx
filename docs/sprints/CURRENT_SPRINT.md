@@ -24,7 +24,7 @@ needed by later fields, templates, forms, and collaboration work.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-274 | Note separators, markers, and restart policy | L | pending | - |
+| F-274 | Note separators, markers, and restart policy | L | in-progress | codex |
 | F-275 | Cross-story bookmarks, ranges, and annotations | L | pending | - |
 | F-276 | Complete fragment conflict and dependency policy | L | pending | - |
 | F-277 | Glossary and building-block creation | L | pending | - |
