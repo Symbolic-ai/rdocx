@@ -6477,6 +6477,22 @@ is the reviewed source boundary for both prepared Issue 266 families.
 fresh package builds on macOS and Linux, both README and release-regression
 CI jobs pass, and the full gate remains green with 49 unchanged hash entries.
 
+### F-X176, Repair unified release inventory and respin PowerPoint (M)
+
+The first `rpptx-v0.13.0` tag passed platform builds and attestation checks,
+then stopped before publication because `cargo publish --dry-run` did not leave
+`.crate` files for the tag job's archive inventory. Retain that failed tag.
+Check the unpacked package directories produced by the successful dry run,
+and add a clean-target regression that rejects missing or extra selected
+packages. Prepare a new PowerPoint family version across all carriers and
+notes, keep the stable Word family at 0.15.0, and prove both tag paths with
+build-only rehearsal, full verification and a clean sprint review.
+**Depends on**: F-X175.
+**Test gate**: release regression. The clean-target package inventory check,
+both family version and notes contracts, manual build-only artifact rehearsal,
+hosted release regressions, full local gate and unchanged 49-entry hash harness
+all pass before `/close-sprint S88` and fresh release approvals.
+
 ### F-X168, Current issue and contribution closure evidence (M)
 
 Reconcile the eight open issues and 31 open PRs from the 2 October GitHub snapshot

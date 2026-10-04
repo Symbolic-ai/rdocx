@@ -1937,13 +1937,30 @@ stack correction. Hosted CI, local package evidence, the full gate and a clean
 sprint review must pass before `/close-sprint S87`. The two family publications
 then follow through separate `/release` approvals at the S87 main merge SHA.
 
-#### Sprint S88, Related stories, fields, templating, and forms
+#### Sprint S88, Release inventory and version repair
+
+**Goal**: repair the tag-only asset inventory failure before either registry
+publishes Issue 266 packages. Preserve the failed `rpptx-v0.13.0` tag, prepare a
+new PowerPoint version and the stable Word version from a reviewed main merge,
+and run a build-only rehearsal and the complete gate before fresh approvals.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X176 | Repair unified release inventory and respin PowerPoint | M |
+
+The tag workflow's publication dry run does not retain `.crate` archives on a
+fresh target directory. F-X176 checks the unpacked package inventory instead,
+adds a clean-target regression, refreshes version carriers and notes, and
+proves both selected release families before `/close-sprint S88`. The related
+story wave moves to S89 so publication follows this focused repair.
+
+#### Sprint S89, Related stories, fields, templating, and forms
 
 **Goal**: complete note policy, cross-story ranges, fragment transactions,
 glossary authoring, field-driven navigation and stable templating, then create
 modern and legacy forms, custom XML bindings and mail-merge package state.
-The related-story wave moved from S87 to make room for release repair.
-Reassess capacity and split this combined wave before implementation.
+The related-story wave moved from S87 through S88 to make room for release
+repairs. Reassess capacity and split this combined wave before implementation.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1974,7 +1991,7 @@ F-285 precedes typed controls and bindings. F-289 is the composed form gate.
 Mail merge remains offline by default and never treats unavailable external
 data as an empty successful result.
 
-#### Sprint S89, Collaboration authoring
+##### Collaboration authoring
 
 **Goal**: create complete Word revisions, comments, permission ranges, and
 comparison results rather than limiting the facade to existing-content

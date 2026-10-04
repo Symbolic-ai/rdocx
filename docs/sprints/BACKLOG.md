@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 15 | 0 | 39 |
-| X, Cross-cutting (opportunistic)              | 185 | 181 | 0 | 0 |
-| **Total** | **510** | **446** | **0** | **60** |
+| X, Cross-cutting (opportunistic)              | 186 | 181 | 0 | 1 |
+| **Total** | **511** | **446** | **0** | **61** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -498,23 +498,23 @@ regenerated, never hand-edited.
 | F-271 | Uniform rich header and footer editing | S86 | L | done |
 | F-272 | Rich footnote authoring | S86 | L | done |
 | F-273 | Rich endnote authoring | S86 | L | done |
-| F-274 | Note separators, markers, and restart policy | S88 | L | pending |
-| F-275 | Cross-story bookmarks, ranges, and annotations | S88 | L | pending |
-| F-276 | Complete fragment conflict and dependency policy | S88 | L | pending |
-| F-277 | Glossary and building-block creation | S88 | L | pending |
-| F-278 | General simple and complex field builder | S88 | L | pending |
-| F-279 | Pagination field materialization across stories | S88 | L | pending |
-| F-280 | Captions, sequences, and complete cross-references | S88 | M | pending |
-| F-281 | Indexes and tables of figures and authorities | S88 | L | pending |
-| F-282 | Citations and bibliography authoring | S88 | L | pending |
-| F-283 | Complete numbering-aware navigation fields | S88 | L | pending |
-| F-284 | Stable container-wide template grammar | S88 | L | pending |
-| F-285 | Content control creation and lifecycle | S88 | L | pending |
-| F-286 | Rich, repeating, and typed content controls | S88 | L | pending |
-| F-287 | Custom XML stores and data binding authoring | S88 | L | pending |
-| F-288 | Legacy form field creation | S88 | M | pending |
-| F-289 | Modern Word form authoring | S88 | L | pending |
-| F-290 | Mail-merge package and data-source authoring | S88 | M | pending |
+| F-274 | Note separators, markers, and restart policy | S89 | L | pending |
+| F-275 | Cross-story bookmarks, ranges, and annotations | S89 | L | pending |
+| F-276 | Complete fragment conflict and dependency policy | S89 | L | pending |
+| F-277 | Glossary and building-block creation | S89 | L | pending |
+| F-278 | General simple and complex field builder | S89 | L | pending |
+| F-279 | Pagination field materialization across stories | S89 | L | pending |
+| F-280 | Captions, sequences, and complete cross-references | S89 | M | pending |
+| F-281 | Indexes and tables of figures and authorities | S89 | L | pending |
+| F-282 | Citations and bibliography authoring | S89 | L | pending |
+| F-283 | Complete numbering-aware navigation fields | S89 | L | pending |
+| F-284 | Stable container-wide template grammar | S89 | L | pending |
+| F-285 | Content control creation and lifecycle | S89 | L | pending |
+| F-286 | Rich, repeating, and typed content controls | S89 | L | pending |
+| F-287 | Custom XML stores and data binding authoring | S89 | L | pending |
+| F-288 | Legacy form field creation | S89 | M | pending |
+| F-289 | Modern Word form authoring | S89 | L | pending |
+| F-290 | Mail-merge package and data-source authoring | S89 | M | pending |
 | F-291 | Tracked insertion and deletion authoring | S89 | L | pending |
 | F-292 | Property revisions and move ranges | S89 | L | pending |
 | F-293 | Complete comments and modern comment metadata | S89 | L | pending |
@@ -729,4 +729,5 @@ regenerated, never hand-edited.
 | F-X173 | Prepare unified rpptx 0.13.0 family | S86 | M | done |
 | F-X174 | Prepare unified rdocx 0.15.0 family | S86 | M | done |
 | F-X175 | Refresh CLI archive evidence after release hardening | S87 | S | done |
+| F-X176 | Repair unified release inventory and respin PowerPoint | S88 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->
