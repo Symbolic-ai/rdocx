@@ -20,6 +20,7 @@ dependency dangling or collide with destination identities.
 - `docs/hld/02-scope-and-non-goals.md`, "Modern DOCX capability matrix", row DOCX-043.
 - `docs/hld/03-architecture.md`, "Facade conventions", `DocumentFragment` closure and staged import.
 - `docs/hld/04-opc-and-packaging.md`, "Package integrity", reachable dependency remapping.
+- `docs/hld/13-risks-and-open-questions.md`, package and fragment import integrity risks.
 - `docs/hld/12-testing-strategy.md`, "The Word corpus", cross-document fragment gate.
 - `docs/hld/14-development-backlog.md`, "F-276, Complete fragment conflict and dependency policy".
 
@@ -31,22 +32,27 @@ owner, including body, headers, footers, notes, comments and nested containers.
 Compatibility is decided by the selected item's block or inline grammar, the
 target owner's admitted child kinds and the target part's relationship scope.
 Test every supported source and destination owner class and reject an
-incompatible pairing atomically. Build
-one dependency graph from selected XML and recursively reachable parts before
-editing the destination. Close styles and aliases, numbering and overrides,
+incompatible pairing atomically. Begin the dependency closure at references in
+selected owner XML and required identity companions, not unrelated source
+parts. Close styles and aliases, numbering and overrides,
 custom XML binding stores, notes, comment threads, revision and paired-marker
-identities, charts, diagrams, embeddings and package extensions. Traverse and
+identities, charts, diagrams, embeddings and package extensions. Include custom
+XML item properties and chart or diagram companion parts. Traverse internal
+relationships, including cycles, and
 copy every well-formed reachable package graph, including opaque extension
 parts, rather than excluding a dependency class by default. Preserve opaque
-payload bytes and their part-local relationship IDs verbatim. Give a copied
-opaque owner a fresh part name instead of rewriting its payload on collision.
-Remap package relationship targets and selected-owner references in a
-namespace-aware pass where collisions require it. Carry external relationships
-as external edges
-without fetching them. Validate that all copied internal edges resolve and
-that rewritten XML still parses. A graph whose references cannot be reconciled
-without corrupting any part fails before publication, leaving the destination
-unchanged.
+payload bytes and their part-local relationship IDs verbatim by assigning each
+copied opaque owner a fresh part name. Rewrite its `.rels` internal targets to
+the allocated part names, while retaining external targets, modes and types.
+Reject a graph only when its opaque payload itself would need an unsafe rewrite
+or an integrity-bound part cannot remain valid. Remap selected-owner references
+in a namespace-aware pass where collisions require it. Carry external
+relationships as external edges without fetching them. Validate copied typed
+companions and every internal edge before package reopen. Apply the existing
+signature invalidation policy to changed coverage and never retain an invalid
+signature as valid. An unknown payload with an internal name or reference that
+cannot be proven intact after remapping fails with a named reason before
+publication, leaving the destination unchanged.
 
 Retain `FragmentConflictPolicy` presets for equivalent reuse and rename-all.
 Apply equivalent reuse only to dependency classes with a proven structural
@@ -66,10 +72,10 @@ path F-277 will reuse.
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | `full_story_fragment_import_remaps_every_conflicting_dependency` | **Test gate.** Every supported story-owner class is exercised as source and destination. A complete story fragment with every named dependency imports twice with deterministic maps, no dangling IDs, and resolved package relationships. |
-| regression | `opaque_extension_graphs_copy_without_corrupting_parts` | Direct, nested, cyclic and collision-heavy opaque graphs copy with exact payloads where untouched, resolved internal edges and retained external edges. An unreconcilable graph rolls back without changing destination bytes. |
+| regression | `full_story_fragment_import_remaps_every_conflicting_dependency` | **Test gate.** Body, header, footer, footnote, endnote, comment, cell, control and text-box owners exercise every grammar-valid source and destination pairing, with invalid pairings rejected atomically. Two imports remap style alias cycles, numbering overrides, custom XML binding stores and item properties, note references, comment threads, paired endpoints, revisions, charts, diagrams and embeddings deterministically without dangling IDs. |
+| regression | `opaque_extension_graphs_copy_without_corrupting_parts` | Direct, nested, cyclic and collision-heavy opaque graphs copy with exact payloads, rewritten internal `.rels` targets, retained external target, mode and type, and valid signature handling. Root and nested external edges are never fetched. |
 | round-trip | `fragment_import_preserves_unmodeled_xml_and_reopens` | Selected retained XML and unrelated destination XML remain exact, with schema-valid changed content. |
-| regression | `fragment_import_rejects_incomplete_graph_atomically` | Split ownership, dangling internal targets, malformed, unsafe, unreconcilable or exhausted graphs leave destination bytes unchanged. External edges remain external and are never fetched. |
+| regression | `fragment_import_rejects_incomplete_graph_atomically` | Invalid section-property placement, split ownership, dangling or tampered internal targets, duplicate or case-equivalent part names, malformed, unsafe, unreconcilable or exhausted graphs leave destination bytes unchanged. |
 | regression | `fragment_conflict_policies_reuse_only_equivalent_graphs` | Equivalent-reuse and rename-all yield the declared deterministic style, numbering and leaf-part differences. |
 
 ## HLD impact
@@ -78,6 +84,7 @@ path F-277 will reuse.
 - `docs/hld/03-architecture.md`
 - `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/12-testing-strategy.md`
+- `docs/hld/13-risks-and-open-questions.md`
 - `docs/hld/14-development-backlog.md`
 
 ## Risk routing
