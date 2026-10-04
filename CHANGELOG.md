@@ -57,6 +57,8 @@ current-main release with matching CLI and Python versions.
 
 ### Fixed
 
+- The `rdocx` CLI runs comparison and other document commands on an eight MiB
+  stack on Windows, avoiding a stack overflow in the complete Word workflow.
 - Editing Word parts writes compact XML without repeating canonical namespace
   declarations on every retained paragraph. It preserves producer aliases,
   root attributes, unknown content, and unchanged package parts, building on
@@ -170,6 +172,8 @@ versions.
 
 ### Fixed
 
+- The `rpptx` CLI runs validation and other presentation commands on an eight
+  MiB stack on Windows, avoiding a stack overflow in the complete deck chain.
 - DrawingML text edits retain unmodelled body properties and turn assigned
   line feeds into paragraphs while preserving line separators in layout.
   Newly authored shapes receive theme style references in schema order.

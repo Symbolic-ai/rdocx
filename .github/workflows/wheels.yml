@@ -131,16 +131,16 @@ jobs:
               "$venv_python" -m pip install /dist/${PACKAGE_DISTRIBUTION}-*.whl pytest python-docx==1.2.0 python-pptx==1.0.2
               "$venv_python" -c "import ${PACKAGE_MODULE}"
               if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then
-                # The Issue 253 PDF text oracle requires pinned Poppler 26.01.0 in CI.
+                # Poppler is pinned in CI. The Issue 158 CLI chain needs Cargo, absent here.
                 "$venv_python" -m pytest \
                   crates/rdocx-py/tests/test_core.py \
                   crates/rdocx-py/tests/test_formatting_tables.py \
                   crates/rdocx-py/tests/test_shared.py \
                   crates/rdocx-py/tests/test_python_docx_parity.py \
-                  -k "not test_issue_253_pdf_text_view"
+                  -k "not test_issue_253_pdf_text_view and not test_issue_158_complete_word_workflow"
               else
-                # The SHA-bound Issue 158 viewer oracle runs in pinned CI, not bare wheel runners.
-                "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py -k "not test_issue_158_deck_fixture_acceptance"
+                # The Issue 158 viewer is pinned in CI. The Issue 217 CLI chain needs Cargo.
+                "$venv_python" -m pytest crates/rpptx-py/tests/test_documented_examples.py -k "not test_issue_158_deck_fixture_acceptance and not test_issue_217_complete_deck_chain"
               fi
             '
       - name: Attest built artifact

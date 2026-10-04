@@ -51,7 +51,7 @@ tag numbers and direct links to their verified GitHub releases.
 | release preparation | `rdocx_v0_15_0_unified_family_contract` | **Test gate.** Exact seven crates, CLI and Python metadata share 0.15.0, with no incubating package in the selected publish set. |
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected seven stay under 10 MiB. |
 | Python | local selected wheel and source distribution check | Build on the available host, check metadata, clean-install and priority runtime behavior without publication. The six-platform manual build-only `wheels.yml` run follows the final reviewed S86 push, before `/close-sprint`. |
-| wheel smoke | Python 3.9 and 3.12 clean installs | The release suite passes on the supported floor. Only the Issue 253 PDF text oracle is excluded from bare wheel runners and retained in CI with pinned Poppler 26.01.0. |
+| wheel smoke | Python 3.9 and 3.12 clean installs | The release suite passes on the supported floor. The Issue 253 PDF text oracle is excluded from bare wheel runners and retained in CI with pinned Poppler 26.01.0. The Issue 158 CLI chain is excluded only from the Cargo-free musllinux container and remains in native and pinned CI suites. Windows CLI comparison uses an eight MiB thread stack. |
 | release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release v0.15.0` after the S86 main merge. Hosted publication is a separate post-close gate. |
 
 ## HLD impact
@@ -67,8 +67,12 @@ tag numbers and direct links to their verified GitHub releases.
   exact-SHA approval before tagging.
 - **Wheel smoke environment**. The Issue 253 PDF text test requires exact
   Poppler 26.01.0, which bare release wheel runners do not install. Exclude
-  only this test from native and musllinux wheel smoke. Retain it in the
-  separately pinned CI suite and run the full local suite with pinned Poppler.
+  this test from native and musllinux wheel smoke. The hosted rehearsal also
+  showed that the Issue 158 complete Word workflow needs Cargo, which the
+  musllinux wheel-only container lacks. Windows CLI comparison overflowed the
+  default main-thread stack. Exclude the chain only from musllinux and run
+  Windows CLI work on an eight MiB thread stack. Retain the chain in native and
+  pinned CI suites. Run the full local suite with pinned Poppler.
 
 ## Hash harness
 

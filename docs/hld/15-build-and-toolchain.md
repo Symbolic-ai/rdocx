@@ -588,13 +588,22 @@ The manual `wheels.yml` build-only preflight runs at the final reviewed sprint
 SHA after the sprint push and before sprint close. Its exact selected artifacts
 and metadata are validated, installed and tested in Python 3.9 and 3.12.
 Wheel smoke runs the documented presentation examples on native and musllinux
-runners, excluding only the SHA-bound Issue 158 viewer fixture that requires
-the separately pinned LibreOffice oracle. The geometry comparison uses
+runners. The SHA-bound Issue 158 viewer fixture requires the separately pinned
+LibreOffice oracle and is excluded from bare wheel runners. The musllinux
+container also excludes the Issue 217 complete deck chain because its CLI
+validation subprocess needs Cargo, which is absent from that wheel-only
+container. Native wheel and pinned CI runs exercise that chain. The Windows
+`rpptx` CLI runs on an eight MiB thread stack so the complete deck validation
+does not overflow the default main-thread stack. The `rdocx` CLI uses the same
+Windows stack for complete document comparison. The geometry comparison uses
 explicit equal-length checks that work on Python 3.9. Typing and stub checks
 run under Python 3.12. Word wheel smoke runs its documented core, formatting,
 shared, and python-docx parity cases on native and musllinux runners. It
-excludes only the Issue 253 PDF text oracle, which requires Poppler 26.01.0
-and remains in the separately pinned CI suite. The same version carriers and source are then checked
+excludes the Issue 253 PDF text oracle, which requires Poppler 26.01.0 and
+remains in the separately pinned CI suite. The musllinux container also
+excludes the Issue 158 complete Word workflow because its CLI subprocess
+needs Cargo. Native wheel and pinned CI runs exercise that chain. The same
+version carriers and source are then checked
 at the main release boundary. Earlier published `py-*` tags and PyPI versions
 remain historical records. New releases use the two unified family tags.
 

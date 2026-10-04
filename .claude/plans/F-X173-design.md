@@ -50,7 +50,7 @@ contributor notifications after publication.
 | package | locally patched workspace publish dry run | All 22 candidate archives build and the selected 15 stay under 10 MiB. |
 | Python | local selected wheel and source distribution check | Build on the available host, check metadata, clean-install and priority runtime behavior without publication. The six-platform manual build-only `wheels.yml` run follows the final reviewed S86 push, before `/close-sprint`. |
 | release preparation | main-SHA release preflight | The prepared manifests, notes and workflow contract support `/release rpptx-v0.13.0` after the S86 main merge. Hosted publication is a separate post-close gate. |
-| wheel smoke | Python 3.9 and 3.12 clean installs | The documented-example suite passes on the supported floor with equal-length geometry comparisons. Only the SHA-bound Issue 158 LibreOffice oracle is excluded from bare wheel runners and retained in the pinned viewer suite. |
+| wheel smoke | Python 3.9 and 3.12 clean installs | The documented-example suite passes on the supported floor with equal-length geometry comparisons. The SHA-bound Issue 158 LibreOffice oracle is excluded from bare wheel runners. The Issue 217 CLI chain is excluded only from the Cargo-free musllinux container and remains in native and pinned CI suites. Windows CLI validation uses an eight MiB thread stack. |
 
 ## HLD impact
 
@@ -66,8 +66,12 @@ contributor notifications after publication.
 - **Wheel smoke environment**. A local Python 3.9 run found a test-only use of
   `zip(strict=True)`, which Python 3.9 cannot call, and an Issue 158 fixture
   requiring pinned LibreOffice. Keep equal-length assertions in that test.
-  Exclude only the viewer test from both native and musllinux release wheel
-  smoke commands. Retain the full viewer test in its pinned suite.
+  Exclude the viewer test from both native and musllinux release wheel smoke
+  commands. The hosted rehearsal also showed that the Issue 217 chain needs
+  Cargo in the musllinux container and that Windows CLI validation overflows
+  the default main-thread stack. Exclude the chain only from that wheel-only
+  container and run the CLI on an eight MiB thread stack on Windows. Retain
+  the full chain in native and pinned CI suites.
 
 ## Hash harness
 

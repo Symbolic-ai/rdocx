@@ -198,6 +198,21 @@ enum CommentCommand {
 }
 
 fn main() {
+    #[cfg(windows)]
+    {
+        // A full validation can exceed the one MiB Windows main-thread stack.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(run_cli)
+            .expect("start rpptx CLI thread")
+            .join()
+            .expect("rpptx CLI thread panicked");
+    }
+    #[cfg(not(windows))]
+    run_cli();
+}
+
+fn run_cli() {
     let cli = Cli::parse();
     if let Command::Validate { file } = &cli.command {
         match commands::validate(file) {

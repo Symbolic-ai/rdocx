@@ -406,6 +406,21 @@ enum TocCommand {
 }
 
 fn main() {
+    #[cfg(windows)]
+    {
+        // Full document comparison can exceed the one MiB Windows main-thread stack.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(run_cli)
+            .expect("start rdocx CLI thread")
+            .join()
+            .expect("rdocx CLI thread panicked");
+    }
+    #[cfg(not(windows))]
+    run_cli();
+}
+
+fn run_cli() {
     let cli = Cli::parse();
 
     // `validate` always carries a verdict in its exit status, so it is
