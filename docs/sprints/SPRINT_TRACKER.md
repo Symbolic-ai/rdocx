@@ -555,6 +555,7 @@ defended.
 | F-X173 | S86 | M | 3 | 1 | 2026-10-03 | Prepared rpptx 0.13.0 across 15 Rust crates, CLI and Python with family notes, package evidence and Python 3.9 wheel smoke repair |
 | F-X174 | S86 | M | 3 | 1 | 2026-10-04 | Prepared rdocx 0.15.0 across seven Rust crates, CLI and Python with family notes, clean wheel smoke, package evidence and 49 matching hashes |
 | F-X175 | S87 | S | 1 | 1 | 2026-10-04 | Refreshed both CLI archive footprints after Windows stack hardening and aligned the S87 roadmap check, with 49 matching hashes and a clean 22-crate dry run |
+| F-X176 | S88 | M | 3 | 1 | 2026-10-04 | Repaired the unified tag package inventory against dry-run directories and prepared rpptx 0.13.1 beside rdocx 0.15.0, with 49 matching hashes and a clean 22-crate dry run |
 
 ## Velocity
 
