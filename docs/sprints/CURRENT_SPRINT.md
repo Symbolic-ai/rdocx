@@ -20,7 +20,7 @@ local and hosted gates before separate publication approvals.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X176 | Repair unified release inventory and respin PowerPoint | M | pending | - |
+| F-X176 | Repair unified release inventory and respin PowerPoint | M | in-progress | codex |
 
 ## Sequencing note
 

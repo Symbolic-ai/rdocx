@@ -29,9 +29,9 @@ Move all 15 shared OOXML and PowerPoint crate manifests, their internal pins and
 
 | Category | Test | Asserts |
 |---|---|---|
-| unit | Fresh-directory package inventory tests in `scripts/test_sprint_workflow.py` | Exact selected package directories pass; missing, extra, and malformed directories fail for both families |
+| unit | Fresh-directory package inventory tests in `scripts/test_sprint_workflow.py` | Exact selected package directories pass. Missing, extra, and malformed directories fail for both families |
 | version | `unified-release-family` and `release-notes --check` for both tags | All manifest, Python and lockfile carriers agree with each tag and reviewed notes |
-| package | Patched `cargo publish --workspace --dry-run` and selected inventory command on a clean target | 22 publishable crates package; selected 15 and 7 directories match; sizes remain below 10 MiB |
+| package | Patched `cargo publish --workspace --dry-run` and selected inventory command on a clean target | 22 publishable crates package. Selected 15 and 7 directories match, with sizes below 10 MiB |
 | artifact | Manual `wheels.yml` build-only dispatch at the reviewed sprint SHA | Both six-wheel and sdist sets, metadata, installed runtime, typing and stubs pass without publication |
 | release regression | Hosted Release regressions and Docs jobs at the final sprint SHA | Version and workflow contracts pass before close |
 | integrated | `/verify --full`, hash harness and clean sprint review | Complete gate passes with 49 unchanged hashes |
