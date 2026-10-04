@@ -28,8 +28,10 @@ path starts a fresh page. Existing `CT_NoteProperties` fields in
 Expose checked document and section note policy setters on `Document` and
 `SectionMut` using concrete note-family, number-format, restart and placement
 enums. Preserve the existing note property source slots and unknown children.
-Add checked APIs to create or replace separator and continuation-separator
-records in the relationship-resolved note parts. Carry optional custom mark
+Add checked APIs to create or replace separator, continuation-separator and
+continuation-notice records in the relationship-resolved note parts. Cover
+document defaults, section overrides and the explicit absence of an override.
+Carry optional custom mark
 text through both the body reference and note marker without changing the
 normal note ID namespace. A marker's source of truth is the reference and its
 note record, not the note part's physical order.
@@ -39,7 +41,8 @@ effective document and section policy. Restart by section or page as selected,
 then format the ordinal once for both body and note layouts. Keep custom marks
 out of the numeric stream. Place footnotes at the configured page or section
 boundary and endnotes at the configured section or document boundary. Render
-authored separator content using the note story rather than a synthetic line.
+authored separator and continuation content using the note story rather than a
+synthetic line. Preserve the family-specific special-record ID namespace.
 Stage every package mutation and publish only after save and reopen.
 
 ## Rejected alternatives
@@ -51,7 +54,7 @@ Stage every package mutation and publish only after save and reopen.
 
 | Category | Test | Asserts |
 |---|---|---|
-| differential | `note_policies_match_pinned_word_markers_and_page_placement` | **Test gate.** Every supported family, format, start, restart, custom mark and placement yields the pinned Word marker and page without changing unrelated section numbering. |
+| differential | `note_policies_match_pinned_word_markers_and_page_placement` | **Test gate.** Both families cover document default and section override, each supported format, start, restart, custom mark and placement, including note carryover and continuation notice, without changing unrelated section numbering. |
 | round-trip | `note_policy_preserves_unknown_note_and_section_xml` | Alias-prefixed inputs parse, changed modeled children write in schema order, and unmodeled children retain exact bytes. |
 | regression | `body_and_note_markers_share_formatted_labels` | Reordering note elements and repeated references do not change first-occurrence labels. |
 | regression | `invalid_note_policy_rolls_back_atomically` | Invalid format, placement or separator mutation leaves complete package bytes unchanged. |

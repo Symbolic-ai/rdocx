@@ -28,7 +28,10 @@ dependency dangling or collide with destination identities.
 Extend the existing `DocumentFragment` source selection and
 `Document::import_fragment` destination to every compatible supported story
 owner, including body, headers, footers, notes, comments and nested containers.
-Reject an incompatible source and destination pairing atomically. Build
+Compatibility is decided by the selected item's block or inline grammar, the
+target owner's admitted child kinds and the target part's relationship scope.
+Test every supported source and destination owner class and reject an
+incompatible pairing atomically. Build
 one dependency graph from selected XML and recursively reachable parts before
 editing the destination. Close styles and aliases, numbering and overrides,
 custom XML binding stores, notes, comment threads, revision and paired-marker
@@ -56,7 +59,8 @@ path F-277 will reuse.
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | `full_story_fragment_import_remaps_every_conflicting_dependency` | **Test gate.** A complete story fragment with every named dependency imports twice with deterministic maps, no dangling IDs, and resolved package relationships. |
+| regression | `full_story_fragment_import_remaps_every_conflicting_dependency` | **Test gate.** Every supported story-owner class is exercised as source and destination. A complete story fragment with every named dependency imports twice with deterministic maps, no dangling IDs, and resolved package relationships. |
+| regression | `opaque_extension_import_requires_a_safe_closed_graph` | A closed extension graph with no internal XML reference rewrite copies intact, while an unrewritable graph rejects with complete destination rollback. |
 | round-trip | `fragment_import_preserves_unmodeled_xml_and_reopens` | Selected retained XML and unrelated destination XML remain exact, with schema-valid changed content. |
 | regression | `fragment_import_rejects_incomplete_graph_atomically` | Split ownership, dangling, external, malformed, unsafe or exhausted graphs leave destination bytes unchanged. |
 | regression | `fragment_conflict_policies_reuse_only_equivalent_graphs` | Equivalent-reuse and rename-all yield the declared deterministic style, numbering and leaf-part differences. |
@@ -89,5 +93,5 @@ Expected unchanged. Existing fixture imports keep their current serialized outpu
 
 ## Open questions
 
-- Answered: any compatible supported source and destination story pair is valid.
+- Answered: any grammar-compatible supported source and destination story pair is valid. Ownership and relationship scope are checked for every pair.
 - Answered: copy only safe closed opaque extension graphs that need no internal XML reference rewrite. Reject the rest.

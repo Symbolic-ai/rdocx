@@ -40,6 +40,8 @@ glossary relationship, part and content-type override on first use. Retain a
 valid empty glossary part after the last entry is removed. Preserve unrelated
 package parts and producer prefixes. Reject unsafe,
 duplicate, stale or incomplete graphs before publishing.
+Teach the glossary reader and writer to accept and produce one `w:docParts`
+container with zero entries for this retained empty-part state.
 
 ## Rejected alternatives
 
@@ -52,6 +54,7 @@ duplicate, stale or incomplete graphs before publishing.
 |---|---|---|
 | round-trip | `public_created_building_blocks_insert_and_reopen` | **Test gate.** New AutoText, building block and placeholder entries retain category, behavior, content, relationships, content-control placeholder binding and unsupported siblings after insertion and reopen. |
 | regression | `glossary_lifecycle_preserves_untouched_docparts` | Add, update and remove preserve untouched entry and root bytes in schema order. |
+| round-trip | `last_entry_removal_keeps_a_reopenable_empty_glossary` | The one-entry to zero-entry transition keeps its safe relationship and content type and reopens as an empty inventory. |
 | regression | `invalid_glossary_graph_rolls_back_atomically` | Stale identity, unsafe relationship, bad content or failed fragment import leaves the package unchanged. |
 
 ## HLD impact
