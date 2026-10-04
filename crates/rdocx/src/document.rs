@@ -51,7 +51,8 @@ use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc, VMerge};
 use rdocx_oxml::text::{
-    CT_P, CT_R, RunContent, story_field_instruction_has_name, story_simple_field_is_typed,
+    CT_P, CT_R, RangeAnchor, RunContent, story_field_instruction_has_name,
+    story_simple_field_is_typed,
 };
 use rdocx_oxml::units::Twips;
 use rdocx_oxml::web_settings::CT_WebSettings;
@@ -3900,6 +3901,7 @@ impl DocumentIdentifiers {
             rel_types::NUMBERING => "rdocxDeferredNumbering",
             rel_types::SETTINGS => "rdocxDeferredSettings",
             rel_types::FOOTNOTES => "rdocxDeferredFootnotes",
+            rel_types::ENDNOTES => "rdocxDeferredEndnotes",
             rel_types::COMMENTS => "rdocxDeferredComments",
             crate::comments::COMMENTS_EXTENDED_REL_TYPE => "rdocxDeferredCommentsExtended",
             _ => {
@@ -6926,17 +6928,87 @@ fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) 
     Ok(())
 }
 
-fn serialized_footnote_fragment(footnote: &rdocx_oxml::footnotes::CT_Footnote) -> Result<Vec<u8>> {
-    let serialized = rdocx_oxml::footnotes::CT_Footnotes {
-        footnotes: vec![footnote.clone()],
-    }
-    .to_xml_footnotes()?;
-    let owner = scan_story_owners(&serialized, StoryKind::Footnote)?
+fn serialized_note_fragment(
+    note: &rdocx_oxml::footnotes::CT_Footnote,
+    kind: StoryKind,
+) -> Result<Vec<u8>> {
+    let notes = rdocx_oxml::footnotes::CT_Footnotes {
+        footnotes: vec![note.clone()],
+    };
+    let serialized = match kind {
+        StoryKind::Footnote => notes.to_xml_footnotes()?,
+        StoryKind::Endnote => notes.to_xml_endnotes()?,
+        _ => return Err(Error::Other("invalid note story kind".to_owned())),
+    };
+    let owner = scan_story_owners(&serialized, kind)?
         .into_iter()
         .next()
-        .ok_or_else(|| Error::Other("serialized footnote has no story owner".to_owned()))?;
+        .ok_or_else(|| Error::Other("serialized note has no story owner".to_owned()))?;
     let scope = story_namespace_scope_at(&serialized, owner.full.start)?;
     close_content_fragment_namespaces(&serialized[owner.full], &scope)
+}
+
+fn serialized_footnote_fragment(footnote: &rdocx_oxml::footnotes::CT_Footnote) -> Result<Vec<u8>> {
+    serialized_note_fragment(footnote, StoryKind::Footnote)
+}
+
+fn remove_note_references(xml: &[u8], id: i32, kind: StoryKind) -> Result<Vec<u8>> {
+    let local_name = match kind {
+        StoryKind::Footnote => b"footnoteReference".as_slice(),
+        StoryKind::Endnote => b"endnoteReference".as_slice(),
+        _ => return Err(Error::Other("invalid note story kind".to_owned())),
+    };
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut ranges = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("footnote reference scan failed: {error}")))?;
+        let start = match &event {
+            Event::Start(start) | Event::Empty(start)
+                if word_element(&namespace) && start.local_name().as_ref() == local_name =>
+            {
+                start
+            }
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        let mut reference_id = None;
+        for attribute in start.attributes() {
+            let attribute = attribute.map_err(|error| {
+                Error::Other(format!("footnote reference attribute scan failed: {error}"))
+            })?;
+            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+            if word_element(&namespace) && local.as_ref() == b"id" {
+                let value = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                    .map_err(|error| {
+                        Error::Other(format!("footnote reference ID is invalid: {error}"))
+                    })?;
+                reference_id = value.parse::<i32>().ok();
+            }
+        }
+        if reference_id == Some(id) {
+            let end = if matches!(event, Event::Empty(_)) {
+                reader.buffer_position() as usize
+            } else {
+                story_element_end(xml, before)?
+            };
+            ranges.push(before..end);
+        }
+        buffer.clear();
+    }
+    let mut updated = xml.to_vec();
+    for range in ranges.into_iter().rev() {
+        updated.drain(range);
+    }
+    Ok(updated)
 }
 
 fn append_story_fragments_to_root(
@@ -14467,6 +14539,89 @@ impl Document {
         }
     }
 
+    pub(crate) fn anchor_related_story_comment(
+        &mut self,
+        start: &ContentLocation,
+        start_run: usize,
+        end: &ContentLocation,
+        end_run: usize,
+        id: i32,
+    ) -> Result<()> {
+        if !matches!(
+            start.story.kind,
+            StoryKind::Header | StoryKind::Footer | StoryKind::Footnote | StoryKind::Endnote
+        ) || start.story != end.story
+        {
+            return Err(Error::Other(
+                "comment range must stay within one header, footer, or note story".to_owned(),
+            ));
+        }
+        let (source, start_item) = self.story_item_source(start)?;
+        let part_name = source.part_name.clone();
+        let source_xml = source.xml.into_owned();
+        let (_, end_item) = self.story_item_source(end)?;
+        let read_paragraph = |item: &StoryItemSpan| -> Result<CT_P> {
+            if item.kind != StoryItemKind::Paragraph {
+                return Err(Error::Other(
+                    "comment positions must identify paragraphs".to_owned(),
+                ));
+            }
+            let scope = story_namespace_scope_at(&source_xml, item.full.start)?;
+            let closed = close_content_fragment_namespaces(&source_xml[item.full.clone()], &scope)?;
+            Ok(CT_P::from_xml_fragment(&closed)?)
+        };
+        let mut first = read_paragraph(&start_item)?;
+        let mut last = if start_item.full == end_item.full {
+            first.clone()
+        } else {
+            read_paragraph(&end_item)?
+        };
+        for (label, index, paragraph) in [("start", start_run, &first), ("end", end_run, &last)] {
+            let count = paragraph.accepted_run_paths().len();
+            if index > count {
+                return Err(Error::Other(format!(
+                    "comment range {label} run index {index} exceeds paragraph run count {count}"
+                )));
+            }
+        }
+        if start_item.full == end_item.full {
+            if start_run > end_run {
+                return Err(Error::Other(
+                    "comment story range start must not follow its end".to_owned(),
+                ));
+            }
+            first
+                .anchor_accepted_range(Some(start_run), Some(end_run), RangeAnchor::Comment(id))
+                .map_err(|error| {
+                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                })?;
+        } else {
+            first
+                .anchor_accepted_range(Some(start_run), None, RangeAnchor::Comment(id))
+                .map_err(|error| {
+                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                })?;
+            last.anchor_accepted_range(None, Some(end_run), RangeAnchor::Comment(id))
+                .map_err(|error| {
+                    Error::Other(format!("comment range cannot be anchored: {error}"))
+                })?;
+        }
+        let same_paragraph = start_item.full == end_item.full;
+        let mut edits = vec![(start_item.full, first)];
+        if !same_paragraph {
+            edits.push((end_item.full, last));
+        }
+        edits.sort_by_key(|item| std::cmp::Reverse(item.0.start));
+        let mut updated = source_xml;
+        for (span, paragraph) in edits {
+            let scope = story_namespace_scope_at(&updated, span.start)?;
+            let xml = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
+            let xml = close_content_fragment_namespaces(&xml, &scope)?;
+            updated.splice(span, xml);
+        }
+        set_story_source_xml(self, &part_name, updated)
+    }
+
     fn story_item_source<'a>(
         &'a self,
         location: &ContentLocation,
@@ -15999,6 +16154,302 @@ impl Document {
             .expect("an in-memory document can refresh a typed footnote");
         self.commit_staged_mutation(candidate);
         id
+    }
+
+    /// Create a normal footnote and append its reference to a direct body paragraph.
+    /// The note and reference are published together only after the staged package reopens.
+    pub fn create_footnote(&mut self, reference: &ContentLocation, text: &str) -> Result<i32> {
+        if reference.story.kind != StoryKind::Body || reference.index_path.len() != 1 {
+            return Err(Error::Other(
+                "footnote reference must identify a direct body paragraph".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.story_paragraph_mut(reference)?;
+        let occupied = candidate
+            .footnotes
+            .footnotes
+            .iter()
+            .map(|note| note.id)
+            .collect::<HashSet<_>>();
+        let mut id = 2_i32;
+        while occupied.contains(&id) {
+            id = id
+                .checked_add(1)
+                .ok_or_else(|| Error::Other("footnote ID range is exhausted".to_owned()))?;
+        }
+        candidate.reserve_footnotes_bundle()?;
+        let mut paragraph = CT_P::new();
+        paragraph.add_run(text);
+        candidate
+            .footnotes
+            .footnotes
+            .push(rdocx_oxml::footnotes::CT_Footnote {
+                id,
+                note_type: rdocx_oxml::footnotes::NoteType::Normal,
+                paragraphs: vec![paragraph],
+            });
+        candidate.footnotes_dirty = true;
+        candidate.flush_dirty_related_story_models()?;
+        candidate.refresh_related_story_caches()?;
+        candidate.invalidate_layout();
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::FootnoteRef { id }];
+        candidate.story_paragraph_mut(reference)?.runs.push(run);
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Create a normal endnote and append its reference to a direct body paragraph.
+    /// The note and reference are published together only after the staged package reopens.
+    pub fn create_endnote(&mut self, reference: &ContentLocation, text: &str) -> Result<i32> {
+        if reference.story.kind != StoryKind::Body || reference.index_path.len() != 1 {
+            return Err(Error::Other(
+                "endnote reference must identify a direct body paragraph".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.story_paragraph_mut(reference)?;
+        candidate.flush_to_package()?;
+        let existing_part = candidate.note_part_name(StoryKind::Endnote)?;
+        let part_name = candidate.reserve_document_part_bundle(
+            existing_part.as_deref(),
+            "/word/endnotes.xml",
+            rel_types::ENDNOTES,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+        )?;
+        let source = match candidate.package.get_part(&part_name) {
+            Some(xml) => xml.to_vec(),
+            None => rdocx_oxml::footnotes::CT_Footnotes::new().to_xml_endnotes()?,
+        };
+        let existing = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&source)?;
+        let occupied = existing
+            .footnotes
+            .iter()
+            .map(|note| note.id)
+            .collect::<HashSet<_>>();
+        let mut id = 2_i32;
+        while occupied.contains(&id) {
+            id = id
+                .checked_add(1)
+                .ok_or_else(|| Error::Other("endnote ID range is exhausted".to_owned()))?;
+        }
+        let mut paragraph = CT_P::new();
+        paragraph.add_run(text);
+        let note = rdocx_oxml::footnotes::CT_Footnote {
+            id,
+            note_type: rdocx_oxml::footnotes::NoteType::Normal,
+            paragraphs: vec![paragraph],
+        };
+        let fragment = serialized_note_fragment(&note, StoryKind::Endnote)?;
+        let updated =
+            append_story_fragments_to_root(&source, b"endnotes", b"endnote", &[fragment])?;
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        candidate.invalidate_layout();
+        let mut run = CT_R::new("");
+        run.content = vec![RunContent::EndnoteRef { id }];
+        candidate.story_paragraph_mut(reference)?.runs.push(run);
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Find the current story identity for a normal footnote ID.
+    pub fn footnote_story(&self, id: i32) -> Result<Option<StoryId>> {
+        self.note_story(StoryKind::Footnote, id)
+    }
+
+    /// Find the current story identity for a normal endnote ID.
+    pub fn endnote_story(&self, id: i32) -> Result<Option<StoryId>> {
+        self.note_story(StoryKind::Endnote, id)
+    }
+
+    fn note_part_name(&self, kind: StoryKind) -> Result<Option<String>> {
+        if kind == StoryKind::Footnote {
+            return Ok(self.footnotes_part_name.clone());
+        }
+        if kind != StoryKind::Endnote {
+            return Err(Error::Other("invalid note story kind".to_owned()));
+        }
+        let mut targets = self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .map(|relationships| relationships.items.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::ENDNOTES
+                    && relationship_is_internal(relationship)
+            })
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target)
+            });
+        let first = targets.next();
+        if targets.next().is_some() {
+            return Err(Error::Other(
+                "endnotes part has multiple internal relationships".to_owned(),
+            ));
+        }
+        Ok(first)
+    }
+
+    fn note_story(&self, kind: StoryKind, id: i32) -> Result<Option<StoryId>> {
+        let Some(part_name) = self.note_part_name(kind)? else {
+            if kind == StoryKind::Footnote
+                && self.footnotes.footnotes.iter().any(|note| {
+                    note.id == id && note.note_type == rdocx_oxml::footnotes::NoteType::Normal
+                })
+            {
+                return Err(Error::Other(
+                    "normal footnote has no relationship-resolved part".to_owned(),
+                ));
+            }
+            return Ok(None);
+        };
+        let endnotes;
+        let notes = if kind == StoryKind::Footnote {
+            &self.footnotes
+        } else {
+            let xml = self
+                .package
+                .get_part(&part_name)
+                .ok_or_else(|| Error::Other(format!("endnotes part {part_name} is missing")))?;
+            endnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml)?;
+            &endnotes
+        };
+        let normal = notes
+            .footnotes
+            .iter()
+            .filter(|note| note.note_type == rdocx_oxml::footnotes::NoteType::Normal)
+            .collect::<Vec<_>>();
+        let mut matches = normal.iter().enumerate().filter(|(_, note)| note.id == id);
+        let Some((index, _)) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(Error::Other(format!("{kind:?} ID {id} is ambiguous")));
+        }
+        let stories = self
+            .stories()?
+            .into_iter()
+            .filter(|story| story.kind == kind && story.part_name == part_name)
+            .collect::<Vec<_>>();
+        if stories.len() != normal.len() {
+            return Err(Error::Other(
+                "note story count differs from the normal note stream".to_owned(),
+            ));
+        }
+        Ok(stories.into_iter().nth(index))
+    }
+
+    /// Move a normal footnote before another normal footnote without changing IDs.
+    pub fn move_footnote_before(&mut self, id: i32, before_id: i32) -> Result<()> {
+        self.move_note_before(StoryKind::Footnote, id, before_id)
+    }
+
+    /// Move a normal endnote before another normal endnote without changing IDs.
+    pub fn move_endnote_before(&mut self, id: i32, before_id: i32) -> Result<()> {
+        self.move_note_before(StoryKind::Endnote, id, before_id)
+    }
+
+    fn move_note_before(&mut self, kind: StoryKind, id: i32, before_id: i32) -> Result<()> {
+        let label = if kind == StoryKind::Footnote {
+            "footnote"
+        } else {
+            "endnote"
+        };
+        let source_story = self
+            .note_story(kind, id)?
+            .ok_or_else(|| Error::Other(format!("{label} ID {id} does not exist")))?;
+        let target_story = self
+            .note_story(kind, before_id)?
+            .ok_or_else(|| Error::Other(format!("{label} ID {before_id} does not exist")))?;
+        if id == before_id {
+            return Ok(());
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let part_name = source_story.part_name.clone();
+        let mut xml = candidate
+            .package
+            .get_part(&part_name)
+            .ok_or_else(|| Error::Other(format!("{label}s part {part_name} is missing")))?
+            .to_vec();
+        let owners = scan_story_owners(&xml, kind)?;
+        let source = owners
+            .iter()
+            .find(|owner| owner.kind == kind && owner.owner_index == source_story.owner_index)
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: source_story.clone(),
+            })?;
+        let target = owners
+            .iter()
+            .find(|owner| owner.kind == kind && owner.owner_index == target_story.owner_index)
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: target_story.clone(),
+            })?;
+        let fragment = xml[source.full.clone()].to_vec();
+        let source_range = source.full.clone();
+        let target_start = target.full.start;
+        xml.drain(source_range.clone());
+        let insertion = if source_range.start < target_start {
+            target_start - source_range.len()
+        } else {
+            target_start
+        };
+        xml.splice(insertion..insertion, fragment);
+        set_story_source_xml(&mut candidate, &part_name, xml)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove a normal footnote and every matching reference in the main body.
+    pub fn remove_footnote(&mut self, id: i32) -> Result<()> {
+        self.remove_note(StoryKind::Footnote, id)
+    }
+
+    /// Remove a normal endnote and every matching reference in the main body.
+    pub fn remove_endnote(&mut self, id: i32) -> Result<()> {
+        self.remove_note(StoryKind::Endnote, id)
+    }
+
+    fn remove_note(&mut self, kind: StoryKind, id: i32) -> Result<()> {
+        let label = if kind == StoryKind::Footnote {
+            "footnote"
+        } else {
+            "endnote"
+        };
+        let story = self
+            .note_story(kind, id)?
+            .ok_or_else(|| Error::Other(format!("{label} ID {id} does not exist")))?;
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let part_name = story.part_name.clone();
+        let mut notes_xml = candidate
+            .package
+            .get_part(&part_name)
+            .ok_or_else(|| Error::Other(format!("{label}s part {part_name} is missing")))?
+            .to_vec();
+        let owner = scan_story_owners(&notes_xml, kind)?
+            .into_iter()
+            .find(|owner| owner.kind == kind && owner.owner_index == story.owner_index)
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: story.clone(),
+            })?;
+        notes_xml.drain(owner.full);
+        let document_xml = candidate
+            .package
+            .get_part(&candidate.doc_part_name)
+            .ok_or_else(|| Error::Other("main document part is missing".to_owned()))?;
+        let without_references = remove_note_references(document_xml, id, kind)?;
+        let document_part = candidate.doc_part_name.clone();
+        set_story_source_xml(&mut candidate, &document_part, without_references)?;
+        set_story_source_xml(&mut candidate, &part_name, notes_xml)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
     }
 
     /// Add a paragraph with the given text and return a mutable reference.

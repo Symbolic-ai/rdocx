@@ -10,7 +10,9 @@ use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{namespace_bindings, word_prefixes_at};
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::text::{CT_P, declare_w14_on_part_root};
+use crate::text::{
+    CT_P, ROOT_R_BINDING, ROOT_WP_BINDING, declare_w14_on_part_root, root_binding_scope,
+};
 
 const VML_NS: &str = "urn:schemas-microsoft-com:vml";
 const OFFICE_NS: &str = "urn:schemas-microsoft-com:office:office";
@@ -343,6 +345,20 @@ impl CT_HdrFtr {
     }
 
     fn to_xml_root(&self, root_tag: &str) -> Result<Vec<u8>> {
+        let wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        let wp_root_is_canonical = self
+            .extra_namespaces
+            .iter()
+            .find(|(name, _)| name == "xmlns:wp")
+            .is_none_or(|(_, namespace)| namespace == wp_ns);
+        let _binding_scope = root_binding_scope(
+            ROOT_R_BINDING
+                | if wp_root_is_canonical {
+                    ROOT_WP_BINDING
+                } else {
+                    0
+                },
+        );
         let mut writer = Writer::new(Vec::new());
 
         writer.write_event(Event::Decl(BytesDecl::new(
@@ -359,7 +375,6 @@ impl CT_HdrFtr {
         ));
 
         // Always emit xmlns:wp for drawing elements
-        let wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
         let mut has_wp = false;
         for (key, _) in &self.extra_namespaces {
             if key == "xmlns:wp" {

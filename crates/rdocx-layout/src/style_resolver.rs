@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use oxml_layout::SourceNodeId;
+use oxml_layout::{NoteRef, SourceNodeId};
 use rdocx_oxml::borders::CT_Tabs;
 use rdocx_oxml::numbering::{CT_Lvl, CT_Numbering, ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
@@ -118,6 +118,7 @@ pub struct NumberingState {
     bookmark_sources: HashMap<String, SourceNodeId>,
     resolved_by_bookmark: HashMap<String, (SourceNodeId, ResolvedNumbering)>,
     main_story_sources: HashSet<SourceNodeId>,
+    note_labels: HashMap<NoteRef, i32>,
 }
 
 impl Default for NumberingState {
@@ -134,6 +135,7 @@ impl NumberingState {
             bookmark_sources: HashMap::new(),
             resolved_by_bookmark: HashMap::new(),
             main_story_sources: HashSet::new(),
+            note_labels: HashMap::new(),
         }
     }
 
@@ -227,7 +229,16 @@ impl NumberingState {
             bookmark_sources: self.bookmark_sources.clone(),
             resolved_by_bookmark: self.resolved_by_bookmark.clone(),
             main_story_sources: self.main_story_sources.clone(),
+            note_labels: self.note_labels.clone(),
         }
+    }
+
+    pub(crate) fn set_note_labels(&mut self, labels: HashMap<NoteRef, i32>) {
+        self.note_labels = labels;
+    }
+
+    pub(crate) fn note_label(&self, note: NoteRef) -> i32 {
+        self.note_labels.get(&note).copied().unwrap_or(note.id)
     }
 
     pub(crate) fn merge_references(&mut self, other: &Self) {

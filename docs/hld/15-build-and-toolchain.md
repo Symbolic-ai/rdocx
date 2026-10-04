@@ -404,15 +404,13 @@ The immutable v0.13.0 tag at reviewed SHA
 then stopped before `rdocx`, `rdocx-cli`, and the GitHub release because
 registry `oxml-opc@0.10.0` lacks the F-238 Word main content-type constants.
 
-`publish.yml` accepts stable `v*` and incubating `rpptx-v*` tags. Before either
-real allowlist it reproduces the hash harness and runs self-contained stable
-and incubating metadata regressions without external development tools. The
-stable regression requires prepared workspace version 0.14.0, eight internal
-pins, ten inherited lockfile packages, the `rdocx` Python project version,
-unpublished `rdocx-wasm`, stable README requirements, and the exact
-seven-package crates.io set. The incubating regression requires the exact
-0.12.1 versions including `rpptx-py`, pins, lockfile entries, publication
-flags, and non-empty package descriptions.
+`wheels.yml` accepts new stable `v*` and incubating `rpptx-v*` tags. Before
+publication it reproduces the hash harness and validates the tag-driven
+selected family: every selected Rust crate and binding version, each workspace
+pin when present, and the Python project version. Historical fixed-version
+regressions continue to protect the earlier immutable release records in the
+local policy suite. The tag preflight is version-agnostic so a reviewed patch
+or minor release does not inherit an S73 version literal.
 
 **The same regressions run in the canonical local gate.** `/verify` step 6 runs
 `python3 -m unittest scripts.test_sprint_workflow`, the module holding both
@@ -434,7 +432,7 @@ Every stable or incubating tag also requires one reviewed `CHANGELOG.md`
 section whose second-level heading is the exact tag. The required ordered
 subsections are Highlights, Added, Fixed, Compatibility, and Contributors.
 The deterministic workflow CLI checks that contract and renders only the
-reviewed body. Both modes are read-only. `publish.yml` runs the check before
+reviewed body. Both modes are read-only. `wheels.yml` runs the check before
 either crates.io allowlist, stores one render in runner-temporary storage, and
 byte-compares a fresh render with that artifact immediately before passing it
 to `gh release create --notes-file`. Generated GitHub notes are not a release
@@ -452,16 +450,21 @@ keeps archive verification enabled. Registry waits separate dependency layers,
 and authentication, network, compilation and duplicate-version failures fail
 the job.
 
-CLI asset construction and aggregation have repository content read permission
-and no registry token. The aggregate asset job must pass before the crates.io
-publish job receives `CARGO_REGISTRY_TOKEN` or can begin. GitHub release
-creation then waits for both the completed publish job and the reviewed asset
-artifact, downloads exactly that artifact, and attaches its six selected-family
-archives plus `SHA256SUMS` beside the reviewed notes. Every external action in
-these jobs is bound to a full reviewed commit SHA. The CLI crate manifests map
-cargo-binstall directly to the same stable or incubating tag namespace and
-target archive names. Python tags use their separate wheel workflow and never
-carry these executable assets.
+A single `wheels.yml` tag run builds the selected Rust CLI, Python wheels and
+source distribution. The six CLI and seven Python build jobs attest their
+produced files using GitHub build provenance with job-scoped OIDC and
+attestation permissions. The aggregate job validates exactly thirteen
+selected-family payloads, verifies each downloaded subject with `gh attestation
+verify FILE -R tensorbee/rdocx` against the workflow and tag source SHA, and
+writes one `SHA256SUMS` over all thirteen files. Both registry publication
+jobs depend on that gate. Only the crates.io job receives
+`CARGO_REGISTRY_TOKEN`. The PyPI job stays directly in `wheels.yml`, under
+`pypi` environment OIDC, to preserve its trusted publisher filename.
+The GitHub release job waits for both registry jobs and publishes the thirteen
+payloads, checksum file and reviewed notes as one release. A partial registry
+publication retains the immutable tag and leaves the GitHub release absent.
+All third-party actions are pinned to reviewed full commit SHAs. The CLI
+manifest cargo-binstall URLs point to these same family tags and archives.
 
 The generated archives remain subject to the crates.io 10 MiB ceiling.
 `oxml-layout` contains all 27 bundled fonts and their required legal files, and
@@ -478,24 +481,20 @@ several megabytes a full family weighs. The two upstream sources measured
 subset command, licence, and notice ship with `oxml-layout`. Package checks
 verify that inventory and keep the archive below the same 10 MiB ceiling.
 
-Four tag namespaces:
+Two new release tag namespaces:
 
 | Tag | Workflow | Publishes |
 |---|---|---|
-| `v*` | `publish.yml` | crates.io, the exact seven-package stable family |
-| `rpptx-v*` | `publish.yml` | crates.io, the exact 15-package incubating family |
-| `py-rdocx-v*` | `wheels.yml` | PyPI `rdocx` via OIDC trusted publishing |
-| `py-rpptx-v*` | `wheels.yml` | PyPI `rpptx` via OIDC trusted publishing |
+| `v*` | `wheels.yml` | stable crates.io family, `rdocx` CLI and PyPI distribution |
+| `rpptx-v*` | `wheels.yml` | incubating crates.io family, `rpptx` CLI and PyPI distribution |
 
-Wheels are separate so a Rust patch release does not rebuild Python wheels, and
-a binding-only fix does not force a crates.io release. Manual `wheels.yml`
-dispatch builds and uploads all twelve cp39-abi3 wheels and both source
-distributions without publication authority. A Python tag runs only the
-selected project cells. Its separate publish job depends on the artifact graph,
-checks the selected six wheels and one source distribution, binds to the
-`pypi` environment, and receives `id-token: write` only for a
-`py-rdocx-v*` or `py-rpptx-v*` tag event. All actions and the maturin version
-are pinned, and no long-lived PyPI secret is present.
+The historical `py-rdocx-v*` and `py-rpptx-v*` tags remain immutable release
+records, but do not trigger new publication. Manual `wheels.yml` dispatch
+builds both Python distributions and uploads twelve `cp39-abi3` wheels and two
+source distributions without registry or GitHub release authority. A new
+family tag builds only the selected Python project cells. The selected
+project's six wheels and one source distribution are validated before PyPI
+publishes them through OIDC. There is no long-lived PyPI secret.
 
 ## Release process
 
@@ -509,12 +508,13 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
 That shared-version group, the `rdocx` Python project, and the rdocx WASM
-contract literals are prepared at 0.14.0. The exact
-seven-package stable family is published from immutable annotated `v0.14.0`
-tag at reviewed SHA `58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published
-archives require shared 0.12.1, and `rpptx-v0.12.1` was published first. The
-unpublished 0.13.2
-crates.io train is superseded rather than backfilled. The Python, binding, and
+contract literals are prepared at 0.15.0, together with the exact
+seven-package stable family and its `v0.15.0` release notes. The prepared
+stable packages require shared OOXML 0.13.0. The latest published stable family
+remains the immutable annotated `v0.14.0` tag at reviewed SHA
+`58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published archives
+require shared 0.12.1. The unpublished 0.13.2 crates.io train is superseded
+rather than backfilled. The Python, binding, and
 WASM carriers remain unpublished on crates.io. The source version move gives no
 Rust publication authority.
 The immutable v0.11.0 attempt published only `rdocx-opc` and `rdocx-oxml`
@@ -527,9 +527,10 @@ remain live and unyanked. The current complete stable family is 0.14.0. Earlier
 immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
-The 17 implemented `oxml-*` and `rpptx*` package manifests use explicit version
-0.12.1, the named `incubating` group, and the `rpptx-v{{version}}` template. The
-preparation group contains unpublished `rpptx-py` and `rpptx-wasm`, while the crates.io
+The 15 publishable `oxml-*` and `rpptx*` package manifests and the unpublished
+`rpptx-py` binding crate use explicit version 0.13.0, the named `incubating`
+group, and the `rpptx-v{{version}}` template. The unpublished `rpptx-wasm`
+crate remains at 0.12.1 with its separate npm boundary. The crates.io
 allowlist remains exactly 15 packages. The latest published complete family is
 the immutable `rpptx-v0.12.1` release at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`, and earlier registry releases
@@ -544,18 +545,16 @@ Preparation changes release carriers, assertions, and selected-family notes
 without changing runtime behavior.
 External release actions remain owned by `/release`.
 
-`/release {vX.Y.Z | rpptx-vX.Y.Z | py-rdocx-vX.Y.Z | py-rpptx-vX.Y.Z}` is the only command allowed to
-create or push a registry release tag or start crates.io or PyPI publication.
-It selects exactly one namespace. The stable path validates the workspace
-version, its internal pins, and the exact seven-package stable set. The
-incubating path validates the common explicit version, workspace pins, and the
-exact 15-package incubating set. Each Python path validates its selected
-distribution at the matching native crate version, six `cp39-abi3` wheels, one
-source distribution, trusted-publisher identity, installed runtime and typing
-gates, and an absent target version on PyPI.
+`/release {vX.Y.Z | rpptx-vX.Y.Z}` is the only command allowed to create or
+push a new family release tag or start crates.io or PyPI publication. It
+selects one Rust allowlist, one CLI and one Python distribution at a matching
+version. The tagged run must contain six CLI archives, six `cp39-abi3` wheels,
+one source distribution, one complete checksum file and verifiable build
+provenance for every payload. The selected PyPI trusted publisher remains
+`wheels.yml` in the `pypi` environment.
 
-`/release-notes TAG` is the deliberate preparation ceremony for the same four
-namespaces. It derives human-written highlights, additions, fixes,
+`/release-notes TAG` is the deliberate preparation ceremony for the two
+new unified namespaces. It derives human-written highlights, additions, fixes,
 compatibility guidance, and contributor credit from reviewed repository
 evidence, then updates the exact changelog section for review with the code.
 `/release` renders and inspects that section at the reviewed SHA before its
@@ -573,22 +572,40 @@ and GitHub release link, then retains their URLs in the release evidence. A
 missing link, credit, inventory entry, or notification blocks completion of the
 release F-ID.
 
-All three paths require a clean sprint branch, full verification and a clean
-sprint review recorded at the exact HEAD, an absent local and remote requested
-tag, and a separate final approval immediately before the first mutation. The
-Rust paths also require the workspace dry run containing exactly the 22-package
-union and its local patch set, archives below 10 MiB, and required assets. The
-Python path pushes the reviewed sprint SHA after approval, then requires a
-successful build-only `wheels.yml` run at that exact SHA before tag creation.
-It also requires exact artifact and metadata validation, clean Python 3.9 and
-3.12 installs and runtime checks, Python 3.12 typing and stub checks,
-trusted-publisher evidence, and absent target versions on PyPI.
-Exact metadata validation covers each crate-local Markdown README, the
-distribution-specific summary, author, keywords, classifiers, project URLs,
-and the required installation, quick-start, typing, and project-link sections
-embedded in wheel `METADATA` and source-distribution `PKG-INFO`.
-`/release` pushes only the requested tag. `/close-sprint` remains the only
-command allowed to merge `main` or create an `sNN` tag.
+Release preparation F-IDs complete on the sprint branch with local artifact,
+workflow and version evidence. `/run-sprint` pushes that reviewed sprint, and
+`/close-sprint` merges and pushes it to `main`. Publication does not occur
+inside `/run-sprint`. `/release` requires clean `main` at the exact closed
+sprint merge SHA, a clean committed sprint review, a tree comparison showing
+only the close-sprint tracker summary changed from the reviewed sprint source,
+and a fresh read-only `/verify --full` at the main SHA. It refuses a material
+tree difference rather than writing a new review record on `main`. A separate
+explicit approval is required immediately before each family tag is created.
+The tag points to the reviewed `main` merge SHA. `/close-sprint` alone owns
+main merges and sprint tags.
+
+The manual `wheels.yml` build-only preflight runs at the final reviewed sprint
+SHA after the sprint push and before sprint close. Its exact selected artifacts
+and metadata are validated, installed and tested in Python 3.9 and 3.12.
+Wheel smoke runs the documented presentation examples on native and musllinux
+runners. The SHA-bound Issue 158 viewer fixture requires the separately pinned
+LibreOffice oracle and is excluded from bare wheel runners. The musllinux
+container also excludes the Issue 217 complete deck chain because its CLI
+validation subprocess needs Cargo, which is absent from that wheel-only
+container. Native wheel and pinned CI runs exercise that chain. The Windows
+`rpptx` CLI runs on an eight MiB thread stack so the complete deck validation
+does not overflow the default main-thread stack. The `rdocx` CLI uses the same
+Windows stack for complete document comparison. The geometry comparison uses
+explicit equal-length checks that work on Python 3.9. Typing and stub checks
+run under Python 3.12. Word wheel smoke runs its documented core, formatting,
+shared, and python-docx parity cases on native and musllinux runners. It
+excludes the Issue 253 PDF text oracle, which requires Poppler 26.01.0 and
+remains in the separately pinned CI suite. The musllinux container also
+excludes the Issue 158 complete Word workflow because its CLI subprocess
+needs Cargo. Native wheel and pinned CI runs exercise that chain. The same
+version carriers and source are then checked
+at the main release boundary. Earlier published `py-*` tags and PyPI versions
+remain historical records. New releases use the two unified family tags.
 
 When a later sprint wave depends on an integrated and reviewed F-ID that is not
 completed, `/run-sprint` uses a resumable dependency-prefix checkpoint before
@@ -596,8 +613,10 @@ that consumer. It verifies and completes the prefix, commits the clean review
 file, records review at the resulting HEAD, reruns full verification, and
 returns the same state to implementation. It does not add a confirmation review
 solely because the review file was committed. A release dependency extends the
-ordinary route with preparation, exact-HEAD review, publication through
-`/release`, separate approval, and verified publication evidence. Full
+ordinary route through a reviewed release preparation F-ID. It does not
+publish during the sprint. After `/close-sprint` has merged the reviewed
+sprint source, `/release` checks the exact main SHA, runs full verification
+and requests a separate final approval before each family tag. Full
 verification repeats after every tracked evidence commit and again over the
 final integrated sprint. Earlier checkpoint evidence never satisfies a later
 HEAD.
@@ -607,14 +626,17 @@ source for each F-ID's title and size. It refreshes those fields and adds newly
 listed F-IDs while preserving the existing phase, feature state, owner, wave,
 worker handoff, review, and verification records.
 
-A Rust release tag starts `publish.yml`. Its Linux runner reproduces the
-deterministic hash baseline, release metadata check, and full workspace dry run
-before crates.io publication begins. A Python release tag starts `wheels.yml`.
-Only its tag event may reach the OIDC publish job. Success requires every
-selected registry entry to report the requested version and expected owner,
-plus a matching GitHub release targeting the reviewed SHA. `rdocx-wasm`
-inherits the stable workspace version but stays `publish = false` because its
-distribution path is npm.
+A new family release tag starts `wheels.yml`. Before either registry job, the
+asset job proves that the tag points to the current `main` commit and its
+closed sprint tag. It checks the exact selected publishable workspace crates,
+their lockfile versions and their packaged archive inventory after the full
+workspace publication dry run. It also checks all thirteen assets and their
+producer attestations. The Rust job reproduces the deterministic hash baseline
+before crates.io publication. The Python job publishes through the existing
+PyPI trusted publisher. A successful release requires every selected registry
+entry and owner to report the requested version, plus one matching GitHub
+release at the reviewed `main` SHA. `rdocx-wasm` inherits the stable workspace version
+but stays `publish = false` because its distribution path is npm.
 
 The current Python release boundary is reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`. Immutable tags

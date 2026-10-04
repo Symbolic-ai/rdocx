@@ -32,7 +32,9 @@ and a zero-finding `/microscope`. Run `/verify --full` and `/sprint-review` once
 sprint result. A formal dependency-prefix checkpoint completes its reviewed
 prerequisite using scoped evidence and focused integration checks so a
 dependent F-ID can start. It does not run the full workspace or sprint review.
-The release workflow retains its separate full gate before publication.
+The release workflow retains its separate full gate and final approval after
+`/close-sprint` has merged and pushed `main`. A prepared family tag points to
+that exact reviewed main merge SHA.
 
 Review commands never patch the diff they audit. When an orchestration command
 such as `/run-sprint` invokes a review, the completed review returns control to

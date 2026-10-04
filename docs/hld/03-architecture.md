@@ -1174,6 +1174,12 @@ rule. A reference therefore carries a `NoteRef`, its stream and its number,
 because the streams number independently and a document may hold a footnote and
 an endnote sharing a number.
 
+The native document facade stages normal endnote creation, exact element
+reordering, and removal with matching body references. Endnotes use their own
+relationship-resolved part and ID allocation. Rich edits use the same checked
+story operations as footnotes, then reopen the candidate package before
+publication.
+
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
@@ -1345,7 +1351,15 @@ second document tree. The facade resolves package owners and stable source
 order. The existing `rdocx-oxml` grammar remains the authority for admitting
 content controls, revisions, and fields as typed content. Content rejected by
 that grammar remains one opaque preserved boundary and cannot expose nested
-owners or editable text. Word writes a text box twice in a run's
+owners or editable text.
+
+Footnote creation and removal stage the note part and body references as one
+package candidate. Reorder moves the exact note element bytes and retains its
+internal ID. Common story content, relationship, and comment operations edit
+rich note bodies through the resolved note owner. Each successful mutation
+reopens the candidate before it replaces live state.
+
+Word writes a text box twice in a run's
 `mc:AlternateContent`, as DrawingML in `mc:Choice` and as VML in
 `mc:Fallback`. That text box is one text-box story, read from the first
 Choice that holds a text box, the one layout draws. Any other Choice and the
@@ -1452,6 +1466,10 @@ then publish once. First-page creation enables `titlePg`. Even-page selection
 is controlled separately by the typed document setting. Rich edits continue
 through the container-neutral story operations rather than a second header or
 footer content model.
+Comment authoring uses the same checked story run range in every header and
+footer variant. The facade anchors selected paragraphs in the owning related
+part on a staged package, retains untouched producer XML around those spans,
+then publishes the part and comment definition together after validation.
 
 Word layout retains that physical ownership. The facade loads header and
 footer images under the main-part relationship that selects the story plus the

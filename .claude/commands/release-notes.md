@@ -1,8 +1,8 @@
 ---
-description: Prepare and validate meaningful reviewed release notes in CHANGELOG.md for one Rust or Python release tag.
+description: Prepare and validate meaningful reviewed release notes in CHANGELOG.md for one unified Rust and Python family tag.
 ---
 
-# /release-notes {vX.Y.Z | rpptx-vX.Y.Z | py-rdocx-vX.Y.Z | py-rpptx-vX.Y.Z}
+# /release-notes {vX.Y.Z | rpptx-vX.Y.Z}
 
 Prepare the human-written release record that `/release` publishes unchanged.
 This ceremony edits only `CHANGELOG.md`, including the matching section and
@@ -11,17 +11,18 @@ create a GitHub release.
 
 ## Inputs
 
-Choose exactly one release family from the requested tag:
+Choose exactly one complete family from the requested tag:
 
-- `vX.Y.Z` is the stable rdocx family.
-- `rpptx-vX.Y.Z` is the incubating OOXML and PowerPoint family.
-- `py-rdocx-vX.Y.Z` is the `rdocx` Python distribution family.
-- `py-rpptx-vX.Y.Z` is the `rpptx` Python distribution family.
+- `vX.Y.Z` is the stable rdocx crates, CLI and Python distribution.
+- `rpptx-vX.Y.Z` is the incubating OOXML and PowerPoint crates, CLI and
+  Python distribution.
+
+Historical `py-*` changelog sections remain readable, but no new Python-only
+release tag is prepared.
 
 Find the current sprint story assigned to the exact requested tag. Read its
-design plan and dependencies before collecting claims. For
-`py-rdocx-v0.13.1` and `py-rpptx-v0.11.0`, that story is F-X094f. Refuse a tag
-that has no release story in the active sprint or whose plan is not approved.
+design plan and dependencies before collecting claims. Refuse a tag that has no release preparation story in the active sprint or
+whose plan is not approved.
 
 ## Evidence
 
@@ -41,9 +42,8 @@ Build the notes from reviewed repository evidence, not memory:
 4. Read the current compatibility and migration contract in `CHANGELOG.md`,
    the release plan, and the relevant HLD sections.
 5. Separate changes for the selected family from changes for the other
-   families. Python notes cover only the selected Python distribution and its
-   public binding surface, not the other Python distribution, crates.io, or npm
-   packages. Exclude internal workflow work unless it changes a user-visible
+   families. Family notes cover the selected Rust, CLI and Python surfaces together,
+   excluding the other family and npm packages. Exclude internal workflow work unless it changes a user-visible
    release or compatibility promise.
 6. Build one contribution inventory for the selected family. For each included
    GitHub record, capture its URL, authenticated author handle, user-visible

@@ -103,6 +103,22 @@ source part, owner kind, source-order ordinal, and a structural fingerprint.
 Any changed owner makes a retained identity stale before indexed content can be
 resolved.
 
+Rich footnote authoring reserves the relationship-resolved footnotes part,
+adds one normal note with an available internal ID, and inserts its body
+reference in one staged package. Reorder moves only the selected note element
+within the part. Removal deletes that element and every matching body
+reference before the candidate is reopened. Common story edits preserve
+untouched note children, separator records, producer prefixes, and unrelated
+part relationships. Pictures and hyperlinks use the footnotes part relationship
+set, and comment anchors in note paragraphs use the comments part.
+
+Endnote authoring uses the relationship-resolved endnotes part and its own
+normal ID namespace. Creation inserts the note and body reference together.
+Reorder moves an exact endnote element, while removal deletes that element and
+its body references. The staged package reopens before publication. Endnote
+story edits preserve separator records, unknown children, and unrelated
+relationships. Pictures and hyperlinks are owned by the endnotes part.
+
 Revision inventory uses these same supported story owners and reports their
 `StoryId` with each record. A revision reachable by resolution without a
 discoverable owner is an error. CLI text extraction retains readable body text
@@ -520,7 +536,16 @@ does not declare `w14`, such as one rdocx wrote or one under an element that
 declared the prefix itself, gains the canonical declaration when the written
 content uses the prefix. The serializers of the document, header, footer,
 note and comment parts and the comparison output of every story add it, so the
-written part stays namespace well formed.
+written part stays namespace well formed. During complete part serialization,
+a retained attribute also omits same-URI bindings already guaranteed by that
+part root: `r` and `mc` for the main document, canonical `wp` when that root
+actually writes it, `r` and conditionally canonical `wp` for headers and
+footers, and `r` for footnotes and endnotes. Standalone paragraphs and
+comments keep their own bindings. A scoped serializer context restores its
+previous guarantees after nested calls and errors. The retained-attribute
+regression checks one declaration of each canonical prefix at the document
+root, alongside producer attributes, a new binding, and an unchanged
+unmodelled child.
 
 A paragraph cut out of its part and parsed on its own carries none of the
 declarations of its part. The table-of-contents rebuild adds the bindings the

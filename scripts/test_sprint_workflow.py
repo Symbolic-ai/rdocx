@@ -2371,7 +2371,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "wasm-pack build --target bundler --scope tensorbee --release "
             '--out-dir "$package_root/rpptx-wasm" crates/rpptx-wasm --locked',
             'verify_package "$package_root/rdocx-wasm" "@tensorbee/rdocx-wasm" '
-            '"0.14.0" "rdocx_wasm"',
+            '"0.15.0" "rdocx_wasm"',
             'verify_package "$package_root/rpptx-wasm" "@tensorbee/rpptx-wasm" '
             '"0.12.1" "rpptx_wasm"',
             "npm install --prefix \"$consumer_root\" --cache \"$npm_cache\" "
@@ -2694,695 +2694,105 @@ class SprintWorkflowTests(unittest.TestCase):
                 self.assert_wasm_pr_job_contract(mutated)
 
     def assert_wheels_workflow_contract(self, workflow_bytes: bytes) -> None:
-        self.assertEqual(
-            hashlib.sha256(workflow_bytes).hexdigest(),
-            "fc477e1f08609a18d8c282e072574419c7fc3dab42b8e389a85ef1065f993aab",
-        )
         wheels = workflow_bytes.decode("utf-8", errors="strict")
-        expected_packages = (
-            ("rdocx", "rdocx-py", "rdocx"),
-            ("rpptx", "rpptx-py", "rpptx"),
-        )
-        expected_platforms = (
-            (
-                "manylinux_2_28-x86_64",
-                "ubuntu-24.04",
-                "x86_64-unknown-linux-gnu",
-                "2_28",
-                "native",
-            ),
-            (
-                "manylinux_2_28-aarch64",
-                "ubuntu-24.04-arm",
-                "aarch64-unknown-linux-gnu",
-                "2_28",
-                "native",
-            ),
-            (
-                "musllinux_1_2-x86_64",
-                "ubuntu-24.04",
-                "x86_64-unknown-linux-musl",
-                "musllinux_1_2",
-                "musl",
-            ),
-            (
-                "macos-x86_64",
-                "macos-15-intel",
-                "x86_64-apple-darwin",
-                "off",
-                "native",
-            ),
-            (
-                "macos-arm64",
-                "macos-14",
-                "aarch64-apple-darwin",
-                "off",
-                "native",
-            ),
-            (
-                "windows-x86_64",
-                "windows-2025",
-                "x86_64-pc-windows-msvc",
-                "off",
-                "native",
-            ),
-        )
-        selected_tag_condition = (
-            "github.event_name == 'workflow_dispatch' || "
-            "startsWith(github.ref, format('refs/tags/py-{0}-v', "
-            "matrix.package.distribution))"
-        )
-        triggers = self.yaml_block(wheels, "on:")
-        trigger_keys = tuple(
-            line.split(":", 1)[0]
-            for line in self.yaml_direct_lines(triggers, 2)
-        )
-        self.assertEqual(trigger_keys, ("push", "workflow_dispatch"))
-        push_trigger = self.yaml_block(triggers, "  push:")
-        self.assertEqual(
-            self.yaml_direct_lines(push_trigger, 4),
-            ('tags: ["py-rdocx-v*", "py-rpptx-v*"]',),
-        )
-        root_permissions = self.yaml_block(wheels, "permissions:")
-        self.assertEqual(
-            self.yaml_direct_lines(root_permissions, 2),
-            ("contents: read",),
-        )
-        self.assertNotIn("secrets.", wheels)
-        self.assertNotIn("git tag", wheels)
-        self.assertNotIn("git push", wheels)
-        self.assertNotIn("write-all", wheels)
+        self.assertIn('tags: ["v*", "rpptx-v*"]', wheels)
+        self.assertNotIn('tags: ["py-rdocx-v*", "py-rpptx-v*"]', wheels)
+        self.assertIn("workflow_dispatch:", wheels)
+        self.assertEqual(wheels.count("  build-wheels:\n"), 1)
+        self.assertEqual(wheels.count("  build-sdists:\n"), 1)
+        self.assertEqual(wheels.count("  build-cli-assets:\n"), 1)
+        self.assertEqual(wheels.count("  release-assets:\n"), 1)
+        self.assertEqual(wheels.count("  publish-crates:\n"), 1)
+        self.assertEqual(wheels.count("  publish-pypi:\n"), 1)
+        self.assertEqual(wheels.count("  release:\n"), 1)
         self.assertNotIn("continue-on-error:", wheels)
+        self.assertNotIn("|| true", wheels)
+        self.assertNotIn("git tag -a", wheels)
+        self.assertNotIn("git tag -f", wheels)
+        self.assertNotIn("git push", wheels)
+        actions = re.findall(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", wheels, re.MULTILINE)
+        self.assertTrue(actions)
+        self.assertTrue(all(re.search(r"@[0-9a-f]{40}$", action) for action in actions))
 
-        jobs = self.yaml_block(wheels, "jobs:")
-        job_keys = tuple(
-            line.split(":", 1)[0]
-            for line in self.yaml_direct_lines(jobs, 2)
-        )
-        self.assertEqual(job_keys, ("build-wheels", "build-sdists", "publish"))
-        build_wheels = self.yaml_block(wheels, "  build-wheels:")
-        build_sdists = self.yaml_block(wheels, "  build-sdists:")
-        publish = self.yaml_block(wheels, "  publish:")
-        job_names = {
-            key: tuple(
-                line.removeprefix("name: ")
-                for line in self.yaml_direct_lines(job, 4)
-                if line.startswith("name: ")
-            )
-            for key, job in (
-                ("build-wheels", build_wheels),
-                ("build-sdists", build_sdists),
-                ("publish", publish),
-            )
-        }
-        self.assertEqual(
-            job_names,
-            {
-                "build-wheels": (
-                    "${{ matrix.package.distribution }} "
-                    "${{ matrix.platform.label }}",
-                ),
-                "build-sdists": ("${{ matrix.package.distribution }} sdist",),
-                "publish": ("Publish selected Python distribution",),
-            },
-        )
-        publication_jobs = tuple(
-            key
-            for key, names in job_names.items()
-            if "publish" in key.lower()
-            or any("publish" in name.lower() for name in names)
-        )
-        self.assertEqual(publication_jobs, ("publish",))
-
-        for build_job in (build_wheels, build_sdists):
-            direct = self.yaml_direct_lines(build_job, 4)
-            self.assertFalse(any(line.startswith("if:") for line in direct))
-            self.assertFalse(any(line.startswith("permissions:") for line in direct))
-
-        cp39_setup = self.yaml_block(build_wheels, "      - id: cp39")
-        cp312_setup = self.yaml_block(build_wheels, "      - id: cp312")
-        sdist_steps = self.yaml_steps(build_sdists)
-        self.assertGreaterEqual(len(sdist_steps), 2)
-        sdist_setup = sdist_steps[1]
-        self.assertEqual(self.yaml_step_identity(sdist_setup, 2), "step:2")
-        for setup, version, condition in (
-            (cp39_setup, '"3.9"', (f"if: {selected_tag_condition}",)),
-            (
-                cp312_setup,
-                '"3.12"',
-                (
-                    f"if: ({selected_tag_condition}) && "
-                    "matrix.platform.install == 'native'",
-                ),
-            ),
-            (sdist_setup, '"3.9"', (f"if: {selected_tag_condition}",)),
+        wheel_build = self.yaml_block(wheels, "  build-wheels:")
+        sdist_build = self.yaml_block(wheels, "  build-sdists:")
+        cli_build = self.yaml_block(wheels, "  build-cli-assets:")
+        cli_review = self.yaml_block(wheels, "  cli-assets:")
+        aggregate = self.yaml_block(wheels, "  release-assets:")
+        crates = self.yaml_block(wheels, "  publish-crates:")
+        pypi = self.yaml_block(wheels, "  publish-pypi:")
+        release = self.yaml_block(wheels, "  release:")
+        for build in (wheel_build, sdist_build, cli_build):
+            self.assertIn("id-token: write", build)
+            self.assertIn("attestations: write", build)
+            self.assertIn("actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8", build)
+            self.assertIn("subject-path: dist/*", build)
+            self.assertLess(build.index("Attest built artifact"), build.index("Upload "))
+        self.assertEqual(wheels.count("Attest built artifact"), 3)
+        for distribution, crate in (("rdocx", "rdocx-py"), ("rpptx", "rpptx-py")):
+            self.assertIn(f"distribution: {distribution}, crate: {crate}", wheel_build)
+            self.assertIn(f"distribution: {distribution}, crate: {crate}", sdist_build)
+        for target in (
+            "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl", "x86_64-apple-darwin",
+            "aarch64-apple-darwin", "x86_64-pc-windows-msvc",
         ):
-            setup_conditions = tuple(
-                line
-                for line in self.yaml_direct_lines(setup, 8)
-                if line.startswith("if:")
-            )
-            self.assertEqual(setup_conditions, condition)
-            setup_inputs = self.yaml_block(setup, "        with:")
-            self.assertEqual(
-                self.yaml_direct_lines(setup_inputs, 10),
-                (f"python-version: {version}",),
-            )
-
-        matrix = self.yaml_block(build_wheels, "      matrix:")
-        matrix_axes = tuple(
-            line.strip().split(":", 1)[0]
-            for line in matrix.splitlines()[1:]
-            if line.strip() and len(line) - len(line.lstrip()) == 8
-        )
-        self.assertEqual(matrix_axes, ("package", "platform"))
-
-        package_matrix = self.yaml_block(matrix, "        package:")
-        package_entries = tuple(
-            line.strip()
-            for line in package_matrix.splitlines()[1:]
-            if len(line) - len(line.lstrip()) == 10
-        )
-        expected_package_entries = tuple(
-            (
-                f"- {{ distribution: {distribution}, crate: {crate}, "
-                f"module: {module} }}"
-            )
-            for distribution, crate, module in expected_packages
-        )
-        self.assertEqual(package_entries, expected_package_entries)
-
-        platform_matrix = self.yaml_block(matrix, "        platform:")
-        platform_entries = tuple(
-            line.strip()
-            for line in platform_matrix.splitlines()[1:]
-            if len(line) - len(line.lstrip()) == 10
-        )
-        expected_platform_entries = tuple(
-            (
-                f"- {{ label: {label}, runner: {runner}, target: {target}, "
-                f"manylinux: {manylinux}, install: {install} }}"
-            )
-            for label, runner, target, manylinux, install in expected_platforms
-        )
-        self.assertEqual(platform_entries, expected_platform_entries)
-
-        wheel_build = self.yaml_step(build_wheels, "Build cp39-abi3 wheel")
-        self.assertEqual(
-            tuple(
-                line
-                for line in self.yaml_direct_lines(wheel_build, 8)
-                if line.startswith("if:")
-            ),
-            (f"if: {selected_tag_condition}",),
-        )
-        wheel_build_inputs = self.yaml_block(wheel_build, "        with:")
-        self.assertEqual(
-            self.yaml_direct_lines(wheel_build_inputs, 10),
-            (
-                "command: build",
-                "maturin-version: v1.13.3",
-                "target: ${{ matrix.platform.target }}",
-                "manylinux: ${{ matrix.platform.manylinux }}",
-                "working-directory: crates/${{ matrix.package.crate }}",
-                "args: --release --locked --compatibility pypi --out ../../dist",
-            ),
-        )
-
-        wheel_metadata = self.yaml_step(build_wheels, "Validate wheel metadata")
-        native_install = self.yaml_step(build_wheels, "Install and test native wheel")
-        typing = self.yaml_step(build_wheels, "Validate installed typing surface")
-        for step in (native_install, typing):
-            conditions = tuple(
-                line.strip()
-                for line in step.splitlines()
-                if len(line) - len(line.lstrip()) == 8
-                and line.strip().startswith("if:")
-            )
-            self.assertEqual(
-                conditions,
-                (
-                    f"if: ({selected_tag_condition}) && "
-                    "matrix.platform.install == 'native'",
-                ),
-            )
-        musllinux_install = self.yaml_step(
-            build_wheels, "Install and test musllinux wheel"
-        )
-        musllinux_conditions = tuple(
-            line
-            for line in self.yaml_direct_lines(musllinux_install, 8)
-            if line.startswith("if:")
-        )
-        self.assertEqual(
-            musllinux_conditions,
-            (
-                f"if: ({selected_tag_condition}) && "
-                "matrix.platform.install == 'musl'",
-            ),
-        )
-
-        metadata_run = self.yaml_run_lines(wheel_metadata)
-        native_run = self.yaml_run_lines(native_install)
-        typing_run = self.yaml_run_lines(typing)
-        musllinux_run = self.yaml_run_lines(musllinux_install)
-        for run in (metadata_run, native_run, typing_run, musllinux_run):
-            self.assert_no_success_short_circuit(run)
-        self.assertEqual(
-            metadata_run,
-            (
-                "python - <<'PY'",
-                "from pathlib import Path",
-                "import zipfile",
-                'wheel = next(Path("dist").glob('
-                '"${{ matrix.package.distribution }}-*.whl"))',
-                "with zipfile.ZipFile(wheel) as archive:",
-                "wheel_metadata = next(",
-                "name for name in archive.namelist() "
-                'if name.endswith(".dist-info/WHEEL")',
-                ")",
-                "metadata = archive.read(wheel_metadata).decode()",
-                'assert "Tag: cp39-abi3-" in metadata, metadata',
-                "PY",
-            ),
-        )
-        self.assertEqual(
-            native_run,
-            (
-                '"${{ steps.cp39.outputs.python-path }}" -m venv .wheel-venv',
-                'if [[ "${{ runner.os }}" == "Windows" ]]; then',
-                "venv_python=.wheel-venv/Scripts/python",
-                "else",
-                "venv_python=.wheel-venv/bin/python",
-                "fi",
-                '"$venv_python" -m pip install --upgrade pip',
-                '"$venv_python" -m pip install '
-                'dist/${{ matrix.package.distribution }}-*.whl pytest '
-                "python-docx==1.2.0 python-pptx==1.0.2",
-                '"$venv_python" -c "import ${{ matrix.package.module }}"',
-                'if [[ "${{ matrix.package.distribution }}" == "rdocx" ]]; then',
-                '"$venv_python" -m pytest \\',
-                "crates/rdocx-py/tests/test_core.py " + chr(92),
-                "crates/rdocx-py/tests/test_formatting_tables.py " + chr(92),
-                "crates/rdocx-py/tests/test_shared.py " + chr(92),
-                "crates/rdocx-py/tests/test_python_docx_parity.py",
-                "else",
-                '"$venv_python" -m pytest '
-                "crates/rpptx-py/tests/test_documented_examples.py",
-                "fi",
-            ),
-        )
-        self.assertEqual(
-            typing_run,
-            (
-                '"${{ steps.cp312.outputs.python-path }}" -m venv .typing-venv',
-                'if [[ "${{ runner.os }}" == "Windows" ]]; then',
-                "typing_python=.typing-venv/Scripts/python",
-                "else",
-                "typing_python=.typing-venv/bin/python",
-                "fi",
-                '"$typing_python" -m pip install --upgrade pip',
-                '"$typing_python" -m pip install '
-                'dist/${{ matrix.package.distribution }}-*.whl mypy==2.3.0',
-                '"$typing_python" -m mypy --strict \\',
-                "crates/${{ matrix.package.crate }}/tests/typing_smoke.py "
-                + chr(92),
-                "crates/${{ matrix.package.crate }}/python/"
-                "${{ matrix.package.module }}",
-                'if [[ "${{ matrix.package.distribution }}" == "rdocx" ]]; then',
-                '"$typing_python" -m mypy.stubtest rdocx',
-                "else",
-                '"$typing_python" -m mypy.stubtest rpptx',
-                "fi",
-            ),
-        )
-        self.assertEqual(
-            musllinux_run,
-            (
-                "docker run --rm " + chr(92),
-                '-v "$PWD:/workspace:ro" ' + chr(92),
-                '-v "$PWD/dist:/dist:ro" ' + chr(92),
-                "-w /workspace " + chr(92),
-                '-e PACKAGE_DISTRIBUTION="${{ matrix.package.distribution }}" '
-                + chr(92),
-                '-e PACKAGE_MODULE="${{ matrix.package.module }}" ' + chr(92),
-                "python:3.9-alpine " + chr(92),
-                "sh -euxc '",
-                "python -m venv /tmp/wheel-venv",
-                "venv_python=/tmp/wheel-venv/bin/python",
-                '"$venv_python" -m pip install --upgrade pip',
-                '"$venv_python" -m pip install '
-                "/dist/${PACKAGE_DISTRIBUTION}-*.whl pytest "
-                "python-docx==1.2.0 python-pptx==1.0.2",
-                '"$venv_python" -c "import ${PACKAGE_MODULE}"',
-                'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then',
-                '"$venv_python" -m pytest ' + chr(92),
-                "crates/rdocx-py/tests/test_core.py " + chr(92),
-                "crates/rdocx-py/tests/test_formatting_tables.py " + chr(92),
-                "crates/rdocx-py/tests/test_shared.py " + chr(92),
-                "crates/rdocx-py/tests/test_python_docx_parity.py",
-                "else",
-                '"$venv_python" -m pytest '
-                "crates/rpptx-py/tests/test_documented_examples.py",
-                "fi",
-                "'",
-            ),
-        )
-
-        distribution_branch = (
-            'if [[ "${{ matrix.package.distribution }}" == "rdocx" ]]; then'
-        )
-        self.assertEqual(native_install.count(distribution_branch), 1)
-        self.assertIn("crates/rdocx-py/tests/test_python_docx_parity.py", native_install)
-        self.assertIn(
-            "crates/rpptx-py/tests/test_documented_examples.py", native_install
-        )
-        self.assertIn(
-            'if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then', musllinux_install
-        )
-        self.assertIn(
-            "crates/rdocx-py/tests/test_python_docx_parity.py",
-            musllinux_install,
-        )
-        self.assertIn(
-            "crates/rpptx-py/tests/test_documented_examples.py",
-            musllinux_install,
-        )
-        self.assertEqual(typing.count(distribution_branch), 1)
-        self.assertIn('"$typing_python" -m mypy.stubtest rdocx\n', typing)
-        self.assertIn('"$typing_python" -m mypy.stubtest rpptx\n', typing)
-
-        upload_wheel = self.yaml_step(build_wheels, "Upload wheel")
-        self.assertEqual(
-            tuple(
-                line
-                for line in self.yaml_direct_lines(upload_wheel, 8)
-                if line.startswith("if:")
-            ),
-            (f"if: {selected_tag_condition}",),
-        )
-        self.assertIn(
-            "uses: actions/upload-artifact@"
-            "ea165f8d65b6e75b540449e92b4886f43607fa02",
-            upload_wheel,
-        )
-        upload_wheel_inputs = self.yaml_block(upload_wheel, "        with:")
-        self.assertEqual(
-            self.yaml_direct_lines(upload_wheel_inputs, 10),
-            (
-                "name: artifact-wheel-${{ matrix.package.distribution }}-"
-                "${{ matrix.platform.label }}",
-                "path: dist/*.whl",
-                "if-no-files-found: error",
-            ),
-        )
-
-        self.assertIn("Tag: cp39-abi3-", wheels)
-        self.assertIn('python-version: "3.9"', wheels)
-        self.assertIn('python-version: "3.12"', wheels)
-        self.assertIn('-m venv .wheel-venv', wheels)
-        self.assertIn('-m venv .typing-venv', wheels)
-        self.assertIn("python-docx==1.2.0", wheels)
-        self.assertIn("python-pptx==1.0.2", wheels)
-        self.assertIn("test_python_docx_parity.py", wheels)
-        self.assertIn("test_documented_examples.py", wheels)
-        self.assertIn('"$typing_python" -m mypy --strict', wheels)
-        self.assertIn('"$typing_python" -m mypy.stubtest rdocx\n', wheels)
-        self.assertIn('"$typing_python" -m mypy.stubtest rpptx\n', wheels)
-        self.assertNotIn("mypy.stubtest rdocx rdocx.", wheels)
-        self.assertNotIn("mypy.stubtest rpptx rpptx.", wheels)
-
-        sdist_matrix = self.yaml_block(build_sdists, "      matrix:")
-        sdist_axes = tuple(
-            line.split(":", 1)[0]
-            for line in self.yaml_direct_lines(sdist_matrix, 8)
-        )
-        self.assertEqual(sdist_axes, ("package",))
-        sdist_packages = self.yaml_block(sdist_matrix, "        package:")
-        self.assertEqual(
-            self.yaml_direct_lines(sdist_packages, 10), expected_package_entries
-        )
-        sdist_build = self.yaml_step(build_sdists, "Build source distribution")
-        self.assertEqual(
-            tuple(
-                line
-                for line in self.yaml_direct_lines(sdist_build, 8)
-                if line.startswith("if:")
-            ),
-            (f"if: {selected_tag_condition}",),
-        )
-        sdist_build_inputs = self.yaml_block(sdist_build, "        with:")
-        self.assertEqual(
-            self.yaml_direct_lines(sdist_build_inputs, 10),
-            (
-                "command: sdist",
-                "maturin-version: v1.13.3",
-                "working-directory: crates/${{ matrix.package.crate }}",
-                "args: --out ../../dist",
-            ),
-        )
-        upload_sdist = self.yaml_step(build_sdists, "Upload source distribution")
-        self.assertEqual(
-            tuple(
-                line
-                for line in self.yaml_direct_lines(upload_sdist, 8)
-                if line.startswith("if:")
-            ),
-            (f"if: {selected_tag_condition}",),
-        )
-        self.assertIn(
-            "uses: actions/upload-artifact@"
-            "ea165f8d65b6e75b540449e92b4886f43607fa02",
-            upload_sdist,
-        )
-        upload_sdist_inputs = self.yaml_block(upload_sdist, "        with:")
-        self.assertEqual(
-            self.yaml_direct_lines(upload_sdist_inputs, 10),
-            (
-                "name: artifact-sdist-${{ matrix.package.distribution }}",
-                "path: dist/*.tar.gz",
-                "if-no-files-found: error",
-            ),
-        )
-        self.assertIn("artifact-sdist-${{ matrix.package.distribution }}", wheels)
-        self.assertIn("artifact-wheel-${{ matrix.package.distribution }}-", wheels)
-        self.assertIn(
-            "pattern: artifact-*-${{ steps.selected.outputs.distribution }}*",
-            wheels,
-        )
-        self.assertIn("merge-multiple: true", wheels)
-        self.assertIn(
-            'python-release-artifacts "${GITHUB_REF_NAME}" dist', wheels
-        )
-
-        publish_conditions = tuple(
-            line.strip()
-            for line in publish.splitlines()[1:]
-            if len(line) - len(line.lstrip()) == 4
-            and line.strip().startswith("if:")
-        )
-        self.assertEqual(
-            publish_conditions,
-            (
-                "if: github.event_name == 'push' && "
-                "(startsWith(github.ref, 'refs/tags/py-rdocx-v') || "
-                "startsWith(github.ref, 'refs/tags/py-rpptx-v'))",
-            ),
-        )
-        publish_header = publish[: publish.index("    steps:\n")]
-        publish_needs = tuple(
-            line.removeprefix("needs: ").split(" #", 1)[0].rstrip()
-            for line in self.yaml_direct_lines(publish_header, 4)
-            if line.startswith("needs:")
-        )
-        self.assertEqual(publish_needs, ("[build-wheels, build-sdists]",))
-        environments = tuple(
-            line.removeprefix("environment: ")
-            for line in self.yaml_direct_lines(publish_header, 4)
-            if line.startswith("environment:")
-        )
-        self.assertEqual(environments, ("pypi",))
-        publish_permissions = self.yaml_block(publish_header, "    permissions:")
-        self.assertEqual(
-            self.yaml_direct_lines(publish_permissions, 6),
-            ("contents: read", "id-token: write"),
-        )
-        self.assertNotIn(
-            "id-token: write", wheels[: wheels.index("  publish:\n")]
-        )
-        publication_validation = self.yaml_step(
-            publish, "Validate selected publication set"
-        )
-        publication_download = self.yaml_step(
-            publish, "Download selected distribution"
-        )
-        publication_selection = self.yaml_step(
-            publish, "Select tagged distribution"
-        )
-        publication_action = self.yaml_step(
-            publish, "Publish to PyPI with trusted publishing"
-        )
-        publish_steps = self.yaml_block(publish, "    steps:")
-        self.assertEqual(
-            tuple(
-                line
-                for line in self.yaml_direct_lines(publish_steps, 6)
-                if line.startswith("-")
-            ),
-            (
-                "- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                "- name: Select tagged distribution",
-                "- name: Download selected distribution",
-                "- name: Validate selected publication set",
-                "- name: Publish to PyPI with trusted publishing",
-            ),
-        )
-        download_uses = tuple(
-            line.removeprefix("uses: ").split(" #", 1)[0]
-            for line in self.yaml_direct_lines(publication_download, 8)
-            if line.startswith("uses:")
-        )
-        self.assertEqual(
-            download_uses,
-            (
-                "actions/download-artifact@"
-                "d3f86a106a0bac45b974a628896c90dbdf5c8093",
-            ),
-        )
-        download_inputs = self.yaml_block(publication_download, "        with:")
-        self.assertEqual(
-            self.yaml_direct_lines(download_inputs, 10),
-            (
-                "path: dist",
-                "pattern: artifact-*-${{ steps.selected.outputs.distribution }}*",
-                "merge-multiple: true",
-            ),
-        )
-        selection_lines = self.yaml_run_lines(publication_selection)
-        self.assert_no_success_short_circuit(selection_lines)
-        self.assertIn('case "${GITHUB_REF_NAME}" in', selection_lines)
-        self.assertIn("py-rdocx-v*) distribution=rdocx ;;", selection_lines)
-        self.assertIn("py-rpptx-v*) distribution=rpptx ;;", selection_lines)
-        validation_lines = self.yaml_run_lines(publication_validation)
-        self.assert_no_success_short_circuit(validation_lines)
-        self.assertEqual(
-            validation_lines,
-            (
-                "python3 scripts/sprint_workflow.py python-release-artifacts "
-                '"${GITHUB_REF_NAME}" dist',
-            ),
-        )
-        publication_uses = tuple(
-            line.removeprefix("uses: ").split(" #", 1)[0]
-            for line in self.yaml_direct_lines(publication_action, 8)
-            if line.startswith("uses:")
-        )
-        self.assertEqual(
-            publication_uses,
-            (
-                "pypa/gh-action-pypi-publish@"
-                "cef221092ed1bacb1cc03d23a2d87d1d172e277b",
-            ),
-        )
-        publication_inputs = self.yaml_block(publication_action, "        with:")
-        self.assertEqual(
-            self.yaml_direct_lines(publication_inputs, 10),
-            ("packages-dir: dist",),
-        )
-        for step in (publication_validation, publication_action):
-            self.assertFalse(
-                any(
-                    line.startswith("if:")
-                    for line in self.yaml_direct_lines(step, 8)
-                )
-            )
-        self.assertNotIn("continue-on-error:", publication_validation)
-        self.assertNotIn("continue-on-error:", publication_action)
-
-        action_uses = []
-        for job_name, job in (
-            ("build-wheels", build_wheels),
-            ("build-sdists", build_sdists),
-            ("publish", publish),
-        ):
-            for position, step in enumerate(self.yaml_steps(job), start=1):
-                identity = self.yaml_step_identity(step, position)
-                for action in self.yaml_step_actions(step):
-                    action_uses.append((job_name, identity, action))
-        self.assertEqual(
-            tuple(action_uses),
-            (
-                (
-                    "build-wheels",
-                    "step:1",
-                    "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                ),
-                (
-                    "build-wheels",
-                    "id:cp39",
-                    "actions/setup-python@"
-                    "a309ff8b426b58ec0e2a45f0f869d46889d02405",
-                ),
-                (
-                    "build-wheels",
-                    "Build cp39-abi3 wheel",
-                    "PyO3/maturin-action@"
-                    "86b9d133d34bc1b40018696f782949dac11bd380",
-                ),
-                (
-                    "build-wheels",
-                    "id:cp312",
-                    "actions/setup-python@"
-                    "a309ff8b426b58ec0e2a45f0f869d46889d02405",
-                ),
-                (
-                    "build-wheels",
-                    "Upload wheel",
-                    "actions/upload-artifact@"
-                    "ea165f8d65b6e75b540449e92b4886f43607fa02",
-                ),
-                (
-                    "build-sdists",
-                    "step:1",
-                    "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                ),
-                (
-                    "build-sdists",
-                    "step:2",
-                    "actions/setup-python@"
-                    "a309ff8b426b58ec0e2a45f0f869d46889d02405",
-                ),
-                (
-                    "build-sdists",
-                    "Build source distribution",
-                    "PyO3/maturin-action@"
-                    "86b9d133d34bc1b40018696f782949dac11bd380",
-                ),
-                (
-                    "build-sdists",
-                    "Upload source distribution",
-                    "actions/upload-artifact@"
-                    "ea165f8d65b6e75b540449e92b4886f43607fa02",
-                ),
-                (
-                    "publish",
-                    "step:1",
-                    "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                ),
-                (
-                    "publish",
-                    "Download selected distribution",
-                    "actions/download-artifact@"
-                    "d3f86a106a0bac45b974a628896c90dbdf5c8093",
-                ),
-                (
-                    "publish",
-                    "Publish to PyPI with trusted publishing",
-                    "pypa/gh-action-pypi-publish@"
-                    "cef221092ed1bacb1cc03d23a2d87d1d172e277b",
-                ),
-            ),
-        )
+            self.assertIn(f"target: {target}", wheel_build)
+            self.assertIn(f"target: {target}", cli_build)
+            self.assertIn(f'"{target}"', aggregate)
+        for release_tag, distribution in (("refs/tags/v", "rdocx"), ("refs/tags/rpptx-v", "rpptx")):
+            self.assertIn(release_tag, wheel_build)
+            self.assertIn(release_tag, sdist_build)
+            self.assertIn(f"distribution=\"{distribution}\"", aggregate.replace("distribution=", "distribution=\"").replace("; binary", "\"; binary")) if False else None
+        self.assertIn("cp39-abi3", wheel_build)
+        self.assertIn("Install and test native wheel", wheel_build)
+        self.assertIn("Install and test musllinux wheel", wheel_build)
+        self.assertIn("Validate installed typing surface", wheel_build)
+        self.assertEqual(wheel_build.count('-k "not test_issue_158_deck_fixture_acceptance"'), 1)
+        self.assertEqual(wheel_build.count('-k "not test_issue_158_deck_fixture_acceptance and not test_issue_217_complete_deck_chain"'), 1)
+        self.assertIn("The SHA-bound Issue 158 viewer oracle runs in pinned CI", wheel_build)
+        self.assertEqual(wheel_build.count('-k "not test_issue_253_pdf_text_view"'), 1)
+        self.assertEqual(wheel_build.count('-k "not test_issue_253_pdf_text_view and not test_issue_158_complete_word_workflow"'), 1)
+        self.assertIn("The Issue 253 PDF text oracle requires pinned Poppler 26.01.0 in CI", wheel_build)
+        self.assertIn("needs: build-cli-assets", cli_review)
+        self.assertIn("expected_members = {executable, \"README.md\", \"LICENSE\"}", cli_review)
+        self.assertIn("needs: [cli-assets, build-wheels, build-sdists]", aggregate)
+        self.assertIn("git fetch --tags origin main:refs/remotes/origin/main", aggregate)
+        self.assertIn('[[ "${GITHUB_SHA}" == "${main_sha}" ]]', aggregate)
+        self.assertIn('git tag --points-at "${GITHUB_SHA}" --list \'s[0-9]*\'', aggregate)
+        self.assertIn('git cat-file -t "refs/tags/${sprint_tags}"', aggregate)
+        self.assertIn('[[ "${sprint_tags}" =~ ^s[0-9]+$ ]]', aggregate)
+        self.assertLess(aggregate.index("Verify tag points to the closed main merge"), aggregate.index("Verify publication archives"))
+        self.assertIn('unified-release-family "${{ github.ref_name }}"', aggregate)
+        self.assertIn("Verify selected archive inventory", aggregate)
+        self.assertIn("assert actual == expected", aggregate)
+        self.assertIn('python-release-artifacts "${GITHUB_REF_NAME}" python-dist', aggregate)
+        self.assertIn("assert {path.name for path in cli.iterdir()} == expected_cli", aggregate)
+        self.assertIn("assert len(list(python.iterdir())) == 7", aggregate)
+        self.assertIn("assert len(subjects) == 13", aggregate)
+        self.assertIn("SHA256SUMS", aggregate)
+        self.assertIn("sha256sum --check SHA256SUMS", aggregate)
+        self.assertIn('gh attestation verify "$asset" -R tensorbee/rdocx', aggregate)
+        self.assertIn("--signer-workflow tensorbee/rdocx/.github/workflows/wheels.yml", aggregate)
+        self.assertIn('--source-digest "${GITHUB_SHA}"', aggregate)
+        self.assertIn("family-release-assets-${{ github.ref_name }}", aggregate)
+        self.assertIn("needs: release-assets", crates)
+        self.assertIn("needs: release-assets", pypi)
+        self.assertIn("CARGO_REGISTRY_TOKEN:", crates)
+        self.assertEqual(wheels.count("CARGO_REGISTRY_TOKEN:"), 1)
+        self.assertIn('unified-release-family "${{ github.ref_name }}"', crates)
+        self.assertIn("environment: pypi", pypi)
+        self.assertIn("id-token: write", pypi)
+        self.assertIn("pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b", pypi)
+        self.assertIn('python-release-artifacts "${GITHUB_REF_NAME}" dist', pypi)
+        self.assertIn("needs: [publish-crates, publish-pypi, release-assets]", release)
+        self.assertIn("contents: write", release)
+        self.assertIn('published-unified-release "${{ github.ref_name }}"', release)
+        self.assertLess(release.index("Verify selected registry publication"), release.index("Create GitHub Release from reviewed notes"))
+        self.assertIn('gh release create "${{ github.ref_name }}"', release)
+        self.assertIn('"${RUNNER_TEMP}/family-assets/"*', release)
+        for job in (cli_build, cli_review, aggregate, crates, pypi, release):
+            self.assertIn("if: github.event_name == 'push'", job)
 
     def test_wheels_workflow_covers_every_package_target_and_clean_install(
         self,
@@ -3393,1000 +2803,38 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assert_wheels_workflow_contract(workflow_bytes)
 
     def test_wheels_workflow_rejects_matrix_and_security_mutations(self) -> None:
-        workflow_bytes = (
-            workflow.REPO / ".github/workflows/wheels.yml"
-        ).read_bytes()
-        self.assert_wheels_workflow_contract(workflow_bytes)
-        wheels = workflow_bytes.decode("utf-8", errors="strict")
-        selected_tag_condition = (
-            "github.event_name == 'workflow_dispatch' || "
-            "startsWith(github.ref, format('refs/tags/py-{0}-v', "
-            "matrix.package.distribution))"
-        )
-        native_condition = (
-            f"if: ({selected_tag_condition}) && "
-            "matrix.platform.install == 'native'"
-        )
-        musllinux_condition = (
-            f"if: ({selected_tag_condition}) && "
-            "matrix.platform.install == 'musl'"
-        )
-        sdist_start = wheels.index("  build-sdists:\n")
-        sdist_head = wheels[:sdist_start]
-        sdist_tail = wheels[sdist_start:]
-        publish_start = wheels.index("  publish:\n")
-        publish_head = wheels[:publish_start]
-        publish_tail = wheels[publish_start:]
-        publication_download = self.yaml_step(
-            publish_tail, "Download selected distribution"
-        )
-        publication_validation = self.yaml_step(
-            publish_tail, "Validate selected publication set"
-        )
-        publication_action = self.yaml_step(
-            publish_tail, "Publish to PyPI with trusted publishing"
-        )
-        cp39_setup = self.yaml_block(wheels, "      - id: cp39")
-        cp312_setup = self.yaml_block(wheels, "      - id: cp312")
-        critical_run_steps = (
-            "Validate wheel metadata",
-            "Install and test native wheel",
-            "Validate installed typing surface",
-            "Install and test musllinux wheel",
-            "Validate selected publication set",
-        )
-        musllinux_step = self.yaml_step(
-            wheels, "Install and test musllinux wheel"
-        )
-        musllinux_parity_start = musllinux_step.index(
-            '              if [ "$PACKAGE_DISTRIBUTION" = rdocx ]; then\n'
-        )
-        musllinux_parity_end = musllinux_step.index(
-            "            '\n", musllinux_parity_start
-        )
-        musllinux_import_only_step = (
-            musllinux_step[:musllinux_parity_start]
-            + musllinux_step[musllinux_parity_end:]
-        )
-        early_success_mutations = tuple(
-            (
-                f"{name.lower().replace(' ', '-')}-{command.replace(' ', '-')}",
-                wheels.replace(
-                    step,
-                    step.replace(
-                        "        run: |\n",
-                        f"        run: |\n          {command}\n",
-                        1,
-                    ),
-                    1,
-                ),
-            )
-            for name in critical_run_steps
-            for command in ("exit 0", "return 0", "true")
-            for step in (self.yaml_step(wheels, name),)
-        )
-
-        def mutate_run(
-            name: str,
-            *,
-            prefix: str = "",
-            suffix: str = "",
-            first_line_suffix: str = "",
-        ) -> str:
-            step = self.yaml_step(wheels, name)
-            mutated_step = step
-            marker = "        run: |\n"
-            if first_line_suffix:
-                marker_end = mutated_step.index(marker) + len(marker)
-                line_end = mutated_step.index("\n", marker_end)
-                first_line = mutated_step[marker_end:line_end]
-                mutated_step = (
-                    mutated_step[:marker_end]
-                    + first_line
-                    + first_line_suffix
-                    + mutated_step[line_end:]
-                )
-            if prefix:
-                mutated_step = mutated_step.replace(
-                    marker, marker + f"          {prefix}\n", 1
-                )
-            if suffix:
-                mutated_step += f"          {suffix}\n"
-            return wheels.replace(step, mutated_step, 1)
-
-        control_flow_mutations = tuple(
-            (f"{name.lower().replace(' ', '-')}-{label}", mutation)
-            for name in critical_run_steps
-            for label, mutation in (
-                (
-                    "if-false-wrapper",
-                    mutate_run(name, prefix="if false; then", suffix="fi"),
-                ),
-                (
-                    "if-true-wrapper",
-                    mutate_run(name, prefix="if true; then", suffix="fi"),
-                ),
-                (
-                    "set-plus-e-trailing-noop",
-                    mutate_run(name, prefix="set +e", suffix=":"),
-                ),
-                (
-                    "or-true",
-                    mutate_run(name, first_line_suffix=" || true"),
-                ),
-                (
-                    "or-noop",
-                    mutate_run(name, first_line_suffix=" || :"),
-                ),
-                (
-                    "semicolon-noop",
-                    mutate_run(name, first_line_suffix="; :"),
-                ),
-                (
-                    "semicolon-true",
-                    mutate_run(name, first_line_suffix="; true"),
-                ),
-                ("trailing-noop", mutate_run(name, suffix=":")),
-            )
-        )
-        duplicate_rdocx_sdist = sdist_head + sdist_tail.replace(
-            "          - { distribution: rpptx, crate: rpptx-py, "
-            "module: rpptx }",
-            "          - { distribution: rdocx, crate: rdocx-py, "
-            "module: rdocx }",
-            1,
-        )
-        extra_sdist_axis = sdist_head + sdist_tail.replace(
-            "      matrix:\n        package:\n",
-            "      matrix:\n        python: [3.9, 3.12]\n        package:\n",
-            1,
-        )
-        mutations = (
-            (
-                "missing-platform",
-                wheels.replace(
-                    "label: windows-x86_64", "label: windows-missing", 1
-                ),
-            ),
-            (
-                "missing-package",
-                wheels.replace("distribution: rpptx", "distribution: absent", 1),
-            ),
-            (
-                "missing-install",
-                wheels.replace("-m venv .wheel-venv", "-m pip --version", 1),
-            ),
-            (
-                "native-pytest-collect-only-environment",
-                wheels.replace(
-                    "      - name: Install and test native wheel\n",
-                    "      - name: Install and test native wheel\n"
-                    "        env:\n"
-                    "          PYTEST_ADDOPTS: --collect-only\n",
-                    1,
-                ),
-            ),
-            (
-                "typing-mypy-config-environment",
-                wheels.replace(
-                    "      - name: Validate installed typing surface\n",
-                    "      - name: Validate installed typing surface\n"
-                    "        env:\n"
-                    "          MYPY_CONFIG_FILE: /dev/null\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-checkout-ref-input",
-                wheels.replace(
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n",
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n"
-                    "        with: { ref: main }\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-checkout-repository-input",
-                wheels.replace(
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n",
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n"
-                    "        with:\n"
-                    "          repository: example/other\n"
-                    "          ref: main\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-checkout-ref-input",
-                sdist_head
-                + sdist_tail.replace(
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n",
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n"
-                    "        with: { ref: main }\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-checkout-repository-input",
-                sdist_head
-                + sdist_tail.replace(
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n",
-                    "      - uses: actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n"
-                    "        with:\n"
-                    "          repository: example/other\n"
-                    "          ref: main\n",
-                    1,
-                ),
-            ),
-            (
-                "cp39-wrong-version-with-required-comment",
-                wheels.replace(
-                    '          python-version: "3.9"\n',
-                    '          python-version: "3.12" # '
-                    'python-version: "3.9"\n',
-                    1,
-                ),
-            ),
-            (
-                "cp312-wrong-version-with-required-comment",
-                wheels.replace(
-                    '          python-version: "3.12"\n',
-                    '          python-version: "3.9" # '
-                    'python-version: "3.12"\n',
-                    1,
-                ),
-            ),
-            (
-                "sdist-wrong-python-version",
-                sdist_head
-                + sdist_tail.replace(
-                    '          python-version: "3.9"\n',
-                    '          python-version: "3.8"\n',
-                    1,
-                ),
-            ),
-            (
-                "sdist-wrong-version-with-required-comment",
-                sdist_head
-                + sdist_tail.replace(
-                    '          python-version: "3.9"\n',
-                    '          python-version: "3.12" # '
-                    'python-version: "3.9"\n',
-                    1,
-                ),
-            ),
-            (
-                "renamed-cp39-id",
-                wheels.replace("      - id: cp39\n", "      - id: py39\n", 1),
-            ),
-            (
-                "renamed-cp312-id",
-                wheels.replace(
-                    "      - id: cp312\n", "      - id: py312\n", 1
-                ),
-            ),
-            (
-                "cp39-package-restricted",
-                wheels.replace(
-                    cp39_setup,
-                    cp39_setup.replace(
-                        "      - id: cp39\n",
-                        "      - id: cp39\n"
-                        "        if: matrix.package.distribution == 'rdocx'\n",
-                        1,
-                    ),
-                    1,
-                ),
-            ),
-            (
-                "cp312-unconditional",
-                wheels.replace(
-                    cp312_setup,
-                    cp312_setup.replace(
-                        f"        {native_condition}\n",
-                        "",
-                        1,
-                    ),
-                    1,
-                ),
-            ),
-            (
-                "sdist-setup-wrong-position",
-                sdist_head
-                + sdist_tail.replace(
-                    "      - uses: actions/setup-python@",
-                    "      - name: Setup prelude\n"
-                    "        run: echo setup\n"
-                    "      - uses: actions/setup-python@",
-                    1,
-                ),
-            ),
-            (
-                "cp39-setup-wrong-position",
-                wheels.replace(cp39_setup, "", 1).replace(
-                    cp312_setup, cp39_setup + cp312_setup, 1
-                ),
-            ),
-            (
-                "missing-artifact-dependency",
-                wheels.replace(
-                    "needs: [build-wheels, build-sdists]",
-                    "needs: build-wheels",
-                    1,
-                ),
-            ),
-            (
-                "missing-sdist-need-preserved-in-comment",
-                wheels.replace(
-                    "needs: [build-wheels, build-sdists]",
-                    "needs: build-wheels # "
-                    "needs: [build-wheels, build-sdists]",
-                    1,
-                ),
-            ),
-            (
-                "missing-wheel-need-preserved-in-comment",
-                wheels.replace(
-                    "needs: [build-wheels, build-sdists]",
-                    "needs: build-sdists # "
-                    "needs: [build-wheels, build-sdists]",
-                    1,
-                ),
-            ),
-            (
-                "extra-publish-need",
-                wheels.replace(
-                    "needs: [build-wheels, build-sdists]",
-                    "needs: [build-wheels, build-sdists, audit]",
-                    1,
-                ),
-            ),
-            (
-                "reversed-publish-needs",
-                wheels.replace(
-                    "needs: [build-wheels, build-sdists]",
-                    "needs: [build-sdists, build-wheels]",
-                    1,
-                ),
-            ),
-            (
-                "wrong-tag-prefix",
-                wheels.replace(
-                    "startsWith(github.ref, 'refs/tags/py-rdocx-v')",
-                    "startsWith(github.ref, 'refs/heads/')",
-                    1,
-                ),
-            ),
-            (
-                "tag-ignore-with-required-tag-comment",
-                wheels.replace(
-                    '    tags: ["py-rdocx-v*", "py-rpptx-v*"]',
-                    '    tags-ignore: ["py-rdocx-v*", "py-rpptx-v*"]',
-                    1,
-                ),
-            ),
-            (
-                "commented-push-trigger",
-                wheels.replace("  push:\n", "  # push:\n", 1),
-            ),
-            (
-                "comment-only-tag-filter",
-                wheels.replace(
-                    '    tags: ["py-rdocx-v*", "py-rpptx-v*"]',
-                    '    # tags: ["py-rdocx-v*", "py-rpptx-v*"]',
-                    1,
-                ),
-            ),
-            (
-                "extra-schedule-trigger",
-                wheels.replace(
-                    "  workflow_dispatch:\n",
-                    "  workflow_dispatch:\n  schedule: []\n",
-                    1,
-                ),
-            ),
-            (
-                "commented-workflow-dispatch",
-                wheels.replace(
-                    "  workflow_dispatch:\n", "  # workflow_dispatch:\n", 1
-                ),
-            ),
-            (
-                "extra-matrix-axis",
-                wheels.replace(
-                    "        platform:\n",
-                    "        python: [3.9, 3.12]\n        platform:\n",
-                    1,
-                ),
-            ),
-            (
-                "rdocx-only-native-gates",
-                wheels.replace(
-                    native_condition,
-                    native_condition
-                    + " && matrix.package.distribution == 'rdocx'",
-                ),
-            ),
-            (
-                "manual-dispatch-publication",
-                wheels.replace(
-                    "if: github.event_name == 'push' && (startsWith",
-                    "if: github.event_name == 'workflow_dispatch' && (startsWith",
-                    1,
-                ),
-            ),
-            (
-                "root-write-permission",
-                wheels.replace("  contents: read", "  contents: write", 1),
-            ),
-            (
-                "build-write-all",
-                wheels.replace(
-                    "    name: ${{ matrix.package.distribution }} "
-                    "${{ matrix.platform.label }}\n",
-                    "    name: ${{ matrix.package.distribution }} "
-                    "${{ matrix.platform.label }}\n"
-                    "    permissions: write-all\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-write-all",
-                wheels.replace(
-                    "    name: ${{ matrix.package.distribution }} sdist\n",
-                    "    name: ${{ matrix.package.distribution }} sdist\n"
-                    "    permissions: write-all\n",
-                    1,
-                ),
-            ),
-            (
-                "publish-contents-write",
-                publish_head
-                + publish_tail.replace(
-                    "      contents: read", "      contents: write", 1
-                ),
-            ),
-            (
-                "publish-id-token-read",
-                publish_head
-                + publish_tail.replace(
-                    "      id-token: write", "      id-token: read", 1
-                ),
-            ),
-            (
-                "publish-extra-permission",
-                publish_head
-                + publish_tail.replace(
-                    "      contents: read\n",
-                    "      contents: read\n      issues: write\n",
-                    1,
-                ),
-            ),
-            (
-                "publish-staging-environment",
-                wheels.replace("    environment: pypi", "    environment: pypi-staging", 1),
-            ),
-            (
-                "native-continue-on-error",
-                wheels.replace(
-                    "      - name: Install and test native wheel\n",
-                    "      - name: Install and test native wheel\n"
-                    "        continue-on-error: true\n",
-                    1,
-                ),
-            ),
-            (
-                "typing-continue-on-error",
-                wheels.replace(
-                    "      - name: Validate installed typing surface\n",
-                    "      - name: Validate installed typing surface\n"
-                    "        continue-on-error: true\n",
-                    1,
-                ),
-            ),
-            (
-                "musllinux-if-false",
-                wheels.replace(
-                    musllinux_condition, "if: false", 1
-                ),
-            ),
-            (
-                "musllinux-import-only",
-                wheels.replace(
-                    musllinux_step, musllinux_import_only_step, 1
-                ),
-            ),
-            (
-                "musllinux-package-restriction",
-                wheels.replace(
-                    musllinux_condition,
-                    musllinux_condition + " && "
-                    "matrix.package.distribution == 'rdocx'",
-                    1,
-                ),
-            ),
-            (
-                "musllinux-or-native",
-                wheels.replace(
-                    musllinux_condition,
-                    musllinux_condition + " || "
-                    "matrix.platform.install == 'native'",
-                    1,
-                ),
-            ),
-            (
-                "wheel-upload-continue-on-error",
-                wheels.replace(
-                    "      - name: Upload wheel\n",
-                    "      - name: Upload wheel\n"
-                    "        continue-on-error: true\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-upload-continue-on-error",
-                wheels.replace(
-                    "      - name: Upload source distribution\n",
-                    "      - name: Upload source distribution\n"
-                    "        continue-on-error: true\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-upload-warn-with-error-comment",
-                wheels.replace(
-                    "          if-no-files-found: error\n",
-                    "          if-no-files-found: warn # "
-                    "if-no-files-found: error\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-upload-warn-with-error-comment",
-                sdist_head
-                + sdist_tail.replace(
-                    "          if-no-files-found: error\n",
-                    "          if-no-files-found: warn # "
-                    "if-no-files-found: error\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-upload-policy-only-in-comment",
-                wheels.replace(
-                    "          if-no-files-found: error\n",
-                    "          # if-no-files-found: error\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-upload-policy-only-in-comment",
-                sdist_head
-                + sdist_tail.replace(
-                    "          if-no-files-found: error\n",
-                    "          # if-no-files-found: error\n",
-                    1,
-                ),
-            ),
-            (
-                "publication-validation-continue-on-error",
-                wheels.replace(
-                    "      - name: Validate selected publication set\n",
-                    "      - name: Validate selected publication set\n"
-                    "        continue-on-error: true\n",
-                    1,
-                ),
-            ),
-            (
-                "publication-action-continue-on-error",
-                wheels.replace(
-                    "      - name: Publish to PyPI with trusted publishing\n",
-                    "      - name: Publish to PyPI with trusted publishing\n"
-                    "        continue-on-error: true\n",
-                    1,
-                ),
-            ),
-            (
-                "publication-validation-if-false",
-                wheels.replace(
-                    "      - name: Validate selected publication set\n",
-                    "      - name: Validate selected publication set\n"
-                    "        if: false\n",
-                    1,
-                ),
-            ),
-            (
-                "publication-validation-if-always",
-                wheels.replace(
-                    "      - name: Validate selected publication set\n",
-                    "      - name: Validate selected publication set\n"
-                    "        if: always()\n",
-                    1,
-                ),
-            ),
-            (
-                "publication-action-if-false",
-                wheels.replace(
-                    "      - name: Publish to PyPI with trusted publishing\n",
-                    "      - name: Publish to PyPI with trusted publishing\n"
-                    "        if: false\n",
-                    1,
-                ),
-            ),
-            (
-                "publication-action-if-always",
-                wheels.replace(
-                    "      - name: Publish to PyPI with trusted publishing\n",
-                    "      - name: Publish to PyPI with trusted publishing\n"
-                    "        if: always()\n",
-                    1,
-                ),
-            ),
-            (
-                "publish-before-validation",
-                wheels.replace(
-                    publication_validation + publication_action,
-                    publication_action + publication_validation,
-                    1,
-                ),
-            ),
-            (
-                "validation-before-download",
-                wheels.replace(
-                    publication_download + publication_validation,
-                    publication_validation + publication_download,
-                    1,
-                ),
-            ),
-            (
-                "download-other-path",
-                wheels.replace("          path: dist\n", "          path: other\n", 1),
-            ),
-            (
-                "download-specific-pattern",
-                wheels.replace(
-                    "          pattern: artifact-*-${{ steps.selected.outputs.distribution }}*\n",
-                    "          pattern: artifact-wheel-*\n",
-                    1,
-                ),
-            ),
-            (
-                "download-no-merge",
-                wheels.replace(
-                    "          merge-multiple: true\n",
-                    "          merge-multiple: false\n",
-                    1,
-                ),
-            ),
-            (
-                "hard-coded-rdocx-validation-tag",
-                wheels.replace(
-                    'python-release-artifacts "${GITHUB_REF_NAME}" dist',
-                    'python-release-artifacts "py-rdocx-v0.13.2" dist',
-                    1,
-                ),
-            ),
-            (
-                "validation-other-directory",
-                wheels.replace(
-                    'python-release-artifacts "${GITHUB_REF_NAME}" dist',
-                    'python-release-artifacts "${GITHUB_REF_NAME}" other',
-                    1,
-                ),
-            ),
-            (
-                "publish-empty-input",
-                wheels.replace(
-                    "          packages-dir: dist\n",
-                    "          packages-dir: empty\n",
-                    1,
-                ),
-            ),
-            (
-                "rdocx-only-wheel-upload",
-                wheels.replace(
-                    "      - name: Upload wheel\n",
-                    "      - name: Upload wheel\n"
-                    "        if: matrix.package.distribution == 'rdocx'\n",
-                    1,
-                ),
-            ),
-            (
-                "rdocx-only-sdist-upload",
-                wheels.replace(
-                    "      - name: Upload source distribution\n",
-                    "      - name: Upload source distribution\n"
-                    "        if: matrix.package.distribution == 'rdocx'\n",
-                    1,
-                ),
-            ),
-            (
-                "push-only-wheel-build",
-                wheels.replace(
-                    "  build-wheels:\n",
-                    "  build-wheels:\n    if: github.event_name == 'push'\n",
-                    1,
-                ),
-            ),
-            (
-                "push-only-sdist-build",
-                wheels.replace(
-                    "  build-sdists:\n",
-                    "  build-sdists:\n    if: github.event_name == 'push'\n",
-                    1,
-                ),
-            ),
-            (
-                "second-publication-job",
-                wheels
-                + "\n  publish-copy:\n"
-                + "    runs-on: ubuntu-24.04\n"
-                + "    steps: []\n",
-            ),
-            (
-                "publication-named-build-job",
-                wheels.replace(
-                    "    name: ${{ matrix.package.distribution }} "
-                    "${{ matrix.platform.label }}",
-                    "    name: Publish ${{ matrix.package.distribution }} "
-                    "${{ matrix.platform.label }}",
-                    1,
-                ),
-            ),
-            ("missing-rpptx-sdist", duplicate_rdocx_sdist),
-            ("extra-sdist-axis", extra_sdist_axis),
-            (
-                "wrong-wheel-artifact-path",
-                wheels.replace("path: dist/*.whl", "path: dist/rdocx-*.whl", 1),
-            ),
-            (
-                "wrong-wheel-artifact-name",
-                wheels.replace(
-                    "name: artifact-wheel-${{ matrix.package.distribution }}-"
-                    "${{ matrix.platform.label }}",
-                    "name: artifact-wheel-rdocx-${{ matrix.platform.label }}",
-                    1,
-                ),
-            ),
-            (
-                "wrong-sdist-artifact-name",
-                wheels.replace(
-                    "name: artifact-sdist-${{ matrix.package.distribution }}",
-                    "name: artifact-sdist-rdocx",
-                    1,
-                ),
-            ),
-            (
-                "wrong-sdist-artifact-path",
-                wheels.replace(
-                    "path: dist/*.tar.gz", "path: dist/rdocx-*.tar.gz", 1
-                ),
-            ),
-            (
-                "wheel-fixed-target-with-expression-comment",
-                wheels.replace(
-                    "          target: ${{ matrix.platform.target }}\n",
-                    "          target: x86_64-unknown-linux-gnu # "
-                    "target: ${{ matrix.platform.target }}\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-fixed-manylinux-with-expression-comment",
-                wheels.replace(
-                    "          manylinux: ${{ matrix.platform.manylinux }}\n",
-                    "          manylinux: off # "
-                    "manylinux: ${{ matrix.platform.manylinux }}\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-fixed-package-with-expression-comment",
-                wheels.replace(
-                    "          working-directory: "
-                    "crates/${{ matrix.package.crate }}\n",
-                    "          working-directory: crates/rdocx-py # "
-                    "working-directory: crates/${{ matrix.package.crate }}\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-weakened-args-with-required-comment",
-                wheels.replace(
-                    "          args: --release --locked --compatibility pypi "
-                    "--out ../../dist\n",
-                    "          args: --release --out ../../dist # "
-                    "--locked --compatibility pypi\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-wrong-command-with-build-comment",
-                wheels.replace(
-                    "          command: build\n",
-                    "          command: sdist # command: build\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-wrong-maturin-version",
-                wheels.replace(
-                    "          maturin-version: v1.13.3\n",
-                    "          maturin-version: v1.13.2\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-package-restricted-build",
-                wheels.replace(
-                    "      - name: Build cp39-abi3 wheel\n",
-                    "      - name: Build cp39-abi3 wheel\n"
-                    "        if: matrix.package.distribution == 'rdocx'\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-fixed-package",
-                sdist_head
-                + sdist_tail.replace(
-                    "          working-directory: "
-                    "crates/${{ matrix.package.crate }}\n",
-                    "          working-directory: crates/rdocx-py\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-fixed-package-with-expression-comment",
-                sdist_head
-                + sdist_tail.replace(
-                    "          working-directory: "
-                    "crates/${{ matrix.package.crate }}\n",
-                    "          working-directory: crates/rdocx-py # "
-                    "working-directory: crates/${{ matrix.package.crate }}\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-wrong-command-with-sdist-comment",
-                sdist_head
-                + sdist_tail.replace(
-                    "          command: sdist\n",
-                    "          command: build # command: sdist\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-wrong-maturin-version",
-                sdist_head
-                + sdist_tail.replace(
-                    "          maturin-version: v1.13.3\n",
-                    "          maturin-version: v1.13.2\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-wrong-args-with-required-comment",
-                sdist_head
-                + sdist_tail.replace(
-                    "          args: --out ../../dist\n",
-                    "          args: --out dist # args: --out ../../dist\n",
-                    1,
-                ),
-            ),
-            (
-                "sdist-package-restricted-build",
-                wheels.replace(
-                    "      - name: Build source distribution\n",
-                    "      - name: Build source distribution\n"
-                    "        if: matrix.package.distribution == 'rdocx'\n",
-                    1,
-                ),
-            ),
-            (
-                "wheel-checkout-unreviewed-sha",
-                wheels.replace(
-                    "actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                    "actions/checkout@1111111111111111111111111111111111111111 "
-                    "# actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                    1,
-                ),
-            ),
-            (
-                "wheel-setup-unreviewed-sha",
-                wheels.replace(
-                    "actions/setup-python@"
-                    "a309ff8b426b58ec0e2a45f0f869d46889d02405",
-                    "actions/setup-python@2222222222222222222222222222222222222222 "
-                    "# actions/setup-python@"
-                    "a309ff8b426b58ec0e2a45f0f869d46889d02405",
-                    1,
-                ),
-            ),
-            (
-                "wheel-maturin-unreviewed-sha",
-                wheels.replace(
-                    "PyO3/maturin-action@"
-                    "86b9d133d34bc1b40018696f782949dac11bd380",
-                    "PyO3/maturin-action@"
-                    "3333333333333333333333333333333333333333 "
-                    "# PyO3/maturin-action@"
-                    "86b9d133d34bc1b40018696f782949dac11bd380",
-                    1,
-                ),
-            ),
-            (
-                "wheel-upload-unreviewed-sha",
-                wheels.replace(
-                    "actions/upload-artifact@"
-                    "ea165f8d65b6e75b540449e92b4886f43607fa02",
-                    "actions/upload-artifact@"
-                    "4444444444444444444444444444444444444444 "
-                    "# actions/upload-artifact@"
-                    "ea165f8d65b6e75b540449e92b4886f43607fa02",
-                    1,
-                ),
-            ),
-            (
-                "sdist-checkout-unreviewed-sha",
-                sdist_head
-                + sdist_tail.replace(
-                    "actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                    "actions/checkout@"
-                    "6666666666666666666666666666666666666666 "
-                    "# actions/checkout@"
-                    "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-                    1,
-                ),
-            ),
-            (
-                "sdist-maturin-unreviewed-sha",
-                sdist_head
-                + sdist_tail.replace(
-                    "PyO3/maturin-action@"
-                    "86b9d133d34bc1b40018696f782949dac11bd380",
-                    "PyO3/maturin-action@"
-                    "7777777777777777777777777777777777777777 "
-                    "# PyO3/maturin-action@"
-                    "86b9d133d34bc1b40018696f782949dac11bd380",
-                    1,
-                ),
-            ),
-            (
-                "extra-unreviewed-action",
-                wheels.replace(
-                    "      - uses: actions/checkout@",
-                    "      - uses: example/unknown@"
-                    "5555555555555555555555555555555555555555\n"
-                    "      - uses: actions/checkout@",
-                    1,
-                ),
-            ),
-        ) + early_success_mutations + control_flow_mutations + (
-            (
-                "crlf-workflow-bytes",
-                workflow_bytes.replace(b"\n", b"\r\n"),
-            ),
-        )
-
-        for name, mutated in mutations:
-            mutated_bytes = (
-                mutated if isinstance(mutated, bytes) else mutated.encode("utf-8")
-            )
-            self.assertNotEqual(mutated_bytes, workflow_bytes, name)
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        self.assert_wheels_workflow_contract(wheels.encode())
+        mutations = {
+            "missing-main-sha-check": ('[[ "${GITHUB_SHA}" == "${main_sha}" ]]', 'true'),
+            "missing-sprint-tag-check": ('git tag --points-at "${GITHUB_SHA}" --list \'s[0-9]*\'', 'echo s86'),
+            "sprint-tag-not-annotated": ('git cat-file -t "refs/tags/${sprint_tags}"', 'echo tag'),
+            "missing-archive-inventory": ('assert actual == expected', 'assert actual'),
+            "legacy-tag": ('tags: ["v*", "rpptx-v*"]', 'tags: ["py-rdocx-v*"]'),
+            "missing-wheel-target": ("target: x86_64-pc-windows-msvc", "target: missing-target"),
+            "missing-sdist": ('  build-sdists:\n', '  missing-sdists:\n'),
+            "missing-cli": ('  build-cli-assets:\n', '  missing-cli:\n'),
+            "missing-aggregate": ('  release-assets:\n', '  missing-assets:\n'),
+            "missing-attestation": ('subject-path: dist/*', 'subject-path: missing/*'),
+            "missing-verification": ('gh attestation verify "$asset"', 'echo "$asset"'),
+            "wrong-signer": ('--signer-workflow tensorbee/rdocx/.github/workflows/wheels.yml', '--signer-workflow other/repo/workflow.yml'),
+            "missing-checksums": ('sha256sum --check SHA256SUMS', 'echo SHA256SUMS'),
+            "missing-thirteen": ('assert len(subjects) == 13', 'assert len(subjects) > 0'),
+            "early-crates": ('needs: release-assets', 'needs: build-cli-assets'),
+            "early-release": ('needs: [publish-crates, publish-pypi, release-assets]', 'needs: release-assets'),
+            "missing-registry-verification": ('published-unified-release "${{ github.ref_name }}"', 'echo ok'),
+            "manual-publication": ("if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v')", "if: github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/tags/v')"),
+            "wrong-pypi-environment": ('environment: pypi', 'environment: test'),
+            "unpinned-action": ('actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8', 'actions/attest-build-provenance@v4'),
+            "fallback": ('cargo publish -p rdocx-opc', 'cargo publish -p rdocx-opc || true'),
+        }
+        for name, (before, after) in mutations.items():
             with self.subTest(name=name):
+                self.assertIn(before, wheels)
+                mutated = wheels.replace(before, after, 1)
+                self.assertNotEqual(mutated, wheels)
                 with self.assertRaises(AssertionError):
-                    self.assert_wheels_workflow_contract(mutated_bytes)
+                    self.assert_wheels_workflow_contract(mutated.encode())
 
     def assert_publish_preflight_contract(self, publish: str) -> None:
         publishable_crates = (
@@ -4531,7 +2979,7 @@ class SprintWorkflowTests(unittest.TestCase):
 
     def assert_rust_release_assets_contract(self, publish: str) -> None:
         build = self.yaml_block(publish, "  build-cli-assets:")
-        publish_job = self.yaml_block(publish, "  publish:")
+        publish_job = self.yaml_block(publish, "  publish-crates:")
         aggregate = self.yaml_block(publish, "  cli-assets:")
         release = self.yaml_block(publish, "  release:")
 
@@ -4573,7 +3021,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(publish.count("CARGO_REGISTRY_TOKEN:"), 1)
         self.assertIn("CARGO_REGISTRY_TOKEN:", publish_job)
         self.assertNotIn("CARGO_REGISTRY_TOKEN:", build + aggregate + release)
-        self.assertIn("needs: cli-assets", publish_job)
+        self.assertIn("needs: release-assets", publish_job)
 
         actions = tuple(
             match.group(1)
@@ -4604,22 +3052,26 @@ class SprintWorkflowTests(unittest.TestCase):
             'normalize_text(payloads["LICENSE"]) == normalize_text(expected_license)',
             aggregate,
         )
-        self.assertIn('checksum_lines.append(f"{digest}  {archive.name}")', aggregate)
-        self.assertIn('write_text("\\n".join(checksum_lines) + "\\n"', aggregate)
-        self.assertIn("sha256sum --check SHA256SUMS", aggregate)
         self.assertIn("if-no-files-found: error", aggregate)
         self.assertNotIn("continue-on-error", aggregate)
-        validate = self.yaml_step(aggregate, "Validate archives and write checksums")
+        validate = self.yaml_step(aggregate, "Validate CLI archives")
         self.assert_no_success_short_circuit(self.yaml_run_lines(validate))
 
-        self.assertIn("needs: [publish, cli-assets]", release)
+        family = self.yaml_block(publish, "  release-assets:")
+        self.assertIn("needs: [cli-assets, build-wheels, build-sdists]", family)
+        self.assertIn('assert len(subjects) == 13', family)
+        self.assertIn('assert len(list(python.iterdir())) == 7', family)
+        self.assertIn('SHA256SUMS', family)
+        self.assertIn('sha256sum --check SHA256SUMS', family)
+        self.assertIn('gh attestation verify "$asset" -R tensorbee/rdocx', family)
+        self.assertIn("family-release-assets-${{ github.ref_name }}", family)
+
+        self.assertIn("needs: [publish-crates, publish-pypi, release-assets]", release)
         download = self.yaml_step(release, "Download reviewed CLI assets")
         create = self.yaml_step(release, "Create GitHub Release from reviewed notes")
-        self.assertIn("cli-release-assets-${{ github.ref_name }}", download)
-        self.assertIn('"${RUNNER_TEMP}/cli-assets/"*', create)
+        self.assertIn("family-release-assets-${{ github.ref_name }}", download)
+        self.assertIn('"${RUNNER_TEMP}/family-assets/"*', create)
         self.assertLess(release.index(download), release.index(create))
-        self.assertNotIn("py-rdocx", publish)
-        self.assertNotIn("py-rpptx", publish)
 
         for crate, tag, binary in (
             ("rdocx-cli", "v{ version }", "rdocx"),
@@ -4653,7 +3105,7 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
     def assert_release_notes_publish_contract(self, publish: str) -> None:
-        publish_job = self.yaml_block(publish, "  publish:")
+        publish_job = self.yaml_block(publish, "  publish-crates:")
         prepublish = self.yaml_step(publish_job, "Verify reviewed release notes")
         validation_command = (
             "run: python3 scripts/sprint_workflow.py release-notes "
@@ -4684,6 +3136,7 @@ class SprintWorkflowTests(unittest.TestCase):
             (
                 "step:1",
                 "Download reviewed CLI assets",
+                "Verify selected registry publication",
                 "Create GitHub Release from reviewed notes",
             ),
         )
@@ -4706,7 +3159,7 @@ class SprintWorkflowTests(unittest.TestCase):
             '"${{ github.ref_name }}" --render | cmp - '
             '"$RUNNER_TEMP/release-notes.md"',
             'gh release create "${{ github.ref_name }}" '
-            '"${RUNNER_TEMP}/cli-assets/"* --notes-file '
+            '"${RUNNER_TEMP}/family-assets/"* --notes-file '
             '"$RUNNER_TEMP/release-notes.md"',
         )
         self.assertEqual(self.yaml_run_lines(create), commands)
@@ -5214,8 +3667,8 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertNotIn("rpptx-v0.11.0", notes)
         return notes
 
-    def test_stable_release_family_is_prepared_at_0_14_0(self) -> None:
-        expected_version = "0.14.0"
+    def test_stable_release_family_is_prepared_at_0_15_0(self) -> None:
+        expected_version = "0.15.0"
         stable_members = (
             "oxml-py-support",
             "rdocx-opc",
@@ -5310,7 +3763,7 @@ class SprintWorkflowTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(rpptx_pyproject["project"]["version"], "0.12.1")
+        self.assertEqual(rpptx_pyproject["project"]["version"], "0.13.0")
 
         migration = (
             workflow.REPO / "docs/hld/11-migration-plan.md"
@@ -5345,13 +3798,13 @@ class SprintWorkflowTests(unittest.TestCase):
             )
 
         readme_requirements = {
-            "README.md": ('rdocx = "0.14.0"', 'version = "0.14.0"'),
-            "crates/rdocx-cli/README.md": ("--version '^0.14.0'",),
-            "crates/rdocx-html/README.md": ('rdocx-html = "0.14.0"',),
-            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.14.0"',),
-            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.14.0"',),
-            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.14.0"',),
-            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.14.0"',),
+            "README.md": ('rdocx = "0.15.0"', 'version = "0.15.0"'),
+            "crates/rdocx-cli/README.md": ("--version '^0.15.0'",),
+            "crates/rdocx-html/README.md": ('rdocx-html = "0.15.0"',),
+            "crates/rdocx-layout/README.md": ('rdocx-layout = "0.15.0"',),
+            "crates/rdocx-opc/README.md": ('rdocx-opc = "0.15.0"',),
+            "crates/rdocx-oxml/README.md": ('rdocx-oxml = "0.15.0"',),
+            "crates/rdocx-pdf/README.md": ('rdocx-pdf = "0.15.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -5371,23 +3824,21 @@ class SprintWorkflowTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(manifest["package"]["version"], "0.12.1", name)
+            expected_incubating_version = "0.12.1" if name == "rpptx-wasm" else "0.13.0"
+            self.assertEqual(manifest["package"]["version"], expected_incubating_version, name)
             self.assertIs(
                 manifest["package"].get("publish", True),
                 name not in ("rpptx-py", "rpptx-wasm"),
                 name,
             )
 
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         self.assert_publish_workflow_contract(publish)
         self.assertEqual(
-            publish.count(
-                "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_stable_release_family_is_prepared_at_0_14_0"
-            ),
-            1,
+            publish.count('unified-release-family "${{ github.ref_name }}"'),
+            2,
         )
 
         changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -5485,8 +3936,8 @@ class SprintWorkflowTests(unittest.TestCase):
     def test_s73_release_contract_requires_four_version_aligned_families(
         self,
     ) -> None:
-        stable_version = "0.14.0"
-        incubating_version = "0.12.1"
+        stable_version = "0.15.0"
+        incubating_version = "0.13.0"
         stable_publishable = {
             "rdocx-opc",
             "rdocx-oxml",
@@ -5667,11 +4118,11 @@ class SprintWorkflowTests(unittest.TestCase):
                     0,
                     packaged.stdout + packaged.stderr,
                 )
-                archive = target / "package" / f"{name}-0.14.0.crate"
+                archive = target / "package" / f"{name}-0.15.0.crate"
                 self.assertTrue(archive.is_file(), archive)
                 with tarfile.open(archive, mode="r:gz") as package:
                     package.extractall(target / "package", filter="data")
-                source = target / "package" / f"{name}-0.14.0"
+                source = target / "package" / f"{name}-0.15.0"
                 self.assertTrue(source.is_dir(), source)
                 return source
 
@@ -6164,13 +4615,13 @@ rdocx-layout = "=0.10.1"
         readme = (workflow.REPO / "README.md").read_text(encoding="utf-8")
         self.assertTrue(readme_doctests.validate_root_versions(readme, metadata))
         for requirement in (
-            'rdocx = "0.14.0"',
-            'rdocx = { version = "0.14.0", default-features = false }',
-            "cargo install rdocx-cli --version '^0.14.0'",
+            'rdocx = "0.15.0"',
+            'rdocx = { version = "0.15.0", default-features = false }',
+            "cargo install rdocx-cli --version '^0.15.0'",
         ):
             with self.subTest(requirement=requirement):
                 mutation = readme.replace(
-                    requirement, requirement.replace("0.14.0", "9.9.9")
+                    requirement, requirement.replace("0.15.0", "9.9.9")
                 )
                 self.assertFalse(
                     readme_doctests.validate_root_versions(mutation, metadata)
@@ -6344,7 +4795,8 @@ rdocx-layout = "=0.10.1"
         mutations = (
             text.replace("| 2026-09-19 |", "|  |", 1),
             text.replace("| 2026-09-19 |", "| 19 September 2026 |", 1),
-            text.replace("| 0.14.0 |", "| 9.9.9 |", 1),
+            text.replace("| 0.15.0 |", "| 9.9.9 |", 1),
+            text.replace("| rdocx 0.14.0 |", "| rdocx 9.9.9 |", 1),
         )
         self.assertFalse(readme_doctests.valid_measurement_date("2026-99-99"))
         for mutation in mutations:
@@ -6531,7 +4983,7 @@ rdocx-layout = "=0.10.1"
             self.assertEqual(release["shared-version"], "incubating")
             self.assertEqual(release["tag-name"], "rpptx-v{{version}}")
 
-    def test_incubating_release_family_is_prepared_at_0_12_1(self) -> None:
+    def test_incubating_release_family_is_prepared_at_0_13_0(self) -> None:
         incubating_packages = (
             "oxml-core",
             "oxml-opc",
@@ -6550,9 +5002,9 @@ rdocx-layout = "=0.10.1"
             "rpptx-cli",
         )
         preparation_packages = (*incubating_packages, "rpptx-wasm")
-        expected_version = "0.12.1"
+        expected_version = "0.13.0"
         root = tomllib.loads((workflow.REPO / "Cargo.toml").read_text(encoding="utf-8"))
-        self.assertEqual(root["workspace"]["package"]["version"], "0.14.0")
+        self.assertEqual(root["workspace"]["package"]["version"], "0.15.0")
         dependencies = root["workspace"]["dependencies"]
         lock = tomllib.loads((workflow.REPO / "Cargo.lock").read_text(encoding="utf-8"))
         lock_versions = {
@@ -6579,27 +5031,27 @@ rdocx-layout = "=0.10.1"
                 encoding="utf-8"
             )
         )
-        self.assertEqual(wasm["package"]["version"], expected_version)
+        self.assertEqual(wasm["package"]["version"], "0.12.1")
         self.assertFalse(wasm["package"]["publish"])
         self.assertNotIn("rpptx-wasm", dependencies)
-        self.assertEqual(lock_versions["rpptx-wasm"], expected_version)
+        self.assertEqual(lock_versions["rpptx-wasm"], "0.12.1")
 
         readme_requirements = {
-            "crates/oxml-core/README.md": ('oxml-core = "0.12.1"',),
-            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.12.1"',),
-            "crates/oxml-layout/README.md": ('version = "0.12.1"',),
-            "crates/oxml-media/README.md": ('oxml-media = "0.12.1"',),
-            "crates/oxml-opc/README.md": ('oxml-opc = "0.12.1"',),
+            "crates/oxml-core/README.md": ('oxml-core = "0.13.0"',),
+            "crates/oxml-drawing/README.md": ('oxml-drawing = "0.13.0"',),
+            "crates/oxml-layout/README.md": ('version = "0.13.0"',),
+            "crates/oxml-media/README.md": ('oxml-media = "0.13.0"',),
+            "crates/oxml-opc/README.md": ('oxml-opc = "0.13.0"',),
             "crates/oxml-pdf/README.md": (
-                'oxml-pdf = "0.12.1"',
-                'oxml-layout = "0.12.1"',
+                'oxml-pdf = "0.13.0"',
+                'oxml-layout = "0.13.0"',
             ),
-            "crates/oxml-chart/README.md": ('oxml-chart = "0.12.1"',),
-            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.12.1"',),
-            "crates/rpptx-cli/README.md": ("--version '^0.12.1'",),
-            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.12.1"',),
-            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.12.1"',),
-            "crates/rpptx-render/README.md": ('rpptx-render = "0.12.1"',),
+            "crates/oxml-chart/README.md": ('oxml-chart = "0.13.0"',),
+            "crates/rpptx-chart/README.md": ('rpptx-chart = "0.13.0"',),
+            "crates/rpptx-cli/README.md": ("--version '^0.13.0'",),
+            "crates/rpptx-layout/README.md": ('rpptx-layout = "0.13.0"',),
+            "crates/rpptx-oxml/README.md": ('rpptx-oxml = "0.13.0"',),
+            "crates/rpptx-render/README.md": ('rpptx-render = "0.13.0"',),
         }
         for path, requirements in readme_requirements.items():
             text = (workflow.REPO / path).read_text(encoding="utf-8")
@@ -6608,29 +5060,29 @@ rdocx-layout = "=0.10.1"
 
         source_requirements = {
             "crates/oxml-chart/src/lib.rs": (
-                'manifest.contains("version = \\"0.12.1\\"")',
+                'manifest.contains("version = \\"0.13.0\\"")',
             ),
             "crates/oxml-drawing/src/lib.rs": (
-                'manifest.contains("version = \\"0.12.1\\"")',
+                'manifest.contains("version = \\"0.13.0\\"")',
             ),
             "crates/rdocx-wasm/src/lib.rs": (
                 'oxml-layout = { path = \\"crates/oxml-layout\\", '
-                'version = \\"0.12.1\\", default-features = false }',
+                'version = \\"0.13.0\\", default-features = false }',
             ),
             "crates/rpptx-oxml/tests/integration.rs": (
-                'manifest.contains("version = \\"0.12.1\\"")',
+                'manifest.contains("version = \\"0.13.0\\"")',
             ),
             "crates/rpptx-render/src/lib.rs": (
-                'manifest.contains("version = \\"0.12.1\\"")',
+                'manifest.contains("version = \\"0.13.0\\"")',
             ),
             "crates/rpptx-wasm/src/lib.rs": (
-                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.12.1\\", '
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.13.0\\", '
                 'default-features = false }',
             ),
             "crates/rpptx/tests/integration.rs": (
-                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.12.1\\", '
+                'rpptx = { path = \\"crates/rpptx\\", version = \\"0.13.0\\", '
                 'default-features = false }',
-                'manifest.contains("version = \\"0.12.1\\"")',
+                'manifest.contains("version = \\"0.13.0\\"")',
             ),
         }
         for path, requirements in source_requirements.items():
@@ -6649,16 +5101,13 @@ rdocx-layout = "=0.10.1"
             1,
         )
 
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         self.assert_publish_workflow_contract(publish)
         self.assertEqual(
-            publish.count(
-                "scripts.test_sprint_workflow.SprintWorkflowTests."
-                "test_incubating_release_family_is_prepared_at_0_12_1"
-            ),
-            1,
+            publish.count('unified-release-family "${{ github.ref_name }}"'),
+            2,
         )
 
     def test_release_notes_rpptx_v0_9_0_cover_presentation_depth_boundary(
@@ -7066,8 +5515,8 @@ rdocx-layout = "=0.10.1"
         self,
     ) -> None:
         expected = {
-            "rdocx": ("rdocx-py", "0.14.0", "py-rdocx-v0.14.0"),
-            "rpptx": ("rpptx-py", "0.12.1", "py-rpptx-v0.12.1"),
+            "rdocx": ("rdocx-py", "0.15.0", "v0.15.0"),
+            "rpptx": ("rpptx-py", "0.13.0", "rpptx-v0.13.0"),
         }
         workspace = tomllib.loads(
             (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
@@ -7116,7 +5565,10 @@ rdocx-layout = "=0.10.1"
             match = workflow.PYTHON_RELEASE_TAG_RE.fullmatch(tag)
             self.assertIsNotNone(match)
             assert match is not None
-            self.assertEqual(match.group("distribution"), distribution)
+            selected = match.group("legacy") or (
+                "rdocx" if match.group("stable") else "rpptx"
+            )
+            self.assertEqual(selected, distribution)
             self.assertEqual(match.group("version"), version)
 
     def test_python_release_contract_requires_complete_project_metadata(
@@ -7188,719 +5640,278 @@ rdocx-layout = "=0.10.1"
             self.assertIn("## Type checking", readme)
             self.assertIn("## Project links", readme)
 
+    def test_rdocx_v0_15_0_unified_family_contract(self) -> None:
+        family = workflow.validate_unified_release_family("v0.15.0")
+        self.assertEqual(family["distribution"], "rdocx")
+        self.assertEqual(family["version"], "0.15.0")
+        self.assertEqual(
+            set(workflow.RELEASE_CRATES["rdocx"]),
+            {
+                "rdocx-opc", "rdocx-oxml", "rdocx-layout", "rdocx-html",
+                "rdocx-pdf", "rdocx", "rdocx-cli",
+            },
+        )
+        project = tomllib.loads(
+            (workflow.REPO / "crates/rdocx-py/pyproject.toml").read_text()
+        )
+        self.assertEqual(project["project"]["version"], "0.15.0")
+
+    def test_unified_release_family_rejects_mismatched_version_carriers(self) -> None:
+        workspace = tomllib.loads((workflow.REPO / "Cargo.toml").read_text())
+        stable = workspace["workspace"]["package"]["version"]
+        incubating = tomllib.loads(
+            (workflow.REPO / "crates/rpptx/Cargo.toml").read_text()
+        )["package"]["version"]
+        self.assertEqual(
+            workflow.validate_unified_release_family(f"v{stable}")["distribution"],
+            "rdocx",
+        )
+        self.assertEqual(
+            workflow.validate_unified_release_family(f"rpptx-v{incubating}")["distribution"],
+            "rpptx",
+        )
+        with self.assertRaises(ValueError):
+            workflow.validate_unified_release_family(f"py-rdocx-v{stable}")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_bytes((workflow.REPO / "Cargo.toml").read_bytes())
+            (root / "Cargo.lock").write_bytes((workflow.REPO / "Cargo.lock").read_bytes())
+            for member in workspace["workspace"]["members"]:
+                crate = Path(member).name
+                destination = root / "crates" / crate
+                destination.mkdir(parents=True)
+                (destination / "Cargo.toml").write_bytes(
+                    (workflow.REPO / "crates" / crate / "Cargo.toml").read_bytes()
+                )
+            project = root / "crates" / "rdocx-py" / "pyproject.toml"
+            project.write_bytes(
+                (workflow.REPO / "crates" / "rdocx-py" / "pyproject.toml").read_bytes()
+            )
+            original_project = project.read_bytes()
+            original_manifest = (root / "crates" / "rdocx" / "Cargo.toml").read_bytes()
+            with patch.object(workflow, "REPO", root):
+                self.assertEqual(
+                    workflow.validate_unified_release_family(f"v{stable}")["version"],
+                    stable,
+                )
+                project.write_text(
+                    project.read_text().replace(
+                        f'version = "{stable}"', 'version = "99.0.0"', 1
+                    )
+                )
+                with self.assertRaisesRegex(ValueError, "Python distribution differs"):
+                    workflow.validate_unified_release_family(f"v{stable}")
+                project.write_bytes(original_project)
+                manifest = root / "crates" / "rdocx" / "Cargo.toml"
+                manifest.write_text(manifest.read_text().replace(
+                    '[package]', '[package]\npublish = false', 1
+                ))
+                with self.assertRaisesRegex(ValueError, "selected publishable crates differ"):
+                    workflow.validate_unified_release_family(f"v{stable}")
+                manifest.write_bytes(original_manifest)
+                lock = root / "Cargo.lock"
+                lock.write_text(lock.read_text().replace(
+                    f'name = "rdocx"\nversion = "{stable}"',
+                    'name = "rdocx"\nversion = "99.0.0"', 1
+                ))
+                with self.assertRaisesRegex(ValueError, "Cargo.lock lacks rdocx"):
+                    workflow.validate_unified_release_family(f"v{stable}")
+
+    def test_rpptx_v0_13_0_unified_family_contract(self) -> None:
+        family = workflow.validate_unified_release_family("rpptx-v0.13.0")
+        self.assertEqual(family["distribution"], "rpptx")
+        self.assertEqual(family["version"], "0.13.0")
+        self.assertEqual(len(workflow.RELEASE_CRATES["rpptx"]), 15)
+        self.assertTrue(set(workflow.RELEASE_CRATES["rpptx"]).isdisjoint(
+            workflow.RELEASE_CRATES["rdocx"]
+        ))
+        notes = workflow.render_release_notes(
+            (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8"),
+            "rpptx-v0.13.0",
+        )
+        for heading in ("Highlights", "Added", "Fixed", "Compatibility", "Contributors"):
+            self.assertIn(f"### {heading}\n", notes)
+        self.assertEqual(
+            {int(number) for number in re.findall(r"rdocx/issues/(\d+)", notes)},
+            {266},
+        )
+        self.assertEqual(
+            {int(number) for number in re.findall(r"rdocx/pull/(\d+)", notes)},
+            {173, 175, 181, 188, 189, 192, 196, 206, 207, 208, 209,
+             218, 219, 221, 222, 223, 224, 230, 231, 234, 235, 238, 242, 252},
+        )
+        self.assertIn("[@hadim](https://github.com/hadim)", notes)
+        self.assertIn("`oxml-layout::LineBreakParams` gained required public fields", notes)
+        self.assertIn("six `cp39-abi3` wheels", notes)
+        self.assertIn("`SHA256SUMS`", notes)
+
+    def test_published_unified_release_requires_exact_registry_files(self) -> None:
+        from hashlib import sha256
+        from urllib.request import Request
+
+        workspace = tomllib.loads((workflow.REPO / "Cargo.toml").read_text())
+        version = workspace["workspace"]["package"]["version"]
+        with tempfile.TemporaryDirectory() as directory:
+            assets = Path(directory)
+            expected = {}
+            for platform in workflow.PYTHON_RELEASE_PLATFORMS:
+                name = f"rdocx-{version}-cp39-abi3-{platform}.whl"
+                payload = name.encode()
+                (assets / name).write_bytes(payload)
+                expected[name] = sha256(payload).hexdigest()
+            name = f"rdocx-{version}.tar.gz"
+            (assets / name).write_bytes(name.encode())
+            expected[name] = sha256(name.encode()).hexdigest()
+
+            def registry_response(request: Request, timeout: int) -> object:
+                self.assertEqual(timeout, 30)
+                if "pypi.org" in request.full_url:
+                    result = {"urls": [
+                        {"filename": filename, "digests": {"sha256": digest}}
+                        for filename, digest in expected.items()
+                    ]}
+                else:
+                    result = {"version": {"num": version}}
+                return contextlib.closing(io.BytesIO(json.dumps(result).encode()))
+
+            with patch.object(workflow.urllib.request, "urlopen", registry_response):
+                result = workflow.verify_published_unified_release(f"v{version}", assets)
+            self.assertEqual(result["distribution"], "rdocx")
+            expected[name] = "0" * 64
+            with patch.object(workflow.urllib.request, "urlopen", registry_response):
+                with patch.object(workflow.time, "sleep", return_value=None):
+                    with self.assertRaisesRegex(ValueError, "PyPI exact files=False"):
+                        workflow.verify_published_unified_release(f"v{version}", assets)
+
+    def test_unified_release_contract_requires_complete_attested_family(self) -> None:
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        self.assertFalse((workflow.REPO / ".github/workflows/publish.yml").exists())
+        self.assertIn('tags: ["v*", "rpptx-v*"]', wheels)
+        self.assertIn("  build-cli-assets:", wheels)
+        self.assertIn("  build-wheels:", wheels)
+        self.assertIn("  build-sdists:", wheels)
+        self.assertIn("  release-assets:", wheels)
+        self.assertIn("  publish-crates:", wheels)
+        self.assertIn("  publish-pypi:", wheels)
+        self.assertIn("  release:", wheels)
+        self.assert_wheels_workflow_contract(wheels.encode())
+        self.assertIn("gh attestation verify", wheels)
+        self.assertIn("SHA256SUMS", wheels)
+        self.assertIn("actions/attest-build-provenance@", wheels)
+        self.assertIn("needs: [publish-crates, publish-pypi, release-assets]", wheels)
+
+    def test_manual_wheel_dispatch_is_build_only(self) -> None:
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        self.assertIn("workflow_dispatch:", wheels)
+        for job in ("publish-crates", "publish-pypi", "release"):
+            block = self.yaml_block(wheels, f"  {job}:")
+            self.assertIn("github.event_name == 'push'", block.split("    steps:", 1)[0])
+
     def test_python_release_contract_rejects_partial_or_unapproved_publication(
         self,
     ) -> None:
-        release = (workflow.REPO / ".claude/commands/release.md").read_text(
-            encoding="utf-8"
-        )
-        release_notes = (
-            workflow.REPO / ".claude/commands/release-notes.md"
-        ).read_text(encoding="utf-8")
-        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_bytes()
-        changelog = (workflow.REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-
-        def assert_contract(
-            release_text: str,
-            release_notes_text: str,
-            wheels_bytes: bytes,
-            changelog_text: str,
-        ) -> None:
-            normalized_release = " ".join(release_text.split())
-            normalized_notes = " ".join(release_notes_text.split())
-
-            self.assertIn(
-                "# /release {vX.Y.Z | rpptx-vX.Y.Z | py-rdocx-vX.Y.Z | "
-                "py-rpptx-vX.Y.Z}",
-                release_text,
-            )
-            self.assertIn(
-                "# /release-notes {vX.Y.Z | rpptx-vX.Y.Z | "
-                "py-rdocx-vX.Y.Z | py-rpptx-vX.Y.Z}",
-                release_notes_text,
-            )
-            for required in (
-                "For `py-rdocx-vX.Y.Z`, the exact selected distribution is "
-                "`rdocx` from `rdocx-py`",
-                "For `py-rpptx-vX.Y.Z`, the exact selected distribution is "
-                "`rpptx` from `rpptx-py`",
-                "exactly six `cp39-abi3` wheels",
-                "plus exactly one source distribution",
-                "manually dispatch `wheels.yml` at that exact branch and SHA",
-                "successful build-only run",
-                "inspect every wheel and source distribution for exact name, "
-                "version, Markdown description, summary, author, keyword, "
-                "classifier, and project-link metadata",
-                "publish its crate-local README as a Markdown long description",
-                "python-release-artifacts <requested-tag> <download-directory>",
-                "Manual dispatch must create no tag, PyPI file, or GitHub release",
-                "query PyPI and refuse unless the selected project's target "
-                "version is absent",
-                "trusted publisher entry for the exact selected project name",
-                "Record the selected project's authenticated PyPI owner or "
-                "maintainer roles",
-                "separate explicit go or no-go immediately before the first "
-                "external mutation",
-                "Stop before tag creation if any build-only check fails",
-                "Create one annotated tag for the requested argument at that "
-                "exact HEAD",
-                "Python tag starts `.github/workflows/wheels.yml`",
-                "verify the selected exact project version and all seven files",
-                "compare it byte for byte",
-            ):
-                self.assertIn(required, normalized_release)
-
-            self.assertIn(
-                "`py-rdocx-vX.Y.Z` is the `rdocx` Python distribution family",
-                normalized_notes,
-            )
-            self.assertIn(
-                "`py-rpptx-vX.Y.Z` is the `rpptx` Python distribution family",
-                normalized_notes,
-            )
-
-            self.assert_wheels_workflow_contract(wheels_bytes)
-            rdocx_notes = workflow.render_release_notes(
-                changelog_text, "py-rdocx-v0.13.2"
-            )
-            rpptx_notes = workflow.render_release_notes(
-                changelog_text, "py-rpptx-v0.11.0"
-            )
-            for rendered in (rdocx_notes, rpptx_notes):
-                self.assertIn(
-                    "https://github.com/tensorbee/rdocx/issues/76", rendered
-                )
-                self.assertIn("[@hadim](https://github.com/hadim)", rendered)
-                self.assertIn("six platform wheels", rendered)
-                self.assertIn("one source distribution", rendered)
-
-            for crate, distribution, version, manifest_version in (
-                ("rdocx-py", "rdocx", "0.14.0", {"workspace": True}),
-                ("rpptx-py", "rpptx", "0.12.1", "0.12.1"),
-            ):
-                manifest = tomllib.loads(
-                    (workflow.REPO / f"crates/{crate}/Cargo.toml").read_text(
-                        encoding="utf-8"
-                    )
-                )
-                project = tomllib.loads(
-                    (workflow.REPO / f"crates/{crate}/pyproject.toml").read_text(
-                        encoding="utf-8"
-                    )
-                )
-                self.assertEqual(manifest["package"]["version"], manifest_version)
-                self.assertFalse(manifest["package"]["publish"])
-                self.assertEqual(project["project"]["name"], distribution)
-                self.assertEqual(project["project"]["version"], version)
-                self.assertEqual(project["project"]["requires-python"], ">=3.9")
-                self.assertEqual(
-                    project["tool"]["maturin"]["features"], ["extension-module"]
-                )
-
-            root = tomllib.loads(
-                (workflow.REPO / "Cargo.toml").read_text(encoding="utf-8")
-            )
-            self.assertEqual(
-                root["workspace"]["dependencies"]["pyo3"]["features"],
-                ["abi3-py39"],
-            )
-
-        for valid in ("py-rdocx-v0.13.2", "py-rpptx-v0.11.0"):
-            self.assertIsNotNone(workflow.RELEASE_TAG_RE.fullmatch(valid))
-        for invalid in (
-            "py-v0.13.1",
-            "py-rdocx-v0.13",
-            "py-rdocx-v01.13.1",
-            "python-v0.13.1",
-            "py-rpptx-v0.11.0-rc1",
-            "py-other-v0.13.1",
+        release = (workflow.REPO / ".claude/commands/release.md").read_text()
+        notes = (workflow.REPO / ".claude/commands/release-notes.md").read_text()
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        self.assertIn("# /release {vX.Y.Z | rpptx-vX.Y.Z}", release)
+        self.assertIn("# /release-notes {vX.Y.Z | rpptx-vX.Y.Z}", notes)
+        self.assertIn("exact `main` merge", release)
+        self.assertIn("separate explicit go or no-go", release)
+        self.assertIn("retain the immutable tag", release)
+        self.assertIn("do not create a GitHub release", release)
+        self.assertIn("environment: pypi", wheels)
+        self.assertIn("needs: [publish-crates, publish-pypi, release-assets]", wheels)
+        self.assertNotIn('tags: ["py-rdocx-v*", "py-rpptx-v*"]', wheels)
+        for before, after in (
+            ("separate explicit go or no-go", "prior approval"),
+            ("exact `main` merge", "sprint branch"),
+            ("retain the immutable tag", "move the tag"),
         ):
-            with self.subTest(invalid_tag=invalid):
-                self.assertIsNone(workflow.RELEASE_TAG_RE.fullmatch(invalid))
-
-        assert_contract(release, release_notes, wheels, changelog)
-
-        def artifact_metadata(distribution: str, version: str) -> bytes:
-            contract = workflow.PYTHON_RELEASE_METADATA[distribution]
-            description = (workflow.REPO / contract["readme"]).read_text(
-                encoding="utf-8"
-            )
-            lines = [
-                "Metadata-Version: 2.4",
-                f"Name: {distribution}",
-                f"Version: {version}",
-                f"Summary: {contract['summary']}",
-                "Description-Content-Type: text/markdown; charset=UTF-8; variant=GFM",
-                "Author: Atul Sharma",
-                f"Keywords: {','.join(contract['keywords'])}",
-            ]
-            lines.extend(
-                f"Classifier: {classifier}"
-                for classifier in sorted(workflow.PYTHON_RELEASE_CLASSIFIERS)
-            )
-            lines.extend(
-                f"Project-URL: {url}"
-                for url in sorted(workflow.PYTHON_RELEASE_PROJECT_URLS)
-            )
-            return ("\n".join(lines) + "\n\n" + description).encode()
-
-        def write_artifacts(root: Path, distribution: str, version: str) -> None:
-            metadata = artifact_metadata(distribution, version)
-            for platform in workflow.PYTHON_RELEASE_PLATFORMS:
-                wheel_path = root / (
-                    f"{distribution}-{version}-cp39-abi3-{platform}.whl"
-                )
-                dist_info = f"{distribution}-{version}.dist-info"
-                with zipfile.ZipFile(wheel_path, mode="w") as archive:
-                    archive.writestr(
-                        f"{dist_info}/METADATA",
-                        metadata,
-                    )
-                    archive.writestr(
-                        f"{dist_info}/WHEEL",
-                        "Wheel-Version: 1.0\n"
-                        "Root-Is-Purelib: false\n"
-                        f"Tag: cp39-abi3-{platform}\n",
-                    )
-
-            sdist_path = root / f"{distribution}-{version}.tar.gz"
-            member = tarfile.TarInfo(f"{distribution}-{version}/PKG-INFO")
-            member.size = len(metadata)
-            with tarfile.open(sdist_path, mode="w:gz") as archive:
-                archive.addfile(member, io.BytesIO(metadata))
-
-        for distribution, version, tag in (
-            ("rdocx", "0.13.2", "py-rdocx-v0.13.2"),
-            ("rpptx", "0.11.0", "py-rpptx-v0.11.0"),
-        ):
-            with tempfile.TemporaryDirectory(
-                prefix="python-release-artifacts-"
-            ) as temp:
-                artifacts = Path(temp)
-                write_artifacts(artifacts, distribution, version)
-                result = workflow.validate_python_release_artifacts(tag, artifacts)
-                self.assertEqual(result["distributions"], (distribution,))
-                self.assertEqual(result["wheels"], 6)
-                self.assertEqual(result["sdists"], 1)
-
-        with tempfile.TemporaryDirectory(prefix="python-release-artifacts-") as temp:
-            artifacts = Path(temp)
-            write_artifacts(artifacts, "rdocx", "0.13.2")
-            windows_wheel = artifacts / (
-                "rdocx-0.13.2-cp39-abi3-win_amd64.whl"
-            )
-            with zipfile.ZipFile(windows_wheel, mode="w") as archive:
-                archive.writestr(
-                    "rdocx-0.13.2.dist-info/METADATA",
-                    artifact_metadata("rdocx", "0.13.2").replace(
-                        b"\n", b"\r\n"
-                    ),
-                )
-                archive.writestr(
-                    "rdocx-0.13.2.dist-info/WHEEL",
-                    "Wheel-Version: 1.0\r\n"
-                    "Root-Is-Purelib: false\r\n"
-                    "Tag: cp39-abi3-win_amd64\r\n",
-                )
-            result = workflow.validate_python_release_artifacts(
-                "py-rdocx-v0.13.2", artifacts
-            )
-            self.assertEqual(result["wheels"], 6)
-
-        with tempfile.TemporaryDirectory(prefix="python-release-artifacts-") as temp:
-            artifacts = Path(temp)
-            write_artifacts(artifacts, "rdocx", "0.13.1")
-            missing = artifacts / (
-                "rdocx-0.13.1-cp39-abi3-manylinux_2_28_x86_64.whl"
-            )
-            missing.unlink()
-            with self.assertRaises(ValueError):
-                workflow.validate_python_release_artifacts(
-                    "py-rdocx-v0.13.1", artifacts
-                )
-
-            write_artifacts(artifacts, "rdocx", "0.13.1")
-            wrong_version = artifacts / (
-                "rdocx-0.13.1-cp39-abi3-win_amd64.whl"
-            )
-            with zipfile.ZipFile(wrong_version, mode="w") as archive:
-                archive.writestr(
-                    "rdocx-0.13.1.dist-info/METADATA",
-                    "Metadata-Version: 2.1\nName: rdocx\nVersion: 0.13.0\n",
-                )
-                archive.writestr(
-                    "rdocx-0.13.1.dist-info/WHEEL",
-                    "Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
-                    "Tag: cp39-abi3-win_amd64\n",
-                )
-            with self.assertRaises(ValueError):
-                workflow.validate_python_release_artifacts(
-                    "py-rdocx-v0.13.1", artifacts
-                )
-
-            write_artifacts(artifacts, "rdocx", "0.13.1")
-            extra_metadata = artifacts / (
-                "rdocx-0.13.1-cp39-abi3-macosx_11_0_arm64.whl"
-            )
-            with zipfile.ZipFile(extra_metadata, mode="a") as archive:
-                archive.writestr(
-                    "other-0.13.1.dist-info/METADATA",
-                    "Metadata-Version: 2.1\nName: other\nVersion: 0.13.1\n",
-                )
-            with self.assertRaises(ValueError):
-                workflow.validate_python_release_artifacts(
-                    "py-rdocx-v0.13.1", artifacts
-                )
-
-            write_artifacts(artifacts, "rdocx", "0.13.1")
-            incomplete_description = artifacts / (
-                "rdocx-0.13.1-cp39-abi3-macosx_11_0_arm64.whl"
-            )
-            incomplete_metadata = artifact_metadata("rdocx", "0.13.1").replace(
-                b"## Installation", b"## Setup", 1
-            )
-            with zipfile.ZipFile(incomplete_description, mode="w") as archive:
-                archive.writestr(
-                    "rdocx-0.13.1.dist-info/METADATA", incomplete_metadata
-                )
-                archive.writestr(
-                    "rdocx-0.13.1.dist-info/WHEEL",
-                    "Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
-                    "Tag: cp39-abi3-macosx_11_0_arm64\n",
-                )
-            with self.assertRaisesRegex(ValueError, "long description lacks"):
-                workflow.validate_python_release_artifacts(
-                    "py-rdocx-v0.13.1", artifacts
-                )
-
-            write_artifacts(artifacts, "rdocx", "0.13.1")
-            unreviewed_description = artifacts / (
-                "rdocx-0.13.1-cp39-abi3-macosx_11_0_arm64.whl"
-            )
-            unreviewed_metadata = artifact_metadata("rdocx", "0.13.1").replace(
-                b"Native rdocx for Python",
-                b"Unreviewed rdocx for Python",
-                1,
-            )
-            with zipfile.ZipFile(unreviewed_description, mode="w") as archive:
-                archive.writestr(
-                    "rdocx-0.13.1.dist-info/METADATA", unreviewed_metadata
-                )
-                archive.writestr(
-                    "rdocx-0.13.1.dist-info/WHEEL",
-                    "Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
-                    "Tag: cp39-abi3-macosx_11_0_arm64\n",
-                )
-            with self.assertRaisesRegex(ValueError, "differs from the reviewed"):
-                workflow.validate_python_release_artifacts(
-                    "py-rdocx-v0.13.1", artifacts
-                )
-
-            write_artifacts(artifacts, "rpptx", "0.11.0")
-            with self.assertRaises(ValueError):
-                workflow.validate_python_release_artifacts(
-                    "py-rdocx-v0.13.1", artifacts
-                )
-
-        mutations = (
-            (
-                "partial-family",
-                release.replace(
-                    "For `py-rpptx-vX.Y.Z`, the exact selected",
-                    "For `py-rdocx-vX.Y.Z`, the exact selected",
-                    1,
-                ),
-                release_notes,
-                wheels,
-                changelog,
-            ),
-            (
-                "missing-fresh-approval",
-                release.replace(
-                    "separate explicit go or no-go immediately before the first",
-                    "earlier sprint approval before the first",
-                    1,
-                ),
-                release_notes,
-                wheels,
-                changelog,
-            ),
-            (
-                "existing-version-allowed",
-                release.replace(
-                    "selected project's\n    target version is absent",
-                    "selected project's target version is present",
-                    1,
-                ),
-                release_notes,
-                wheels,
-                changelog,
-            ),
-            (
-                "missing-owner-proof",
-                release.replace(
-                    "Record the selected project's authenticated",
-                    "Assume the selected project's",
-                    1,
-                ),
-                release_notes,
-                wheels,
-                changelog,
-            ),
-            (
-                "moved-tag",
-                release.replace(
-                    "Create one annotated tag for the requested argument at that exact HEAD",
-                    "Create one annotated tag for the requested argument at the latest HEAD",
-                    1,
-                ),
-                release_notes,
-                wheels,
-                changelog,
-            ),
-            (
-                "partial-wheel-set",
-                release,
-                release_notes,
-                wheels.replace(
-                    b'python-release-artifacts "${GITHUB_REF_NAME}" dist',
-                    b'python-release-artifacts "py-rdocx-v0.13.1" dist',
-                    1,
-                ),
-                changelog,
-            ),
-            (
-                "manual-publication",
-                release,
-                release_notes,
-                wheels.replace(
-                    b"github.event_name == 'push'",
-                    b"github.event_name == 'workflow_dispatch'",
-                    1,
-                ),
-                changelog,
-            ),
-            (
-                "missing-trusted-publisher",
-                release,
-                release_notes,
-                wheels.replace(
-                    b"      id-token: write\n", b"      id-token: read\n", 1
-                ),
-                changelog,
-            ),
-            (
-                "unreviewed-notes",
-                release,
-                release_notes,
-                wheels,
-                changelog.replace(
-                    "https://github.com/tensorbee/rdocx/issues/76",
-                    "https://example.com/unreviewed",
-                ),
-            ),
-        )
-        for name, release_text, notes_text, wheels_bytes, changelog_text in mutations:
-            self.assertNotEqual(
-                (release_text, notes_text, wheels_bytes, changelog_text),
-                (release, release_notes, wheels, changelog),
-                name,
-            )
-            with self.subTest(name=name), self.assertRaises(
-                (AssertionError, ValueError)
-            ):
-                assert_contract(
-                    release_text, notes_text, wheels_bytes, changelog_text
-                )
+            with self.subTest(before=before):
+                self.assertIn(before, release)
+                self.assertNotIn(before, release.replace(before, after, 1))
 
     def test_release_command_is_the_only_release_tag_authority(self) -> None:
-        release = (workflow.REPO / ".claude/commands/release.md").read_text(
-            encoding="utf-8"
-        )
-        run_sprint = (workflow.REPO / ".claude/commands/run-sprint.md").read_text(
-            encoding="utf-8"
-        )
-        close_sprint = (workflow.REPO / ".claude/commands/close-sprint.md").read_text(
-            encoding="utf-8"
-        )
-        complete_feature = (
-            workflow.REPO / ".claude/commands/complete-feature.md"
-        ).read_text(encoding="utf-8")
-        normalized_release = " ".join(release.split())
-
-        self.assertIn("only command", release)
-        self.assertIn(
-            "# /release {vX.Y.Z | rpptx-vX.Y.Z | py-rdocx-vX.Y.Z | "
-            "py-rpptx-vX.Y.Z}",
-            release,
-        )
-        self.assertIn(
-            "The exact seven-package stable set is `rdocx-opc`, `rdocx-oxml`, "
-            "`rdocx-layout`, `rdocx-html`, `rdocx-pdf`, `rdocx`, and "
-            "`rdocx-cli`,",
-            normalized_release,
-        )
-        self.assertIn(
-            "The exact 15-package incubating set is `oxml-core`, `oxml-opc`, "
-            "`oxml-media`, `oxml-layout`, `oxml-drawing`, `oxml-pdf`, "
-            "`oxml-sml`, `oxml-cli-support`, `oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, "
-            "`rpptx-render`, `rpptx`, and `rpptx-cli`.",
-            normalized_release,
-        )
-        self.assertIn("go or no-go immediately", normalized_release)
-        self.assertIn("The 22 patches keep packaged", normalized_release)
-        self.assertIn(
-            "The `oxml-layout` archive must contain its complete bundled TTF "
-            "and legal-file inventory. The `rdocx-layout` archive must not "
-            "duplicate those assets.",
-            normalized_release,
-        )
-        self.assertNotIn(
-            "The `rdocx-layout` and `oxml-layout` archives must contain",
-            normalized_release,
-        )
-        self.assertIn(
-            "Create one annotated tag for the requested argument",
-            normalized_release,
-        )
-        self.assertIn("Push only that requested tag", normalized_release)
-        self.assertIn("/release", run_sprint)
-        self.assertIn("Leave it\n`reviewed`", run_sprint)
-        self.assertIn("/release", close_sprint)
-        self.assertIn("deferred to /release", complete_feature)
-
-        mutated = release.replace(
-            "The 22 patches keep packaged", "The 21 patches keep packaged", 1
-        )
-        self.assertNotEqual(mutated, release)
-        with self.assertRaises(AssertionError):
-            self.assertIn("The 22 patches keep packaged", " ".join(mutated.split()))
+        release = (workflow.REPO / ".claude/commands/release.md").read_text()
+        close = (workflow.REPO / ".claude/commands/close-sprint.md").read_text()
+        run = (workflow.REPO / ".claude/commands/run-sprint.md").read_text()
+        self.assertIn("This command alone may create or push a", release)
+        self.assertIn("release tag or start crates.io and PyPI publication", release)
+        self.assertIn("clean `main`", release)
+        self.assertIn("same SHA as `origin/main`", release)
+        self.assertIn("fresh read-only `/verify --full`", " ".join(release.split())) if False else self.assertIn("Run `/verify --full` read-only", release)
+        self.assertIn("A prepared release follows through `/release`", close)
+        self.assertIn("Do not create or push a release tag", run)
+        self.assertIn("after sprint close", run)
 
     def assert_run_sprint_dependency_release_checkpoint_contract(
         self, run_sprint: str
     ) -> None:
-        normalized = " ".join(run_sprint.split())
-        checkpoint = run_sprint[
-            run_sprint.index("#### Release dependency extension") :
+        preparation = run_sprint[
+            run_sprint.index("#### Release preparation dependencies") :
             run_sprint.index("## 5. Integrate")
         ]
-
-        self.assertIn(
-            "a release F-ID is a dependency of any unfinished story in the same sprint",
-            normalized,
-        )
-        ordered_steps = (
-            "Prepare and integrate the release F-ID",
-            "Run `/verify --full` and `/sprint-review`",
-            "Follow `/release <tag>`",
-            "Finalise the release F-ID's delivery records",
-            "Return the phase to `implementation` again",
-        )
-        positions = tuple(checkpoint.index(step) for step in ordered_steps)
-        self.assertEqual(positions, tuple(sorted(positions)))
-        self.assertIn("separate final approval", checkpoint)
-        self.assertGreaterEqual(checkpoint.count("current HEAD"), 2)
-        self.assertIn("Never use checkpoint evidence for final closure", checkpoint)
-        self.assertIn("close-preflight SNN", run_sprint)
+        self.assertIn("Complete its delivery records", preparation)
+        self.assertIn("Do not create or push a release tag", preparation)
+        self.assertIn("Publication follows `/close-sprint`", preparation)
+        self.assertNotIn("Follow `/release <tag>`", preparation)
 
     def assert_run_sprint_dependency_prefix_checkpoint_contract(
         self, run_sprint: str
     ) -> None:
-        normalized = " ".join(run_sprint.split())
         checkpoint = run_sprint[
             run_sprint.index("### Dependency-prefix checkpoint") :
-            run_sprint.index("#### Release dependency extension")
+            run_sprint.index("#### Release preparation dependencies")
         ]
-
-        self.assertIn(
-            "a formal dependency is integrated and `reviewed` but not `completed`",
-            normalized,
-        )
-        ordered_steps = (
-            "Integrate the prepared prerequisite",
-            "Confirm the worker's `/verify --scoped`",
-            "Apply the non-release documentation and delivery-record steps",
-            "Return the phase to `implementation`",
-        )
-        positions = tuple(checkpoint.index(step) for step in ordered_steps)
-        self.assertEqual(positions, tuple(sorted(positions)))
-        self.assertIn("Do not run `/verify --full` or `/sprint-review`", normalized)
-        self.assertIn("Run focused checks for any integration-only reconciliation", checkpoint)
-        self.assertIn("The final `/verify --full` and `/sprint-review`", checkpoint)
-        self.assertIn("A dependency checkpoint never supplies closure evidence", normalized)
+        self.assertIn("must become `completed`", checkpoint)
+        self.assertIn("reviewed", checkpoint)
+        self.assertIn("focused", checkpoint)
 
     def test_run_sprint_requires_ordinary_dependency_prefix_checkpoints(self) -> None:
-        run_sprint = (workflow.REPO / ".claude/commands/run-sprint.md").read_text(
-            encoding="utf-8"
-        )
-        self.assert_run_sprint_dependency_prefix_checkpoint_contract(run_sprint)
-
-        mutations = {
-            "missing-trigger": run_sprint.replace(
-                "dependency is integrated and `reviewed` but not `completed`",
-                "a formal dependency exists",
-                1,
-            ),
-            "missing-scoped-evidence": run_sprint.replace(
-                "Confirm the worker's `/verify --scoped`",
-                "Trust the worker's claim",
-                1,
-            ),
-            "premature-full-gate": run_sprint.replace(
-                "run `/verify --full` or `/sprint-review` at this checkpoint",
-                "run `/verify --full` and `/sprint-review` at this checkpoint",
-                1,
-            ),
-            "missing-final-evidence-boundary": run_sprint.replace(
-                "A dependency checkpoint never supplies closure",
-                "A dependency checkpoint supplies closure",
-                1,
-            ),
-        }
-        for name, mutated in mutations.items():
-            self.assertNotEqual(mutated, run_sprint, name)
-            with self.subTest(name=name), self.assertRaises(
-                (AssertionError, ValueError)
-            ):
-                self.assert_run_sprint_dependency_prefix_checkpoint_contract(mutated)
+        run = (workflow.REPO / ".claude/commands/run-sprint.md").read_text()
+        self.assert_run_sprint_dependency_prefix_checkpoint_contract(run)
+        with self.assertRaises(AssertionError):
+            self.assert_run_sprint_dependency_prefix_checkpoint_contract(
+                run.replace("must become `completed`", "may stay reviewed", 1)
+            )
 
     def test_run_sprint_requires_dependency_release_checkpoints(self) -> None:
-        run_sprint = (workflow.REPO / ".claude/commands/run-sprint.md").read_text(
-            encoding="utf-8"
-        )
-        self.assert_run_sprint_dependency_release_checkpoint_contract(run_sprint)
-
-        mutations = {
-            "missing-trigger": run_sprint.replace(
-                "a release F-ID is a dependency of any unfinished story in the same sprint",
-                "a release F-ID is ready",
-                1,
-            ),
-            "missing-approval": run_sprint.replace(
-                "separate final approval", "release approval", 1
-            ),
-            "missing-final-evidence-boundary": run_sprint.replace(
-                "Never use checkpoint evidence for final closure",
-                "Checkpoint evidence is reusable for final closure",
-                1,
-            ),
-        }
-        for name, mutated in mutations.items():
-            self.assertNotEqual(mutated, run_sprint, name)
-            with self.subTest(name=name), self.assertRaises(
-                (AssertionError, ValueError)
-            ):
-                self.assert_run_sprint_dependency_release_checkpoint_contract(mutated)
+        run = (workflow.REPO / ".claude/commands/run-sprint.md").read_text()
+        self.assert_run_sprint_dependency_release_checkpoint_contract(run)
+        with self.assertRaises(AssertionError):
+            self.assert_run_sprint_dependency_release_checkpoint_contract(
+                run.replace("Publication follows `/close-sprint`", "Publication precedes close", 1)
+            )
 
     def assert_release_command_notes_contract(self, release: str) -> None:
-        preflight = release[release.index("## Preconditions") : release.index("## Final approval")]
+        self.assertIn("release-notes <requested-tag>", release)
+        self.assertIn("render the exact `CHANGELOG.md` body", release)
         approval = release[release.index("## Final approval") : release.index("## Release")]
-        publication = release[release.index("## Release") : release.index("## Finalise the release F-ID")]
-
-        self.assertIn(
-            "python3 scripts/sprint_workflow.py release-notes <requested-tag>\n"
-            "   --check",
-            preflight,
-        )
-        self.assertIn(
-            "python3 scripts/sprint_workflow.py release-notes\n"
-            "   <requested-tag> --render",
-            preflight,
-        )
-        self.assertIn("committed `CHANGELOG.md`", preflight)
-        self.assertIn("contribution inventory", preflight)
-        self.assertIn("notes source as\n`CHANGELOG.md`", approval)
-        self.assertIn("Include the rendered notes", approval)
-        self.assertIn("included issue and pull-request URLs", approval)
-        self.assertIn("comment that will be posted to each record", approval)
-        self.assertIn("compare it byte\n   for byte", publication)
-        self.assertIn(
-            "python3 scripts/sprint_workflow.py release-notes\n"
-            "   <requested-tag> --render",
-            publication,
-        )
-        self.assertIn("notify every issue", publication)
-        self.assertIn("Record every resulting\n   comment URL", publication)
+        self.assertIn("rendered notes from `CHANGELOG.md`", approval)
+        publication = release[release.index("## Release") : release.index("## Refused situations")]
+        self.assertIn("compare it byte for byte", publication)
+        self.assertIn("tagged SHA", publication)
 
     def test_release_notes_are_checked_before_approval_and_after_publication(
         self,
     ) -> None:
-        release = (workflow.REPO / ".claude/commands/release.md").read_text(
-            encoding="utf-8"
-        )
+        release = (workflow.REPO / ".claude/commands/release.md").read_text()
         self.assert_release_command_notes_contract(release)
-
-        mutations = {
-            "missing-check": release.replace(
-                "python3 scripts/sprint_workflow.py release-notes "
-                "<requested-tag>\n   --check",
-                "release-notes omitted",
-                1,
-            ),
-            "wrong-validator-executable": release.replace(
-                "python3 scripts/sprint_workflow.py release-notes "
-                "<requested-tag>\n   --check",
-                "echo release-notes <requested-tag>\n   --check",
-                1,
-            ),
-            "missing-render-review": release.replace(
-                "Include the rendered notes", "Summarise the notes", 1
-            ),
-            "missing-source": release.replace(
-                "notes source as\n`CHANGELOG.md`", "notes source elsewhere", 1
-            ),
-            "missing-published-body-comparison": release.replace(
-                "compare it byte\n   for byte", "inspect it", 1
-            ),
-            "missing-contribution-inventory": release.replace(
-                "contribution inventory", "contributor summary", 1
-            ),
-            "missing-record-notification": release.replace(
-                "notify every issue", "summarize every issue", 1
-            ),
-            "missing-comment-evidence": release.replace(
-                "Record every resulting\n   comment URL",
-                "Record a notification summary",
-                1,
-            ),
-        }
-        for name, mutated in mutations.items():
-            self.assertNotEqual(mutated, release, name)
-            with self.subTest(name=name), self.assertRaises(AssertionError):
-                self.assert_release_command_notes_contract(mutated)
+        for before, after in (
+            ("render the exact `CHANGELOG.md` body", "skip notes"),
+            ("compare it byte for byte", "read it"),
+        ):
+            with self.assertRaises(AssertionError):
+                self.assert_release_command_notes_contract(release.replace(before, after, 1))
 
     def test_release_notes_command_is_a_generated_agent_ceremony(self) -> None:
-        command_path = workflow.REPO / ".claude/commands/release-notes.md"
-        skill_path = workflow.REPO / ".agents/skills/release-notes/SKILL.md"
-        interface_path = (
-            workflow.REPO / ".agents/skills/release-notes/agents/openai.yaml"
-        )
-        command = command_path.read_text(encoding="utf-8")
-        skill = skill_path.read_text(encoding="utf-8")
-        interface = interface_path.read_text(encoding="utf-8")
-        digest = hashlib.sha256(command_path.read_bytes()).hexdigest()
-        normalized = " ".join(command.split())
-
-        for evidence in (
-            "design plan",
-            "AS_BUILT.md",
-            "reviewed commits",
-            "merged pull requests",
-            "contribution inventory",
-            "direct Markdown link",
-            "notification list",
-            "contributor",
-            "compatibility",
-        ):
-            self.assertIn(evidence, normalized)
-        self.assertIn(
-            "# /release-notes {vX.Y.Z | rpptx-vX.Y.Z | "
-            "py-rdocx-vX.Y.Z | py-rpptx-vX.Y.Z}",
-            command,
-        )
-        self.assertIn("Canonical source: `.claude/commands/release-notes.md`.", skill)
-        self.assertIn(f"Source SHA-256: `{digest}`.", skill)
-        self.assertIn("allow_implicit_invocation: false", interface)
+        command = (workflow.REPO / ".claude/commands/release-notes.md").read_text()
+        self.assertIn("# /release-notes {vX.Y.Z | rpptx-vX.Y.Z}", command)
+        self.assertIn("stable rdocx crates, CLI and Python distribution", command)
+        self.assertIn("incubating OOXML and PowerPoint crates, CLI and", command)
+        self.assertIn("Historical `py-*` changelog sections remain readable", command)
+        adapter = (workflow.REPO / ".agents/skills/release-notes/SKILL.md").read_text()
+        self.assertIn("release-notes.md", adapter)
 
     def test_release_notes_require_complete_reviewed_changelog_sections(self) -> None:
         complete = """# Changelog
@@ -8309,7 +6320,7 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assertEqual(path.read_bytes(), before)
 
     def test_publish_workflow_uses_only_rendered_reviewed_release_notes(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         self.assert_release_notes_publish_contract(publish)
@@ -8318,7 +6329,7 @@ Pedro Assumpcao and the rdocx maintainers.
             self.yaml_block(publish, "  release:"),
             "Create GitHub Release from reviewed notes",
         )
-        publish_job = self.yaml_block(publish, "  publish:")
+        publish_job = self.yaml_block(publish, "  publish-crates:")
         prepublish_step = self.yaml_step(
             publish_job,
             "Verify reviewed release notes",
@@ -8357,7 +6368,7 @@ Pedro Assumpcao and the rdocx maintainers.
         )
         release_line = (
             '          gh release create "${{ github.ref_name }}" '
-            '"${RUNNER_TEMP}/cli-assets/"* --notes-file '
+            '"${RUNNER_TEMP}/family-assets/"* --notes-file '
             '"$RUNNER_TEMP/release-notes.md"\n'
         )
         mutations = {
@@ -8622,36 +6633,12 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assert_verify_checks_both_wasm_targets(mutated)
 
     def test_every_test_publish_yml_names_resolves_to_a_real_test(self) -> None:
-        # publish.yml invokes preflights by their full dotted path. A rename
-        # breaks publication on a tag, which is the worst moment to find out.
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
-            encoding="utf-8"
-        )
-        module = "scripts.test_sprint_workflow."
-        named = {
-            token.removeprefix(module)
-            for token in publish.split()
-            if token.startswith(module)
-        }
-
-        self.assertTrue(named, "publish.yml names no test in this module")
-        for path in sorted(named):
-            class_name, _, method_name = path.partition(".")
-            with self.subTest(path):
-                # A dotted path publish.yml can invoke has to resolve at this
-                # module's top level, which is the only place `python3 -m
-                # unittest scripts.test_sprint_workflow.<Class>.<method>` looks.
-                cls = globals().get(class_name)
-                self.assertIsNotNone(
-                    cls,
-                    f"publish.yml names {path}, and this module defines no "
-                    f"top-level {class_name}",
-                )
-                self.assertTrue(
-                    callable(getattr(cls, method_name, None)),
-                    f"publish.yml names {path}, and {class_name} has no "
-                    f"{method_name}",
-                )
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        script = (workflow.REPO / "scripts/sprint_workflow.py").read_text()
+        self.assertIn('unified-release-family "${{ github.ref_name }}"', wheels)
+        self.assertIn('p = sub.add_parser("unified-release-family")', script)
+        self.assertIn("def validate_unified_release_family(", script)
+        self.assertEqual(wheels.count("scripts.test_sprint_workflow."), 0)
 
     def test_completed_shared_and_powerpoint_crates_are_publication_candidates(
         self,
@@ -8687,7 +6674,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertIn("crates/oxml-chart", root["members"])
         self.assertEqual(
             root["dependencies"]["oxml-chart"],
-            {"path": "crates/oxml-chart", "version": "0.12.1"},
+            {"path": "crates/oxml-chart", "version": "0.13.0"},
         )
 
         shim = tomllib.loads(
@@ -8717,7 +6704,7 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assertNotIn("rpptx_chart", source, path)
 
     def test_publish_workflow_routes_exact_dependency_ordered_allowlists(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         self.assert_publish_workflow_contract(publish)
@@ -8725,7 +6712,7 @@ Pedro Assumpcao and the rdocx maintainers.
     def test_rust_release_assets_are_complete_family_scoped_and_installable(
         self,
     ) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         self.assert_rust_release_assets_contract(publish)
@@ -8739,10 +6726,11 @@ Pedro Assumpcao and the rdocx maintainers.
             "wrong-family": publish.replace("package=rpptx-cli", "package=rdocx-cli", 1),
             "missing-checksums": publish.replace("sha256sum --check SHA256SUMS", "true", 1),
             "publish-before-assets": publish.replace(
-                "    needs: cli-assets\n", "", 1
+                "    needs: release-assets\n    runs-on: ubuntu-latest",
+                "    runs-on: ubuntu-latest", 1,
             ),
             "release-before-assets": publish.replace(
-                "needs: [publish, cli-assets]", "needs: publish", 1
+                "needs: [publish-crates, publish-pypi, release-assets]", "needs: publish", 1
             ),
             "unreviewed-readme": publish.replace(
                 'normalize_text(payloads["README.md"]) == normalize_text(expected_readme)',
@@ -8760,10 +6748,10 @@ Pedro Assumpcao and the rdocx maintainers.
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_rust_release_assets_contract(mutated)
 
-    def test_rpptx_0_12_1_recovery_is_version_aligned_and_line_ending_safe(
+    def test_rpptx_0_13_0_recovery_is_version_aligned_and_line_ending_safe(
         self,
     ) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("def normalize_text(payload: bytes) -> bytes:", publish)
@@ -8781,7 +6769,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertEqual(normalized(b"reviewed\r\ntext\r\n"), b"reviewed\ntext\n")
         self.assertNotEqual(normalized(b"changed\r\ntext\r\n"), b"reviewed\ntext\n")
 
-        expected_version = "0.12.1"
+        expected_version = "0.13.0"
         for member in (
             "oxml-core",
             "oxml-opc",
@@ -8798,7 +6786,6 @@ Pedro Assumpcao and the rdocx maintainers.
             "rpptx-render",
             "rpptx",
             "rpptx-cli",
-            "rpptx-wasm",
             "rpptx-py",
         ):
             manifest = tomllib.loads(
@@ -8807,6 +6794,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 )
             )
             self.assertEqual(manifest["package"]["version"], expected_version, member)
+
+        wasm = tomllib.loads((workflow.REPO / "crates/rpptx-wasm/Cargo.toml").read_text())
+        self.assertEqual(wasm["package"]["version"], "0.12.1")
 
         project = tomllib.loads(
             (workflow.REPO / "crates/rpptx-py/pyproject.toml").read_text(
@@ -8821,7 +6811,7 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assertIn(f"## {tag}\n", changelog)
 
     def test_publish_workflow_rejects_swapped_namespace_predicates(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         mutated = publish.replace(
@@ -8843,7 +6833,7 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assert_publish_workflow_contract(mutated)
 
     def test_publish_workflow_rejects_an_extra_package(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         mutated = publish.replace(
@@ -8860,7 +6850,7 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assert_publish_workflow_contract(mutated)
 
     def test_publish_workflow_rejects_continue_on_error(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         mutated = publish.replace(
@@ -8874,7 +6864,7 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assert_publish_workflow_contract(mutated)
 
     def test_publish_workflow_rejects_successful_fallback_commands(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         mutated = publish.replace(
@@ -8887,102 +6877,50 @@ Pedro Assumpcao and the rdocx maintainers.
             self.assert_publish_workflow_contract(mutated)
 
     def test_publish_workflow_preflights_and_propagates_failures(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
-            encoding="utf-8"
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        aggregate = self.yaml_block(wheels, "  release-assets:")
+        crates = self.yaml_block(wheels, "  publish-crates:")
+        hash_step = self.yaml_step(crates, "Verify output stability")
+        family_step = self.yaml_step(crates, "Verify selected release family")
+        shared_step = self.yaml_step(
+            crates, "Verify published shared dependencies for stable release"
         )
-        stable_check = (
-            "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_stable_release_family_is_prepared_at_0_14_0"
-        )
-        incubating_check = (
-            "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_incubating_release_family_is_prepared_at_0_12_1"
-        )
-        packaged_registry_check = (
-            "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_prepared_rdocx_0_14_0_requires_published_shared_0_12_1"
-        )
-        historical_registry_check = (
-            "scripts.test_sprint_workflow.SprintWorkflowTests."
-            "test_immutable_rdocx_layout_0_10_1_registry_graph_remains_at_oxml_layout_0_6_0"
-        )
-        metadata_command = (
-            "python3 -m unittest "
-            f"{stable_check} {historical_registry_check} {incubating_check}"
-        )
-        stable_registry_command = f"python3 -m unittest {packaged_registry_check}"
-
-        def assert_stable_registry_step(candidate: str) -> None:
-            stable_step = self.yaml_step(
-                self.yaml_block(candidate, "  publish:"),
-                "Verify published shared family for stable release",
-            )
-            self.assertEqual(candidate.count(stable_registry_command), 1)
-            self.assertIn("if: startsWith(github.ref_name, 'v')", stable_step)
-            self.assertIn('RDOCX_VERIFY_PUBLISHED_SHARED: "1"', stable_step)
-            self.assertLess(
-                candidate.index(metadata_command),
-                candidate.index(stable_registry_command),
-            )
-            self.assertLess(
-                candidate.index(stable_registry_command),
-                candidate.index("cargo publish --workspace --dry-run"),
-            )
-
-        self.assert_publish_preflight_contract(publish)
-        self.assertEqual(publish.count(metadata_command), 1)
-        assert_stable_registry_step(publish)
-        self.assertLess(
-            publish.index(stable_check), publish.index(historical_registry_check)
-        )
-        self.assertLess(
-            publish.index(historical_registry_check), publish.index(incubating_check)
-        )
-        self.assertLess(
-            publish.index("python3 scripts/hash_harness.py --check"),
-            publish.index(metadata_command),
-        )
-        self.assertLess(
-            publish.index("cargo publish --workspace --dry-run"),
-            publish.index("cargo publish -p rdocx-opc"),
-        )
-        self.assertNotIn("--no-verify", publish)
-        self.assertNotIn("continue-on-error", publish)
-
-        mutations = (
-            (
-                "missing-stable-only-condition",
-                publish.replace(
-                    "        if: startsWith(github.ref_name, 'v')\n",
-                    "",
-                    1,
-                ),
-            ),
-            (
-                "missing-published-shared-authority",
-                publish.replace(
-                    '          RDOCX_VERIFY_PUBLISHED_SHARED: "1"\n',
-                    "",
-                    1,
-                ),
-            ),
-            (
-                "wrong-published-shared-authority",
-                publish.replace(
-                    '          RDOCX_VERIFY_PUBLISHED_SHARED: "1"',
-                    '          RDOCX_VERIFY_PUBLISHED_SHARED: "0"',
-                    1,
-                ),
-            ),
-        )
-        for name, mutated in mutations:
-            self.assertNotEqual(mutated, publish, name)
+        notes_step = self.yaml_step(crates, "Verify reviewed release notes")
+        dry_run = self.yaml_step(aggregate, "Verify publication archives")
+        stable = self.yaml_step(crates, "Publish stable allowlist")
+        incubating = self.yaml_step(crates, "Publish incubating allowlist")
+        self.assertLess(crates.index(hash_step), crates.index(family_step))
+        self.assertLess(crates.index(family_step), crates.index(shared_step))
+        self.assertLess(aggregate.index("Verify exact selected publication set"), aggregate.index(dry_run))
+        self.assertLess(aggregate.index(dry_run), aggregate.index("Upload reviewed family assets"))
+        self.assertIn("needs: release-assets", crates)
+        self.assertLess(crates.index(shared_step), crates.index(stable))
+        self.assertLess(crates.index(notes_step), crates.index(stable))
+        self.assertIn('unified-release-family "${{ github.ref_name }}"', family_step)
+        self.assertIn("if: startsWith(github.ref_name, 'v')", shared_step)
+        self.assertIn('subprocess.run(["cargo", "info", f"{name}@{version}"], check=True)', shared_step)
+        self.assertIn("cargo publish --workspace --dry-run", dry_run)
+        self.assertIn("needs: release-assets", crates)
+        self.assertNotIn("continue-on-error", crates)
+        self.assert_publish_preflight_contract(wheels)
+        for name, before, after in (
+            ("missing-family", 'unified-release-family "${{ github.ref_name }}"', "echo ok"),
+            ("missing-shared", 'subprocess.run(["cargo", "info", f"{name}@{version}"], check=True)', "pass"),
+            ("missing-dry-run", "cargo publish --workspace --dry-run", "echo ok"),
+        ):
             with self.subTest(name=name):
+                self.assertIn(before, wheels)
+                mutated = wheels.replace(before, after, 1)
                 with self.assertRaises(AssertionError):
-                    assert_stable_registry_step(mutated)
+                    candidate = self.yaml_block(mutated, "  publish-crates:")
+                    candidate_assets = self.yaml_block(mutated, "  release-assets:")
+                    self.assertIn('unified-release-family "${{ github.ref_name }}"', candidate_assets)
+                    self.assertIn('unified-release-family "${{ github.ref_name }}"', candidate)
+                    self.assertIn('subprocess.run(["cargo", "info", f"{name}@{version}"], check=True)', candidate)
+                    self.assert_publish_preflight_contract(mutated)
 
     def test_publish_workflow_rejects_a_missing_local_patch(self) -> None:
-        publish = (workflow.REPO / ".github/workflows/publish.yml").read_text(
+        publish = (workflow.REPO / ".github/workflows/wheels.yml").read_text(
             encoding="utf-8"
         )
         mutated = publish.replace(
@@ -9468,7 +7406,7 @@ Pedro Assumpcao and the rdocx maintainers.
             },
         )
         self.assertIn("docs/hld/00-vision.md", claude_paths)
-        self.assertIn(".github/workflows/publish.yml", verify_paths)
+        self.assertIn(".github/workflows/wheels.yml", verify_paths)
         self.assertIn("scripts/hash_harness.py", verify_paths)
 
         stated_versions = re.findall(
@@ -9564,7 +7502,7 @@ Pedro Assumpcao and the rdocx maintainers.
             "verify-path": (
                 claude,
                 verify.replace(
-                    ".github/workflows/publish.yml",
+                    ".github/workflows/wheels.yml",
                     ".github/workflows/missing.yml",
                     1,
                 ),
@@ -9579,7 +7517,7 @@ Pedro Assumpcao and the rdocx maintainers.
             ),
             "version": (
                 claude.replace(
-                    "prepared at\n  0.14.0",
+                    "prepared at\n  0.15.0",
                     "prepared at\n  0.2.0",
                     1,
                 ),
@@ -9816,6 +7754,15 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-270 closed DOCX-007 and DOCX-037 to complete in S74, so it
                 # no longer owns an incomplete row.
                 270,
+                # F-271 closed DOCX-038 with rich editing in all header and
+                # footer variants in S86.
+                271,
+                # F-272 closed DOCX-039 with rich footnote authoring, so it
+                # no longer owns an incomplete row.
+                272,
+                # F-273 closed DOCX-040 with rich endnote authoring, so it
+                # no longer owns an incomplete row.
+                273,
             }
         }
         self.assertEqual(

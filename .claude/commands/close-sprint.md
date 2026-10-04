@@ -5,6 +5,7 @@ description: Close a sprint. The only command that merges to main and creates an
 # /close-sprint SNN [--next SMM]
 
 Merge the sprint branch to `main`, tag it, push both, and open the next sprint.
+A prepared release follows through `/release` at this exact `main` merge SHA.
 
 **This is the only command in the repository that may touch `main` or create an
 `sNN` sprint tag.** `/release` alone owns `v*` release tags and crates.io
@@ -53,7 +54,10 @@ publication.
    completed F-IDs. For a validation-only sprint with no completed F-IDs, the
    message says `Validation-only sprint, no F-IDs`.
 
-8. **Push** `main` and the tag.
+8. **Push** `main` and the tag. Record the reviewed sprint HEAD, the merge
+   commit SHA, and the tree comparison needed by `/release`. A release tag is
+   created later at this merge SHA, after its own full gate and separate
+   approval.
 
 9. **Clean completed workers.** Only after both pushes succeed, inspect every
    cleanup target recorded in the run state:
@@ -86,10 +90,11 @@ publication.
 
 11. **Open the next sprint.** If `--next SMM` was given, run `/sync-sprint SMM`.
 
-12. **Report** what merged, the tag, the velocity for this sprint, whether it
-    diverged from the plan by more than 30 percent, every worker cleanup
-    outcome, and the PR and issue reconciliation. A variance over 30 percent
-    is an escalation trigger.
+12. **Report** what merged, the sprint tag, the exact `main` merge SHA, the
+    reviewed sprint SHA and tree comparison, the velocity for this sprint,
+    every worker cleanup outcome, and the PR and issue reconciliation. Name
+    each prepared family release and its subsequent `/release` command. A
+    velocity variance over 30 percent is an escalation trigger.
 
 ## Carrying a story
 

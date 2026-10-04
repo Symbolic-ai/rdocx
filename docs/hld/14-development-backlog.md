@@ -41,6 +41,7 @@ performance corrections.
 F-X137 through F-X171 form a contribution and issue repair programme across
 S76 through S85. The 2 October intake had 31 open PRs and 8 open issues.
 Issue 264 joined on 2 October after that intake and is included in S84.
+F-X172 through F-X174 address Issue 266's unified family release in S86.
 The new tolerance, baseline, revision and accepted-view work continues after
 the original S82 acceptance wave. These are cross-cutting stories, separate
 from the 47 planned M24 feature stories. Their shared files and full issue
@@ -2846,12 +2847,16 @@ Complete all valid header and footer content, fields, controls, annotations,
 drawings, tables, links, and inherited variant operations through the common
 story API.
 **Depends on**: F-252 through F-255.
-**Test gate**: integration. The same rich subtree can be authored in every
-header and footer variant and reopens with correct part-scoped relationships.
+**Test gate**: integration. The same rich subtree, including authored comment
+anchors, can be authored in every header and footer variant and reopens with
+correct part-scoped relationships.
 
 ### F-272, Rich footnote authoring (L)
-Create, edit, reorder, and remove footnotes containing rich paragraphs, tables,
-fields, links, drawings, comments, and content controls.
+The native facade creates normal footnotes with body references, resolves their
+story IDs, reorders their exact part elements, and removes them with all body
+references in one staged mutation. Common story operations edit rich
+paragraphs, tables, fields, links, drawings, comments, and content controls.
+Internal note IDs stay stable while visible labels follow body reference order.
 **Depends on**: F-253 through F-255.
 **Test gate**: differential. Rich notes and their references match Word in
 numbering, page placement, continuation, and round-trip structure.
@@ -2859,9 +2864,15 @@ numbering, page placement, continuation, and round-trip structure.
 ### F-273, Rich endnote authoring (L)
 Create, edit, reorder, and remove endnotes with the same content and relationship
 surface as footnotes while retaining an independent identifier namespace.
+The native facade stages each mutation and reopens the package before
+publication. Common story editing preserves exact untouched XML, separator
+records, and endnote-owned picture and hyperlink relationships. Body references
+across sections number independently from footnotes, and the endnote stream
+appends after the final body page under the current placement policy.
 **Depends on**: F-272.
-**Test gate**: differential. Mixed footnotes and endnotes remain independent and
-match Word at section and document-end placement boundaries.
+**Test gate**: differential. Word confirms independent occurrence order across
+sections. The gate asserts the current renderer's documented fresh-page and
+decimal-label divergence at the document end. F-274 owns those policies.
 
 ### F-274, Note separators, markers, and restart policy (L)
 Author separator and continuation stories, custom reference marks, number
@@ -5969,21 +5980,20 @@ two indistinguishable owners still fails closed.
 
 ### F-X133, Stop rebinding a canonical prefix on every retained element (S)
 
-F-X131 stops `push_root_attribute_record` writing the canonical `w14` binding
-onto its target, because the part root already owns it, but the canonical `w`
-binding is still written. F-X128 retains producer root attributes on every
-paragraph and run, and F-X131's `used_prefixes` loop keeps the `w` declaration
-those attributes use, so a plain save emits `xmlns:w` on every retained
-paragraph and run. On `corpus/docx/redlined_no_footer.docx` that is 888
-declarations and grows the part from 387397 bytes to 578815, about 49 percent,
-none of which resolves a name differently. Extend the skip to every canonical
-prefix the part root already declares.
+Retained producer attributes keep their bindings in the private record, while
+serialization omits same-URI declarations already guaranteed by the part
+root. The main document guarantees `r` and `mc`, and writes canonical `wp`
+unless a retained root binding claims that prefix. Headers and footers follow
+the same `wp` rule alongside guaranteed `r`, and note parts guarantee `r`.
+The existing canonical `w` and `w14` behavior remains. A regression pins one declaration of every
+guaranteed prefix at the document root with producer attributes, a new binding,
+and an unmodelled child preserved through reopen. Standalone paragraphs and
+comments retain local bindings.
 **Depends on**: F-X131, F-X132.
 **Test gate**: regression.
-`a_retained_element_does_not_rebind_a_prefix_its_part_root_declares` proves a
-plain save of a document carrying producer root attributes emits no redundant
-canonical declaration, that the retained attributes still round-trip, and that
-a genuinely new binding is still written.
+`a_retained_element_does_not_rebind_a_prefix_its_part_root_declares` proves
+document serialization emits no redundant canonical declaration, retains the
+producer attributes and unmodelled child, and writes a genuinely new binding.
 
 ### F-X134, Keep Python story hyperlink snapshots linear (S)
 
@@ -6391,6 +6401,68 @@ bypassed pinned viewer setup, the exact DMG digest and mounted build identity
 match the reviewed oracle, and the full local presentation binding suite
 passes. The hosted presentation job and aggregate required CI gate must pass
 at the S85 close boundary before any S84 contribution closure.
+
+### F-X172, Unified release artifacts and provenance (L)
+
+Address [Issue 266](https://github.com/tensorbee/rdocx/issues/266) by making
+each new stable or incubating tag select its Rust crates, CLI binary and Python
+distribution at one matching version. Build the six CLI archives, six
+`cp39-abi3` wheels and source distribution for that family. Publish one GitHub
+release containing all thirteen files and one `SHA256SUMS` covering each of
+them. Generate GitHub build provenance attestations for every CLI archive, wheel
+and source distribution. Verify each downloaded subject with `gh attestation
+verify FILE -R tensorbee/rdocx`. Preserve the build-only manual wheel
+preflight and PyPI trusted publishing with no long-lived token. Keep old
+release tags immutable. Release new tags from the exact reviewed `main` merge
+SHA after sprint close. Update the release command, workflow contracts, tests
+and the build and toolchain HLD for the unified family contract.
+**Depends on**: F-X111, F-X094f.
+**Test gate**: release workflow regression. Mutation checks reject a missing
+asset or attestation, a checksum omission, a mismatched family or version,
+untrusted PyPI publication, premature GitHub release creation, and partial
+registry publication reported as success. Manual dispatch remains build-only.
+
+### F-X173, Prepare unified rpptx 0.13.0 family (M)
+
+Prepare the minor release of the 15 shared OOXML and PowerPoint crates,
+`rpptx-cli` and the `rpptx` Python distribution at 0.13.0 from the reviewed S86
+source. Record version and internal pin changes, metadata, compatibility and
+contributor notes under `rpptx-v0.13.0`. Complete local preparation at the
+dependency checkpoint, then pass the full gate and clean review on the final
+integrated S86 result. After `/close-sprint` merges the reviewed source
+to `main`, `/release` verifies that main merge SHA, obtains separate final
+approval, and checks every crates.io and PyPI version, asset, checksum,
+attestation, release note, owner role and contributor notification.
+**Depends on**: F-X172, F-X133, F-271, F-272, F-273.
+**Test gate**: release preparation. The local dry run, metadata contract,
+build-only wheel preflight, scoped verification and zero-finding microscope
+pass on the prepared source. The integrated full gate and clean sprint review
+follow both preparations at S86 closure. Publication follows `/close-sprint`
+from `main` with its own final approval and hosted verification.
+
+### F-X174, Prepare unified rdocx 0.15.0 family (M)
+
+Prepare the minor release of the seven stable Word crates, `rdocx-cli` and the
+`rdocx` Python distribution at 0.15.0 from the same reviewed S86 source.
+Record version and internal pin changes, metadata, compatibility and
+contributor notes under `v0.15.0`, including the S85 to S86 work and Issue
+266's release changes. Complete local preparation with the selected-family
+metadata contract, exact package dry run, host wheel and source distribution
+rehearsal, scoped gate, and zero-finding review. The integrated S86 source then
+passes the full gate and clean review. A six-platform manual build-only
+rehearsal runs on the final pushed sprint SHA before closure. After
+`/close-sprint` merges the reviewed source to `main`, `/release` verifies
+that main merge SHA, obtains separate final approval for this tag, and checks
+every crates.io and PyPI version, asset, checksum, attestation, release note,
+owner role and contributor notification.
+After both family releases pass, comment on Issue 266 with the published
+`rpptx-v0.13.0` and `v0.15.0` numbers and links to their verified releases.
+**Depends on**: F-X173.
+**Test gate**: release preparation. The local dry run, metadata contract,
+build-only wheel preflight, scoped verification and zero-finding microscope
+pass on the prepared source. The integrated full gate and clean sprint review
+follow both preparations at S86 closure. Publication follows `/close-sprint`
+from `main` with its own final approval and hosted verification.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 

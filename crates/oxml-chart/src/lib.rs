@@ -15557,7 +15557,7 @@ mod tests {
     fn oxml_chart_is_an_explicit_publication_candidate() {
         let manifest = include_str!("../Cargo.toml");
         assert!(manifest.contains("name = \"oxml-chart\""));
-        assert!(manifest.contains("version = \"0.12.1\""));
+        assert!(manifest.contains("version = \"0.13.0\""));
         assert!(manifest.contains("publish = true"));
         for dependency in [
             "oxml-core.workspace",

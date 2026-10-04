@@ -17194,3 +17194,143 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged, all 49 entries match on the worker and integrated source.
 
 **Notes for future sessions.** After `/close-sprint` pushes S85, wait for the macOS presentation Python job and aggregate CI gate to pass on `main`. Only then post the individual 32 PR and nine issue dispositions, with Issue 158 last. Keep `work/f-x171-codex` through sprint verification and review.
+
+### F-271, Uniform rich header and footer editing
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** The existing story editing surface now handles rich content in all six header and footer variants. Comment ranges can be anchored in related story parts and published through a staged package reopen. The related part retains unmodelled paragraph XML and keeps its relationships scoped to that part.
+
+**Non-obvious choices.** Related-part comment anchoring edits the paragraph fragment in the selected part. Its package is validated and reopened before the live document changes. Body and table-cell comments keep their existing publication path.
+
+**Deviations from the design plan.** The initial worker pass missed the package reopen before publishing related-part comments. Integration review caught it, and the corrected worker passed another microscope review and scoped gate. An integration policy check also required the completed DOCX-038 capability row in `docs/hld/02-scope-and-non-goals.md`, beyond the plan's HLD impact list.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-038 completion, `docs/hld/03-architecture.md`, related story publication, and `docs/hld/14-development-backlog.md`, F-271 acceptance.
+
+**Tests.** The worker passed 488 Word unit, 333 integration, 745 regression and 2 documentation tests with pinned tools. Scoped Clippy, formatting, prose, generated skills, 133 policy tests and the archive inventory passed. The all-variant rich-content test and aliased-header rollback test passed. Microscope pass 4 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-272 can start on this completed prefix. Keep `work/f-271-codex` until final sprint verification and review.
+
+### F-X133, Stop rebinding a canonical prefix on every retained element
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** Retained Word paragraph attributes now omit local `r`, `mc` and `wp` declarations when the serialized part root guarantees the same URI binding. Document, header, footer and note writers establish their actual root bindings for the duration of serialization. Standalone fragments, comments, noncanonical roots and true local shadows keep required declarations.
+
+**Non-obvious choices.** A thread-local scope restores the previous binding set on nested serialization and unwind. The guard ties suppression to the exact part root rather than the prefix spelling alone.
+
+**Deviations from the design plan.** The prior F-X161 work already removed repeated canonical `w` declarations. This story covered the remaining root-guaranteed prefixes and added conditional `wp` handling for producer roots.
+
+**Spec sections touched.** `docs/hld/04-opc-and-packaging.md`, retained namespace emission, and `docs/hld/14-development-backlog.md`, F-X133 acceptance.
+
+**Tests.** The named regression failed before the change and passed afterward. The worker passed 601 OXML tests, one documentation test, scoped Clippy, formatting, prose, generated skills, all 133 policy tests and exact package measurement. Microscope pass 4 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-X173 can use this completed serialization prefix. Keep `work/f-x133-codex` until final sprint verification and review.
+
+### F-272, Rich footnote authoring
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native footnotes can be created with a body reference, located as stories, edited with existing rich content operations, reordered without changing IDs, and removed with every matching body reference in one staged mutation. Footnote paragraphs support scoped pictures, hyperlinks and comments, while separator and unknown XML survive save and reopen. Visible note labels follow reference occurrence while internal IDs stay stable.
+
+**Non-obvious choices.** The package-backed note part is reopened before publication. Reorder moves a source note fragment and keeps its stable ID. The layout label map uses body reference order, which matches the pinned Word output even when internal IDs begin at two.
+
+**Deviations from the design plan.** The Word comparison exposed raw internal IDs printed as visible labels. The worker added occurrence-based layout numbering and repeated the oracle and hash gates. No new crate, module, trait, generic or feature flag was introduced.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-039 completion, `docs/hld/03-architecture.md`, note story ownership, `docs/hld/04-opc-and-packaging.md`, preservation, `docs/hld/08-rendering-spec.md`, labels and continuation, `docs/hld/10-bindings-spec.md`, native API, and `docs/hld/14-development-backlog.md`, F-272 acceptance.
+
+**Tests.** The worker passed 488 Word unit, 334 integration, 750 regression, 303 layout and documentation tests, all 133 policy tests, scoped Clippy, formatting, prose, generated skills, archive inventory and the 22-package dry run. Microsoft Word for Mac 16.113.2 build 16.113.26092012 and deterministic local PDF both showed three pages, body note labels 1 and 2, a long note continuing through page three and a short note on page three. Microscope pass 1 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-273 can start on this completed note substrate. Keep `work/f-272-codex` until final sprint verification and review.
+
+### F-X172, Unified release artifacts and provenance
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** `wheels.yml` now owns the only new family tag trigger for both Rust and Python publication. A tag selects one family, builds six CLI archives, six wheels and one source distribution, checks all thirteen payloads and writes one `SHA256SUMS` for the GitHub release. Build jobs attest each payload, and the aggregate job verifies provenance against the source SHA. The PyPI job remains in the trusted `wheels.yml` identity and `pypi` environment. A GitHub release waits for both registries and exact published Python file digests.
+
+**Non-obvious choices.** The tag workflow requires the tag SHA to match current `origin/main` and one annotated sprint tag at that SHA. The prepublication validator checks the exact selected publishable crate set, matching versions, workspace pins and lockfile entries. A patched 22-package dry run and exact selected archive inventory finish before either registry job can start. Manual dispatch remains build-only. Historical Python tags and changelog sections stay readable, but new publication uses only the combined family tags.
+
+**Deviations from the design plan.** Issue 266's request for a release from `main` led to post-close publication. F-X173 and F-X174 prepare versions and notes during S86, `/close-sprint` merges the reviewed tree, then `/release` applies separate exact-SHA approvals. An independent audit found and the worker fixed missing selected-crate and main-source machine checks plus stale HLD process prose before handoff.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X172 acceptance, and `docs/hld/15-build-and-toolchain.md`, unified family publication and provenance.
+
+**Tests.** The new unified workflow and security mutation gate failed on the old split workflow and passed after the change. The worker passed 137 policy tests with 2 skips, formatting, prose, generated-skill drift, diff checks and a zero-finding microscope pass. Hosted build and registry publication remain the separate post-close release gates.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate is due.
+
+**Notes for future sessions.** F-X173 and F-X174 can prepare the incubating and stable minor versions on this workflow. Keep `work/f-x172-codex` until final sprint verification and review. The user authorized an Issue 266 comment after both releases are verified, naming their published numbers and links.
+
+### F-273, Rich endnote authoring
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Native endnotes can be created with a direct body reference, located as stories, edited with rich content, reordered without changing IDs, and removed with matching references in one staged mutation. Endnotes and footnotes keep separate ID spaces. Endnote pictures, hyperlinks and comments use the endnote part, while separator and unknown XML survive save and reopen.
+
+**Non-obvious choices.** The package-backed note part is reopened before publication. Word for Mac placed the two fixture endnotes on the final body page with Roman labels. The existing deterministic renderer appends an endnote page and uses decimal labels. The approved F-273 contract keeps that policy and asserts the difference explicitly. F-274 owns placement and number-format policy.
+
+**Deviations from the design plan.** The pinned Word comparison exposed an existing page-placement and label-format difference. The plan's differential gate and rendering spec now record and assert that difference without changing the F-273 API or renderer policy.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, endnote authoring scope, `docs/hld/03-architecture.md`, note story ownership, `docs/hld/04-opc-and-packaging.md`, part and unknown XML preservation, `docs/hld/08-rendering-spec.md`, independent labels and the Word divergence, `docs/hld/10-bindings-spec.md`, native API, and `docs/hld/14-development-backlog.md`, F-273 acceptance.
+
+**Tests.** The named mixed-rich-notes gate passed on the integrated sprint tree. The worker passed 494 Word unit, 343 integration, 760 regression and documentation tests, all 137 policy tests, scoped Clippy, formatting, prose, generated skills, archive inventory and the 22-package dry run. Microsoft Word for Mac 16.113.2 build 16.113.26092012 opened the exact generated DOCX and showed two pages, footnote labels 1 and 2, endnote labels i and ii, and both endnotes after final body text. Microscope pass 2 found zero defects and zero smells. Full integrated verification and sprint review remain due.
+
+**Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
+
+**Notes for future sessions.** F-X173 and F-X174 may now prepare both release families. Keep `work/f-273-codex` branch through final sprint review. The current append-page and decimal-label policies are documented for F-274.
+
+### F-X173, Prepare unified rpptx 0.13.0 family
+
+**Sprint.** S86
+**Completed.** 2026-10-03
+**Size.** M, estimated 3 days, actual 1 day
+
+**What was built.** The 15 selected shared OOXML and presentation Rust crates, their workspace pins, the `rpptx` CLI, `rpptx-py` metadata and `Cargo.lock` now agree on 0.13.0. The changelog contains family release notes with compatibility guidance, Issue 266 and authenticated contributor credit. Package assertions and README examples use the reviewed archive measurements. The release wheel smoke now runs on Python 3.9 and excludes only the pinned LibreOffice fixture from bare wheel runners.
+
+**Non-obvious choices.** The public `oxml-layout::LineBreakParams` fields require a pre-1.0 minor version. `rpptx-wasm` remains unpublished at its prior crate version. The wheel smoke keeps an equivalent length assertion where Python 3.9 lacks `zip(strict=True)`. Its Issue 158 viewer oracle still runs in the pinned CI suite. A hosted manual build-only rehearsal needs the final pushed sprint SHA, so it follows the integrated sprint gate and push before close.
+
+**Deviations from the design plan.** The approved plan's hosted build-only run was moved to the final pushed sprint SHA because worker branches do not push. A local wheel and source distribution check covers the dependency checkpoint. Local Python 3.9 rehearsal exposed and fixed the wheel smoke compatibility and LibreOffice environment defects.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X173 release acceptance, and `docs/hld/15-build-and-toolchain.md`, unified family versions, artifact rehearsal and wheel smoke.
+
+**Tests.** The integrated `test_rpptx_v0_13_0_unified_family_contract` and release-note parser passed. The worker passed 17 affected crate test suites and Clippy, wasm check, 138 policy tests with two skips, formatting, prose, generated skills, README inventory and examples, and an exact 22-package locally patched dry run with every archive under 10 MiB. A clean Python 3.9 wheel install passed 75 examples, one skip and the one viewer deselection. The full Python 3.12 examples passed 77 cases with pinned LibreOffice and Poppler, plus strict mypy and stubtest. Microscope pass 1 found zero defects and zero smells. Final integrated verification, sprint review and hosted build-only rehearsal remain due.
+
+**Hash harness.** Unchanged on the reviewed worker, all 49 entries match. The final integrated sprint gate is due.
+
+**Notes for future sessions.** F-X174 may now prepare `v0.15.0` against these shared 0.13.0 packages. Keep `work/f-x173-codex` branch through final sprint review. Publish `rpptx-v0.13.0` only from the reviewed S86 main merge through `/release` and its separate final approval.
+
+### F-X174, Prepare unified rdocx 0.15.0 family
+
+**Sprint.** S86
+**Completed.** 2026-10-04
+**Size.** M, estimated 3 days, actual 1 day
+
+**What was built.** The seven selected Word Rust crates, their workspace pins, the `rdocx` CLI, Python project metadata and `Cargo.lock` now agree on 0.15.0. The changelog records Issue 266, compatibility guidance and authenticated contributor credit. The release preparation includes exact package measurements and clean Python wheel and source distribution checks.
+
+**Non-obvious choices.** The pre-1.0 minor version reflects source-incompatible public layout model changes. Historical 0.14.0 performance observations retain their dated version, while archive measurements reflect 0.15.0. Bare wheel runners exclude only the Issue 253 PDF text oracle that needs pinned Poppler 26.01.0. The full pinned CI suite keeps that case. Hosted six-platform build-only evidence follows the final reviewed sprint push before close, and publication requires a separate exact-SHA `/release` approval after close.
+
+**Deviations from the design plan.** The bare wheel smoke needed the narrow Issue 253 selection after a clean Python 3.9 install exposed its exact Poppler dependency. The risk and HLD now name this environment requirement. No publication is claimed by the preparation story.
+
+**Spec sections touched.** `docs/hld/14-development-backlog.md`, F-X174 release acceptance, and `docs/hld/15-build-and-toolchain.md`, stable family versions, artifact rehearsal and wheel smoke.
+
+**Tests.** The 0.15.0 family contract failed on the old 0.14.0 carriers and passes on the integrated source. The worker passed selected Rust crate tests and Clippy, a clean Python 3.9 wheel smoke with 156 cases and one bare-runner deselection, all 157 Python 3.12 cases with pinned Poppler, strict mypy and stubtest, 139 policy tests with two skips, docs, README examples, and the locally patched 22-package dry run. Microscope pass 1 found zero defects and zero smells. The integrated full workspace tests, policy suite, Clippy, no-default path, both WASM targets, docs, README examples, 22-package clean publish dry run and cargo-deny check passed. Hosted build-only rehearsal and release publication remain later gates.
+
+**Hash harness.** Unchanged on the integrated sprint source, all 49 entries match.
+
+**Notes for future sessions.** Keep `work/f-x174-codex` through final sprint review. Publish `v0.15.0` only from the reviewed S86 main merge through `/release` and its separate final approval. After both family releases are verified, comment on Issue 266 with `rpptx-v0.13.0` and `v0.15.0` and direct release links.

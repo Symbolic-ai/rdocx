@@ -449,6 +449,216 @@ fn f252_section_story(
         .clone()
 }
 
+#[test]
+fn rich_content_reopens_in_every_header_and_footer_variant() {
+    let mut document = Document::new();
+    document.add_paragraph("first section");
+    document.insert_section(1).unwrap();
+    document.add_paragraph("second section");
+    document.set_even_and_odd_headers(true).unwrap();
+    let fixture = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>rich paragraph</w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>second paragraph</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p><w:r><w:t>rich table</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p><w:r><w:t>rich control</w:t></w:r></w:p></w:sdtContent></w:sdt></w:body></w:document>"#
+    );
+    let content = CT_Document::from_xml(fixture.as_bytes())
+        .unwrap()
+        .body
+        .content;
+    let mut expected = Vec::new();
+    for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+        for variant in [HdrFtrType::Default, HdrFtrType::First, HdrFtrType::Even] {
+            document.create_section_story(0, kind, variant).unwrap();
+            for item in &content {
+                let fragment = match item.clone() {
+                    BodyContent::Paragraph(value) => ContentFragment::paragraph(value).unwrap(),
+                    BodyContent::Table(value) => ContentFragment::table(value).unwrap(),
+                    BodyContent::ContentControl(value) => {
+                        ContentFragment::content_control(value).unwrap()
+                    }
+                    BodyContent::RawXml(_) => panic!("fixture must be modeled"),
+                };
+                let current = f252_section_story(&document, 0, kind, variant);
+                document
+                    .insert_content(&ContentLocation::end(current), fragment)
+                    .unwrap();
+            }
+            let current = f252_section_story(&document, 0, kind, variant);
+            let marker = format!("{kind:?}-{variant:?}");
+            let url = format!("https://example.invalid/f271/{marker}");
+            document
+                .add_hyperlink_to_story(&current, &marker, &url)
+                .unwrap();
+            let current = f252_section_story(&document, 0, kind, variant);
+            let image = marker.as_bytes().to_vec();
+            document
+                .add_picture_to_story(
+                    &current,
+                    &image,
+                    "f271.png",
+                    Length::pt(9.0),
+                    Length::pt(6.0),
+                )
+                .unwrap();
+            let current = f252_section_story(&document, 0, kind, variant);
+            let paragraphs = document
+                .story_items(&current)
+                .unwrap()
+                .into_iter()
+                .filter(|item| item.kind() == StoryItemKind::Paragraph)
+                .take(2)
+                .map(|item| item.location().clone())
+                .collect::<Vec<_>>();
+            document
+                .add_story_comment(
+                    StoryRunRange {
+                        start: StoryRunPosition {
+                            location: paragraphs[0].clone(),
+                            run_index: 0,
+                        },
+                        end: StoryRunPosition {
+                            location: paragraphs[1].clone(),
+                            run_index: 1,
+                        },
+                    },
+                    "Ada",
+                    None,
+                    &marker,
+                )
+                .unwrap();
+            expected.push((kind, variant, marker, url, image));
+        }
+    }
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.comments().len(), 6);
+    let mut parts = HashSet::new();
+    for (kind, variant, marker, url, image) in &expected {
+        let story = f252_section_story(&reopened, 0, *kind, *variant);
+        assert!(parts.insert(story.part_name().to_owned()));
+        let inherited = reopened.section_story(1, *kind, *variant).unwrap().unwrap();
+        assert!(inherited.is_inherited());
+        assert_eq!(inherited.story().part_name(), story.part_name());
+        let xml = reopened
+            .story_items(&story)
+            .unwrap()
+            .iter()
+            .map(|item| String::from_utf8(item.xml().unwrap().into_owned()).unwrap())
+            .collect::<String>();
+        for value in [
+            "rich paragraph",
+            "second paragraph",
+            "rich table",
+            "rich control",
+            "w:fldSimple",
+            "w:commentRangeStart",
+            marker.as_str(),
+        ] {
+            assert!(
+                xml.contains(value),
+                "{kind:?} {variant:?} lacks {value}: {xml}"
+            );
+        }
+        let link = f255_xml_attribute(&xml, "r:id").unwrap();
+        assert_eq!(
+            reopened.hyperlink_url_for_story(&story, &link).unwrap(),
+            *url
+        );
+        let embed = f255_xml_attribute(&xml, "r:embed").unwrap();
+        assert_eq!(
+            reopened.image_data_for_story(&story, &embed).unwrap(),
+            *image
+        );
+    }
+    assert_eq!(parts.len(), 6);
+    let mut document = reopened;
+    for (kind, variant, _, url, image) in &expected {
+        let detached = document.unlink_section_story(1, *kind, *variant).unwrap();
+        let origin = f252_section_story(&document, 0, *kind, *variant);
+        assert_ne!(detached.part_name(), origin.part_name());
+        let xml = document
+            .story_items(&detached)
+            .unwrap()
+            .iter()
+            .map(|item| String::from_utf8(item.xml().unwrap().into_owned()).unwrap())
+            .collect::<String>();
+        let link = f255_xml_attribute(&xml, "r:id").unwrap();
+        let embed = f255_xml_attribute(&xml, "r:embed").unwrap();
+        assert_eq!(
+            document.hyperlink_url_for_story(&detached, &link).unwrap(),
+            *url
+        );
+        assert_eq!(
+            document.image_data_for_story(&detached, &embed).unwrap(),
+            *image
+        );
+    }
+}
+
+#[test]
+fn header_footer_unmodelled_content_survives_rich_edit() {
+    let extension = r#"<x:private x:flag="a&amp;b"><x:child value="retained"/></x:private>"#;
+    let inner = r#"<x:inside x:flag="leave me"/>"#;
+    let xml = format!(
+        r#"<q:hdr xmlns:q="{W_NS}" xmlns:x="urn:producer"><q:p x:mark="retained"><q:r><q:t>before</q:t></q:r>{inner}</q:p>{extension}</q:hdr>"#
+    );
+    let mut document = document_with_header_story(&xml);
+    let story = f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default);
+    let paragraph = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    let before_invalid = document.to_bytes().unwrap();
+    assert!(
+        document
+            .add_story_comment(
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: paragraph.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location: paragraph.clone(),
+                        run_index: 2,
+                    },
+                },
+                "Ada",
+                None,
+                "invalid",
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_invalid);
+    document
+        .add_story_comment(
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: paragraph.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location: paragraph,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "review",
+        )
+        .unwrap();
+    let story = f252_section_story(&document, 0, HeaderFooterKind::Header, HdrFtrType::Default);
+    document
+        .insert_content(&ContentLocation::end(story), f254_paragraph("after"))
+        .unwrap();
+    let saved = header_story_xml(&mut document);
+    assert!(saved.contains(extension), "{saved}");
+    assert!(saved.contains(inner), "{saved}");
+    assert!(saved.contains("x:mark=\"retained\""), "{saved}");
+    assert!(saved.contains("w:commentRangeStart"), "{saved}");
+    assert!(saved.contains("after"), "{saved}");
+}
+
 fn f252_oracle_document() -> Document {
     let mut document = Document::new();
     for (section, markers) in [
@@ -44846,4 +45056,398 @@ fn issue_254_comparison_inserts_a_new_picture_and_a_repeated_one() {
             "{case}"
         );
     }
+}
+
+#[test]
+fn footnote_removal_clears_references_atomically() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let first = document.create_footnote(&location, "first").unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let second = document.create_footnote(&location, "second").unwrap();
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_footnote(1000).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert!(
+        document
+            .create_footnote(
+                &ContentLocation::new(StoryId::body(), StoryItemKind::Paragraph, vec![0]),
+                "invalid",
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.remove_footnote(first).unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(!body.contains(&format!("footnoteReference w:id=\"{first}\"")));
+    assert!(body.contains(&format!("footnoteReference w:id=\"{second}\"")));
+    assert_eq!(document.footnotes(), vec![(second, "second".to_owned())]);
+}
+
+#[test]
+fn rich_footnotes_keep_part_scoped_relationships() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let id = document.create_footnote(&location, "note").unwrap();
+    let story = document.footnote_story(id).unwrap().unwrap();
+    document
+        .add_picture_to_story(
+            &story,
+            b"footnote image",
+            "footnote.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let story = document.footnote_story(id).unwrap().unwrap();
+    document
+        .add_hyperlink_to_story(&story, "footnote link", "https://example.invalid/f272")
+        .unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let story = reopened.footnote_story(id).unwrap().unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part(story.part_name()).unwrap()).unwrap();
+    let image_id = f255_xml_attribute(xml, "r:embed").unwrap();
+    let hyperlink_id = f255_xml_attribute(xml, "r:id").unwrap();
+    assert_eq!(
+        reopened.image_data_for_story(&story, &image_id).unwrap(),
+        b"footnote image"
+    );
+    assert_eq!(
+        reopened
+            .hyperlink_url_for_story(&story, &hyperlink_id)
+            .unwrap(),
+        "https://example.invalid/f272"
+    );
+}
+
+#[test]
+fn rich_footnote_edit_preserves_unmodelled_children() {
+    let mut seed = Document::new();
+    seed.add_paragraph("body");
+    let location = seed.paragraph_story_location(0).unwrap().unwrap();
+    let first = seed.create_footnote(&location, "first").unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let source = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    let source = source
+        .replacen("<w:footnotes ", "<w:footnotes xmlns:x=\"urn:producer\" ", 1)
+        .replace("</w:footnote>", "<x:keep x:flag=\"exact\"/></w:footnote>")
+        .replace(
+            "</w:footnotes>",
+            "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p/></w:footnote></w:footnotes>",
+        );
+    package.set_part("/word/footnotes.xml", source.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let second = document.create_footnote(&location, "second").unwrap();
+    document.move_footnote_before(second, first).unwrap();
+    let story = document.footnote_story(first).unwrap().unwrap();
+    document
+        .insert_content(&ContentLocation::end(story), f254_paragraph("edited"))
+        .unwrap();
+    document.remove_footnote(second).unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    assert!(xml.contains("<x:keep x:flag=\"exact\"/>"), "{xml}");
+    assert!(
+        xml.contains("<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p/></w:footnote>"),
+        "{xml}"
+    );
+    assert!(xml.contains("edited"), "{xml}");
+}
+
+#[test]
+fn footnote_comment_anchors_package_backed_paragraph() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let id = document.create_footnote(&location, "noted text").unwrap();
+    let story = document.footnote_story(id).unwrap().unwrap();
+    let location = f254_item(&document, &story, 0);
+    let point = StoryRunPosition {
+        location: location.clone(),
+        run_index: 0,
+    };
+    let end = StoryRunPosition {
+        location,
+        run_index: 1,
+    };
+    let comment_id = document
+        .add_story_comment(
+            StoryRunRange { start: point, end },
+            "Author",
+            Some("A"),
+            "note comment",
+        )
+        .unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let story = reopened.footnote_story(id).unwrap().unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part(story.part_name()).unwrap()).unwrap();
+    assert!(
+        xml.contains(&format!("commentRangeStart w:id=\"{comment_id}\"")),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(&format!("commentReference w:id=\"{comment_id}\"")),
+        "{xml}"
+    );
+    assert!(xml.contains("noted text"), "{xml}");
+}
+
+#[test]
+fn rich_footnote_accepts_table_field_and_content_control() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let id = document.create_footnote(&location, "note").unwrap();
+    let mut table = rdocx_oxml::table::CT_Tbl::new();
+    let mut row = rdocx_oxml::table::CT_Row::new();
+    let mut cell = rdocx_oxml::table::CT_Tc::new();
+    cell.paragraphs_mut()[0].add_run("note cell");
+    row.cells.push(cell);
+    table.rows.push(row);
+    let story = document.footnote_story(id).unwrap().unwrap();
+    document
+        .insert_content(
+            &ContentLocation::end(story),
+            ContentFragment::table(table).unwrap(),
+        )
+        .unwrap();
+    let field = CT_P::from_xml_fragment(format!(
+        r#"<w:p xmlns:w="{W_NS}"><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#
+    ).as_bytes()).unwrap();
+    let story = document.footnote_story(id).unwrap().unwrap();
+    document
+        .insert_content(
+            &ContentLocation::end(story),
+            ContentFragment::paragraph(field).unwrap(),
+        )
+        .unwrap();
+    let control =
+        f254_block_context_content_control("<w:p><w:r><w:t>note control</w:t></w:r></w:p>");
+    let story = document.footnote_story(id).unwrap().unwrap();
+    document
+        .insert_content(
+            &ContentLocation::end(story),
+            ContentFragment::content_control(control).unwrap(),
+        )
+        .unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let story = reopened.footnote_story(id).unwrap().unwrap();
+    let kinds = reopened
+        .story_items(&story)
+        .unwrap()
+        .iter()
+        .map(|item| item.kind())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&StoryItemKind::Table), "{kinds:?}");
+    assert!(kinds.contains(&StoryItemKind::ContentControl), "{kinds:?}");
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part(story.part_name()).unwrap()).unwrap();
+    for expected in ["note cell", "fldSimple", "note control"] {
+        assert!(xml.contains(expected), "missing {expected}: {xml}");
+    }
+}
+
+#[test]
+fn rich_endnotes_reopen_with_part_scoped_relationships() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let id = document.create_endnote(&location, "endnote").unwrap();
+    let story = document.endnote_story(id).unwrap().unwrap();
+    document
+        .add_picture_to_story(
+            &story,
+            b"endnote image",
+            "endnote.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        )
+        .unwrap();
+    let story = document.endnote_story(id).unwrap().unwrap();
+    document
+        .add_hyperlink_to_story(&story, "link", "https://example.invalid/f273")
+        .unwrap();
+    let story = document.endnote_story(id).unwrap().unwrap();
+    let location = f254_item(&document, &story, 0);
+    let comment_id = document
+        .add_story_comment(
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Author",
+            Some("A"),
+            "endnote comment",
+        )
+        .unwrap();
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let story = reopened.endnote_story(id).unwrap().unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part(story.part_name()).unwrap()).unwrap();
+    let image_id = f255_xml_attribute(xml, "r:embed").unwrap();
+    let hyperlink_id = f255_xml_attribute(xml, "r:id").unwrap();
+    assert_eq!(
+        reopened.image_data_for_story(&story, &image_id).unwrap(),
+        b"endnote image"
+    );
+    assert_eq!(
+        reopened
+            .hyperlink_url_for_story(&story, &hyperlink_id)
+            .unwrap(),
+        "https://example.invalid/f273"
+    );
+    assert!(
+        xml.contains(&format!("commentRangeStart w:id=\"{comment_id}\"")),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(&format!("commentReference w:id=\"{comment_id}\"")),
+        "{xml}"
+    );
+
+    let mut table = rdocx_oxml::table::CT_Tbl::new();
+    let mut row = rdocx_oxml::table::CT_Row::new();
+    let mut cell = rdocx_oxml::table::CT_Tc::new();
+    cell.paragraphs_mut()[0].add_run("endnote cell");
+    row.cells.push(cell);
+    table.rows.push(row);
+    let story = reopened.endnote_story(id).unwrap().unwrap();
+    reopened
+        .insert_content(
+            &ContentLocation::end(story),
+            ContentFragment::table(table).unwrap(),
+        )
+        .unwrap();
+    let field = CT_P::from_xml_fragment(format!(
+        r#"<w:p xmlns:w="{W_NS}"><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#
+    ).as_bytes()).unwrap();
+    let story = reopened.endnote_story(id).unwrap().unwrap();
+    reopened
+        .insert_content(
+            &ContentLocation::end(story),
+            ContentFragment::paragraph(field).unwrap(),
+        )
+        .unwrap();
+    let control =
+        f254_block_context_content_control("<w:p><w:r><w:t>endnote control</w:t></w:r></w:p>");
+    let story = reopened.endnote_story(id).unwrap().unwrap();
+    reopened
+        .insert_content(
+            &ContentLocation::end(story),
+            ContentFragment::content_control(control).unwrap(),
+        )
+        .unwrap();
+    let story = reopened.endnote_story(id).unwrap().unwrap();
+    let kinds = reopened
+        .story_items(&story)
+        .unwrap()
+        .iter()
+        .map(|item| item.kind())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&StoryItemKind::Table), "{kinds:?}");
+    assert!(kinds.contains(&StoryItemKind::ContentControl), "{kinds:?}");
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part(story.part_name()).unwrap()).unwrap();
+    for expected in ["endnote cell", "fldSimple", "endnote control"] {
+        assert!(xml.contains(expected), "missing {expected}: {xml}");
+    }
+}
+
+#[test]
+fn endnote_removal_preserves_footnotes_with_the_same_id() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let footnote = document.create_footnote(&location, "footnote").unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let endnote = document.create_endnote(&location, "endnote").unwrap();
+    assert_eq!(footnote, endnote);
+    let before = document.to_bytes().unwrap();
+    assert!(document.remove_endnote(1000).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.remove_endnote(endnote).unwrap();
+    assert!(document.footnote_story(footnote).unwrap().is_some());
+    assert!(document.endnote_story(endnote).unwrap().is_none());
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(body.contains(&format!("footnoteReference w:id=\"{footnote}\"")));
+    assert!(!body.contains(&format!("endnoteReference w:id=\"{endnote}\"")));
+}
+
+#[test]
+fn endnote_edit_preserves_unmodelled_children() {
+    let mut seed = Document::new();
+    seed.add_paragraph("body");
+    let location = seed.paragraph_story_location(0).unwrap().unwrap();
+    let first = seed.create_endnote(&location, "first").unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let source = std::str::from_utf8(package.get_part("/word/endnotes.xml").unwrap()).unwrap();
+    let source = source
+        .replacen("<w:endnotes ", "<w:endnotes xmlns:x=\"urn:producer\" ", 1)
+        .replace("</w:endnote>", "<x:keep x:flag=\"exact\"/></w:endnote>")
+        .replace(
+            "</w:endnotes>",
+            "<w:endnote w:type=\"separator\" w:id=\"-1\"><w:p/></w:endnote></w:endnotes>",
+        );
+    package.set_part("/word/endnotes.xml", source.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let second = document.create_endnote(&location, "second").unwrap();
+    document.move_endnote_before(second, first).unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/endnotes.xml").unwrap()).unwrap();
+    assert!(
+        xml.find(&format!("<w:endnote w:id=\"{second}\"")).unwrap()
+            < xml.find(&format!("<w:endnote w:id=\"{first}\"")).unwrap(),
+        "{xml}"
+    );
+    let story = document.endnote_story(first).unwrap().unwrap();
+    document
+        .insert_content(&ContentLocation::end(story), f254_paragraph("rich"))
+        .unwrap();
+    document.remove_endnote(second).unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/endnotes.xml").unwrap()).unwrap();
+    assert!(xml.contains("<x:keep x:flag=\"exact\"/>"), "{xml}");
+    assert!(
+        xml.contains("<w:endnote w:type=\"separator\" w:id=\"-1\"><w:p/></w:endnote>"),
+        "{xml}"
+    );
+    assert!(xml.contains("rich"), "{xml}");
 }

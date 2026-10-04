@@ -2025,6 +2025,7 @@ impl Engine {
         let mut num_state = reference_seed
             .map(NumberingState::references_only)
             .unwrap_or_default();
+        num_state.set_note_labels(note_labels(input));
         if let Some(sources) = sources {
             for (index, path) in sources.nodes.iter().enumerate() {
                 if path.story == WordStory::Document {
@@ -7003,7 +7004,9 @@ fn layout_paragraph_with_source_and_table(
                         _ => NoteStream::Footnote,
                     };
                     // Render as superscript number
-                    let marker = id.to_string();
+                    let marker = num_state
+                        .note_label(NoteRef { stream, id: *id })
+                        .to_string();
                     let sup_size = font_size * 0.58;
                     let sup_offset = font_size * 0.33; // raise baseline
                     let shaped = fm.shape_text(font_id, &marker, sup_size)?;
@@ -7544,6 +7547,32 @@ fn visit_document_paragraphs<'a>(input: &'a LayoutInput, visit: &mut impl FnMut(
             BodyContent::RawXml(_) => {}
         }
     }
+}
+
+fn note_labels(input: &LayoutInput) -> HashMap<NoteRef, i32> {
+    let mut labels = HashMap::new();
+    let mut footnote_count = 0i32;
+    let mut endnote_count = 0i32;
+    visit_document_paragraphs(input, &mut |paragraph| {
+        for projected in project_paragraph_runs(paragraph, input.revision_view) {
+            for content in &projected.run.content {
+                let (stream, id, count) = match content {
+                    RunContent::FootnoteRef { id } => {
+                        (NoteStream::Footnote, *id, &mut footnote_count)
+                    }
+                    RunContent::EndnoteRef { id } => (NoteStream::Endnote, *id, &mut endnote_count),
+                    _ => continue,
+                };
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    labels.entry(NoteRef { stream, id })
+                {
+                    *count += 1;
+                    entry.insert(*count);
+                }
+            }
+        }
+    });
+    labels
 }
 
 fn visit_table_paragraphs<'a>(table: &'a CT_Tbl, accepted: bool, visit: &mut impl FnMut(&'a CT_P)) {
