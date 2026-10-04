@@ -9,7 +9,7 @@ No changes have been recorded after the prepared family sections below.
 ### Highlights
 
 The seven stable Word Rust crates, the `rdocx` CLI, and the `rdocx` Python
-distribution move together to 0.15.0 from the reviewed S86 source. One
+distribution move together to 0.15.0 from the reviewed S88 source. One
 release carries six CLI archives, six `cp39-abi3` wheels, one source
 distribution, and a `SHA256SUMS` covering all thirteen payloads. Each
 payload has build provenance verifiable with `gh attestation verify FILE -R
@@ -110,7 +110,7 @@ current-main release with matching CLI and Python versions.
 The exact seven publishable stable crates move from 0.14.0 to 0.15.0:
 `rdocx-opc`, `rdocx-oxml`, `rdocx-layout`, `rdocx-html`,
 `rdocx-pdf`, `rdocx`, and `rdocx-cli`. Update their pins together.
-They use the separately prepared shared OOXML 0.13.0 family. The Python
+They use the separately prepared shared OOXML 0.13.1 family. The Python
 distribution and import name stay `rdocx`, and its 0.15.0 wheels require
 Python 3.9 or newer. Historical `v0.14.0` and `py-rdocx-v0.14.0`
 remain unchanged. The unpublished `rdocx-wasm` and npm package are outside
@@ -143,12 +143,12 @@ Those GitHub PRs were closed without direct merges.
 [Issue 264](https://github.com/tensorbee/rdocx/issues/264) high-level style
 API. Atul Sharma reviewed and integrated the release family.
 
-## rpptx-v0.13.0
+## rpptx-v0.13.1
 
 ### Highlights
 
 The shared OOXML and PowerPoint Rust crates, `rpptx` CLI, and `rpptx` Python
-distribution move together to 0.13.0. One family release carries six CLI
+distribution move together to 0.13.1. One family release carries six CLI
 archives, six `cp39-abi3` wheels, one source distribution, and a `SHA256SUMS`
 covering all thirteen payloads. Each payload has build provenance that can be
 checked with `gh attestation verify FILE -R tensorbee/rdocx`. This answers
@@ -156,6 +156,8 @@ checked with `gh attestation verify FILE -R tensorbee/rdocx`. This answers
 [Issue 266](https://github.com/tensorbee/rdocx/issues/266) request for a
 current release from the reviewed main merge with matching CLI and Python
 versions.
+The immutable `rpptx-v0.13.0` tag stopped at its package inventory gate
+before either registry publication or GitHub release creation.
 
 ### Added
 
@@ -185,7 +187,7 @@ versions.
 ### Compatibility
 
 The exact 15 publishable shared OOXML and PowerPoint crates move from 0.12.1
-to 0.13.0 together. They are `oxml-core`, `oxml-opc`, `oxml-media`,
+to 0.13.1 together. They are `oxml-core`, `oxml-opc`, `oxml-media`,
 `oxml-layout`, `oxml-drawing`, `oxml-pdf`, `oxml-sml`, `oxml-cli-support`,
 `oxml-chart`, `rpptx-oxml`, `rpptx-chart`, `rpptx-layout`, `rpptx-render`,
 `rpptx`, and `rpptx-cli`. Rust callers should update every shared internal
@@ -195,7 +197,7 @@ operations. `oxml-layout::LineBreakParams` gained required public fields, so
 Rust callers constructing it with a struct literal must update those
 literals. Review exact-output fixtures and exhaustive use of public models.
 
-The Python distribution and import name remain `rpptx`. The 0.13.0 wheels
+The Python distribution and import name remain `rpptx`. The 0.13.1 wheels
 require Python 3.9 or newer. Stable Word crates, `rdocx` Python, and the
 unpublished `rpptx-wasm` and npm packages are outside this tag. Historical
 `rpptx-v0.12.1` and `py-rpptx-v0.12.1` remain unchanged.

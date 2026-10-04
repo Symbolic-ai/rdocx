@@ -853,6 +853,25 @@ def validate_unified_release_family(tag: str) -> dict[str, object]:
     return {"tag": tag, "distribution": distribution, "version": version}
 
 
+def validate_release_package_inventory(tag: str, directory: Path) -> None:
+    """Check the unpacked packages left by a workspace publication dry run."""
+    family = validate_unified_release_family(tag)
+    version = str(family["version"])
+    expected = {
+        f"{crate}-{version}" for crate in RELEASE_CRATES[str(family["distribution"])]
+    }
+    actual = {path.name for path in directory.glob(f"*-{version}")}
+    if actual != expected:
+        raise ValueError(
+            f"selected package inventory differs: missing={sorted(expected - actual)}, "
+            f"extra={sorted(actual - expected)}"
+        )
+    for name in expected:
+        package = directory / name
+        if not package.is_dir() or not (package / "Cargo.toml").is_file():
+            raise ValueError(f"dry-run package is incomplete: {name}")
+
+
 def cmd_unified_release_family(args: argparse.Namespace) -> int:
     try:
         result = validate_unified_release_family(args.tag)

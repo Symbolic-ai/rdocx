@@ -1,6 +1,6 @@
 # F-X176, Repair unified release inventory and respin PowerPoint
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S88
 **Size**: M
 **Depends on**: F-X175
@@ -53,12 +53,13 @@ Expected unchanged, with all 49 entries matching. The release workflow and versi
 
 ## Implementation checklist
 
-- [ ] Reproduce and test clean-target inventory behavior.
-- [ ] Replace the tag job's archive-file assertion with the selected package-directory contract.
-- [ ] Refresh PowerPoint version carriers, notes, README examples and policy tests.
-- [ ] Keep stable Word 0.15.0 and update its shared pins.
-- [ ] Complete scoped and integrated verification, build-only rehearsal and sprint review.
+- [x] Reproduce and test clean-target inventory behavior.
+- [x] Replace the tag job's archive-file assertion with the selected package-directory contract.
+- [x] Refresh PowerPoint version carriers, notes, README examples and policy tests.
+- [x] Keep stable Word 0.15.0 and update its shared pins.
+- [x] Complete scoped verification and a zero-finding microscope review.
 
 ## Open questions
 
-None. Use 0.13.1 for the replacement PowerPoint version, subject to any later user correction.
+None. The user selected 0.13.1 for the replacement PowerPoint version and
+retained 0.15.0 for Word.

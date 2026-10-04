@@ -541,24 +541,17 @@ jobs:
             --config 'patch.crates-io.rpptx-oxml.path="crates/rpptx-oxml"' \
             --config 'patch.crates-io.rpptx-render.path="crates/rpptx-render"'
 
-      - name: Verify selected archive inventory
+      - name: Verify selected package inventory
         shell: bash
         run: |
           python3 - <<'PYINVENTORY'
           from pathlib import Path
           import os
-          from scripts.sprint_workflow import RELEASE_CRATES, validate_unified_release_family
+          from scripts.sprint_workflow import validate_release_package_inventory
 
-          family = validate_unified_release_family(os.environ["GITHUB_REF_NAME"])
-          version = family["version"]
-          expected = {
-              f"{crate}-{version}.crate"
-              for crate in RELEASE_CRATES[family["distribution"]]
-          }
-          actual = {
-              path.name for path in Path("target/package").glob(f"*-{version}.crate")
-          }
-          assert actual == expected, (sorted(expected - actual), sorted(actual - expected))
+          validate_release_package_inventory(
+              os.environ["GITHUB_REF_NAME"], Path("target/package")
+          )
           PYINVENTORY
       - name: Upload reviewed family assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

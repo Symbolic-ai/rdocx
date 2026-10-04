@@ -6456,7 +6456,7 @@ that main merge SHA, obtains separate final approval for this tag, and checks
 every crates.io and PyPI version, asset, checksum, attestation, release note,
 owner role and contributor notification.
 After both family releases pass, comment on Issue 266 with the published
-`rpptx-v0.13.0` and `v0.15.0` numbers and links to their verified releases.
+`rpptx-v0.13.1` and `v0.15.0` numbers and links to their verified releases.
 **Depends on**: F-X173.
 **Test gate**: release preparation. The local dry run, metadata contract,
 build-only wheel preflight, scoped verification and zero-finding microscope
@@ -6484,7 +6484,7 @@ then stopped before publication because `cargo publish --dry-run` did not leave
 `.crate` files for the tag job's archive inventory. Retain that failed tag.
 Check the unpacked package directories produced by the successful dry run,
 and add a clean-target regression that rejects missing or extra selected
-packages. Prepare a new PowerPoint family version across all carriers and
+packages. Prepare PowerPoint 0.13.1 across all carriers and
 notes, keep the stable Word family at 0.15.0, and prove both tag paths with
 build-only rehearsal, full verification and a clean sprint review.
 **Depends on**: F-X175.
