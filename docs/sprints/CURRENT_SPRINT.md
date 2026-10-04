@@ -19,7 +19,7 @@ local gate, hosted CI and a clean sprint review before both Issue 266 releases.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X175 | Refresh CLI archive evidence after release hardening | S | in-progress | codex |
+| F-X175 | Refresh CLI archive evidence after release hardening | S | done | - |
 
 ## Sequencing note
 
