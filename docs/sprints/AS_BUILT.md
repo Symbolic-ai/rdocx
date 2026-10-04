@@ -17374,3 +17374,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the integrated sprint tree, all 49 entries match.
 
 **Notes for future sessions.** Keep `work/f-x176-codex` through sprint close. After hosted build-only and CI pass, close S88 and prepare both releases from its exact reviewed main SHA. Obtain a separate final `/release` approval for each tag. After both registry and GitHub releases are verified, comment on Issue 266 with `rpptx-v0.13.1` and `v0.15.0` and their direct release links.
+
+### F-274, Note separators, markers, and restart policy
+
+**Sprint.** S89
+**Completed.** 2026-10-04
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Checked document and section note policies now control numbering format, start, restart and placement for footnotes and endnotes. Normal and custom labels use one occurrence-based stream in body and note areas. Authored separator, continuation-separator and continuation-notice records retain their relationship-resolved note ownership. The deterministic layout places notes at the selected page, section or document boundary and carries long notes with authored continuation content.
+
+**Non-obvious choices.** Word for Mac 16.113.2 ignored a valid document and final-section `beneathText` policy and placed the fixture footnote at page bottom. The native renderer follows the OOXML value and places it beneath body text. The approved design gate and rendering spec assert this observed divergence explicitly. The additive pre-1.0 note policy API uses checked staging and save-and-reopen publication. The three changed crate archive measurements were refreshed for the scoped package gate.
+
+**Deviations from the design plan.** The pinned Word `beneathText` observation clarified the differential gate. No note-placement behavior was removed. The first three microscope passes found and resolved special-record selection, XML preservation and continuation progress defects before pass 4 reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-036 and DOCX-041, `docs/hld/03-architecture.md`, note policy facade, `docs/hld/04-opc-and-packaging.md`, note part ownership, `docs/hld/08-rendering-spec.md`, note placement, `docs/hld/12-testing-strategy.md`, pinned Word gate, and `docs/hld/14-development-backlog.md`, F-274 acceptance.
+
+**Tests.** The named note differential gate passed on the worker and its two-page expectation failed against the claimed base, which produced three pages. Pinned Word fixtures covered both note families, markers, restarts, separators and carryover. Scoped changed-crate tests, Clippy, formatting, 140 policy tests with two skips, prose, generated skills and the patched workspace publish dry run passed with pinned LibreOffice and Poppler and a larger macOS test stack. All archives were below 10 MiB. The integrated full sprint gate and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate remains due.
+
+**Notes for future sessions.** F-276 consumes this completed note contract. Keep `work/f-274-codex` through final sprint verification and review. Its clean worktree was removed after the integration commit.
