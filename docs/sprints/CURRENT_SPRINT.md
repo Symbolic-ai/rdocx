@@ -26,7 +26,7 @@ needed by later fields, templates, forms, and collaboration work.
 |------|-------|------|--------|-------|
 | F-274 | Note separators, markers, and restart policy | L | done | - |
 | F-275 | Cross-story bookmarks, ranges, and annotations | L | done | - |
-| F-276 | Complete fragment conflict and dependency policy | L | pending | - |
+| F-276 | Complete fragment conflict and dependency policy | L | in-progress | codex |
 | F-277 | Glossary and building-block creation | L | pending | - |
 
 ## Sequencing note
