@@ -510,7 +510,7 @@ effective `workspace` shared-version group and the `v{{version}}` tag template.
 That shared-version group, the `rdocx` Python project, and the rdocx WASM
 contract literals are prepared at 0.15.0, together with the exact
 seven-package stable family and its `v0.15.0` release notes. The prepared
-stable packages require shared OOXML 0.13.0. The latest published stable family
+stable packages require shared OOXML 0.13.1. The latest published stable family
 remains the immutable annotated `v0.14.0` tag at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published archives
 require shared 0.12.1. The unpublished 0.13.2 crates.io train is superseded
@@ -528,7 +528,7 @@ immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 15 publishable `oxml-*` and `rpptx*` package manifests and the unpublished
-`rpptx-py` binding crate use explicit version 0.13.0, the named `incubating`
+`rpptx-py` binding crate use explicit version 0.13.1, the named `incubating`
 group, and the `rpptx-v{{version}}` template. The unpublished `rpptx-wasm`
 crate remains at 0.12.1 with its separate npm boundary. The crates.io
 allowlist remains exactly 15 packages. The latest published complete family is
@@ -629,8 +629,10 @@ worker handoff, review, and verification records.
 A new family release tag starts `wheels.yml`. Before either registry job, the
 asset job proves that the tag points to the current `main` commit and its
 closed sprint tag. It checks the exact selected publishable workspace crates,
-their lockfile versions and their packaged archive inventory after the full
-workspace publication dry run. It also checks all thirteen assets and their
+their lockfile versions and their unpacked package inventory after the full
+workspace publication dry run. Cargo removes dry-run `.crate` files on a fresh
+target directory, so the selected inventory checks each package directory and
+its manifest. The job also checks all thirteen assets and their
 producer attestations. The Rust job reproduces the deterministic hash baseline
 before crates.io publication. The Python job publishes through the existing
 PyPI trusted publisher. A successful release requires every selected registry

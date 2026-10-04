@@ -102,6 +102,7 @@ defended.
 | S85 | X | 1 | 1 | 0 | 1 | 1 | Pinned LibreOffice 26.2.5.2 for the macOS Presentation Python CI cell after the S84 main run exposed the missing viewer. The full integrated local gate passed, including 77 Presentation Python tests, 133 workflow checks, 49 matching hashes, both WASM targets, 22 package archives below 10 MiB and a clear supply-chain scan. Hosted CI and the 32 PR and nine issue dispositions follow the reviewed main push. No stories carried |
 | S86 | M24, X | 7 | 7 | 0 | 27 | 2 | Completed rich headers and footers, footnotes and endnotes, namespace preservation, and both family release preparations. The full gate passed with 49 matching hashes, 22 package archives below 10 MiB and clean sprint review pass 2. Hosted build-only run 37165122971 produced all 14 expected artifacts after one targeted Linux arm64 retry. Issue 266 stays open until the separately approved rpptx-v0.13.0 and v0.15.0 releases are published, verified and reported to the requester. No contributed PR was assigned and no stories carried |
 | S87 | X | 1 | 1 | 0 | 1 | 1 | Refreshed both CLI archive measurements after S86 Windows stack hardening and moved the planned M24 wave to S88 by approval. The full gate passed with 49 matching hashes, 139 policy tests, 22 package archives below 10 MiB and clean sprint review pass 1. Hosted CI run 37178559664 passed, including Docs and Release regressions. Build-only run 37178579418 produced all 14 expected artifacts after one targeted Linux x86-64 retry. Issue 266 stays open until both separately approved releases are published, verified and reported to the requester. No stories carried |
+| S88 | X | 1 | 1 | 0 | 3 | 1 | Repaired the unified release inventory and prepared PowerPoint 0.13.1 beside Word 0.15.0 after the immutable failed PowerPoint tag. The full gate passed with 49 matching hashes, 140 policy tests with two expected skips, exact 22-crate dry run and clean sprint review pass 1. Hosted CI run 37192110554 passed all jobs, including Docs, Release regressions and fidelity. Build-only run 37192115737 passed all 14 wheel and source distribution jobs, and both exact seven-file artifact contracts passed. Issue 266 remains open until both separately approved releases are published and verified. No stories carried |
 
 ## Completed features
 
@@ -555,6 +556,7 @@ defended.
 | F-X173 | S86 | M | 3 | 1 | 2026-10-03 | Prepared rpptx 0.13.0 across 15 Rust crates, CLI and Python with family notes, package evidence and Python 3.9 wheel smoke repair |
 | F-X174 | S86 | M | 3 | 1 | 2026-10-04 | Prepared rdocx 0.15.0 across seven Rust crates, CLI and Python with family notes, clean wheel smoke, package evidence and 49 matching hashes |
 | F-X175 | S87 | S | 1 | 1 | 2026-10-04 | Refreshed both CLI archive footprints after Windows stack hardening and aligned the S87 roadmap check, with 49 matching hashes and a clean 22-crate dry run |
+| F-X176 | S88 | M | 3 | 1 | 2026-10-04 | Repaired the unified tag package inventory against dry-run directories and prepared rpptx 0.13.1 beside rdocx 0.15.0, with 49 matching hashes and a clean 22-crate dry run |
 
 ## Velocity
 
@@ -657,6 +659,7 @@ five working days.
 | S85 | 1 | 1 | 5.00 |
 | S86 | 7 | 2 | 17.50 |
 | S87 | 1 | 1 | 5.00 |
+| S88 | 1 | 1 | 5.00 |
 
 ## Escalation record
 
@@ -745,6 +748,7 @@ was done about it. Empty is the expected state.
 | 2026-10-02 | Sprint estimate variance exceeded 30 percent | S83 | Record 1 elapsed workday against 8 estimated for two completed dependency waves. Reviewed contributions and established Word, binding and package gates compressed elapsed work while full integrated verification and sprint review remained explicit. The resulting 10.00 stories per week is a short contribution-intake result, so retain the dependency-defined S84 through S88 repair boundaries |
 | 2026-10-03 | Sprint estimate variance exceeded 30 percent | S84 | Record 2 elapsed workdays against 38 estimated for ten completed stories. This deliberately combined the S84 through S89 repair scope to pay the full-test cost once. Isolated workers, reviewed contribution increments and one integrated acceptance gate reduced elapsed time without changing the 38-day planning estimate. The resulting 25.00 stories per week is not a sustainable forecast. Keep the dependency-defined S85 feature boundary |
 | 2026-10-04 | Sprint estimate variance exceeded 30 percent | S86 | Record 2 elapsed workdays against 27 estimated for seven completed stories. Isolated workers reused established authoring and release infrastructure while the integrated gate, clean review and hosted build evidence remained explicit. The resulting 17.50 stories per week is a short sprint result, so retain the dependency-defined S87 boundary |
+| 2026-10-04 | Sprint estimate variance exceeded 30 percent | S88 | Record 1 elapsed workday against 3 estimated for the focused release repair. The failed tag had isolated the package inventory cause, and established release checks were reused. The resulting 5.00 stories per week is a short repair result, so retain the dependency-defined S89 boundary |
 
 ## S79 contribution reconciliation
 

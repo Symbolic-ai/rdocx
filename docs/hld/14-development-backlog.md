@@ -6456,7 +6456,7 @@ that main merge SHA, obtains separate final approval for this tag, and checks
 every crates.io and PyPI version, asset, checksum, attestation, release note,
 owner role and contributor notification.
 After both family releases pass, comment on Issue 266 with the published
-`rpptx-v0.13.0` and `v0.15.0` numbers and links to their verified releases.
+`rpptx-v0.13.1` and `v0.15.0` numbers and links to their verified releases.
 **Depends on**: F-X173.
 **Test gate**: release preparation. The local dry run, metadata contract,
 build-only wheel preflight, scoped verification and zero-finding microscope
@@ -6476,6 +6476,22 @@ is the reviewed source boundary for both prepared Issue 266 families.
 **Test gate**: release regression. The two CLI archive measurements match
 fresh package builds on macOS and Linux, both README and release-regression
 CI jobs pass, and the full gate remains green with 49 unchanged hash entries.
+
+### F-X176, Repair unified release inventory and respin PowerPoint (M)
+
+The first `rpptx-v0.13.0` tag passed platform builds and attestation checks,
+then stopped before publication because `cargo publish --dry-run` did not leave
+`.crate` files for the tag job's archive inventory. Retain that failed tag.
+Check the unpacked package directories produced by the successful dry run,
+and add a clean-target regression that rejects missing or extra selected
+packages. Prepare PowerPoint 0.13.1 across all carriers and
+notes, keep the stable Word family at 0.15.0, and prove both tag paths with
+build-only rehearsal, full verification and a clean sprint review.
+**Depends on**: F-X175.
+**Test gate**: release regression. The clean-target package inventory check,
+both family version and notes contracts, manual build-only artifact rehearsal,
+hosted release regressions, full local gate and unchanged 49-entry hash harness
+all pass before `/close-sprint S88` and fresh release approvals.
 
 ### F-X168, Current issue and contribution closure evidence (M)
 

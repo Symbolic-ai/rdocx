@@ -17,7 +17,7 @@ notes, comments, diagrams, and timing data.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rpptx-oxml | 160,535 compressed bytes, 1,075,777 member bytes, 20 members | 0.13.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-oxml` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-03 |
+| Crates.io archive: rpptx-oxml | 160,540 compressed bytes, 1,075,777 member bytes, 20 members | 0.13.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-oxml` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-04 |
 
 ## Use it when
 
@@ -45,4 +45,4 @@ assert!(presentation.slide_ids.is_empty());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Add `rpptx-oxml = "0.13.0"` to your dependencies. The [API documentation](https://docs.rs/rpptx-oxml) lists the modeled PresentationML types.
+Add `rpptx-oxml = "0.13.1"` to your dependencies. The [API documentation](https://docs.rs/rpptx-oxml) lists the modeled PresentationML types.
