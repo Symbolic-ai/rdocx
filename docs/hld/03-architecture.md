@@ -1129,8 +1129,9 @@ one effective header variant without changing the caller-owned even-and-odd
 header setting. Every operation serializes and reopens the staged package
 before publishing it.
 
-Footnotes and endnotes are laid out into a `NoteRegistry` before pagination, and
-the paginator reserves, splits and draws them. Note placement is part of
+Footnotes, endnotes, and authored separator and continuation records are laid
+out into a `NoteRegistry` before pagination, and the paginator reserves, splits
+and draws them. Note placement is part of
 pagination rather than a pass that runs after it, because a page's body height
 depends on the note area it owes, and a note that does not fit continues on the
 following page. The registry pre-shapes each note's marker, so the paginator
@@ -1141,9 +1142,8 @@ per document, and is looked up by the width of the section drawing it. A note is
 broken to the measure of the section carrying its reference, since that is the
 measure it is drawn at, and reserve and render therefore still read the same
 lines. A document whose sections share a page size registers one width and lays
-each note out once, which is the common case. Endnotes are measured against the
-final section, because they are emitted after the last body page and drawn
-against that section's geometry wherever their references sit.
+each note out once, which is the common case. Section-end endnotes use their
+section's width, while document-end endnotes use the final section's width.
 
 The paginator also reflows a paragraph around any floating drawing that wraps,
 because whether a drawing overlaps a line is only known once the paragraph has a
@@ -1167,12 +1167,15 @@ paragraph can push a drawing to the next page, which shrinks the paragraph,
 which pulls the drawing back. Two passes give one answer, always.
 
 The two note streams are placed differently and are keyed apart. A footnote
-sits at the foot of the page carrying its reference and takes height from that
-page. An endnote costs its page nothing and is emitted after the last body
-page, where endnotes flow from the top of their own pages without a separator
-rule. A reference therefore carries a `NoteRef`, its stream and its number,
-because the streams number independently and a document may hold a footnote and
-an endnote sharing a number.
+sits at the foot of the page carrying its reference or immediately beneath
+body text when the effective policy selects that position. The paginator
+reserves its full note area before admitting body lines. Endnotes flow from the
+last page of their section or from the final body page, then continue on later
+pages as needed. The body and note marker use one label assigned at the first
+body reference under document and section policy. Page restarts use the
+reference's physical page after a bounded pagination pass. A custom mark does
+not consume the numeric stream. A reference carries a `NoteRef`, its stream
+and its package ID, because footnotes and endnotes can share an ID.
 
 The native document facade stages normal endnote creation, exact element
 reordering, and removal with matching body references. Endnotes use their own

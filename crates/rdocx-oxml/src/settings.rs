@@ -4,6 +4,7 @@ use oxml_core::Twips;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
+use crate::document::{CT_NoteProperties, CT_SectPr};
 use crate::error::{OxmlError, Result};
 use crate::math::{MathProperties, fixed_math_prefix_is_safe, is_math_element};
 use crate::namespace::W_NS;
@@ -520,6 +521,8 @@ pub struct CT_Settings {
     do_not_track_moves: Option<bool>,
     do_not_track_formatting: Option<bool>,
     document_protection: Option<DocumentProtection>,
+    footnote_properties: Option<CT_NoteProperties>,
+    endnote_properties: Option<CT_NoteProperties>,
     default_tab_stop: Option<Twips>,
     automatic_hyphenation: Option<bool>,
     consecutive_hyphen_limit: Option<i32>,
@@ -599,6 +602,33 @@ impl CT_Settings {
                         };
                         let total = model.tally.record(&["mathPr"], parsed.is_some());
                         assign(&mut model.math_properties, parsed, total);
+                        buffer.clear();
+                        continue;
+                    }
+                    if depth == 1
+                        && (is_word_element(element.name().as_ref(), b"footnotePr", &prefixes)
+                            || is_word_element(element.name().as_ref(), b"endnotePr", &prefixes))
+                    {
+                        let footnote =
+                            is_word_element(element.name().as_ref(), b"footnotePr", &prefixes);
+                        let name = if footnote { "footnotePr" } else { "endnotePr" };
+                        let properties = if started {
+                            CT_SectPr::parse_note_properties(
+                                &mut reader,
+                                &prefixes,
+                                &[],
+                                name.as_bytes(),
+                            )?
+                        } else {
+                            CT_NoteProperties::default()
+                        };
+                        let total = model.tally.record(&[name], true);
+                        let slot = if footnote {
+                            &mut model.footnote_properties
+                        } else {
+                            &mut model.endnote_properties
+                        };
+                        assign(slot, Some(properties), total);
                         buffer.clear();
                         continue;
                     }
@@ -935,6 +965,52 @@ impl CT_Settings {
 }
 
 impl CT_Settings {
+    /// Document-wide footnote policy, before a section override.
+    pub fn footnote_properties(&self) -> Option<&CT_NoteProperties> {
+        self.footnote_properties.as_ref()
+    }
+
+    /// Document-wide endnote policy, before a section override.
+    pub fn endnote_properties(&self) -> Option<&CT_NoteProperties> {
+        self.endnote_properties.as_ref()
+    }
+
+    /// Replace document-wide footnote policy in schema order.
+    pub fn set_footnote_properties(&mut self, properties: CT_NoteProperties) -> Result<()> {
+        let mut writer = Writer::new(Vec::new());
+        properties.to_xml(&mut writer, "w:footnotePr")?;
+        self.finish_set("footnotePr", writer.into_inner())?;
+        self.footnote_properties = Some(properties);
+        Ok(())
+    }
+
+    /// Replace document-wide endnote policy in schema order.
+    pub fn set_endnote_properties(&mut self, properties: CT_NoteProperties) -> Result<()> {
+        let mut writer = Writer::new(Vec::new());
+        properties.to_xml(&mut writer, "w:endnotePr")?;
+        self.finish_set("endnotePr", writer.into_inner())?;
+        self.endnote_properties = Some(properties);
+        Ok(())
+    }
+
+    /// Remove document-wide footnote policy.
+    pub fn remove_footnote_properties(&mut self) -> Result<Option<CT_NoteProperties>> {
+        if !self.begin_removal("footnotePr")? {
+            return Ok(None);
+        }
+        self.finish_removal("footnotePr")?;
+        Ok(self.footnote_properties.take())
+    }
+
+    /// Remove document-wide endnote policy.
+    pub fn remove_endnote_properties(&mut self) -> Result<Option<CT_NoteProperties>> {
+        if !self.begin_removal("endnotePr")? {
+            return Ok(None);
+        }
+        self.finish_removal("endnotePr")?;
+        Ok(self.endnote_properties.take())
+    }
+
     /// Report every supported child the typed model could not own.
     ///
     /// A package authored entirely through the public API can only produce
@@ -1905,6 +1981,8 @@ impl CT_Settings {
             && self.do_not_track_moves.is_none()
             && self.do_not_track_formatting.is_none()
             && self.document_protection.is_none()
+            && self.footnote_properties.is_none()
+            && self.endnote_properties.is_none()
             && self.default_tab_stop.is_none()
             && self.automatic_hyphenation.is_none()
             && self.consecutive_hyphen_limit.is_none()
@@ -1985,6 +2063,16 @@ impl CT_Settings {
         }
         if let Some(protection) = &self.document_protection {
             emit(write_document_protection(protection)?);
+        }
+        if let Some(properties) = &self.footnote_properties {
+            let mut child = Writer::new(Vec::new());
+            properties.to_xml(&mut child, "w:footnotePr")?;
+            emit(child.into_inner());
+        }
+        if let Some(properties) = &self.endnote_properties {
+            let mut child = Writer::new(Vec::new());
+            properties.to_xml(&mut child, "w:endnotePr")?;
+            emit(child.into_inner());
         }
         if let Some(value) = self.default_tab_stop {
             emit(write_valued_setting(
@@ -4055,5 +4143,65 @@ mod tests {
         let reopened = CT_Settings::from_xml(output.as_bytes()).unwrap();
         assert_eq!(reopened.mail_merge().unwrap().check_errors, Some(2));
         assert_eq!(reopened.diagnostics(), &[]);
+    }
+
+    #[test]
+    fn note_policy_preserves_unknown_note_and_section_xml() {
+        let xml = format!(
+            r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:producer"><q:footnotePr><q:pos q:val="beneathText"/><x:keep x:flag="exact"/><q:numFmt q:val="decimal"/><q:endnote q:id="9"/><q:footnote q:id="-1"/></q:footnotePr><q:endnotePr><q:numStart q:val="4"/></q:endnotePr></q:settings>"#
+        );
+        let mut settings = CT_Settings::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(settings.to_xml().unwrap(), xml.as_bytes());
+        let mut footnote = settings.footnote_properties().unwrap().clone();
+        assert_eq!(footnote.pos.as_deref(), Some("beneathText"));
+        assert_eq!(footnote.special_references, vec![-1]);
+        footnote.num_start = Some(3);
+        settings.set_footnote_properties(footnote).unwrap();
+        let written = String::from_utf8(settings.to_xml().unwrap()).unwrap();
+        assert!(written.contains(r#"<x:keep x:flag="exact"/>"#), "{written}");
+        assert!(written.contains(r#"<q:endnote q:id="9"/>"#), "{written}");
+        assert!(written.contains(r#"<w:numStart w:val="3"/>"#), "{written}");
+        let reopened = CT_Settings::from_xml(written.as_bytes()).unwrap();
+        assert_eq!(reopened.footnote_properties().unwrap().num_start, Some(3));
+        assert_eq!(
+            reopened.footnote_properties().unwrap().special_references,
+            vec![-1]
+        );
+        assert_eq!(reopened.endnote_properties().unwrap().num_start, Some(4));
+
+        let section_xml = format!(
+            r#"<q:document xmlns:q="{W_NS}" xmlns:x="urn:producer"><q:body><q:p/><q:sectPr><q:footnotePr><q:pos q:val="pageBottom"/><x:keep x:flag="section-exact"/><q:numFmt q:val="decimal"/></q:footnotePr></q:sectPr></q:body></q:document>"#
+        );
+        let mut document = crate::document::CT_Document::from_xml(section_xml.as_bytes()).unwrap();
+        document
+            .body
+            .sect_pr
+            .as_mut()
+            .unwrap()
+            .footnote_pr
+            .as_mut()
+            .unwrap()
+            .num_start = Some(5);
+        let rewritten = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        assert!(
+            rewritten.contains(r#"<x:keep x:flag="section-exact"/>"#),
+            "{rewritten}"
+        );
+        assert!(
+            rewritten.contains(r#"<w:numStart w:val="5"/>"#),
+            "{rewritten}"
+        );
+        let reopened_section =
+            crate::document::CT_Document::from_xml(rewritten.as_bytes()).unwrap();
+        assert_eq!(
+            reopened_section
+                .body
+                .sect_pr
+                .unwrap()
+                .footnote_pr
+                .unwrap()
+                .num_start,
+            Some(5)
+        );
     }
 }

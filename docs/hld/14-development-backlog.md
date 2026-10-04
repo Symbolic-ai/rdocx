@@ -2796,8 +2796,8 @@ with a separator rule, while the single-column path bypasses the track
 arithmetic so all 49 hash entries stay unchanged. Page borders, margin line
 numbering excluded from the PDF reading order, vertical page alignment and
 mirrored margins all render. `ST_VerticalJc` gains `Both` and
-`#[non_exhaustive]`, which is a breaking change to `rdocx-oxml`. DOCX-036 stays
-`partial` and its remaining owner is F-274.
+`#[non_exhaustive]`, which is a breaking change to `rdocx-oxml`. DOCX-036
+has checked note policies and placement through F-274.
 
 ### F-269a, Word GUI confirmation for section page semantics (S)
 Record the Word-authored oracle for columns, page borders, line numbering,
@@ -2868,19 +2868,27 @@ The native facade stages each mutation and reopens the package before
 publication. Common story editing preserves exact untouched XML, separator
 records, and endnote-owned picture and hyperlink relationships. Body references
 across sections number independently from footnotes, and the endnote stream
-appends after the final body page under the current placement policy.
+flows from the section or document boundary under the selected placement policy.
 **Depends on**: F-272.
 **Test gate**: differential. Word confirms independent occurrence order across
-sections. The gate asserts the current renderer's documented fresh-page and
-decimal-label divergence at the document end. F-274 owns those policies.
+sections and the selected policy places formatted labels and endnote bodies.
 
 ### F-274, Note separators, markers, and restart policy (L)
-Author separator and continuation stories, custom reference marks, number
-formats, start values, placement, and section restart behavior for both note
-families.
+Checked document and section policies select number format, start, restart,
+and placement for both note families. Special-record mutation authors the
+separator, continuation separator, and continuation notice in each
+relationship-resolved note part while preserving unrelated XML. Body and note
+markers share one formatted label stream, and custom marks leave numeric
+numbering untouched. Footnotes reserve their page area. Endnotes flow from
+their section or document boundary and carry to later pages. The pinned Word
+build ignores `beneathText` even with a section override, while native layout
+places the footnote beneath body text.
 **Depends on**: F-269, F-272, F-273.
-**Test gate**: differential. Every note policy produces the pinned marker and
-page placement without disturbing unrelated section numbering.
+**Test gate**: differential. The pinned Word fixtures confirm document and
+section end placement, section and page restart, custom marks, separators,
+and carried-note notices. A native deterministic test records the pinned
+`beneathText` divergence. Round-trip and atomic tests cover source XML and
+invalid mutations without disturbing unrelated section numbering.
 
 ### F-275, Cross-story bookmarks, ranges, and annotations (L)
 Create and mutate bookmarks, comment ranges, permission ranges, proofing ranges,

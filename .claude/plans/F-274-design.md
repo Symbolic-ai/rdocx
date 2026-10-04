@@ -1,6 +1,6 @@
 # F-274, Note separators, markers, and restart policy
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S89
 **Size**: L
 **Depends on**: F-269, F-272, F-273
@@ -54,7 +54,7 @@ Stage every package mutation and publish only after save and reopen.
 
 | Category | Test | Asserts |
 |---|---|---|
-| differential | `note_policies_match_pinned_word_markers_and_page_placement` | **Test gate.** Both families cover document default and section override, each supported format, start, restart, custom mark and placement, including note carryover and continuation notice, without changing unrelated section numbering. |
+| differential | `note_policies_match_pinned_word_markers_and_page_placement` | **Test gate.** Both families cover document default and section override, each supported format, start, restart, custom mark and placement, including note carryover and continuation notice, without changing unrelated section numbering. The pinned Word for Mac 16.113.2 fixture ignores `beneathText` in both valid document and explicit final-section `w:footnotePr` forms and places the note at page bottom. Assert that observed Word placement separately from the native renderer's `beneathText` placement, which follows the OOXML policy. |
 | round-trip | `note_policy_preserves_unknown_note_and_section_xml` | Alias-prefixed inputs parse, changed modeled children write in schema order, and unmodeled children retain exact bytes. |
 | regression | `body_and_note_markers_share_formatted_labels` | Reordering note elements and repeated references do not change first-occurrence labels. |
 | regression | `invalid_note_policy_rolls_back_atomically` | Invalid format, placement or separator mutation leaves complete package bytes unchanged. |
@@ -81,13 +81,13 @@ Expected unchanged for current fixtures. A changed note fixture needs an attribu
 
 ## Implementation checklist
 
-- [ ] Author checked document and section policies and separator records in existing note and facade files.
-- [ ] Carry custom reference marks through typed run and note XML.
-- [ ] Resolve policy and one formatted label stream for body and note layout.
-- [ ] Place both note families and render their authored separators.
-- [ ] Run pinned differential, round-trip, focused and scoped verification checks.
-- [ ] Obtain a zero-finding microscope review.
+- [x] Author checked document and section policies and separator records in existing note and facade files.
+- [x] Carry custom reference marks through typed run and note XML.
+- [x] Resolve policy and one formatted label stream for body and note layout.
+- [x] Place both note families and render their authored separators.
+- [x] Run pinned differential, round-trip, focused and scoped verification checks.
+- [x] Obtain a zero-finding microscope review.
 
 ## Open questions
 
-None. Use the OOXML policy vocabulary already represented by `CT_NoteProperties`. The pinned Word fixture fixes observable placement at section and document boundaries.
+None. Use the OOXML policy vocabulary already represented by `CT_NoteProperties`. The pinned Word fixture fixes observable placement at section and document boundaries. The valid `/private/tmp/f274-beneath-text-oracle.docx` carries both document and final-section `w:pos w:val="beneathText"`. Word for Mac 16.113.2 placed its footnote at page bottom, while the deterministic native renderer placed it beneath the body. This observed divergence does not suppress native support for the OOXML placement value and is recorded in `docs/hld/08-rendering-spec.md`.

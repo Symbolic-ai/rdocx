@@ -17,7 +17,7 @@ use rdocx_oxml::document::{
 };
 use rdocx_oxml::drawing::WrapType;
 use rdocx_oxml::header_footer::{HdrFtrType, VmlWatermark};
-use rdocx_oxml::numbering::ST_LvlSuffix;
+use rdocx_oxml::numbering::{ST_LvlSuffix, ST_NumberFormat};
 use rdocx_oxml::properties::{CT_EastAsianLayout, CT_PPr, CT_RPr, CT_Shd, ST_Em};
 use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::ruby::{CT_Ruby, ST_RubyAlign};
@@ -786,9 +786,11 @@ fn projected_content_char_starts(run: &CT_R) -> Vec<usize> {
                 .projected_text()
                 .map_or(0, |text| text.chars().count()),
             RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn) => 1,
+            RunContent::FootnoteRef { custom_mark, .. }
+            | RunContent::EndnoteRef { custom_mark, .. } => {
+                custom_mark.as_ref().map_or(0, |mark| mark.chars().count())
+            }
             RunContent::Drawing(_)
-            | RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. }
             | RunContent::Symbol { .. }
             | RunContent::SpecialCharacter(_) => 0,
@@ -992,6 +994,7 @@ struct ReusableEngineContext {
     default_tab_stop: Option<rdocx_oxml::units::Twips>,
     clamp_tabs_past_margin: bool,
     math_properties: Option<rdocx_oxml::math::MathProperties>,
+    note_defaults: [Option<rdocx_oxml::document::CT_NoteProperties>; 2],
     has_wrapping_drawing: bool,
     styles: CT_Styles,
     numbering: Option<rdocx_oxml::numbering::CT_Numbering>,
@@ -1091,6 +1094,7 @@ impl ReusableEngineContext {
             default_tab_stop: input.default_tab_stop,
             clamp_tabs_past_margin: input.clamp_tabs_past_margin,
             math_properties: input.math_properties.clone(),
+            note_defaults: input.note_defaults.clone(),
             has_wrapping_drawing,
             styles: input.styles.clone(),
             numbering: input.numbering.clone(),
@@ -1169,6 +1173,7 @@ impl ReusableEngineContext {
             && self.default_tab_stop == input.default_tab_stop
             && self.clamp_tabs_past_margin == input.clamp_tabs_past_margin
             && self.math_properties == input.math_properties
+            && self.note_defaults == input.note_defaults
             && self.has_wrapping_drawing == has_wrapping_drawing
             && self.styles == input.styles
             && self.numbering == input.numbering
@@ -1510,11 +1515,11 @@ fn paragraph_note_references(paragraph: &CT_P, view: RevisionView) -> Vec<NoteRe
         .into_iter()
         .flat_map(|projected| projected.run.content.iter())
         .filter_map(|content| match content {
-            RunContent::FootnoteRef { id } => Some(NoteRef {
+            RunContent::FootnoteRef { id, .. } => Some(NoteRef {
                 stream: NoteStream::Footnote,
                 id: *id,
             }),
-            RunContent::EndnoteRef { id } => Some(NoteRef {
+            RunContent::EndnoteRef { id, .. } => Some(NoteRef {
                 stream: NoteStream::Endnote,
                 id: *id,
             }),
@@ -1880,10 +1885,11 @@ impl Engine {
             .as_ref()
             .is_some_and(|context| context.notes_match(input));
         let context_matches = base_context_matches && notes_match;
-        self.paragraph_cache_reads_enabled = base_context_matches;
+        let page_note_restart = input_uses_page_note_restart(input);
+        self.paragraph_cache_reads_enabled = base_context_matches && !page_note_restart;
         self.paragraph_cache_notes_match = notes_match;
-        self.retained_context_matches_full = context_matches;
-        self.header_footer_cache_reads_enabled = context_matches;
+        self.retained_context_matches_full = context_matches && !page_note_restart;
+        self.header_footer_cache_reads_enabled = context_matches && !page_note_restart;
         self.pending_paragraph_cache = Some(VecDeque::new());
         self.pending_paragraph_cache_bytes = 0;
         self.pending_table_cache = Some(VecDeque::new());
@@ -1905,28 +1911,70 @@ impl Engine {
             reset_restart_body_identity_computations();
         }
 
-        let result = match self.layout_transaction(input, sources, has_wrapping_drawing, None) {
-            Ok((first, references)) if needs_ref_projection => {
-                self.numbering_by_source.clear();
-                if let Some(pending) = &mut self.pending_paragraph_cache {
-                    pending.clear();
+        let mut reference_seed = None;
+        let mut result =
+            match self.layout_transaction(input, sources, has_wrapping_drawing, None, None) {
+                Ok((first, references)) if needs_ref_projection => {
+                    self.numbering_by_source.clear();
+                    if let Some(pending) = &mut self.pending_paragraph_cache {
+                        pending.clear();
+                    }
+                    if let Some(pending) = &mut self.pending_table_cache {
+                        pending.clear();
+                    }
+                    if let Some(pending) = &mut self.pending_header_footer_cache {
+                        pending.clear();
+                    }
+                    self.pending_paragraph_cache_bytes = 0;
+                    self.pending_table_cache_bytes = 0;
+                    self.pending_header_footer_cache_bytes = 0;
+                    drop(first);
+                    let projected = self
+                        .layout_transaction(
+                            input,
+                            sources,
+                            has_wrapping_drawing,
+                            Some(&references),
+                            None,
+                        )
+                        .map(|(result, _)| result);
+                    reference_seed = Some(references);
+                    projected
                 }
-                if let Some(pending) = &mut self.pending_table_cache {
-                    pending.clear();
+                Ok((result, _)) => Ok(result),
+                Err(error) => Err(error),
+            };
+        if page_note_restart {
+            result = result.and_then(|mut current| {
+                for _ in 0..4 {
+                    let pages = note_reference_pages(&current);
+                    self.numbering_by_source.clear();
+                    self.pending_paragraph_cache.as_mut().map(VecDeque::clear);
+                    self.pending_table_cache.as_mut().map(VecDeque::clear);
+                    self.pending_header_footer_cache
+                        .as_mut()
+                        .map(VecDeque::clear);
+                    self.pending_paragraph_cache_bytes = 0;
+                    self.pending_table_cache_bytes = 0;
+                    self.pending_header_footer_cache_bytes = 0;
+                    let (next, _) = self.layout_transaction(
+                        input,
+                        sources,
+                        has_wrapping_drawing,
+                        reference_seed.as_ref(),
+                        Some(&pages),
+                    )?;
+                    let stable = note_reference_pages(&next) == pages;
+                    current = next;
+                    if stable {
+                        return Ok(current);
+                    }
                 }
-                if let Some(pending) = &mut self.pending_header_footer_cache {
-                    pending.clear();
-                }
-                self.pending_paragraph_cache_bytes = 0;
-                self.pending_table_cache_bytes = 0;
-                self.pending_header_footer_cache_bytes = 0;
-                drop(first);
-                self.layout_transaction(input, sources, has_wrapping_drawing, Some(&references))
-                    .map(|(result, _)| result)
-            }
-            Ok((result, _)) => Ok(result),
-            Err(error) => Err(error),
-        };
+                Err(LayoutError::Layout(
+                    "page-restarted note labels did not converge".to_owned(),
+                ))
+            });
+        }
         #[cfg(test)]
         {
             self.last_restart_identity_computations = restart_body_identity_computations();
@@ -2019,13 +2067,14 @@ impl Engine {
         sources: Option<&SourceRegistry>,
         document_wraps: bool,
         reference_seed: Option<&NumberingState>,
+        note_pages: Option<&HashMap<NoteRef, usize>>,
     ) -> Result<(LayoutResult, NumberingState)> {
         let retained_context_matches = self.retained_context_matches_full;
         let styles = &input.styles;
         let mut num_state = reference_seed
             .map(NumberingState::references_only)
             .unwrap_or_default();
-        num_state.set_note_labels(note_labels(input));
+        num_state.set_note_labels(note_labels(input, note_pages));
         if let Some(sources) = sources {
             for (index, path) in sources.nodes.iter().enumerate() {
                 if path.story == WordStory::Document {
@@ -2177,6 +2226,26 @@ impl Engine {
                             header_footer_semantics,
                             title_pg,
                             page_number_start: section_page_number_start(sect_pr),
+                            endnotes_at_section_end: sect_pr
+                                .endnote_pr
+                                .as_deref()
+                                .and_then(|policy| policy.pos.as_deref())
+                                .or_else(|| {
+                                    input.note_defaults[1]
+                                        .as_ref()
+                                        .and_then(|policy| policy.pos.as_deref())
+                                })
+                                == Some("sectEnd"),
+                            footnotes_beneath_text: sect_pr
+                                .footnote_pr
+                                .as_deref()
+                                .and_then(|policy| policy.pos.as_deref())
+                                .or_else(|| {
+                                    input.note_defaults[0]
+                                        .as_ref()
+                                        .and_then(|policy| policy.pos.as_deref())
+                                })
+                                == Some("beneathText"),
                         });
                         if let Some(numbering) = input.numbering.as_ref() {
                             num_state.restart_after_section_break(numbering);
@@ -2241,6 +2310,26 @@ impl Engine {
             header_footer_semantics: final_hf_semantics,
             title_pg: final_title_pg,
             page_number_start: section_page_number_start(&final_sect_pr),
+            endnotes_at_section_end: final_sect_pr
+                .endnote_pr
+                .as_deref()
+                .and_then(|policy| policy.pos.as_deref())
+                .or_else(|| {
+                    input.note_defaults[1]
+                        .as_ref()
+                        .and_then(|policy| policy.pos.as_deref())
+                })
+                == Some("sectEnd"),
+            footnotes_beneath_text: final_sect_pr
+                .footnote_pr
+                .as_deref()
+                .and_then(|policy| policy.pos.as_deref())
+                .or_else(|| {
+                    input.note_defaults[0]
+                        .as_ref()
+                        .and_then(|policy| policy.pos.as_deref())
+                })
+                == Some("beneathText"),
         });
         let structure = assign_shared_document_structure(&mut sections);
         #[cfg(test)]
@@ -2284,6 +2373,9 @@ impl Engine {
 
         let mut font_trace = self.font_manager.current_layout_fonts().to_vec();
         let restart_record_eligible = sections.len() == 1
+            && !input.note_defaults[1]
+                .as_ref()
+                .is_some_and(|policy| policy.pos.as_deref() == Some("docEnd"))
             && sections[0].blocks.len() == input.document.body.content.len()
             && input.document.background_xml.is_none()
             && !document_wraps
@@ -2565,7 +2657,32 @@ impl Engine {
             }
             // Endnotes read at the end of the document, so they follow the last
             // body page rather than sitting at the foot of their reference's page.
-            paginator::append_endnote_pages(&mut pagination.pages, &notes, final_geometry.clone());
+            if input.note_defaults[1]
+                .as_ref()
+                .is_some_and(|policy| policy.pos.as_deref() == Some("docEnd"))
+            {
+                paginator::append_endnote_pages_at_document_end(
+                    &mut pagination.pages,
+                    &notes,
+                    final_geometry.clone(),
+                    pagination.last_flow_space,
+                    &pagination.endnotes_placed,
+                );
+            } else if !pagination.endnotes_placed.is_empty() {
+                paginator::append_endnote_pages_at_document_end(
+                    &mut pagination.pages,
+                    &notes,
+                    final_geometry.clone(),
+                    None,
+                    &pagination.endnotes_placed,
+                );
+            } else {
+                paginator::append_endnote_pages(
+                    &mut pagination.pages,
+                    &notes,
+                    final_geometry.clone(),
+                );
+            }
             apply_page_background(&mut pagination.pages, input);
             for page in &mut pagination.pages {
                 mark_remaining_artifacts(&mut page.elements);
@@ -6996,7 +7113,7 @@ fn layout_paragraph_with_source_and_table(
                         }
                     }
                 }
-                RunContent::FootnoteRef { id } | RunContent::EndnoteRef { id } => {
+                RunContent::FootnoteRef { id, .. } | RunContent::EndnoteRef { id, .. } => {
                     // The two streams number independently, so the marker has
                     // to carry which one it came from.
                     let stream = match content {
@@ -7549,29 +7666,162 @@ fn visit_document_paragraphs<'a>(input: &'a LayoutInput, visit: &mut impl FnMut(
     }
 }
 
-fn note_labels(input: &LayoutInput) -> HashMap<NoteRef, i32> {
+fn input_uses_page_note_restart(input: &LayoutInput) -> bool {
+    input.note_defaults.iter().flatten().any(|policy| policy.num_restart.as_deref() == Some("eachPage"))
+        || input.document.body.content.iter().any(|content| {
+            matches!(content, BodyContent::Paragraph(paragraph) if paragraph.properties.as_ref().and_then(|properties| properties.sect_pr.as_ref()).is_some_and(|section| {
+                [section.footnote_pr.as_deref(), section.endnote_pr.as_deref()].into_iter().flatten().any(|policy| policy.num_restart.as_deref() == Some("eachPage"))
+            }))
+        })
+        || input.document.body.sect_pr.as_ref().is_some_and(|section| {
+            [section.footnote_pr.as_deref(), section.endnote_pr.as_deref()].into_iter().flatten().any(|policy| policy.num_restart.as_deref() == Some("eachPage"))
+        })
+}
+
+fn note_reference_pages(result: &LayoutResult) -> HashMap<NoteRef, usize> {
+    let mut pages = HashMap::new();
+    for page in &result.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let reference = match element {
+                PositionedElement::Text(run) => run.note,
+                PositionedElement::MultilingualText(run) => run.note,
+                _ => None,
+            };
+            if let Some(reference) = reference {
+                pages.entry(reference).or_insert(page.page_number);
+            }
+        });
+    }
+    pages
+}
+
+fn note_labels(
+    input: &LayoutInput,
+    note_pages: Option<&HashMap<NoteRef, usize>>,
+) -> HashMap<NoteRef, String> {
     let mut labels = HashMap::new();
-    let mut footnote_count = 0i32;
-    let mut endnote_count = 0i32;
-    visit_document_paragraphs(input, &mut |paragraph| {
-        for projected in project_paragraph_runs(paragraph, input.revision_view) {
-            for content in &projected.run.content {
-                let (stream, id, count) = match content {
-                    RunContent::FootnoteRef { id } => {
-                        (NoteStream::Footnote, *id, &mut footnote_count)
-                    }
-                    RunContent::EndnoteRef { id } => (NoteStream::Endnote, *id, &mut endnote_count),
-                    _ => continue,
-                };
-                if let std::collections::hash_map::Entry::Vacant(entry) =
-                    labels.entry(NoteRef { stream, id })
-                {
-                    *count += 1;
-                    entry.insert(*count);
-                }
+    let mut counts = [None::<u32>, None::<u32>];
+    let mut last_pages = [None::<usize>, None::<usize>];
+    let mut section_ends = input
+        .document
+        .body
+        .content
+        .iter()
+        .enumerate()
+        .filter_map(|(index, content)| match content {
+            BodyContent::Paragraph(paragraph) => paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.sect_pr.as_ref())
+                .map(|section| (index, Some(section))),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    section_ends.push((
+        input.document.body.content.len(),
+        input.document.body.sect_pr.as_ref(),
+    ));
+    let mut first_index = 0;
+    for (end, section) in section_ends {
+        let policies = [
+            section.and_then(|section| section.footnote_pr.as_deref()),
+            section.and_then(|section| section.endnote_pr.as_deref()),
+        ];
+        for (family, policy) in policies.iter().enumerate() {
+            let restart = policy
+                .and_then(|policy| policy.num_restart.as_deref())
+                .or_else(|| {
+                    input.note_defaults[family]
+                        .as_ref()
+                        .and_then(|policy| policy.num_restart.as_deref())
+                });
+            if first_index > 0 && restart == Some("eachSect") && policy.is_some() {
+                counts[family] = None;
             }
         }
-    });
+        for content in input
+            .document
+            .body
+            .content
+            .iter()
+            .take(end + 1)
+            .skip(first_index)
+        {
+            let mut visit = |paragraph: &CT_P| {
+                for projected in project_paragraph_runs(paragraph, input.revision_view) {
+                    for item in &projected.run.content {
+                        let (family, stream, id, custom_mark) = match item {
+                            RunContent::FootnoteRef { id, custom_mark } => {
+                                (0, NoteStream::Footnote, *id, custom_mark.as_deref())
+                            }
+                            RunContent::EndnoteRef { id, custom_mark } => {
+                                (1, NoteStream::Endnote, *id, custom_mark.as_deref())
+                            }
+                            _ => continue,
+                        };
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            labels.entry(NoteRef { stream, id })
+                        {
+                            if let Some(mark) = custom_mark {
+                                entry.insert(mark.to_owned());
+                                continue;
+                            }
+                            let section_policy = policies[family];
+                            let default_policy = input.note_defaults[family].as_ref();
+                            let restart = section_policy
+                                .and_then(|policy| policy.num_restart.as_deref())
+                                .or_else(|| {
+                                    default_policy.and_then(|policy| policy.num_restart.as_deref())
+                                });
+                            let page = note_pages
+                                .and_then(|pages| pages.get(&NoteRef { stream, id }))
+                                .copied();
+                            if restart == Some("eachPage")
+                                && page.is_some()
+                                && last_pages[family] != page
+                            {
+                                counts[family] = None;
+                            }
+                            if page.is_some() {
+                                last_pages[family] = page;
+                            }
+                            let start = section_policy
+                                .and_then(|policy| policy.num_start)
+                                .or_else(|| default_policy.and_then(|policy| policy.num_start))
+                                .unwrap_or(1);
+                            let ordinal =
+                                counts[family].map_or(start, |value| value.saturating_add(1));
+                            counts[family] = Some(ordinal);
+                            let format = section_policy
+                                .and_then(|policy| policy.num_fmt.as_deref())
+                                .or_else(|| {
+                                    default_policy.and_then(|policy| policy.num_fmt.as_deref())
+                                })
+                                .map(ST_NumberFormat::from_str)
+                                .unwrap_or(ST_NumberFormat::Decimal);
+                            entry.insert(style_resolver::format_number(ordinal, format));
+                        }
+                    }
+                }
+            };
+            match content {
+                BodyContent::Paragraph(paragraph) => visit(paragraph),
+                BodyContent::Table(table) => visit_table_paragraphs(
+                    table,
+                    input.revision_view == RevisionView::Accepted,
+                    &mut visit,
+                ),
+                BodyContent::ContentControl(control) => visit_control_paragraphs(
+                    control,
+                    BlockControlOwner::Body,
+                    input.revision_view == RevisionView::Accepted,
+                    &mut visit,
+                ),
+                BodyContent::RawXml(_) => {}
+            }
+        }
+        first_index = end.saturating_add(1);
+    }
     labels
 }
 
@@ -11240,6 +11490,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -13181,8 +13432,14 @@ mod tests {
         };
         let mut marker = CT_R::new("");
         marker.content = vec![match stream {
-            NoteStream::Footnote => RunContent::FootnoteRef { id: 1 },
-            NoteStream::Endnote => RunContent::EndnoteRef { id: 1 },
+            NoteStream::Footnote => RunContent::FootnoteRef {
+                id: 1,
+                custom_mark: None,
+            },
+            NoteStream::Endnote => RunContent::EndnoteRef {
+                id: 1,
+                custom_mark: None,
+            },
         }];
         reference.runs.push(marker);
 
@@ -13244,8 +13501,10 @@ mod tests {
         let BodyContent::Paragraph(reference) = &mut input.document.body.content[20] else {
             panic!("note reference belongs to a paragraph");
         };
-        reference.runs.last_mut().expect("marker run").content =
-            vec![RunContent::FootnoteRef { id: 2 }];
+        reference.runs.last_mut().expect("marker run").content = vec![RunContent::FootnoteRef {
+            id: 2,
+            custom_mark: None,
+        }];
         let warm_reference = engine
             .layout(&input)
             .expect("changed reference layout succeeds");
@@ -14709,7 +14968,10 @@ mod tests {
 
         let mut note_paragraph = CT_P::new();
         let mut note_run = CT_R::new("");
-        note_run.content = vec![RunContent::FootnoteRef { id: 7 }];
+        note_run.content = vec![RunContent::FootnoteRef {
+            id: 7,
+            custom_mark: None,
+        }];
         note_paragraph.runs.push(note_run);
         input
             .document
@@ -15093,7 +15355,10 @@ mod tests {
             panic!("split body entry is a paragraph");
         };
         let mut marker = CT_R::new("");
-        marker.content = vec![RunContent::FootnoteRef { id: 1 }];
+        marker.content = vec![RunContent::FootnoteRef {
+            id: 1,
+            custom_mark: None,
+        }];
         split.runs.push(marker);
         let mut note = CT_P::new();
         note.add_run("page-spanning footnote");
@@ -15747,8 +16012,20 @@ mod tests {
         }
 
         for (index, content) in [
-            (20, RunContent::FootnoteRef { id: 1 }),
-            (40, RunContent::EndnoteRef { id: 2 }),
+            (
+                20,
+                RunContent::FootnoteRef {
+                    id: 1,
+                    custom_mark: None,
+                },
+            ),
+            (
+                40,
+                RunContent::EndnoteRef {
+                    id: 2,
+                    custom_mark: None,
+                },
+            ),
         ] {
             let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[index] else {
                 panic!("related story reference belongs to a paragraph");
@@ -15911,7 +16188,10 @@ mod tests {
             panic!("last body entry is a paragraph");
         };
         let mut marker = CT_R::new("");
-        marker.content = vec![RunContent::EndnoteRef { id: 3 }];
+        marker.content = vec![RunContent::EndnoteRef {
+            id: 3,
+            custom_mark: None,
+        }];
         last.runs.push(marker);
         let mut suffix_endnote = CT_P::new();
         suffix_endnote.add_run("suffix endnote text");
@@ -16069,7 +16349,10 @@ mod tests {
             panic!("first body entry is a paragraph");
         };
         let mut marker = CT_R::new("");
-        marker.content = vec![RunContent::FootnoteRef { id: 1 }];
+        marker.content = vec![RunContent::FootnoteRef {
+            id: 1,
+            custom_mark: None,
+        }];
         first.runs.push(marker);
         for index in 1..8 {
             let mut paragraph = CT_P::new();
@@ -17065,8 +17348,14 @@ mod tests {
         let mut references = CT_P::new();
         let mut reference_run = CT_R::new("");
         reference_run.content = vec![
-            RunContent::FootnoteRef { id: 4 },
-            RunContent::EndnoteRef { id: 9 },
+            RunContent::FootnoteRef {
+                id: 4,
+                custom_mark: None,
+            },
+            RunContent::EndnoteRef {
+                id: 9,
+                custom_mark: None,
+            },
         ];
         references.runs.push(reference_run);
         input.document.body.add_paragraph(references);
@@ -17448,7 +17737,10 @@ mod tests {
             RunContent::Text(rdocx_oxml::text::CT_Text::new("right")),
             RunContent::Field(Field::new("PAGE", "7")),
             RunContent::Text(rdocx_oxml::text::CT_Text::new("after")),
-            RunContent::FootnoteRef { id: 4 },
+            RunContent::FootnoteRef {
+                id: 4,
+                custom_mark: None,
+            },
         ];
         generated.runs.push(generated_run);
         input.document.body.add_paragraph(generated);
@@ -17734,6 +18026,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -18264,6 +18557,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -18332,6 +18626,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -18400,7 +18695,10 @@ mod tests {
         let mut body = CT_P::new();
         body.add_run("Body text carrying a note");
         let mut marker_run = CT_R::new("");
-        marker_run.content = vec![RunContent::FootnoteRef { id: 1 }];
+        marker_run.content = vec![RunContent::FootnoteRef {
+            id: 1,
+            custom_mark: None,
+        }];
         body.runs.push(marker_run);
         doc.body.add_paragraph(body);
 
@@ -18418,6 +18716,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -18578,7 +18877,10 @@ mod tests {
             let mut body = CT_P::new();
             body.add_run("Body");
             let mut marker_run = CT_R::new("");
-            marker_run.content = vec![RunContent::FootnoteRef { id: 1 }];
+            marker_run.content = vec![RunContent::FootnoteRef {
+                id: 1,
+                custom_mark: None,
+            }];
             body.runs.push(marker_run);
             doc.body.add_paragraph(body);
 
@@ -18600,6 +18902,7 @@ mod tests {
                 default_tab_stop: None,
                 clamp_tabs_past_margin: false,
                 math_properties: None,
+                note_defaults: [None, None],
                 document: doc,
                 styles: CT_Styles::new_default(),
                 numbering: None,
@@ -18699,7 +19002,10 @@ mod tests {
             para.add_run("Body paragraph text that occupies a line of the page.");
             if ref_positions.contains(&index) {
                 let mut marker = CT_R::new("");
-                marker.content = vec![RunContent::FootnoteRef { id: 1 }];
+                marker.content = vec![RunContent::FootnoteRef {
+                    id: 1,
+                    custom_mark: None,
+                }];
                 para.runs.push(marker);
             }
             doc.body.add_paragraph(para);
@@ -18734,6 +19040,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -19004,10 +19311,16 @@ mod tests {
             para.add_run("Body paragraph text that occupies a line of the page.");
             if index == 0 {
                 let mut foot = CT_R::new("");
-                foot.content = vec![RunContent::FootnoteRef { id }];
+                foot.content = vec![RunContent::FootnoteRef {
+                    id,
+                    custom_mark: None,
+                }];
                 para.runs.push(foot);
                 let mut end = CT_R::new("");
-                end.content = vec![RunContent::EndnoteRef { id }];
+                end.content = vec![RunContent::EndnoteRef {
+                    id,
+                    custom_mark: None,
+                }];
                 para.runs.push(end);
             }
             doc.body.add_paragraph(para);
@@ -19032,6 +19345,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -19165,7 +19479,10 @@ mod tests {
                 para.add_run("Body paragraph text that occupies a line of the page.");
                 if index == 0 && with_endnote {
                     let mut end = CT_R::new("");
-                    end.content = vec![RunContent::EndnoteRef { id: 1 }];
+                    end.content = vec![RunContent::EndnoteRef {
+                        id: 1,
+                        custom_mark: None,
+                    }];
                     para.runs.push(end);
                 }
                 doc.body.add_paragraph(para);
@@ -19181,6 +19498,7 @@ mod tests {
                 default_tab_stop: None,
                 clamp_tabs_past_margin: false,
                 math_properties: None,
+                note_defaults: [None, None],
                 document: doc,
                 styles: CT_Styles::new_default(),
                 numbering: None,
@@ -19314,6 +19632,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -19653,6 +19972,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -19742,6 +20062,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -19811,9 +20132,15 @@ mod tests {
         let reference = |id: i32| {
             let mut run = CT_R::new("");
             run.content = vec![if endnotes_instead {
-                RunContent::EndnoteRef { id }
+                RunContent::EndnoteRef {
+                    id,
+                    custom_mark: None,
+                }
             } else {
-                RunContent::FootnoteRef { id }
+                RunContent::FootnoteRef {
+                    id,
+                    custom_mark: None,
+                }
             }];
             run
         };
@@ -19851,6 +20178,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -20052,6 +20380,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             document: doc,
             styles: CT_Styles::new_default(),
             numbering: None,
@@ -20393,8 +20722,14 @@ mod tests {
             let mut note_reference = CT_P::new();
             let mut reference_run = CT_R::new("");
             reference_run.content = vec![match stream {
-                NoteStream::Footnote => RunContent::FootnoteRef { id: 1 },
-                NoteStream::Endnote => RunContent::EndnoteRef { id: 1 },
+                NoteStream::Footnote => RunContent::FootnoteRef {
+                    id: 1,
+                    custom_mark: None,
+                },
+                NoteStream::Endnote => RunContent::EndnoteRef {
+                    id: 1,
+                    custom_mark: None,
+                },
             }];
             note_reference.runs.push(reference_run);
             input

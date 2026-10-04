@@ -16,7 +16,7 @@ use crate::text::{CT_P, ROOT_R_BINDING, declare_w14_on_part_root, root_binding_s
 /// id: the conventional ids 0 and 1 are a convention, not a guarantee, and
 /// reading a `continuationSeparator` as if it were note number 1 is how a
 /// separator ends up rendered as body content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum NoteType {
     /// A real note, the only kind a reference can resolve to.
     #[default]

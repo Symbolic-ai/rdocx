@@ -76,6 +76,133 @@ pub struct RenderOptions {
     pub revision_view: rdocx_layout::RevisionView,
 }
 
+/// Which of Word's independent note streams a policy governs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteFamily {
+    Footnote,
+    Endnote,
+}
+
+/// Special content placed before or after a note that continues across pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteSpecialRecord {
+    Separator,
+    ContinuationSeparator,
+    ContinuationNotice,
+}
+
+impl NoteSpecialRecord {
+    fn note_type(self) -> rdocx_oxml::footnotes::NoteType {
+        use rdocx_oxml::footnotes::NoteType;
+        match self {
+            Self::Separator => NoteType::Separator,
+            Self::ContinuationSeparator => NoteType::ContinuationSeparator,
+            Self::ContinuationNotice => NoteType::ContinuationNotice,
+        }
+    }
+}
+
+/// Marker formats the native renderer can reproduce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteNumberFormat {
+    Decimal,
+    UpperRoman,
+    LowerRoman,
+    UpperLetter,
+    LowerLetter,
+}
+
+impl NoteNumberFormat {
+    fn xml_value(self) -> &'static str {
+        match self {
+            Self::Decimal => "decimal",
+            Self::UpperRoman => "upperRoman",
+            Self::LowerRoman => "lowerRoman",
+            Self::UpperLetter => "upperLetter",
+            Self::LowerLetter => "lowerLetter",
+        }
+    }
+}
+
+/// Boundary at which numeric note markers start over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteRestart {
+    Continuous,
+    EachSection,
+    EachPage,
+}
+
+impl NoteRestart {
+    fn xml_value(self) -> &'static str {
+        match self {
+            Self::Continuous => "continuous",
+            Self::EachSection => "eachSect",
+            Self::EachPage => "eachPage",
+        }
+    }
+}
+
+/// Boundary at which note content appears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotePlacement {
+    PageBottom,
+    BeneathText,
+    SectionEnd,
+    DocumentEnd,
+}
+
+impl NotePlacement {
+    fn xml_value(self) -> &'static str {
+        match self {
+            Self::PageBottom => "pageBottom",
+            Self::BeneathText => "beneathText",
+            Self::SectionEnd => "sectEnd",
+            Self::DocumentEnd => "docEnd",
+        }
+    }
+}
+
+/// A complete visible note policy. `start` is one-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotePolicy {
+    pub format: NoteNumberFormat,
+    pub start: u32,
+    pub restart: NoteRestart,
+    pub placement: NotePlacement,
+}
+
+impl NotePolicy {
+    fn properties(self, family: NoteFamily) -> Result<CT_NoteProperties> {
+        if self.start == 0 {
+            return Err(Error::Other(
+                "note numbering must start above zero".to_owned(),
+            ));
+        }
+        let valid = matches!(
+            (family, self.placement),
+            (
+                NoteFamily::Footnote,
+                NotePlacement::PageBottom | NotePlacement::BeneathText
+            ) | (
+                NoteFamily::Endnote,
+                NotePlacement::SectionEnd | NotePlacement::DocumentEnd
+            )
+        );
+        if !valid {
+            return Err(Error::Other(
+                "placement is invalid for this note family".to_owned(),
+            ));
+        }
+        Ok(CT_NoteProperties {
+            pos: Some(self.placement.xml_value().to_owned()),
+            num_fmt: Some(self.format.xml_value().to_owned()),
+            num_start: Some(self.start),
+            num_restart: Some(self.restart.xml_value().to_owned()),
+            ..CT_NoteProperties::default()
+        })
+    }
+}
+
 /// The package class declared by a Word main document part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WordPackageClass {
@@ -3183,6 +3310,46 @@ impl Section<'_> {
     /// Set this section's endnote configuration.
     pub fn set_endnote_properties(&mut self, properties: CT_NoteProperties) {
         self.inner.endnote_pr = Some(Box::new(properties));
+    }
+
+    /// Set a checked section override while retaining unmodelled note-property children.
+    pub fn set_note_policy(&mut self, family: NoteFamily, policy: NotePolicy) -> Result<()> {
+        let checked = policy.properties(family)?;
+        let slot = match family {
+            NoteFamily::Footnote => &mut self.inner.footnote_pr,
+            NoteFamily::Endnote => &mut self.inner.endnote_pr,
+        };
+        let properties = slot.get_or_insert_with(Box::default);
+        properties.pos = checked.pos;
+        properties.num_fmt = checked.num_fmt;
+        properties.num_start = checked.num_start;
+        properties.num_restart = checked.num_restart;
+        Ok(())
+    }
+
+    /// Remove an explicit section note override so document defaults apply.
+    pub fn remove_note_policy(&mut self, family: NoteFamily) -> Option<CT_NoteProperties> {
+        let slot = match family {
+            NoteFamily::Footnote => &mut self.inner.footnote_pr,
+            NoteFamily::Endnote => &mut self.inner.endnote_pr,
+        };
+        let properties = slot.as_mut()?;
+        if properties.pos.is_none()
+            && properties.num_fmt.is_none()
+            && properties.num_start.is_none()
+            && properties.num_restart.is_none()
+        {
+            return None;
+        }
+        let removed = (**properties).clone();
+        properties.pos = None;
+        properties.num_fmt = None;
+        properties.num_start = None;
+        properties.num_restart = None;
+        if properties.special_references.is_empty() && properties.extra_xml.is_empty() {
+            *slot = None;
+        }
+        Some(removed)
     }
 
     /// Return the printer trays feeding the first page and every later page.
@@ -6940,7 +7107,7 @@ fn serialized_note_fragment(
         StoryKind::Endnote => notes.to_xml_endnotes()?,
         _ => return Err(Error::Other("invalid note story kind".to_owned())),
     };
-    let owner = scan_story_owners(&serialized, kind)?
+    let owner = scan_story_owners_with_special(&serialized, kind, true)?
         .into_iter()
         .next()
         .ok_or_else(|| Error::Other("serialized note has no story owner".to_owned()))?;
@@ -7660,6 +7827,14 @@ fn accepted_story_text_visible(stack: &[XmlElementFrame]) -> bool {
 }
 
 fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerSpan>> {
+    scan_story_owners_with_special(xml, root_kind, false)
+}
+
+fn scan_story_owners_with_special(
+    xml: &[u8],
+    root_kind: StoryKind,
+    include_special: bool,
+) -> Result<Vec<StoryOwnerSpan>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut stack: Vec<XmlElementFrame> = Vec::new();
@@ -7697,6 +7872,7 @@ fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerS
                     .then(|| owner_kind(&local_name))
                     .flatten();
                 if matches!(candidate, Some(StoryKind::Footnote | StoryKind::Endnote))
+                    && !include_special
                     && !editable_note_owner(&reader, &element)?
                 {
                     candidate = None;
@@ -7745,6 +7921,7 @@ fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerS
                             || matches!(kind, StoryKind::TableCell | StoryKind::TextBox)
                     })
                     && (!matches!(kind, StoryKind::Footnote | StoryKind::Endnote)
+                        || include_special
                         || editable_note_owner(&reader, &element)?)
                 {
                     owners.push(StoryOwnerSpan {
@@ -16180,6 +16357,11 @@ impl Document {
         }
         candidate.reserve_footnotes_bundle()?;
         let mut paragraph = CT_P::new();
+        let mut note_marker = CT_R::new("");
+        note_marker.content.clear();
+        note_marker.extra_xml.push(b"<w:footnoteRef/>".to_vec());
+        note_marker.extra_xml_positions.push(0);
+        paragraph.runs.push(note_marker);
         paragraph.add_run(text);
         candidate
             .footnotes
@@ -16194,7 +16376,10 @@ impl Document {
         candidate.refresh_related_story_caches()?;
         candidate.invalidate_layout();
         let mut run = CT_R::new("");
-        run.content = vec![RunContent::FootnoteRef { id }];
+        run.content = vec![RunContent::FootnoteRef {
+            id,
+            custom_mark: None,
+        }];
         candidate.story_paragraph_mut(reference)?.runs.push(run);
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -16236,6 +16421,11 @@ impl Document {
                 .ok_or_else(|| Error::Other("endnote ID range is exhausted".to_owned()))?;
         }
         let mut paragraph = CT_P::new();
+        let mut note_marker = CT_R::new("");
+        note_marker.content.clear();
+        note_marker.extra_xml.push(b"<w:endnoteRef/>".to_vec());
+        note_marker.extra_xml_positions.push(0);
+        paragraph.runs.push(note_marker);
         paragraph.add_run(text);
         let note = rdocx_oxml::footnotes::CT_Footnote {
             id,
@@ -16248,8 +16438,230 @@ impl Document {
         set_story_source_xml(&mut candidate, &part_name, updated)?;
         candidate.invalidate_layout();
         let mut run = CT_R::new("");
-        run.content = vec![RunContent::EndnoteRef { id }];
+        run.content = vec![RunContent::EndnoteRef {
+            id,
+            custom_mark: None,
+        }];
         candidate.story_paragraph_mut(reference)?.runs.push(run);
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Create a footnote whose visible reference is an authored mark.
+    pub fn create_footnote_with_mark(
+        &mut self,
+        reference: &ContentLocation,
+        text: &str,
+        mark: &str,
+    ) -> Result<i32> {
+        self.create_note_with_mark(NoteFamily::Footnote, reference, text, mark)
+    }
+
+    /// Create an endnote whose visible reference is an authored mark.
+    pub fn create_endnote_with_mark(
+        &mut self,
+        reference: &ContentLocation,
+        text: &str,
+        mark: &str,
+    ) -> Result<i32> {
+        self.create_note_with_mark(NoteFamily::Endnote, reference, text, mark)
+    }
+
+    fn create_note_with_mark(
+        &mut self,
+        family: NoteFamily,
+        reference: &ContentLocation,
+        text: &str,
+        mark: &str,
+    ) -> Result<i32> {
+        if mark.is_empty() {
+            return Err(Error::Other(
+                "custom note mark must not be empty".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        let (kind, id) = match family {
+            NoteFamily::Footnote => (
+                StoryKind::Footnote,
+                candidate.create_footnote(reference, text)?,
+            ),
+            NoteFamily::Endnote => (
+                StoryKind::Endnote,
+                candidate.create_endnote(reference, text)?,
+            ),
+        };
+        let paragraph_index = reference.index_path.first().copied().ok_or_else(|| {
+            Error::Other("note reference must identify a direct body paragraph".to_owned())
+        })?;
+        let refreshed = candidate
+            .paragraph_story_location(paragraph_index)?
+            .ok_or_else(|| Error::Other("new note reference paragraph is missing".to_owned()))?;
+        let paragraph = candidate.story_paragraph_mut(&refreshed)?;
+        let marker = paragraph
+            .runs
+            .last_mut()
+            .and_then(|run| run.content.first_mut())
+            .ok_or_else(|| Error::Other("new note reference is missing".to_owned()))?;
+        match marker {
+            RunContent::FootnoteRef { custom_mark, .. }
+            | RunContent::EndnoteRef { custom_mark, .. } => {
+                *custom_mark = Some(mark.to_owned());
+            }
+            _ => return Err(Error::Other("new note reference is malformed".to_owned())),
+        }
+        candidate.invalidate_layout();
+        candidate.flush_to_package()?;
+        let story = candidate
+            .note_story(kind, id)?
+            .ok_or_else(|| Error::Other("new note story is missing".to_owned()))?;
+        let part_name = story.part_name.clone();
+        let mut xml = candidate
+            .package
+            .get_part(&part_name)
+            .ok_or_else(|| Error::Other("new note part is missing".to_owned()))?
+            .to_vec();
+        let owner = scan_story_owners(&xml, kind)?
+            .into_iter()
+            .find(|owner| owner.kind == kind && owner.owner_index == story.owner_index)
+            .ok_or_else(|| Error::Other("new note owner is missing".to_owned()))?;
+        let mut paragraph = CT_P::new();
+        let marker_run = CT_R::new(mark);
+        paragraph.runs.push(marker_run);
+        paragraph.add_run(text);
+        let note = rdocx_oxml::footnotes::CT_Footnote {
+            id,
+            note_type: rdocx_oxml::footnotes::NoteType::Normal,
+            paragraphs: vec![paragraph],
+        };
+        let fragment = serialized_note_fragment(&note, kind)?;
+        xml.splice(owner.full, fragment);
+        set_story_source_xml(&mut candidate, &part_name, xml)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(id)
+    }
+
+    /// Create or replace an authored note separator or continuation record.
+    /// The supplied paragraphs are written into the special note owner without
+    /// changing other note owners or unmodelled XML in the part.
+    pub fn set_note_special_record(
+        &mut self,
+        family: NoteFamily,
+        record: NoteSpecialRecord,
+        paragraphs: Vec<CT_P>,
+    ) -> Result<i32> {
+        if paragraphs.is_empty() {
+            return Err(Error::Other(
+                "special note record needs a paragraph".to_owned(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (kind, part_name, root, item) = match family {
+            NoteFamily::Footnote => {
+                candidate.reserve_footnotes_bundle()?;
+                (
+                    StoryKind::Footnote,
+                    candidate
+                        .footnotes_part_name
+                        .clone()
+                        .ok_or_else(|| Error::Other("footnotes part is missing".to_owned()))?,
+                    b"footnotes".as_slice(),
+                    b"footnote".as_slice(),
+                )
+            }
+            NoteFamily::Endnote => {
+                let existing = candidate.note_part_name(StoryKind::Endnote)?;
+                let part = candidate.reserve_document_part_bundle(
+                    existing.as_deref(),
+                    "/word/endnotes.xml",
+                    rel_types::ENDNOTES,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+                )?;
+                (
+                    StoryKind::Endnote,
+                    part,
+                    b"endnotes".as_slice(),
+                    b"endnote".as_slice(),
+                )
+            }
+        };
+        let source = match candidate.package.get_part(&part_name) {
+            Some(xml) => xml.to_vec(),
+            None if family == NoteFamily::Footnote => {
+                rdocx_oxml::footnotes::CT_Footnotes::new().to_xml_footnotes()?
+            }
+            None => rdocx_oxml::footnotes::CT_Footnotes::new().to_xml_endnotes()?,
+        };
+        let parsed = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&source)?;
+        let matches = parsed
+            .footnotes
+            .iter()
+            .enumerate()
+            .filter(|(_, note)| note.note_type == record.note_type())
+            .collect::<Vec<_>>();
+        if matches.len() > 1 {
+            return Err(Error::Other("duplicate special note records".to_owned()));
+        }
+        let used = parsed
+            .footnotes
+            .iter()
+            .map(|note| note.id)
+            .collect::<HashSet<_>>();
+        let id = if let Some((_, note)) = matches.first() {
+            note.id
+        } else {
+            let preferred = match record {
+                NoteSpecialRecord::Separator => -1,
+                NoteSpecialRecord::ContinuationSeparator => 0,
+                NoteSpecialRecord::ContinuationNotice => -2,
+            };
+            if !used.contains(&preferred) {
+                preferred
+            } else {
+                let mut next = -2_i32;
+                while used.contains(&next) {
+                    next = next.checked_sub(1).ok_or_else(|| {
+                        Error::Other("special note ID range is exhausted".to_owned())
+                    })?;
+                }
+                next
+            }
+        };
+        let note = rdocx_oxml::footnotes::CT_Footnote {
+            id,
+            note_type: record.note_type(),
+            paragraphs,
+        };
+        let fragment = serialized_note_fragment(&note, kind)?;
+        let updated = if let Some((index, _)) = matches.first() {
+            let spans = scan_story_owners_with_special(&source, kind, true)?
+                .into_iter()
+                .filter(|owner| owner.kind == kind)
+                .collect::<Vec<_>>();
+            let span = spans
+                .get(*index)
+                .ok_or_else(|| Error::Other("special note owner cannot be located".to_owned()))?;
+            let mut xml = source;
+            xml.splice(span.full.clone(), fragment);
+            xml
+        } else {
+            append_story_fragments_to_root(&source, root, item, &[fragment])?
+        };
+        set_story_source_xml(&mut candidate, &part_name, updated)?;
+        let mut properties = candidate
+            .note_properties(family)
+            .cloned()
+            .unwrap_or_default();
+        if !properties.special_references.contains(&id) {
+            properties.special_references.push(id);
+        }
+        candidate.stage_settings_mutation(|settings| match family {
+            NoteFamily::Footnote => settings.set_footnote_properties(properties),
+            NoteFamily::Endnote => settings.set_endnote_properties(properties),
+        })?;
+        candidate.invalidate_layout();
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(id)
@@ -21077,6 +21489,64 @@ impl Document {
         self.settings.as_ref()?.update_fields()
     }
 
+    /// Document-wide note policy in the relationship-resolved settings part.
+    pub fn note_properties(&self, family: NoteFamily) -> Option<&CT_NoteProperties> {
+        let settings = self.settings.as_ref()?;
+        match family {
+            NoteFamily::Footnote => settings.footnote_properties(),
+            NoteFamily::Endnote => settings.endnote_properties(),
+        }
+    }
+
+    /// Set a checked document-wide note policy and publish the staged package.
+    pub fn set_note_policy(&mut self, family: NoteFamily, policy: NotePolicy) -> Result<()> {
+        let mut properties = self.note_properties(family).cloned().unwrap_or_default();
+        let checked = policy.properties(family)?;
+        properties.pos = checked.pos;
+        properties.num_fmt = checked.num_fmt;
+        properties.num_start = checked.num_start;
+        properties.num_restart = checked.num_restart;
+        self.stage_settings_mutation(|settings| match family {
+            NoteFamily::Footnote => settings.set_footnote_properties(properties),
+            NoteFamily::Endnote => settings.set_endnote_properties(properties),
+        })
+    }
+
+    /// Remove an explicit document-wide note policy.
+    pub fn remove_note_policy(&mut self, family: NoteFamily) -> Result<Option<CT_NoteProperties>> {
+        let Some(mut properties) = self.note_properties(family).cloned() else {
+            return Ok(None);
+        };
+        if properties.pos.is_none()
+            && properties.num_fmt.is_none()
+            && properties.num_start.is_none()
+            && properties.num_restart.is_none()
+        {
+            return Ok(None);
+        }
+        let removed = properties.clone();
+        properties.pos = None;
+        properties.num_fmt = None;
+        properties.num_start = None;
+        properties.num_restart = None;
+        if properties.special_references.is_empty() && properties.extra_xml.is_empty() {
+            match family {
+                NoteFamily::Footnote => {
+                    self.stage_settings_removal(CT_Settings::remove_footnote_properties)?;
+                }
+                NoteFamily::Endnote => {
+                    self.stage_settings_removal(CT_Settings::remove_endnote_properties)?;
+                }
+            }
+        } else {
+            self.stage_settings_mutation(|settings| match family {
+                NoteFamily::Footnote => settings.set_footnote_properties(properties),
+                NoteFamily::Endnote => settings.set_endnote_properties(properties),
+            })?;
+        }
+        Ok(Some(removed))
+    }
+
     /// Ask Word to update fields when it opens the document, stop asking with
     /// `Some(false)`, or remove the setting with `None`.
     pub fn set_update_fields_on_open(&mut self, value: Option<bool>) -> Result<()> {
@@ -24895,6 +25365,16 @@ impl Document {
                 .as_ref()
                 .and_then(CT_Settings::math_properties)
                 .cloned(),
+            note_defaults: [
+                self.settings
+                    .as_ref()
+                    .and_then(CT_Settings::footnote_properties)
+                    .cloned(),
+                self.settings
+                    .as_ref()
+                    .and_then(CT_Settings::endnote_properties)
+                    .cloned(),
+            ],
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             headers,

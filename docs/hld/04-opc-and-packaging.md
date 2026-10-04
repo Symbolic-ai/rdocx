@@ -119,6 +119,18 @@ its body references. The staged package reopens before publication. Endnote
 story edits preserve separator records, unknown children, and unrelated
 relationships. Pictures and hyperlinks are owned by the endnotes part.
 
+Checked document and section note policies retain unmodelled property children
+while writing position, format, start, and restart in schema order. The
+document policy lives in the relationship-resolved settings part. An authored
+separator, continuation separator, or continuation notice replaces only its
+special note owner in the relevant note part. The corresponding settings note
+property records the special ID. This namespace remains separate from normal
+note IDs and unselected special records do not render. Removing only the
+numbering or placement policy retains special-record selection and unmodelled
+property children. Special records are never public note stories. Custom reference
+marks live in the body reference and in the note owner's marker run. Package
+mutation is staged through save and reopen before publication.
+
 Revision inventory uses these same supported story owners and reports their
 `StoryId` with each record. A revision reachable by resolution without a
 discoverable owner is an error. CLI text extraction retains readable body text

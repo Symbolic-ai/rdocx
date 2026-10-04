@@ -6947,12 +6947,18 @@ mod tests {
         });
         paragraph.runs.push({
             let mut run = CT_R::new("");
-            run.content = vec![RunContent::FootnoteRef { id: 2 }];
+            run.content = vec![RunContent::FootnoteRef {
+                id: 2,
+                custom_mark: None,
+            }];
             run
         });
         paragraph.runs.push({
             let mut run = CT_R::new("");
-            run.content = vec![RunContent::EndnoteRef { id: 3 }];
+            run.content = vec![RunContent::EndnoteRef {
+                id: 3,
+                custom_mark: None,
+            }];
             run
         });
         paragraph.runs.push({

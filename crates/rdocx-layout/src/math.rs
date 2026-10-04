@@ -1435,6 +1435,7 @@ mod tests {
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
             math_properties: None,
+            note_defaults: [None, None],
             revision_view: crate::RevisionView::Accepted,
             styles: CT_Styles::new_default(),
             numbering: None,

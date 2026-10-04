@@ -915,10 +915,14 @@ pub enum RunContent {
     /// A footnote reference (`<w:footnoteReference w:id="..."/>`).
     FootnoteRef {
         id: i32,
+        /// Custom mark displayed by this reference instead of a numeric label.
+        custom_mark: Option<String>,
     },
     /// An endnote reference (`<w:endnoteReference w:id="..."/>`).
     EndnoteRef {
         id: i32,
+        /// Custom mark displayed by this reference instead of a numeric label.
+        custom_mark: Option<String>,
     },
     /// A comment reference (`<w:commentReference w:id="..."/>`).
     CommentReference {
@@ -1576,9 +1580,9 @@ impl CT_R {
             RunContent::Break(_) => "\n",
             RunContent::Drawing(_) => "", // Drawings have no text content
             RunContent::Field(field) => field.projected_text().unwrap_or(""),
-            RunContent::FootnoteRef { .. }
-            | RunContent::EndnoteRef { .. }
-            | RunContent::CommentReference { .. } => "",
+            RunContent::FootnoteRef { custom_mark, .. }
+            | RunContent::EndnoteRef { custom_mark, .. } => custom_mark.as_deref().unwrap_or(""),
+            RunContent::CommentReference { .. } => "",
             // A symbol is font-encoded rather than Unicode, and the special
             // characters carry no text, so neither contributes to extraction.
             RunContent::Symbol { .. } => "",
@@ -1815,10 +1819,20 @@ impl CT_R {
                             .decode()
                             .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
                         let text = crate::xml_text::decode_escaped(&encoded);
-                        content.push(RunContent::Text(CT_Text {
-                            text,
-                            preserve_space: preserve,
-                        }));
+                        match content.last_mut() {
+                            Some(RunContent::FootnoteRef {
+                                custom_mark: Some(mark),
+                                ..
+                            })
+                            | Some(RunContent::EndnoteRef {
+                                custom_mark: Some(mark),
+                                ..
+                            }) if mark.is_empty() => *mark = text,
+                            _ => content.push(RunContent::Text(CT_Text {
+                                text,
+                                preserve_space: preserve,
+                            })),
+                        }
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"delText", &prefixes) {
                         let preserve = e.attributes().any(|a| {
@@ -1905,13 +1919,21 @@ impl CT_R {
                         let id = optional_word_attribute(e, b"id", &prefixes)
                             .and_then(|value| value.parse::<i32>().ok())
                             .unwrap_or(0);
-                        content.push(RunContent::FootnoteRef { id });
+                        let custom_mark =
+                            optional_word_attribute(e, b"customMarkFollows", &prefixes)
+                                .filter(|value| value == "1" || value == "true")
+                                .map(|_| String::new());
+                        content.push(RunContent::FootnoteRef { id, custom_mark });
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"endnoteReference", &prefixes) {
                         let id = optional_word_attribute(e, b"id", &prefixes)
                             .and_then(|value| value.parse::<i32>().ok())
                             .unwrap_or(0);
-                        content.push(RunContent::EndnoteRef { id });
+                        let custom_mark =
+                            optional_word_attribute(e, b"customMarkFollows", &prefixes)
+                                .filter(|value| value == "1" || value == "true")
+                                .map(|_| String::new());
+                        content.push(RunContent::EndnoteRef { id, custom_mark });
                         modeled_children += 1;
                     } else if is_word_element(name.as_ref(), b"commentReference", &prefixes) {
                         let id = required_word_i32_attribute(e, b"id", &prefixes)?;
@@ -2038,17 +2060,37 @@ impl CT_R {
                 RunContent::Field(_) => {
                     // Field runs are serialized at the paragraph level as <w:fldSimple>
                 }
-                RunContent::FootnoteRef { id } => {
+                RunContent::FootnoteRef { id, custom_mark } => {
                     let mut buf = itoa::Buffer::new();
                     let mut e = BytesStart::new("w:footnoteReference");
                     e.push_attribute(("w:id", buf.format(*id)));
+                    if custom_mark.is_some() {
+                        e.push_attribute(("w:customMarkFollows", "1"));
+                    }
                     writer.write_event(Event::Empty(e))?;
+                    if let Some(mark) = custom_mark {
+                        let mut text = BytesStart::new("w:t");
+                        text.push_attribute(("xml:space", "preserve"));
+                        writer.write_event(Event::Start(text))?;
+                        writer.write_event(Event::Text(quick_xml::events::BytesText::new(mark)))?;
+                        writer.write_event(Event::End(BytesEnd::new("w:t")))?;
+                    }
                 }
-                RunContent::EndnoteRef { id } => {
+                RunContent::EndnoteRef { id, custom_mark } => {
                     let mut buf = itoa::Buffer::new();
                     let mut e = BytesStart::new("w:endnoteReference");
                     e.push_attribute(("w:id", buf.format(*id)));
+                    if custom_mark.is_some() {
+                        e.push_attribute(("w:customMarkFollows", "1"));
+                    }
                     writer.write_event(Event::Empty(e))?;
+                    if let Some(mark) = custom_mark {
+                        let mut text = BytesStart::new("w:t");
+                        text.push_attribute(("xml:space", "preserve"));
+                        writer.write_event(Event::Start(text))?;
+                        writer.write_event(Event::Text(quick_xml::events::BytesText::new(mark)))?;
+                        writer.write_event(Event::End(BytesEnd::new("w:t")))?;
+                    }
                 }
                 RunContent::Symbol { font, char_code } => {
                     let mut e = BytesStart::new("w:sym");
@@ -5071,8 +5113,8 @@ impl CT_P {
             )));
         }
         if let Some((kind, id)) = run.content.iter().find_map(|content| match content {
-            RunContent::FootnoteRef { id } => Some(("footnote", *id)),
-            RunContent::EndnoteRef { id } => Some(("endnote", *id)),
+            RunContent::FootnoteRef { id, .. } => Some(("footnote", *id)),
+            RunContent::EndnoteRef { id, .. } => Some(("endnote", *id)),
             _ => None,
         }) {
             return Err(OxmlError::InvalidValue(format!(
@@ -13226,7 +13268,7 @@ mod tests {
         assert_eq!(p.runs[1].content.len(), 1);
         assert!(matches!(
             p.runs[1].content[0],
-            RunContent::FootnoteRef { id: 1 }
+            RunContent::FootnoteRef { id: 1, .. }
         ));
     }
 
@@ -13236,7 +13278,7 @@ mod tests {
         assert_eq!(p.runs.len(), 1);
         assert!(matches!(
             p.runs[0].content[0],
-            RunContent::EndnoteRef { id: 3 }
+            RunContent::EndnoteRef { id: 3, .. }
         ));
     }
 
@@ -13246,7 +13288,10 @@ mod tests {
         p.add_run("Text before");
         p.runs.push(CT_R {
             properties: None,
-            content: vec![RunContent::FootnoteRef { id: 2 }],
+            content: vec![RunContent::FootnoteRef {
+                id: 2,
+                custom_mark: None,
+            }],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
             alt_drawings: Vec::new(),
@@ -13267,7 +13312,7 @@ mod tests {
         assert_eq!(parsed.runs.len(), 3);
         assert!(matches!(
             parsed.runs[1].content[0],
-            RunContent::FootnoteRef { id: 2 }
+            RunContent::FootnoteRef { id: 2, .. }
         ));
     }
 

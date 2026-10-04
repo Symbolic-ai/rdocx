@@ -28316,6 +28316,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         do_not_use_html_paragraph_auto_spacing: false,
         default_tab_stop: None,
         math_properties: None,
+        note_defaults: [None, None],
         document,
         styles: rdocx_oxml::styles::CT_Styles::new_default(),
         numbering: None,
@@ -39931,6 +39932,7 @@ mod advanced_table_geometry_regressions {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             math_properties: None,
+            note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {
                 body: rdocx_oxml::document::CT_Body {
                     content: Vec::new(),

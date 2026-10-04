@@ -7798,6 +7798,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-273 closed DOCX-040 with rich endnote authoring, so it
                 # no longer owns an incomplete row.
                 273,
+                # F-274 completed DOCX-036 note policy and DOCX-041, so it
+                # no longer owns an incomplete row.
+                274,
             }
         }
         self.assertEqual(

@@ -1176,7 +1176,22 @@ engine and bundled-fallback facade. They also prove endnotes append once,
 changed related stories and note-reference sequences invalidate reuse, and a
 footnote continuation cannot publish a dirty checkpoint. Multi-section
 content, note-bearing tables, floating drawings, backgrounds, and mismatched
-boundary state must use the full paginator. Ordinary multi-line prose,
+boundary state must use the full paginator.
+
+The note-policy gate `note_policies_match_pinned_word_markers_and_page_placement`
+compares deterministic page placement and paired body and note labels with
+Microsoft Word for Mac 16.113.2. Focused fixtures cover document-end and
+section-end endnotes, an explicit section restart, a page restart within one
+section, custom footnote and endnote marks, authored separators, and a
+three-page carried footnote with continuation separator and notice. Package
+round trips check alias-prefixed note settings, special-record ID references,
+and exact retained XML. Invalid policies and an empty special record must
+leave complete package bytes unchanged. The pinned Word build ignores
+`beneathText` even under an explicit section override, so the deterministic
+native placement test records that divergence while proving the policy is
+applied by the renderer.
+
+Ordinary multi-line prose,
 headings, `keepNext`, and `keepLines` must publish complete-boundary restart
 records. A deterministic Issue 67 fixture requires 175 naturally wrapped
 four-line paragraphs to span 19 pages, keep the completed recorded pass, and
