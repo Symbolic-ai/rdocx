@@ -17334,3 +17334,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the integrated sprint source, all 49 entries match.
 
 **Notes for future sessions.** Keep `work/f-x174-codex` through final sprint review. Publish `v0.15.0` only from the reviewed S86 main merge through `/release` and its separate final approval. After both family releases are verified, comment on Issue 266 with `rpptx-v0.13.0` and `v0.15.0` and direct release links.
+
+### F-X175, Refresh CLI archive evidence after release hardening
+
+**Sprint.** S87
+**Completed.** 2026-10-04
+**Size.** S, estimated 1 day, actual 1 day
+
+**What was built.** The `rdocx-cli` and `rpptx-cli` README archive measurements and their enforced inventory now reflect the reviewed Windows stack correction. The roadmap policy assertion matches the approved move of the related-story wave from S87 to S88. No application behavior, version carrier, release workflow or public API changed.
+
+**Non-obvious choices.** The exact tar member totals are the package payload check. Compressed bytes are dated macOS observations with the existing 64-byte tolerance for generated VCS metadata. Both archive rows use the 4 October measurements. The S86 main CI found only Docs and Release regressions failures, both caused by the stale CLI rows.
+
+**Deviations from the design plan.** The existing roadmap test also expected an M24 story in S87. Its expected sprint set was updated after the user approved a focused release repair. The package check used the direct archive builder and validator instead of the record mode, which would rewrite unrelated measurement rows.
+
+**Spec sections touched.** None. F-X175 implements the package evidence rule already in `docs/hld/15-build-and-toolchain.md`.
+
+**Tests.** Both CLI archive validators fail on the old rows and pass after the update. The worker passed the focused README regression, all 139 workflow policy tests with two skips, both CLI crate Clippy checks and test suites, the 22-crate patched dry run, and a zero-finding microscope pass. The integrated full gate passed formatting, workspace Clippy, workspace tests, 49 matching hashes, prose, generated skills, policy, no-default layout, both WASM targets, docs, README examples, all 22 selected archives under 10 MiB and cargo-deny. Hosted Linux CI and the final sprint review follow the pushed sprint SHA.
+
+**Hash harness.** Unchanged, all 49 entries match on the integrated sprint source.
+
+**Notes for future sessions.** Publish `rpptx-v0.13.0` and `v0.15.0` only after the reviewed S87 main merge, green hosted CI and each release's separate exact-SHA approval. After both family releases are verified, comment on Issue 266 with their numbers and direct release links.

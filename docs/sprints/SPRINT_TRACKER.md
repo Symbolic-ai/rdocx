@@ -101,6 +101,7 @@ defended.
 | S84 | X | 10 | 10 | 0 | 38 | 2 | Combined the S84 through S89 repair scope in one sprint, including PR 265's mixed-section regression. All nine issue contracts and 32 contribution dispositions have integrated evidence. The full gate passed with 175 Word and 77 Presentation Python tests, 49 matching hashes, 22 package archives below 10 MiB and sprint review pass 1 clean. GitHub closure follows the reviewed main push. No stories carried |
 | S85 | X | 1 | 1 | 0 | 1 | 1 | Pinned LibreOffice 26.2.5.2 for the macOS Presentation Python CI cell after the S84 main run exposed the missing viewer. The full integrated local gate passed, including 77 Presentation Python tests, 133 workflow checks, 49 matching hashes, both WASM targets, 22 package archives below 10 MiB and a clear supply-chain scan. Hosted CI and the 32 PR and nine issue dispositions follow the reviewed main push. No stories carried |
 | S86 | M24, X | 7 | 7 | 0 | 27 | 2 | Completed rich headers and footers, footnotes and endnotes, namespace preservation, and both family release preparations. The full gate passed with 49 matching hashes, 22 package archives below 10 MiB and clean sprint review pass 2. Hosted build-only run 37165122971 produced all 14 expected artifacts after one targeted Linux arm64 retry. Issue 266 stays open until the separately approved rpptx-v0.13.0 and v0.15.0 releases are published, verified and reported to the requester. No contributed PR was assigned and no stories carried |
+| S87 | X | 1 | 1 | 0 | 1 | 1 | Refreshed both CLI archive measurements after S86 Windows stack hardening and moved the planned M24 wave to S88 by approval. The full gate passed with 49 matching hashes, 139 policy tests, 22 package archives below 10 MiB and clean sprint review pass 1. Hosted CI run 37178559664 passed, including Docs and Release regressions. Build-only run 37178579418 produced all 14 expected artifacts after one targeted Linux x86-64 retry. Issue 266 stays open until both separately approved releases are published, verified and reported to the requester. No stories carried |
 
 ## Completed features
 
@@ -553,6 +554,7 @@ defended.
 | F-273 | S86 | L | 5 | 1 | 2026-10-03 | Added atomic rich endnote authoring with independent IDs, preserved part XML and scoped assets, and recorded the pinned Word policy divergence |
 | F-X173 | S86 | M | 3 | 1 | 2026-10-03 | Prepared rpptx 0.13.0 across 15 Rust crates, CLI and Python with family notes, package evidence and Python 3.9 wheel smoke repair |
 | F-X174 | S86 | M | 3 | 1 | 2026-10-04 | Prepared rdocx 0.15.0 across seven Rust crates, CLI and Python with family notes, clean wheel smoke, package evidence and 49 matching hashes |
+| F-X175 | S87 | S | 1 | 1 | 2026-10-04 | Refreshed both CLI archive footprints after Windows stack hardening and aligned the S87 roadmap check, with 49 matching hashes and a clean 22-crate dry run |
 
 ## Velocity
 
@@ -654,6 +656,7 @@ five working days.
 | S84 | 10 | 2 | 25.00 |
 | S85 | 1 | 1 | 5.00 |
 | S86 | 7 | 2 | 17.50 |
+| S87 | 1 | 1 | 5.00 |
 
 ## Escalation record
 

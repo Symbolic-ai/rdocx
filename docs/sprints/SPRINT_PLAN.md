@@ -1921,11 +1921,29 @@ adds a release pipeline story followed by the incubating and stable release
 preparations. After `/close-sprint` merges the reviewed result to `main`, each
 tag requires its own final approval at that merge SHA.
 
-#### Sprint S87, Related-story completion, fields, and stable templating
+#### Sprint S87, Release archive evidence repair
+
+**Goal**: repair the Linux package footprint checks exposed by the S86 main
+CI run, then verify a clean release source for both Issue 266 families. The
+previously planned related-story work moves to S88 because publication must
+follow a reviewed green main merge.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X175 | Refresh CLI archive evidence after release hardening | S |
+
+The repair updates the two CLI archive measurements after the reviewed Windows
+stack correction. Hosted CI, local package evidence, the full gate and a clean
+sprint review must pass before `/close-sprint S87`. The two family publications
+then follow through separate `/release` approvals at the S87 main merge SHA.
+
+#### Sprint S88, Related stories, fields, templating, and forms
 
 **Goal**: complete note policy, cross-story ranges, fragment transactions,
-and glossary authoring, then build the field-driven navigation and stable
-templating structures that depend on them.
+glossary authoring, field-driven navigation and stable templating, then create
+modern and legacy forms, custom XML bindings and mail-merge package state.
+The related-story wave moved from S87 to make room for release repair.
+Reassess capacity and split this combined wave before implementation.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -1940,23 +1958,6 @@ templating structures that depend on them.
 | F-282 | Citations and bibliography authoring | L |
 | F-283 | Complete numbering-aware navigation fields | L |
 | F-284 | Stable container-wide template grammar | L |
-
-F-274 composes the S87 note families with section policy. F-276 follows the
-related-story work, and F-277 uses its transactional remapping. F-278 is the
-shared field construction substrate after those stories. F-283 integrates
-numbering only after the other navigation structures are complete. F-284
-freezes the template grammar against the completed container and fragment
-model. This 11-story wave is intentionally larger than the usual sprint
-cadence. Reassess its capacity and split it again before implementation if
-the dependency work cannot be completed within one sprint.
-
-#### Sprint S88, Content controls, forms, and data binding
-
-**Goal**: create rather than only fill modern and legacy forms, including
-repeating controls, custom XML bindings, and mail-merge package state.
-
-| F-ID | Title | Size |
-|------|-------|------|
 | F-285 | Content control creation and lifecycle | L |
 | F-286 | Rich, repeating, and typed content controls | L |
 | F-287 | Custom XML stores and data binding authoring | L |
@@ -1964,9 +1965,14 @@ repeating controls, custom XML bindings, and mail-merge package state.
 | F-289 | Modern Word form authoring | L |
 | F-290 | Mail-merge package and data-source authoring | M |
 
-The generic control lifecycle precedes typed controls and bindings. F-289 is
-the composed form gate. Mail merge remains offline by default and never treats
-unavailable external data as an empty successful result.
+F-274 composes the note families with section policy. F-276 follows the
+related-story work, and F-277 uses its transactional remapping. F-278 is the
+field construction substrate. F-283 integrates numbering after the other
+navigation structures. F-284 freezes the template grammar against the
+completed container and fragment model. The generic control lifecycle in
+F-285 precedes typed controls and bindings. F-289 is the composed form gate.
+Mail merge remains offline by default and never treats unavailable external
+data as an empty successful result.
 
 #### Sprint S89, Collaboration authoring
 

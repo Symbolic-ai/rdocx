@@ -6464,6 +6464,19 @@ pass on the prepared source. The integrated full gate and clean sprint review
 follow both preparations at S86 closure. Publication follows `/close-sprint`
 from `main` with its own final approval and hosted verification.
 
+### F-X175, Refresh CLI archive evidence after release hardening (S)
+
+The S86 main CI run found that the two CLI archive measurements still describe
+the packages before the reviewed Windows CLI stack fix. Recompute the exact
+`rdocx-cli` and `rpptx-cli` source archive footprints from the final tracked
+tree and update their README rows and the enforced measurement inventory.
+Keep all other release metadata and behavior unchanged. The focused S87 repair
+is the reviewed source boundary for both prepared Issue 266 families.
+**Depends on**: F-X174.
+**Test gate**: release regression. The two CLI archive measurements match
+fresh package builds on macOS and Linux, both README and release-regression
+CI jobs pass, and the full gate remains green with 49 unchanged hash entries.
+
 ### F-X168, Current issue and contribution closure evidence (M)
 
 Reconcile the eight open issues and 31 open PRs from the 2 October GitHub snapshot
