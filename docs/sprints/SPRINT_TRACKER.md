@@ -558,6 +558,7 @@ defended.
 | F-X175 | S87 | S | 1 | 1 | 2026-10-04 | Refreshed both CLI archive footprints after Windows stack hardening and aligned the S87 roadmap check, with 49 matching hashes and a clean 22-crate dry run |
 | F-X176 | S88 | M | 3 | 1 | 2026-10-04 | Repaired the unified tag package inventory against dry-run directories and prepared rpptx 0.13.1 beside rdocx 0.15.0, with 49 matching hashes and a clean 22-crate dry run |
 | F-274 | S89 | L | 5 | 1 | 2026-10-04 | Added checked note numbering and placement policies, custom markers and authored continuation records with pinned Word evidence and 49 matching hashes |
+| F-275 | S89 | L | 5 | 1 | 2026-10-04 | Added atomic bookmark, comment, permission and proofing ranges across eight story owners and nested controls with 49 matching hashes |
 
 ## Velocity
 

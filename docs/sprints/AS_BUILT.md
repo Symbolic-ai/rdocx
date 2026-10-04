@@ -17394,3 +17394,23 @@ closure. The 18-page Word SSIM trend is advisory and below its target.
 **Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate remains due.
 
 **Notes for future sessions.** F-276 consumes this completed note contract. Keep `work/f-274-codex` through final sprint verification and review. Its clean worktree was removed after the integration commit.
+
+### F-275, Cross-story bookmarks, ranges, and annotations
+
+**Sprint.** S89
+**Completed.** 2026-10-04
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Checked story-qualified range snapshots and add, move and remove operations now cover bookmarks, comment endpoints, permission ranges and proofing ranges. The source-backed path resolves body, table cell, text box, header, footer, footnote, endnote and comment owners, including nested block controls. Paired endpoints validate in accepted-view order and publish only after a staged package reopens.
+
+**Non-obvious choices.** Permission starts retain editor or group metadata, while proofing pairs retain their error kind without inventing an ID. A moved comment range carries its reference run and definition. Removing a comment range leaves a valid point comment with its reference and definition. Unrelated and unsupported XML siblings retain their bytes. The new public API is additive under the current pre-1.0 version.
+
+**Deviations from the design plan.** None. Microscope pass 1 found a nested body control routed through the direct-body path. The worker fixed it and added a physically ordered but lexically reversed path fixture. Pass 3 reported zero defects and zero smells.
+
+**Spec sections touched.** `docs/hld/02-scope-and-non-goals.md`, DOCX-042, `docs/hld/03-architecture.md`, checked story ranges, `docs/hld/04-opc-and-packaging.md`, source-backed owner edits, `docs/hld/10-bindings-spec.md`, native API, `docs/hld/12-testing-strategy.md`, paired range gate, and `docs/hld/14-development-backlog.md`, F-275 acceptance.
+
+**Tests.** The named gate passed across eight story kinds and nested controls, then failed to compile against the claimed base because the new range API was absent. The changed `rdocx` and `rdocx-oxml` suites, Clippy, formatting, 140 policy tests with two skips, prose, generated skills and the patched workspace publish dry run passed. All archives remained below 10 MiB. The integrated full sprint gate and sprint review remain due.
+
+**Hash harness.** Unchanged on the worker, all 49 entries match. The integrated sprint gate remains due.
+
+**Notes for future sessions.** F-276 consumes these paired-range identities during fragment import. Keep `work/f-275-codex` through final sprint verification and review. Its clean worktree was removed after the integration commit.
